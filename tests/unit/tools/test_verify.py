@@ -32,7 +32,9 @@ def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
         ),
     )
     expected_tools = (module.PYTEST_PREFIX + ("tests/unit/tools", "-q"),)
-    expected_unit = (module.PYTEST_PREFIX + ("tests/unit/model", "-q"),)
+    expected_unit = (
+        module.PYTEST_PREFIX + ("tests/unit/model", "tests/unit/io", "-q"),
+    )
     assert module.MODE_REGISTRY["quality"].commands == expected_quality
     assert module.MODE_REGISTRY["tools"].commands == expected_tools
     assert module.MODE_REGISTRY["unit"].commands == expected_unit

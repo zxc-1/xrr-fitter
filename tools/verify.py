@@ -52,7 +52,9 @@ MODE_REGISTRY: Mapping[str, Mode] = {
         )
     ),
     "tools": Mode(commands=(PYTEST_PREFIX + ("tests/unit/tools", "-q"),)),
-    "unit": Mode(commands=(PYTEST_PREFIX + ("tests/unit/model", "-q"),)),
+    "unit": Mode(
+        commands=(PYTEST_PREFIX + ("tests/unit/model", "tests/unit/io", "-q"),)
+    ),
 }
 
 

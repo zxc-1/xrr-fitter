@@ -443,7 +443,7 @@ def test_model_project_adapter_is_explicit_and_matches_committed_reference(
     module = load_tool_module("compare_r22_reference")
     root = Path(__file__).resolve().parents[3]
 
-    assert tuple(module.GROUP_REGISTRY) == ("model_project",)
+    assert tuple(module.GROUP_REGISTRY) == ("model_project", "io")
     source = (root / "tools/reference_groups/model_project.py").read_text(encoding="utf-8")
     assert "tests.support" not in source
     assert module.compare_group(
@@ -517,3 +517,86 @@ def test_model_project_adapter_rejects_missing_or_extra_project_fields(
 
     with pytest.raises(ValueError, match="project|dataset|field"):
         adapter(context)
+
+
+def _committed_group_context(module, group: str):
+    root = Path(__file__).resolve().parents[3]
+    reference_root = root / "verification/r22/reference"
+    manifest = json.loads(
+        (reference_root / "manifest.json").read_text(encoding="utf-8")
+    )
+    provenance = manifest["provenance"]
+    by_id = {record["input_id"]: record for record in provenance["inputs"]}
+    entry = manifest["groups"][group]
+    inputs = tuple(
+        module.ReplayInput(
+            input_id=by_id[input_id]["input_id"],
+            input_class=by_id[input_id]["input_class"],
+            path=by_id[input_id]["path"],
+            size=by_id[input_id]["size"],
+            sha256=by_id[input_id]["sha256"],
+            content=(reference_root / by_id[input_id]["path"]).read_bytes(),
+        )
+        for input_id in entry["input_ids"]
+    )
+    return module.ReplayContext(
+        group=group,
+        artifacts=tuple(entry["artifacts"]),
+        inputs=inputs,
+        configuration=provenance["configurations"][group]["value"],
+        seeds=tuple(provenance["seeds"][group]),
+    )
+
+
+def test_io_adapter_is_explicit_and_matches_committed_reference(
+    load_tool_module,
+) -> None:
+    module = load_tool_module("compare_r22_reference")
+    root = Path(__file__).resolve().parents[3]
+
+    assert tuple(module.GROUP_REGISTRY) == ("model_project", "io")
+    source = (root / "tools/reference_groups/io.py").read_text(encoding="utf-8")
+    assert "tests.support" not in source
+    assert module.compare_group(
+        root / "verification/r22/reference/manifest.json",
+        "io",
+    ) == {"group": "io", "status": "PASS", "artifact_count": 2}
+
+
+def test_io_adapter_replays_serialized_project_bytes(
+    load_tool_module,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_tool_module("compare_r22_reference")
+    adapter = module.GROUP_REGISTRY["io"]
+    context = _committed_group_context(module, "io")
+    monkeypatch.setitem(adapter.__globals__, "project_to_bytes", lambda _project: b"{}")
+
+    with pytest.raises(ValueError, match="project|field"):
+        adapter(context)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda context: replace(context, group="model_project"),
+        lambda context: replace(context, artifacts=context.artifacts[:-1]),
+        lambda context: replace(context, inputs=context.inputs[:-1]),
+        lambda context: replace(
+            context,
+            inputs=(replace(context.inputs[0], content=b"drift"), *context.inputs[1:]),
+        ),
+        lambda context: replace(context, configuration={"cases": []}),
+        lambda context: replace(context, seeds=(1,)),
+    ],
+)
+def test_io_adapter_rejects_replay_context_field_drift(
+    load_tool_module,
+    mutation,
+) -> None:
+    module = load_tool_module("compare_r22_reference")
+    adapter = module.GROUP_REGISTRY["io"]
+    context = _committed_group_context(module, "io")
+
+    with pytest.raises(ValueError, match="io|artifact|input|configuration|seed"):
+        adapter(mutation(context))
