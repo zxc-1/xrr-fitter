@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -73,6 +74,9 @@ def _reference(tmp_path: Path, *, include_npz: bool = False) -> Path:
     root = tmp_path / "reference"
     golden = root / "golden"
     golden.mkdir(parents=True)
+    replay_input = root / "xrr_fitter/examples/input.xy"
+    replay_input.parent.mkdir(parents=True)
+    replay_input.write_bytes(b"x\n\n\n")
     artifacts = []
     groups = {}
     for group in GROUPS:
@@ -165,6 +169,7 @@ def test_self_check_recomputes_every_file_hash(tmp_path: Path, load_tool_module)
         "source_commit": "a" * 40,
         "group_count": 8,
         "artifact_count": 9,
+        "input_count": 1,
     }
     (manifest.parent / "golden/physics.json").write_text("drift\n", encoding="utf-8")
     with pytest.raises(ValueError, match="hash|size"):
@@ -309,6 +314,7 @@ def test_registered_group_uses_closed_adapter_and_policy(tmp_path: Path, load_to
                     path="xrr_fitter/examples/input.xy",
                     size=4,
                     sha256=hashlib.sha256(b"x\n\n\n").hexdigest(),
+                    content=b"x\n\n\n",
                 ),
             ),
             configuration={"case": "model_project"},
@@ -337,3 +343,177 @@ def test_self_check_rejects_group_replay_metadata_drift(
 
     with pytest.raises(ValueError, match="artifact|input|metadata|policy"):
         module.self_check(manifest)
+
+
+def test_self_check_binds_replay_input_bytes(tmp_path: Path, load_tool_module) -> None:
+    module = load_tool_module("compare_r22_reference")
+    manifest = _reference(tmp_path)
+
+    assert module.self_check(manifest)["input_count"] == 1
+
+    replay_input = manifest.parent / "xrr_fitter/examples/input.xy"
+    replay_input.write_bytes(b"drift")
+    with pytest.raises(ValueError, match="input.*size|input.*hash"):
+        module.self_check(manifest)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "symlink", "extra"])
+def test_self_check_rejects_missing_symlink_or_extra_replay_input(
+    tmp_path: Path,
+    load_tool_module,
+    mutation: str,
+) -> None:
+    module = load_tool_module("compare_r22_reference")
+    manifest = _reference(tmp_path)
+    replay_input = manifest.parent / "xrr_fitter/examples/input.xy"
+    if mutation == "missing":
+        replay_input.unlink()
+    elif mutation == "symlink":
+        replay_input.unlink()
+        replay_input.symlink_to(manifest.parent / "golden/io.json")
+    else:
+        extra = replay_input.with_name("extra.xy")
+        extra.write_bytes(b"extra\n")
+
+    with pytest.raises(ValueError, match="input|symlink|undeclared|missing"):
+        module.self_check(manifest)
+
+
+def test_self_check_rejects_replay_input_path_traversal(
+    tmp_path: Path,
+    load_tool_module,
+) -> None:
+    module = load_tool_module("compare_r22_reference")
+    manifest = _reference(tmp_path)
+    _rewrite_manifest(
+        manifest,
+        lambda value: value["provenance"]["inputs"][0].update(path="../input.xy"),
+    )
+
+    with pytest.raises(ValueError, match="input.*path"):
+        module.self_check(manifest)
+
+
+def _committed_model_context(module):
+    root = Path(__file__).resolve().parents[3]
+    reference_root = root / "verification/r22/reference"
+    manifest = json.loads(
+        (reference_root / "manifest.json").read_text(encoding="utf-8")
+    )
+    provenance = manifest["provenance"]
+    by_id = {record["input_id"]: record for record in provenance["inputs"]}
+    entry = manifest["groups"]["model_project"]
+    inputs = tuple(
+        module.ReplayInput(
+            input_id=by_id[input_id]["input_id"],
+            input_class=by_id[input_id]["input_class"],
+            path=by_id[input_id]["path"],
+            size=by_id[input_id]["size"],
+            sha256=by_id[input_id]["sha256"],
+            content=(reference_root / by_id[input_id]["path"]).read_bytes(),
+        )
+        for input_id in entry["input_ids"]
+    )
+    return module.ReplayContext(
+        group="model_project",
+        artifacts=tuple(entry["artifacts"]),
+        inputs=inputs,
+        configuration=provenance["configurations"]["model_project"]["value"],
+        seeds=tuple(provenance["seeds"]["model_project"]),
+    )
+
+
+def _mutated_model_document(context, mutation):
+    replay_input = context.inputs[0]
+    document = json.loads(replay_input.content)
+    mutation(document)
+    content = _canonical(document)
+    changed = replace(
+        replay_input,
+        size=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+        content=content,
+    )
+    return replace(context, inputs=(changed, *context.inputs[1:]))
+
+
+def test_model_project_adapter_is_explicit_and_matches_committed_reference(
+    load_tool_module,
+) -> None:
+    module = load_tool_module("compare_r22_reference")
+    root = Path(__file__).resolve().parents[3]
+
+    assert tuple(module.GROUP_REGISTRY) == ("model_project",)
+    source = (root / "tools/reference_groups/model_project.py").read_text(encoding="utf-8")
+    assert "tests.support" not in source
+    assert module.compare_group(
+        root / "verification/r22/reference/manifest.json",
+        "model_project",
+    ) == {"group": "model_project", "status": "PASS", "artifact_count": 1}
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda context: replace(context, group="io"),
+        lambda context: replace(context, artifacts=()),
+        lambda context: replace(context, inputs=context.inputs[:-1]),
+        lambda context: replace(
+            context,
+            inputs=context.inputs + (context.inputs[0],),
+        ),
+        lambda context: replace(
+            context,
+            inputs=(replace(context.inputs[0], content=b"{}"), *context.inputs[1:]),
+        ),
+        lambda context: replace(
+            context,
+            inputs=(replace(context.inputs[0], input_id="wrong"), *context.inputs[1:]),
+        ),
+        lambda context: replace(
+            context,
+            inputs=(replace(context.inputs[0], input_class="wrong"), *context.inputs[1:]),
+        ),
+        lambda context: replace(
+            context,
+            inputs=(replace(context.inputs[0], path="wrong.json"), *context.inputs[1:]),
+        ),
+        lambda context: replace(context, configuration={"cases": ["single-layer"]}),
+        lambda context: replace(
+            context,
+            configuration={**context.configuration, "extra": True},
+        ),
+        lambda context: replace(context, seeds=(1,)),
+    ],
+)
+def test_model_project_adapter_rejects_replay_context_field_drift(
+    load_tool_module,
+    mutation,
+) -> None:
+    module = load_tool_module("compare_r22_reference")
+    adapter = module.GROUP_REGISTRY["model_project"]
+    context = _committed_model_context(module)
+
+    with pytest.raises(ValueError, match="model_project|artifact|input|configuration|seed"):
+        adapter(mutation(context))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda document: document.pop("algorithm_version"),
+        lambda document: document.update(extra=True),
+        lambda document: document["datasets"][0].pop("instrument"),
+        lambda document: document["datasets"][0].update(extra=True),
+    ],
+)
+def test_model_project_adapter_rejects_missing_or_extra_project_fields(
+    load_tool_module,
+    mutation,
+) -> None:
+    module = load_tool_module("compare_r22_reference")
+    adapter = module.GROUP_REGISTRY["model_project"]
+    context = _mutated_model_document(_committed_model_context(module), mutation)
+
+    with pytest.raises(ValueError, match="project|dataset|field"):
+        adapter(context)

@@ -62,6 +62,7 @@ class ReplayInput:
     path: str
     size: int
     sha256: str
+    content: bytes
 
 
 @dataclass(frozen=True)
@@ -156,22 +157,37 @@ def _artifact_index(artifacts: object) -> dict[str, dict[str, object]]:
     return by_path
 
 
-def _records(manifest: dict[str, object]) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
-    by_path = _artifact_index(manifest.get("artifacts"))
+def _input_index(manifest: dict[str, object]) -> dict[str, dict[str, object]]:
     provenance = manifest.get("provenance")
     if not isinstance(provenance, dict) or not isinstance(provenance.get("inputs"), list):
         raise ValueError("invalid reference provenance inputs")
-    known_input_ids = {
-        str(record.get("input_id"))
-        for record in provenance["inputs"]
-        if isinstance(record, dict)
-    }
+    by_id: dict[str, dict[str, object]] = {}
+    for record in provenance["inputs"]:
+        if not isinstance(record, dict):
+            raise ValueError("invalid reference provenance input")
+        input_id = str(record.get("input_id"))
+        path = _relative(record.get("path"))
+        if input_id in by_id or any(item["path"] == path for item in by_id.values()):
+            raise ValueError("duplicate reference provenance input")
+        by_id[input_id] = record
+    return by_id
+
+
+def _records(
+    manifest: dict[str, object],
+) -> tuple[
+    dict[str, dict[str, object]],
+    dict[str, dict[str, object]],
+    dict[str, dict[str, object]],
+]:
+    by_path = _artifact_index(manifest.get("artifacts"))
+    inputs = _input_index(manifest)
     normalized_groups = validate_groups(
         manifest.get("groups"),
         artifact_paths=set(by_path),
-        known_input_ids=known_input_ids,
+        known_input_ids=set(inputs),
     )
-    return normalized_groups, by_path
+    return normalized_groups, by_path, inputs
 
 
 def _valid_zip_metadata(info: zipfile.ZipInfo) -> bool:
@@ -258,8 +274,8 @@ def _manifest_identity(manifest: dict[str, object]) -> str:
     return source_commit
 
 
-def _tree_paths(root: Path, records: Mapping[str, object]) -> set[str]:
-    expected = {"manifest.json", *records}
+def _tree_paths(root: Path, expected_files: set[str]) -> set[str]:
+    expected = {"manifest.json", *expected_files}
     observed: set[str] = set()
     for candidate in root.rglob("*"):
         if candidate.is_symlink():
@@ -269,6 +285,19 @@ def _tree_paths(root: Path, records: Mapping[str, object]) -> set[str]:
     if observed != expected:
         raise ValueError("reference tree contains missing or undeclared files")
     return observed
+
+
+def _replay_input_content(root: Path, record: dict[str, object]) -> bytes:
+    relative = str(record["path"])
+    path = root.joinpath(*PurePosixPath(relative).parts)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"missing regular replay input: {relative}")
+    content = path.read_bytes()
+    expected_size = record.get("size")
+    expected_hash = record.get("sha256")
+    if len(content) != expected_size or hashlib.sha256(content).hexdigest() != expected_hash:
+        raise ValueError(f"replay input size or hash drift: {relative}")
+    return content
 
 
 def _validate_group_policies(
@@ -288,17 +317,21 @@ def self_check(manifest_path: str | Path) -> dict[str, object]:
     path = Path(manifest_path)
     manifest = _json(path, "reference manifest")
     source_commit = _manifest_identity(manifest)
-    groups, records = _records(manifest)
+    groups, records, inputs = _records(manifest)
     root = path.parent
     for record in records.values():
         _validate_artifact(root, record)
-    _tree_paths(root, records)
+    for record in inputs.values():
+        _replay_input_content(root, record)
+    expected_files = {*records, *(str(record["path"]) for record in inputs.values())}
+    _tree_paths(root, expected_files)
     _validate_group_policies(root, groups)
     return {
         "schema": manifest["schema"],
         "source_commit": source_commit,
         "group_count": len(groups),
         "artifact_count": len(records),
+        "input_count": len(inputs),
     }
 
 
@@ -312,17 +345,19 @@ def _artifact_value(root: Path, relative: str) -> object:
         return {key: archive[key].copy() for key in archive.files}
 
 
-def _replay_input(record: dict[str, object]) -> ReplayInput:
+def _replay_input(root: Path, record: dict[str, object]) -> ReplayInput:
     return ReplayInput(
         input_id=str(record["input_id"]),
         input_class=str(record["input_class"]),
         path=str(record["path"]),
         size=int(record["size"]),
         sha256=str(record["sha256"]),
+        content=_replay_input_content(root, record),
     )
 
 
 def _replay_context(
+    root: Path,
     manifest: dict[str, object],
     group: str,
     entry: dict[str, object],
@@ -336,7 +371,7 @@ def _replay_context(
         for record in input_records
     }
     replay_inputs = tuple(
-        _replay_input(by_id[input_id])
+        _replay_input(root, by_id[input_id])
         for input_id in entry["input_ids"]
     )
     configuration = configurations[group]
@@ -360,13 +395,14 @@ def compare_group(
     if group not in selected:
         raise ValueError(f"reference group is not registered: {group}")
     manifest = _json(Path(manifest_path), "reference manifest")
-    groups, _ = _records(manifest)
+    root = Path(manifest_path).parent
+    groups, _records_by_path, _inputs_by_id = _records(manifest)
     entry = groups[group]
     reference = {
-        relative: _artifact_value(Path(manifest_path).parent, relative)
+        relative: _artifact_value(root, relative)
         for relative in entry["artifacts"]
     }
-    actual = selected[group](_replay_context(manifest, group, entry))
+    actual = selected[group](_replay_context(root, manifest, group, entry))
     compare_value(reference, actual, entry.get("comparison_policy", "exact"))
     return {"group": group, "status": "PASS", "artifact_count": len(reference)}
 

@@ -6,6 +6,10 @@ The sidecar supplies only data artifacts that are absent from that archive.
 An independently reviewed, checked-in lock binds its manifest and complete tree.
 Every sidecar file is also declared by relative path, size, and SHA-256.
 The normalized manifest binds both source identities without recording host paths.
+Replay inputs are copied from the already hash-bound archive at their declared
+relative paths; they never come from the untrusted sidecar payload. Golden
+artifacts remain under ``golden/`` and cannot collide with those input paths.
+The comparison tool rechecks both classes of file before an adapter sees bytes.
 Golden path normalization is injective, so no artifact can overwrite another.
 No R22 module is imported or executed, and no missing golden field is synthesized.
 Publication owns one output directory and replaces it only after full validation.
@@ -200,7 +204,7 @@ def _archive_payload(
     archive: Path,
     receipt: dict[str, object],
     input_records: list[tuple[str, int, str]],
-) -> tuple[bytes, bytes]:
+) -> tuple[bytes, bytes, list[tuple[str, bytes]]]:
     archive_content = _regular_file(archive, "R22 archive")
     if _sha256(archive_content) != receipt["archive_sha256"]:
         raise ValueError("R22 archive hash does not match freeze receipt")
@@ -213,7 +217,8 @@ def _archive_payload(
         raise ValueError("product manifest hash does not match freeze receipt")
     _validate_identity(identity)
     _validate_archive_inputs(found, input_records)
-    return identity, product
+    inputs = [(path, found[path]) for path, _size, _sha in input_records]
+    return identity, product, inputs
 
 
 def _artifact_record(value: object) -> tuple[str, int, str]:
@@ -360,6 +365,7 @@ def _normalized_manifest(
     sidecar_tree_hash: str,
     sidecar_lock_content: bytes,
     payload: list[tuple[str, bytes]],
+    archive_inputs: list[tuple[str, bytes]],
     archive_hash: str,
     provenance: dict[str, object],
 ) -> tuple[dict[str, object], list[tuple[str, bytes]]]:
@@ -381,7 +387,12 @@ def _normalized_manifest(
         "groups": _normalized_groups(sidecar_manifest, source_to_output),
         "artifacts": artifacts,
     }
-    return manifest, [(output, content) for _, output, content in converted]
+    normalized = [(output, content) for _, output, content in converted]
+    normalized.extend(archive_inputs)
+    paths = [path for path, _content in normalized]
+    if "manifest.json" in paths or len(paths) != len(set(paths)):
+        raise ValueError("reference artifacts and replay inputs collide")
+    return manifest, normalized
 
 
 def _validate_output(output: Path) -> None:
@@ -439,7 +450,11 @@ def build_reference(
         artifact_paths={path for path, _content in payload},
         known_input_ids=known_input_ids,
     )
-    identity, product = _archive_payload(archive_path, receipt, input_records)
+    identity, product, archive_inputs = _archive_payload(
+        archive_path,
+        receipt,
+        input_records,
+    )
     sidecar_lock_content = _sidecar_lock(
         Path(sidecar_lock),
         sidecar_content,
@@ -455,6 +470,7 @@ def build_reference(
         sidecar_tree_hash,
         sidecar_lock_content,
         payload,
+        archive_inputs,
         _sha256(archive_path.read_bytes()),
         provenance,
     )

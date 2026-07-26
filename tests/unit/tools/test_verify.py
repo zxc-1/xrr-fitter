@@ -17,9 +17,9 @@ def _commands(module) -> tuple[tuple[str, ...], ...]:
     )
 
 
-def test_initial_registry_is_exact(load_tool_module) -> None:
+def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
     module = load_tool_module("verify")
-    assert tuple(module.MODE_REGISTRY) == ("quality", "tools")
+    assert tuple(module.MODE_REGISTRY) == ("quality", "tools", "unit")
     expected_quality = (
         (module.PYTHON, "tools/check_radon.py", "--output", f"{module.REPORT}/radon.json"),
         module.PYTEST_PREFIX
@@ -32,15 +32,21 @@ def test_initial_registry_is_exact(load_tool_module) -> None:
         ),
     )
     expected_tools = (module.PYTEST_PREFIX + ("tests/unit/tools", "-q"),)
+    expected_unit = (module.PYTEST_PREFIX + ("tests/unit/model", "-q"),)
     assert module.MODE_REGISTRY["quality"].commands == expected_quality
     assert module.MODE_REGISTRY["tools"].commands == expected_tools
+    assert module.MODE_REGISTRY["unit"].commands == expected_unit
 
 
-def test_registry_uses_argument_vectors_and_outcome_plugin(load_tool_module) -> None:
+def test_registry_uses_nonempty_argument_vectors(load_tool_module) -> None:
     module = load_tool_module("verify")
     for mode in module.MODE_REGISTRY.values():
         assert all(isinstance(command, tuple) and command for command in mode.commands)
         assert all(not isinstance(command, str) for command in mode.commands)
+
+
+def test_every_pytest_command_uses_outcome_plugin(load_tool_module) -> None:
+    module = load_tool_module("verify")
     pytest_commands = [command for command in _commands(module) if "pytest" in command]
     assert pytest_commands
     assert all("tests.outcome_gate" in command for command in pytest_commands)

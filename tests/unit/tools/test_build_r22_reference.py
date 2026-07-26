@@ -211,6 +211,7 @@ def test_builder_normalizes_exact_sidecar_groups_without_running_r22(
             "input_ids": ["fixture"],
         }
     assert (output / "manifest.json").is_file()
+    assert (output / "xrr_fitter/examples/input.xy").read_bytes() == b"0.1 1.0\n"
 
 
 def test_builder_is_atomic_rejects_drift_and_does_not_touch_siblings(
