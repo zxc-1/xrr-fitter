@@ -238,7 +238,8 @@ class _PeriodicTangents:
         exponent_tangent = -2.0 * ((upper_tangent * lower[:, None] + upper[:, None] * lower_tangent) * sigma**2 + upper[:, None] * lower[:, None] * 2.0 * sigma * sigma_tangent)
         factor = np.exp(exponent)
         reflection = bare * factor
-        tangent = bare_tangent * factor[:, None] + bare[:, None] * factor[:, None] * exponent_tangent
+        factor_tangent = factor[:, None] * exponent_tangent
+        tangent = bare_tangent * factor[:, None] + bare[:, None] * factor_tangent
         self.interface_cache[interface] = (reflection, tangent)
         return reflection, tangent
 

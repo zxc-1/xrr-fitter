@@ -34,7 +34,14 @@ def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
     expected_tools = (module.PYTEST_PREFIX + ("tests/unit/tools", "-q"),)
     expected_unit = (
         module.PYTEST_PREFIX
-        + ("tests/unit/model", "tests/unit/io", "tests/unit/physics", "-q"),
+        + (
+            "tests/unit/model",
+            "tests/unit/io",
+            "tests/unit/physics",
+            "tests/unit/test_evaluation.py",
+            "tests/unit/fit",
+            "-q",
+        ),
     )
     expected_regression = (
         module.PYTEST_PREFIX + ("tests/regression/test_numerical_reference.py", "-q"),

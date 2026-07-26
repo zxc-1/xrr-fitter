@@ -37,6 +37,9 @@ Execution boundaries:
 - __import__, importlib, exec, and eval cannot form discovery channels;
 - wildcard imports cannot hide dependency ownership.
 
+Fit evaluation is a top-level shared boundary; fit and analysis may consume it
+without importing each other or recreating a second numerical chain.
+
 Graph validation also rejects every multi-module strongly connected component.
 Focused fixtures cover absolute, relative, aliased, local, and type-only forms
 so a future simplification of the scanner cannot silently weaken the policy.
@@ -516,6 +519,17 @@ def test_fit_and_analysis_never_import_each_other() -> None:
         root = PACKAGE / owner
         if root.is_dir():
             assert all(forbidden not in _internal_imports(path) for path in root.rglob("*.py"))
+
+
+def test_shared_evaluation_and_fit_have_one_declared_numerical_boundary() -> None:
+    required = (
+        "evaluation.py", "fit/__init__.py", "fit/objective.py", "fit/parameters.py",
+        "fit/problem.py", "fit/initialization.py", "fit/screening.py", "fit/candidates.py",
+    )
+    assert all((PACKAGE / path).is_file() for path in required)
+    assert (PACKAGE / "fit" / "__init__.py").read_bytes() == b""
+    assert not (PACKAGE / "fit" / "evaluation.py").exists()
+    assert not (PACKAGE / "fit" / "jacobian.py").exists()
 
 
 def _fixture_kinds(module: str, source: str, *known_modules: str) -> set[str]:
