@@ -1,0 +1,70 @@
+name: verify
+
+"on":
+  push:
+    branches:
+      - r23-clean-architecture
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    runs-on: [self-hosted, macOS, ARM64, xrr-ci]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify quality
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
+          python3.12 -m venv "$RUNNER_TEMP/venv"
+          PYTHON="$RUNNER_TEMP/venv/bin/python"
+          "$PYTHON" -m pip install pip==26.1.2
+          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          "$PYTHON" tools/verify.py quality
+
+  tools:
+    runs-on: [self-hosted, macOS, ARM64, xrr-ci]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
+          python3.12 -m venv "$RUNNER_TEMP/venv"
+          PYTHON="$RUNNER_TEMP/venv/bin/python"
+          "$PYTHON" -m pip install pip==26.1.2
+          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          "$PYTHON" tools/verify.py tools
+
+  checkpoint:
+    needs: [quality, tools]
+    if: always()
+    runs-on: [self-hosted, macOS, ARM64, xrr-ci]
+    timeout-minutes: 10
+    steps:
+      - name: Require all gates
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          TOOLS_RESULT: ${{ needs.tools.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$QUALITY_RESULT" = success
+          test "$TOOLS_RESULT" = success

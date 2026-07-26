@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools==75.8.2", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xrr-fitter"
+version = "0.2.0"
+description = "X-ray reflectivity fitting application"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "numpy>=2.0,<3",
+  "scipy>=1.14,<2",
+  "periodictable>=2.0,<3",
+  "pandas>=2.2,<3",
+  "xlsxwriter>=3.2,<4",
+  "matplotlib>=3.9,<4",
+  "PySide6>=6.8,<7",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.3,<9",
+  "pytest-qt>=4.4,<5",
+  "openpyxl>=3.1,<4",
+  "radon==6.0.1",
+  "build>=1.2,<2",
+  "refnx @ git+https://github.com/refnx/refnx.git@3d3808f66a14a8200eba020f8dff53f4d1e059bc",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["xrr_fitter*"]
+namespaces = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-config --strict-markers -ra"
+markers = [
+  "slow: long-running statistical or recovery verification",
+  "approved_data: requires the approved, hash-bound approved-data manifest",
+  "visible_gui: requires a visible desktop session",
+  "spawn: starts real multiprocessing spawn workers",
+]
