@@ -54,7 +54,7 @@ def _standard_job(mode: str) -> dict[str, object]:
 
 def _checkpoint_job() -> dict[str, object]:
     return {
-        "needs": ["quality", "tools", "unit"],
+        "needs": ["quality", "tools", "unit", "regression"],
         "if": "always()",
         "runs-on": RUNNER,
         "timeout-minutes": 10,
@@ -65,6 +65,7 @@ def _checkpoint_job() -> dict[str, object]:
                     "QUALITY_RESULT": "${{ needs.quality.result }}",
                     "TOOLS_RESULT": "${{ needs.tools.result }}",
                     "UNIT_RESULT": "${{ needs.unit.result }}",
+                    "REGRESSION_RESULT": "${{ needs.regression.result }}",
                 },
                 "shell": "bash",
                 "run": (
@@ -72,6 +73,7 @@ def _checkpoint_job() -> dict[str, object]:
                     'test "$QUALITY_RESULT" = success\n'
                     'test "$TOOLS_RESULT" = success\n'
                     'test "$UNIT_RESULT" = success\n'
+                    'test "$REGRESSION_RESULT" = success\n'
                 ),
             }
         ],
@@ -91,6 +93,7 @@ def _expected_workflow() -> dict[str, object]:
             "quality": _standard_job("quality"),
             "tools": _standard_job("tools"),
             "unit": _standard_job("unit"),
+            "regression": _standard_job("regression"),
             "checkpoint": _checkpoint_job(),
         },
     }
@@ -104,13 +107,13 @@ def test_initial_workflow_has_exact_jobs_permissions_and_trigger() -> None:
     payload = _payload()
     assert payload["permissions"] == {"contents": "read"}
     assert payload["on"] == {"push": {"branches": ["r23-clean-architecture"]}}
-    assert set(payload["jobs"]) == {"quality", "tools", "unit", "checkpoint"}
+    assert set(payload["jobs"]) == {"quality", "tools", "unit", "regression", "checkpoint"}
 
 
 def test_checkpoint_job_contract() -> None:
     payload = _payload()
     checkpoint = payload["jobs"]["checkpoint"]
-    assert checkpoint["needs"] == ["quality", "tools", "unit"]
+    assert checkpoint["needs"] == ["quality", "tools", "unit", "regression"]
     assert checkpoint["if"] == "always()"
     assert checkpoint["runs-on"] == RUNNER
     assert checkpoint["timeout-minutes"] == 10
@@ -124,11 +127,13 @@ def test_checkpoint_step_requires_every_gate() -> None:
         "QUALITY_RESULT": "${{ needs.quality.result }}",
         "TOOLS_RESULT": "${{ needs.tools.result }}",
         "UNIT_RESULT": "${{ needs.unit.result }}",
+        "REGRESSION_RESULT": "${{ needs.regression.result }}",
     }
     commands = step["run"].splitlines()
     assert 'test "$QUALITY_RESULT" = success' in commands
     assert 'test "$TOOLS_RESULT" = success' in commands
     assert 'test "$UNIT_RESULT" = success' in commands
+    assert 'test "$REGRESSION_RESULT" = success' in commands
 
 
 def test_concurrency_never_cancels_an_exact_sha_run() -> None:
@@ -165,7 +170,7 @@ def _assert_standard_job(name: str, job: dict[str, object]) -> None:
 
 def test_standard_jobs_use_required_runner_and_explicit_verifier_modes() -> None:
     jobs = _payload()["jobs"]
-    for name in ("quality", "tools", "unit"):
+    for name in ("quality", "tools", "unit", "regression"):
         _assert_standard_job(name, jobs[name])
 
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import warnings
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
@@ -292,6 +294,22 @@ def test_unregistered_group_fails_without_discovery(tmp_path: Path, load_tool_mo
         module.compare_group(manifest, "physics", registry={})
 
 
+def test_physics_adapter_replays_committed_reference_after_registration(
+    load_tool_module,
+) -> None:
+    module = load_tool_module("compare_r22_reference")
+    root = Path(__file__).resolve().parents[3]
+    assert tuple(module.GROUP_REGISTRY) == ("model_project", "io", "physics")
+    source = (root / "tools/reference_groups/physics.py").read_text(encoding="utf-8")
+    assert "tests.support" not in source
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert module.compare_group(
+            root / "verification/r22/reference/manifest.json",
+            "physics",
+        ) == {"group": "physics", "status": "PASS", "artifact_count": 2}
+
+
 def test_registered_group_uses_closed_adapter_and_policy(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("compare_r22_reference")
     manifest = _reference(tmp_path)
@@ -443,7 +461,7 @@ def test_model_project_adapter_is_explicit_and_matches_committed_reference(
     module = load_tool_module("compare_r22_reference")
     root = Path(__file__).resolve().parents[3]
 
-    assert tuple(module.GROUP_REGISTRY) == ("model_project", "io")
+    assert tuple(module.GROUP_REGISTRY) == ("model_project", "io", "physics")
     source = (root / "tools/reference_groups/model_project.py").read_text(encoding="utf-8")
     assert "tests.support" not in source
     assert module.compare_group(
@@ -554,7 +572,7 @@ def test_io_adapter_is_explicit_and_matches_committed_reference(
     module = load_tool_module("compare_r22_reference")
     root = Path(__file__).resolve().parents[3]
 
-    assert tuple(module.GROUP_REGISTRY) == ("model_project", "io")
+    assert tuple(module.GROUP_REGISTRY) == ("model_project", "io", "physics")
     source = (root / "tools/reference_groups/io.py").read_text(encoding="utf-8")
     assert "tests.support" not in source
     assert module.compare_group(
@@ -599,4 +617,64 @@ def test_io_adapter_rejects_replay_context_field_drift(
     context = _committed_group_context(module, "io")
 
     with pytest.raises(ValueError, match="io|artifact|input|configuration|seed"):
+        adapter(mutation(context))
+
+
+# Physics replay rejects drift across every hash-bound input and configuration axis.
+def _physics_configuration_drift(context, path: tuple[str, ...], value: object):
+    configuration = deepcopy(context.configuration)
+    target = configuration
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    return replace(context, configuration=configuration)
+
+
+def _physics_project_content_drift(context):
+    replay_input = context.inputs[0]
+    document = json.loads(replay_input.content)
+    document["datasets"][0]["dataset_id"] += "-drift"
+    content = _canonical(document)
+    changed = replace(
+        replay_input,
+        size=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+        content=content,
+    )
+    return replace(context, inputs=(changed, context.inputs[1]))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda context: replace(context, group="io"),
+        lambda context: replace(context, artifacts=context.artifacts[:-1]),
+        lambda context: replace(context, artifacts=tuple(reversed(context.artifacts))),
+        lambda context: replace(context, inputs=context.inputs[:-1]),
+        lambda context: replace(context, inputs=tuple(reversed(context.inputs))),
+        lambda context: replace(context, inputs=(replace(context.inputs[0], input_id="single-layer-project"), context.inputs[1])),
+        lambda context: replace(context, inputs=(replace(context.inputs[0], path=context.inputs[1].path), context.inputs[1])),
+        lambda context: replace(context, inputs=(replace(context.inputs[0], content=b"drift"), context.inputs[1])),
+        lambda context: replace(context, inputs=(replace(context.inputs[0], sha256="0" * 64), context.inputs[1])),
+        _physics_project_content_drift,
+        lambda context: _physics_configuration_drift(context, ("q_grid", "count"), 127),
+        lambda context: _physics_configuration_drift(context, ("q_grid", "start"), 0.006),
+        lambda context: _physics_configuration_drift(context, ("q_grid", "stop"), 0.36),
+        lambda context: _physics_configuration_drift(context, ("theta_grid", "count"), 127),
+        lambda context: _physics_configuration_drift(context, ("theta_grid", "start"), 0.06),
+        lambda context: _physics_configuration_drift(context, ("theta_grid", "stop"), 2.6),
+        lambda context: _physics_configuration_drift(context, ("relative_sigma",), 0.003),
+        lambda context: _physics_configuration_drift(context, ("profile_step_a",), 1.0),
+        lambda context: replace(context, configuration={**context.configuration, "extra": True}),
+        lambda context: replace(context, seeds=(1,)),
+    ],
+)
+def test_physics_adapter_rejects_replay_context_field_drift(
+    load_tool_module,
+    mutation,
+) -> None:
+    module = load_tool_module("compare_r22_reference")
+    adapter = module.GROUP_REGISTRY["physics"]
+    context = _committed_group_context(module, "physics")
+    with pytest.raises(ValueError, match="physics|artifact|input|configuration|seed"):
         adapter(mutation(context))

@@ -19,7 +19,7 @@ def _commands(module) -> tuple[tuple[str, ...], ...]:
 
 def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
     module = load_tool_module("verify")
-    assert tuple(module.MODE_REGISTRY) == ("quality", "tools", "unit")
+    assert tuple(module.MODE_REGISTRY) == ("quality", "tools", "unit", "regression")
     expected_quality = (
         (module.PYTHON, "tools/check_radon.py", "--output", f"{module.REPORT}/radon.json"),
         module.PYTEST_PREFIX
@@ -33,11 +33,16 @@ def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
     )
     expected_tools = (module.PYTEST_PREFIX + ("tests/unit/tools", "-q"),)
     expected_unit = (
-        module.PYTEST_PREFIX + ("tests/unit/model", "tests/unit/io", "-q"),
+        module.PYTEST_PREFIX
+        + ("tests/unit/model", "tests/unit/io", "tests/unit/physics", "-q"),
+    )
+    expected_regression = (
+        module.PYTEST_PREFIX + ("tests/regression/test_numerical_reference.py", "-q"),
     )
     assert module.MODE_REGISTRY["quality"].commands == expected_quality
     assert module.MODE_REGISTRY["tools"].commands == expected_tools
     assert module.MODE_REGISTRY["unit"].commands == expected_unit
+    assert module.MODE_REGISTRY["regression"].commands == expected_regression
 
 
 def test_registry_uses_nonempty_argument_vectors(load_tool_module) -> None:
