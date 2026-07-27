@@ -6,12 +6,42 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from xrr_fitter.io.xy import read_xy, resolution_to_sigma_q
+from xrr_fitter.io.xy import read_xy, resolution_to_sigma_q, xy_bytes
 from xrr_fitter.model.data import BeamSpec, DataColumnMapping, with_fit_mask
 
 
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures/source/header_and_duplicates.xy"
 MONO = BeamSpec(kind="monochromatic")
+
+
+def test_xy_bytes_uses_the_canonical_export_format() -> None:
+    angles = np.array([0.08, 1.234567890123])
+    intensities = np.array([0.5, 1.2345678901234567e-8])
+
+    content = xy_bytes(angles, intensities)
+
+    assert content == (
+        b"# 2theta_deg intensity\n"
+        b"0.0800000000 5.0000000000000000e-01\n"
+        b"1.2345678901 1.2345678901234567e-08\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("angles", "intensities"),
+    (
+        (np.array([[0.1]]), np.array([1.0])),
+        (np.array([0.1, 0.2]), np.array([1.0])),
+        (np.array([0.1]), np.array([np.nan])),
+        (np.array([]), np.array([])),
+    ),
+)
+def test_xy_bytes_rejects_invalid_curve_axes(
+    angles: np.ndarray,
+    intensities: np.ndarray,
+) -> None:
+    with pytest.raises(ValueError, match="curve axes"):
+        xy_bytes(angles, intensities)
 
 
 def _write_numeric_curve(

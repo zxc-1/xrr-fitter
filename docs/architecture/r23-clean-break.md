@@ -526,6 +526,8 @@ local import 或 `TYPE_CHECKING` 绕环。
 - `examples.py`：确定性示例生成和重定位验证。
 
 I/O 模块不得导入 `fit`、`analysis`、`services`、`api` 或 `gui`。
+唯一例外是 `io.examples` 可调用 `physics.stack` 和 `physics.reflectivity`
+生成受审的确定性预测曲线；其他 `io -> physics` 依赖仍禁止。
 
 ### 5.3 `physics`
 
@@ -644,6 +646,10 @@ package-level `model -> model` 之内还必须满足 5.1 节的 module-level DAG
 仅允许 `gui`。因此 `pytest`、`pytestqt`、`refnx`、`openpyxl`、`radon`、`build`
 以及任何以后意外出现的 root 在 `src/` 中都会失败；test/tool dependency 不获得
 production 豁免。
+
+package DAG 的唯一具名例外是 `io.examples -> physics.stack` 和
+`io.examples -> physics.reflectivity`，只用于从固定 model 声明生成示例预测曲线；
+checker 仍拒绝该 source module 的其他 physics target 以及任何其他 I/O module 的该依赖。
 
 进程创建同样采用穷尽规则：除 `services.workers` 外，`src/` 中任何
 `multiprocessing` import 都失败；唯一特例是 `__main__.py` 中 exact AST 形式
@@ -2521,7 +2527,7 @@ cd /Users/dala/Desktop/xrr-rewrite-r23 && env -u PYTHONPATH PYTHONDONTWRITEBYTEC
 - [ ] 提交：
 
 ```bash
-cd /Users/dala/Desktop/xrr-rewrite-r23 && git diff --check && git add src/xrr_fitter/io/export_run.py src/xrr_fitter/io/export_tables.py src/xrr_fitter/io/export_plots.py src/xrr_fitter/io/examples.py tests/unit/io/test_export_run.py tests/unit/io/test_export_tables.py tests/unit/io/test_export_plots.py tests/unit/io/test_examples.py examples/single-layer.xy examples/single-layer.xrrproj.json examples/mo-si-periodic.xy examples/mo-si-periodic.xrrproj.json docs/architecture/r22-r23-test-ledger.csv && git diff --cached --check && git diff --cached --name-status && git commit -m 'refactor: migrate deterministic export and example IO' && test -z "$(git status --porcelain=v1 --untracked-files=all)"
+cd /Users/dala/Desktop/xrr-rewrite-r23 && git diff --check && git add src/xrr_fitter/io/export_run.py src/xrr_fitter/io/export_tables.py src/xrr_fitter/io/export_plots.py src/xrr_fitter/io/examples.py src/xrr_fitter/io/xy.py tests/unit/io/test_export_run.py tests/unit/io/test_export_tables.py tests/unit/io/test_export_plots.py tests/unit/io/test_examples.py tests/unit/io/test_xy_reader.py tests/architecture/test_dependency_rules.py examples/single-layer.xy examples/single-layer.xrrproj.json examples/mo-si-periodic.xy examples/mo-si-periodic.xrrproj.json docs/architecture/r22-r23-test-ledger.csv docs/architecture/r23-clean-break.md && git diff --cached --check && git diff --cached --name-status && git commit -m 'refactor: migrate deterministic export and example IO' && test -z "$(git status --porcelain=v1 --untracked-files=all)"
 ```
 
 ### 任务 10：迁移服务层并发布完整公共 API

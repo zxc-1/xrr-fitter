@@ -76,6 +76,29 @@ ALLOWED = {
     "__main__": {"gui"},
     "__init__": set(),
 }
+PACKAGE_EDGE_EXCEPTIONS = {
+    "io.examples": {"physics.reflectivity", "physics.stack"},
+}
+# Package exceptions are exact directed module edges, never owner-wide grants.
+# The mapping key names the only source module that receives an exception.
+# Every mapping value names one complete target module rather than its package.
+# Ordinary owner rules remain authoritative for every target outside the set.
+# Example generation predates services but must execute canonical physics.
+# Moving that calculation into model would invert the declared dependency DAG.
+# Copying the calculation into IO would create a second numerical authority.
+# Opaque committed curve constants would make regeneration unverifiable.
+# The two listed targets are the complete calculation surface needed here.
+# Importing another physics module from io.examples is therefore a violation.
+# Importing either target from another IO module is also a violation.
+# Exceptions do not propagate through aliases, packages, or transitive imports.
+# The fixture below proves allowed targets, a wrong target, and a wrong source.
+# The exhaustive filesystem check applies the same rule to production modules.
+# The fast path-level check only rejects owners with no possible valid edge.
+# The AST rule is decisive because it retains each resolved module target.
+# Package roots cannot appear in this exception table as shorthand targets.
+# The architecture document records the same two edges for human review.
+# The graph phase still records both real edges for cycle detection.
+# Any future exception requires its own exact mapping and three-way fixture.
 MODEL_ALLOWED = {
     "data": set(),
     "instrument": set(),
@@ -204,7 +227,13 @@ def _package_violations(
     owner = _owner(module)
     if owner not in ALLOWED:
         return [_violation("package-owner", module, owner, node)]
-    forbidden = sorted({_owner(target) for target in targets} - ALLOWED[owner])
+    allowed = ALLOWED[owner]
+    exceptions = PACKAGE_EDGE_EXCEPTIONS.get(module, set())
+    forbidden = sorted(
+        target
+        for target in targets
+        if _owner(target) not in allowed and target not in exceptions
+    )
     return [_violation("package-edge", module, target, node) for target in forbidden]
 
 
@@ -507,7 +536,12 @@ def _package_owner(path: Path) -> tuple[Path, str]:
 def _assert_import_policy(path: Path) -> None:
     relative, owner = _package_owner(path)
     assert owner in ALLOWED, f"unregistered package owner: {relative}"
-    assert _internal_imports(path) <= ALLOWED[owner], relative
+    module = ".".join(relative.with_suffix("").parts)
+    exception_owners = {
+        _owner(target) for target in PACKAGE_EDGE_EXCEPTIONS.get(module, set())
+    }
+    allowed = ALLOWED[owner] | exception_owners
+    assert _internal_imports(path) <= allowed, relative
 
 
 def test_all_internal_imports_follow_package_allowlist() -> None:
@@ -583,6 +617,28 @@ def build():
 
     forbidden = source + "\ndef bad():\n    from xrr_fitter.analysis import report\n"
     assert "package-edge" in _fixture_kinds("fit.search", forbidden, *known, "analysis.report")
+
+
+def test_fixture_checker_allows_only_examples_to_compose_physics() -> None:
+    source = """
+from xrr_fitter.physics.reflectivity import instrument_reflectivity
+from xrr_fitter.physics.stack import expand_structure
+"""
+    known = {
+        "io.examples",
+        "io.export_run",
+        "physics.parratt",
+        "physics.reflectivity",
+        "physics.stack",
+    }
+
+    assert _module_violations("io.examples", source, known) == ()
+    assert "package-edge" in _fixture_kinds("io.export_run", source, *known)
+    assert "package-edge" in _fixture_kinds(
+        "io.examples",
+        "from xrr_fitter.physics.parratt import parratt_reflectivity",
+        *known,
+    )
 
 
 def test_fixture_checker_enforces_model_module_dag_and_services_composition() -> None:

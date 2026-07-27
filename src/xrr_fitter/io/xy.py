@@ -1,4 +1,8 @@
-"""Lossless XRR text import with stable source provenance."""
+"""Canonical XRR text serialization and lossless provenance-aware import.
+
+Generated curves use one stable two-column ASCII representation. Import keeps
+the original bytes, raw rows, parse status, and derived row identities intact.
+"""
 
 from __future__ import annotations
 
@@ -29,6 +33,28 @@ class _MergedRows:
     sigmas: np.ndarray
     resolutions: np.ndarray
     row_groups: tuple[tuple[int, ...], ...]
+
+
+def xy_bytes(two_theta_deg: object, intensity: object) -> bytes:
+    """Serialize one finite curve using the canonical two-column XY format."""
+    angles = np.asarray(two_theta_deg, dtype=float)
+    intensities = np.asarray(intensity, dtype=float)
+    valid = (
+        angles.ndim == 1
+        and intensities.ndim == 1
+        and angles.size > 0
+        and angles.shape == intensities.shape
+        and np.all(np.isfinite(angles))
+        and np.all(np.isfinite(intensities))
+    )
+    if not valid:
+        raise ValueError("curve axes must be aligned nonempty finite vectors")
+    rows = ["# 2theta_deg intensity"]
+    rows.extend(
+        f"{angle:.10f} {value:.16e}"
+        for angle, value in zip(angles, intensities, strict=True)
+    )
+    return ("\n".join(rows) + "\n").encode("ascii")
 
 
 def _numeric_columns(row: str) -> list[float] | None:
