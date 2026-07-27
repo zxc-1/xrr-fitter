@@ -1,3 +1,12 @@
+"""Joint fitting contracts for aligned search state and atomic replay.
+
+The suite exercises real local projection for two datasets, shared-coordinate
+ranking, atomic checkpoint batches, resume validation, pickle handoff, and batch
+dispatch. Candidate-local objectives remain distinct from the persisted global
+ranking objective. A real analysis pass verifies that uncertainty history keeps
+that shared ranking instead of silently reverting to one dataset's objective.
+"""
+
 from __future__ import annotations
 
 from dataclasses import fields, replace
@@ -8,11 +17,16 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from tests.support.model_cases import prepared_data, simple_structure
+from tests.support.model_cases import dataset_project, prepared_data, project, simple_structure
 from xrr_fitter.fit.problem import compile_fit_problem
-from xrr_fitter.model.fitting import FitConfig, SearchBudget
+from xrr_fitter.model.fitting import (
+    FitConfig,
+    SearchBudget,
+    candidate_selection_objective,
+)
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import ParameterReference, ParameterSetting, SharingRule
+from xrr_fitter.model.project import validate_project
 
 
 SHARED_NAME = "component.0.density_scale"
@@ -151,12 +165,25 @@ def _staged_joint_problem():
     )
 
 
+def _asymmetric_joint_problem():
+    api = import_module("xrr_fitter.fit.joint_problem")
+    return api.compile_joint_problem(
+        ("left", "right"),
+        (
+            _problem(seed=869, size=40),
+            _staged_problem(seed=869, size=48),
+        ),
+        _sharing_rules(),
+    )
+
+
 def _assert_atomic_checkpoints(checkpoints) -> None:
     assert tuple(batch[0].stage for batch in checkpoints) == ("B", "C", "D", "E")
     assert all(len(batch) == 2 for batch in checkpoints)
     for batch in checkpoints:
         assert len({value.stage for value in batch}) == 1
         assert len({value.joint_layout_fingerprint for value in batch}) == 1
+        assert all(value.runtime_warnings == batch[0].runtime_warnings for value in batch)
         assert tuple(candidate.candidate_id for candidate in batch[0].candidates) == tuple(
             candidate.candidate_id for candidate in batch[1].candidates
         )
@@ -165,6 +192,7 @@ def _assert_atomic_checkpoints(checkpoints) -> None:
 def _assert_aligned_results(results) -> None:
     left, right = results
     assert left.best_index == right.best_index
+    assert left.warnings == right.warnings
     assert left.child_seeds == right.child_seeds
     assert left.stage_summaries == right.stage_summaries
     assert tuple(candidate.candidate_id for candidate in left.candidates) == tuple(
@@ -207,6 +235,73 @@ def test_joint_pipeline_projects_aligned_results_and_atomic_checkpoints() -> Non
     assert len(results) == 2
     _assert_atomic_checkpoints(checkpoints)
     _assert_aligned_results(results)
+
+
+def test_joint_analysis_publishes_coherent_shared_ranking_history() -> None:
+    fit_api = import_module("xrr_fitter.fit.joint_pipeline")
+    analysis_api = import_module("xrr_fitter.analysis.report")
+    joint = _joint_problem()
+    searches = fit_api.run_joint_fit(fit_api.JointFitRequest(joint))
+    best_candidates = tuple(search.best_candidate for search in searches)
+    assert all(best is not None for best in best_candidates)
+    assert all(
+        candidate_selection_objective(best) != best.objective
+        for best in best_candidates
+    )
+    results = tuple(
+        analysis_api.analyze_search_result(problem, search, profile_names=())
+        for problem, search in zip(joint.problems, searches, strict=True)
+    )
+
+    summaries = tuple(result.stage_summaries[-1] for result in results)
+    assert summaries[0] == summaries[1]
+    assert all(
+        summary.best_objective == candidate_selection_objective(best)
+        for summary, best in zip(summaries, best_candidates, strict=True)
+    )
+
+
+def test_joint_analysis_results_are_publishable_as_one_project() -> None:
+    fit_api = import_module("xrr_fitter.fit.joint_pipeline")
+    analysis_api = import_module("xrr_fitter.analysis.report")
+    joint = _joint_problem()
+    searches = fit_api.run_joint_fit(fit_api.JointFitRequest(joint))
+    results = tuple(
+        analysis_api.analyze_search_result(problem, search, profile_names=())
+        for problem, search in zip(joint.problems, searches, strict=True)
+    )
+    datasets = tuple(
+        dataset_project(dataset_id, result=result)
+        for dataset_id, result in zip(joint.dataset_ids, results, strict=True)
+    )
+
+    published = replace(project(*datasets), batch_mode="joint")
+    validate_project(published)
+
+    assert tuple(dataset.dataset_id for dataset in published.datasets) == joint.dataset_ids
+    assert tuple(dataset.last_valid_result for dataset in published.datasets) == results
+
+
+def test_joint_analysis_publishes_dataset_local_classification_to_one_project() -> None:
+    fit_api = import_module("xrr_fitter.fit.joint_pipeline")
+    analysis_api = import_module("xrr_fitter.analysis.report")
+    joint = _asymmetric_joint_problem()
+    searches = fit_api.run_joint_fit(fit_api.JointFitRequest(joint))
+    results = tuple(
+        analysis_api.analyze_search_result(problem, search, profile_names=())
+        for problem, search in zip(joint.problems, searches, strict=True)
+    )
+    assert tuple(len(problem.variables) for problem in joint.problems) == (1, 2)
+    assert results[0].confidence != results[1].confidence
+    datasets = tuple(
+        dataset_project(dataset_id, result=result)
+        for dataset_id, result in zip(joint.dataset_ids, results, strict=True)
+    )
+
+    published = replace(project(*datasets), batch_mode="joint")
+    validate_project(published)
+
+    assert tuple(dataset.last_valid_result for dataset in published.datasets) == results
 
 
 def test_joint_pipeline_preserves_fully_locked_lineage_through_stage_e() -> None:

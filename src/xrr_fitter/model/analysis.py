@@ -2,11 +2,47 @@
 
 Every published NumPy value is copied and made read-only. Result identities
 remain explicit so later project serialization can validate ownership graphs.
+
+This module contains data contracts only. It does not evaluate reflectivity,
+run optimizers, inspect files, or schedule workers. Constructors normalize
+sequences and restore read-only NumPy ownership after every pickle round trip.
+
+Profile values retain the sampled coordinate, objective trace, and boundary
+evidence needed to explain one-dimensional confidence limits. A profile-basin
+decision is intentionally smaller than a fitting continuation: it carries a
+parameter identity and an immutable unit-space center, while fit independently
+revalidates the center before changing search state.
+
+Bootstrap results distinguish generic local aggregation from problem-owned
+evidence. Owner fields are paired, parameter names define sample columns, and
+published intervals must follow exactly the same ordered axis. Failure rate is
+kept even when the interval gate suppresses all bounds.
+
+Ensemble and MCMC values preserve sampling geometry separately from summaries.
+Their axes align draws, walkers, parameters, log probability, acceptance,
+convergence, and effective sample size without retaining runtime callbacks or
+random-number generators.
+
+Uncertainty reports combine those immutable values with covariance, residual,
+diagnostic, boundary, and correlation evidence for one candidate identity.
+Classification stays explicit rather than being inferred from display text.
+
+``FitResult`` flattens the fitting-only search schema for the supported public
+result while attaching uncertainty and classification evidence. It reconstructs
+the fitting value during validation so candidate lineage, eligible winner,
+region arrays, and stage references obey one contract across both result types.
+
+All validation occurs at construction. Invalid serialized state therefore
+fails at the model boundary instead of surfacing later during report rendering,
+project persistence, export, or service orchestration.
+
+These values remain presentation-neutral: Chinese confidence labels are stable
+persisted categories, while numerical evidence keeps its original precision.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import StrEnum
 from math import isfinite
 
@@ -27,6 +63,10 @@ def _readonly(value: object, dtype: type, field: str, ndim: int) -> np.ndarray:
         raise ValueError(f"{field} must be {ndim}-dimensional")
     array.setflags(write=False)
     return array
+
+
+def _pickle_values(value: object) -> tuple[object, ...]:
+    return tuple(getattr(value, item.name) for item in fields(value))
 
 
 def _positive_integer(value: int, field: str) -> None:
@@ -102,6 +142,90 @@ def _positive_values(values: object, field: str) -> tuple[float, ...]:
     return result
 
 
+def _bootstrap_names(values: object) -> tuple[str, ...]:
+    names = tuple(values)
+    if any(not isinstance(value, str) or not value.strip() for value in names):
+        raise ValueError("bootstrap parameter names must contain nonempty strings")
+    if len(names) != len(set(names)):
+        raise ValueError("bootstrap parameter names must be unique")
+    return names
+
+
+def _bootstrap_intervals(
+    names: tuple[str, ...],
+    values: object,
+) -> tuple[tuple[str, float, float], ...]:
+    intervals = tuple(values)
+    if not intervals:
+        return ()
+    valid_rows = all(
+        isinstance(value, (tuple, list)) and len(value) == 3
+        for value in intervals
+    )
+    if not valid_rows:
+        raise ValueError("bootstrap intervals must contain name, lower, and upper")
+    interval_names = tuple(value[0] for value in intervals)
+    if interval_names != names:
+        raise ValueError("bootstrap interval names must match parameter names in order")
+    bounds = _bootstrap_interval_bounds(intervals)
+    return tuple(
+        (name, lower, upper)
+        for name, (lower, upper) in zip(interval_names, bounds, strict=True)
+    )
+
+
+def _bootstrap_interval_bounds(
+    intervals: tuple[object, ...],
+) -> tuple[tuple[float, float], ...]:
+    try:
+        bounds = tuple(
+            (float(value[1]), float(value[2]))
+            for value in intervals
+        )
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("bootstrap interval bounds must be finite numbers") from error
+    invalid = any(
+        not isfinite(lower) or not isfinite(upper) or lower > upper
+        for lower, upper in bounds
+    )
+    if invalid:
+        raise ValueError("bootstrap interval bounds must be finite and ordered")
+    return bounds
+
+
+def _bootstrap_samples(names: tuple[str, ...], values: object) -> np.ndarray:
+    samples = _readonly(values, float, "bootstrap samples", 2)
+    if samples.shape[1] != len(names):
+        raise ValueError("bootstrap samples do not match parameter names")
+    if np.any(~np.isfinite(samples)):
+        raise ValueError("bootstrap samples must be finite")
+    return samples
+
+
+def _validate_bootstrap_failure_rate(value: float) -> None:
+    if not isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError("failure_rate must be in [0, 1]")
+
+
+def _validate_bootstrap_owner(
+    candidate_id: str | None,
+    provenance_sha256: str | None,
+) -> None:
+    if (candidate_id is None) != (provenance_sha256 is None):
+        raise ValueError("bootstrap candidate_id and provenance_sha256 must be paired")
+    if candidate_id is None:
+        return
+    if not isinstance(candidate_id, str) or not candidate_id.strip():
+        raise ValueError("bootstrap candidate_id must be nonempty or None")
+    if not isinstance(provenance_sha256, str):
+        raise ValueError("bootstrap provenance_sha256 must be a lowercase SHA-256")
+    valid = len(provenance_sha256) == 64 and all(
+        value in "0123456789abcdef" for value in provenance_sha256
+    )
+    if not valid:
+        raise ValueError("bootstrap provenance_sha256 must be a lowercase SHA-256")
+
+
 class ConfidenceClass(StrEnum):
     """Persisted user-facing confidence categories."""
 
@@ -109,6 +233,44 @@ class ConfidenceClass(StrEnum):
     CORRELATED = "可用但相关"
     MULTIPLE = "多解"
     UNTRUSTED = "不可信"
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileBasinDecision:
+    """Analysis evidence requesting fit-owned basin reconvergence.
+
+    Analysis owns the decision but never executes the fitting continuation.
+    The unit-space center and parameter identity cross that domain boundary as
+    immutable evidence; fit independently re-evaluates the center before using
+    it and does not trust the reported objective as search state.
+    """
+
+    parameter_name: str
+    unit_vector: np.ndarray
+    objective: float
+    evidence: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.parameter_name.strip():
+            raise ValueError("parameter_name must not be empty")
+        unit = _readonly(self.unit_vector, float, "unit vector", 1)
+        if np.any(~np.isfinite(unit)) or np.any((unit < 0.0) | (unit > 1.0)):
+            raise ValueError("unit vector must be finite and within [0, 1]")
+        if not isfinite(self.objective):
+            raise ValueError("objective must be finite")
+        evidence = tuple(self.evidence)
+        if not evidence or any(not isinstance(value, str) or not value for value in evidence):
+            raise ValueError("evidence must contain nonempty strings")
+        object.__setattr__(self, "unit_vector", unit)
+        object.__setattr__(self, "evidence", evidence)
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), (
+            self.parameter_name,
+            self.unit_vector,
+            self.objective,
+            self.evidence,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +325,9 @@ class ParameterProfile:
         object.__setattr__(self, "values", values)
         object.__setattr__(self, "objectives", objectives)
 
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), _pickle_values(self)
+
 
 @dataclass(frozen=True, slots=True)
 class BootstrapResult:
@@ -172,17 +337,21 @@ class BootstrapResult:
     samples: np.ndarray
     intervals: tuple[tuple[str, float, float], ...]
     failure_rate: float
+    candidate_id: str | None = None
+    provenance_sha256: str | None = None
 
     def __post_init__(self) -> None:
-        names = tuple(self.parameter_names)
-        samples = _readonly(self.samples, float, "bootstrap samples", 2)
-        if samples.shape[1] != len(names):
-            raise ValueError("bootstrap samples do not match parameter names")
-        if not isfinite(self.failure_rate) or not 0.0 <= self.failure_rate <= 1.0:
-            raise ValueError("failure_rate must be in [0, 1]")
+        names = _bootstrap_names(self.parameter_names)
+        samples = _bootstrap_samples(names, self.samples)
+        _validate_bootstrap_failure_rate(self.failure_rate)
+        intervals = _bootstrap_intervals(names, self.intervals)
+        _validate_bootstrap_owner(self.candidate_id, self.provenance_sha256)
         object.__setattr__(self, "parameter_names", names)
         object.__setattr__(self, "samples", samples)
-        object.__setattr__(self, "intervals", tuple(self.intervals))
+        object.__setattr__(self, "intervals", intervals)
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), _pickle_values(self)
 
 
 def _ensemble_arrays(value: EnsembleSamples) -> tuple[np.ndarray, ...]:
@@ -231,6 +400,9 @@ class EnsembleSamples:
         )
         _set_array_fields(self, names, arrays)
 
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), _pickle_values(self)
+
 
 @dataclass(frozen=True, slots=True)
 class McmcReport:
@@ -266,6 +438,9 @@ class McmcReport:
         _set_array_fields(self, names, arrays)
         object.__setattr__(self, "boundary_hits", tuple(self.boundary_hits))
         object.__setattr__(self, "warnings", tuple(self.warnings))
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), _pickle_values(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,6 +479,9 @@ class UncertaintyReport:
         if self.candidate_id is not None and not self.candidate_id:
             raise ValueError("candidate_id must be a nonempty string or None")
         object.__setattr__(self, "diagnostics", diagnostics)
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), _pickle_values(self)
 
 
 def _search_result_fields() -> tuple[str, ...]:
@@ -358,6 +536,9 @@ class FitResult:
         for field in _search_result_fields():
             object.__setattr__(self, field, getattr(search_result, field))
         object.__setattr__(self, "classification_evidence", evidence)
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), _pickle_values(self)
 
     @classmethod
     def from_search(

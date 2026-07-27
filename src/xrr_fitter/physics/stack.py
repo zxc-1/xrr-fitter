@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from functools import partial
 from math import ceil, isfinite
 
 import numpy as np
 
+from xrr_fitter.model.parameters import PhysicalValueError
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
     LayerSpec,
@@ -18,6 +20,154 @@ from xrr_fitter.model.structure import (
     StructureSpec,
 )
 from xrr_fitter.physics.materials import material_sld
+
+
+def _replace_material(
+    material: MaterialSpec,
+    prefix: str,
+    values: dict[str, float],
+) -> MaterialSpec:
+    """Rebuild an optional explicit complex-SLD material override.
+
+    Formula-backed materials intentionally omit override coordinates and retain
+    their original identity. Explicit real and imaginary parts are consumed as
+    one value so a half-specified mapping cannot escape reconstruction.
+    """
+    real_name = f"{prefix}.sld_real_a2"
+    if real_name not in values:
+        return material
+    return replace(
+        material,
+        sld_override_a2=complex(values[real_name], values[f"{prefix}.sld_imag_a2"]),
+    )
+
+
+def _replace_layer(
+    layer: LayerSpec,
+    prefix: str,
+    values: dict[str, float],
+) -> LayerSpec:
+    """Apply one layer's material, thickness, density, and roughness values.
+
+    Name construction remains positional because compiled definitions and
+    periodic sharing both refer to the same component-index prefixes.
+    """
+    return replace(
+        layer,
+        material=_replace_material(layer.material, prefix, values),
+        thickness_a=values[f"{prefix}.thickness_a"],
+        density_scale=values[f"{prefix}.density_scale"],
+        roughness_a=values[f"{prefix}.roughness_a"],
+    )
+
+
+def _replace_indexed_layer(
+    item: tuple[int, LayerSpec],
+    prefix: str,
+    values: dict[str, float],
+) -> LayerSpec:
+    index, layer = item
+    return _replace_layer(layer, f"{prefix}.layer.{index}", values)
+
+
+def _replace_periodic(
+    block: PeriodicBlock,
+    prefix: str,
+    values: dict[str, float],
+) -> PeriodicBlock:
+    """Rebuild shared periodic-cell coordinates without expanding repeats.
+
+    Repeat count is persisted as numeric metadata but represents exact topology.
+    ``None`` top roughness remains an inheritance sentinel rather than being
+    materialized from the first layer during reconstruction.
+    """
+    layers = tuple(
+        map(
+            partial(_replace_indexed_layer, prefix=prefix, values=values),
+            enumerate(block.layers),
+        )
+    )
+    # A missing top override is semantic inheritance, not a zero roughness value.
+    # Preserve the sentinel so later expansion chooses layer zero exactly once.
+    top_roughness = (
+        None
+        if block.top_roughness_a is None
+        else values[f"{prefix}.top_roughness_a"]
+    )
+    return replace(
+        block,
+        layers=layers,
+        repeats=int(round(values[f"{prefix}.repeats"])),
+        top_roughness_a=top_roughness,
+    )
+
+
+def _replace_gradient(
+    layer: GradientLayerSpec,
+    prefix: str,
+    values: dict[str, float],
+) -> GradientLayerSpec:
+    """Rebuild complex gradient endpoints and topology-defining dimensions.
+
+    Thickness and microslab limit are independent coordinates because both can
+    change the expanded slab count used by the primal and tangent mappings.
+    """
+    return replace(
+        layer,
+        upper_sld_a2=complex(
+            values[f"{prefix}.upper_sld_real_a2"],
+            values[f"{prefix}.upper_sld_imag_a2"],
+        ),
+        lower_sld_a2=complex(
+            values[f"{prefix}.lower_sld_real_a2"],
+            values[f"{prefix}.lower_sld_imag_a2"],
+        ),
+        thickness_a=values[f"{prefix}.thickness_a"],
+        roughness_a=values[f"{prefix}.roughness_a"],
+        microslab_max_a=values[f"{prefix}.microslab_max_a"],
+    )
+
+
+def _replace_component(
+    component: StructureComponent,
+    prefix: str,
+    values: dict[str, float],
+) -> StructureComponent:
+    if isinstance(component, LayerSpec):
+        return _replace_layer(component, prefix, values)
+    if isinstance(component, PeriodicBlock):
+        return _replace_periodic(component, prefix, values)
+    return _replace_gradient(component, prefix, values)
+
+
+def _replace_indexed_component(
+    item: tuple[int, StructureComponent],
+    values: dict[str, float],
+) -> StructureComponent:
+    index, component = item
+    return _replace_component(component, f"component.{index}", values)
+
+
+def rebuild_structure(
+    structure: StructureSpec,
+    values: dict[str, float],
+) -> StructureSpec:
+    """Return an immutable structure from one complete physical value map.
+
+    Component order is retained exactly. Rebuilding never mutates the compiled
+    problem's declared structure, allowing parallel candidates to share it.
+    """
+    components = tuple(
+        map(
+            partial(_replace_indexed_component, values=values),
+            enumerate(structure.components),
+        )
+    )
+    return replace(
+        structure,
+        components=components,
+        backing_roughness_a=values["backing.roughness_a"],
+    )
 
 
 @dataclass(slots=True)
@@ -89,7 +239,9 @@ def _validate_roughness(thickness: np.ndarray, roughness: np.ndarray) -> None:
         limit = 0.49 * min(neighbors) if neighbors else 50.0
         invalid = sigma >= limit if neighbors else sigma > limit
         if invalid:
-            raise ValueError(f"interface.{interface}.roughness_a must be below {limit:g} A")
+            raise PhysicalValueError(
+                f"interface.{interface}.roughness_a must be below {limit:g} A"
+            )
 
 
 def expand_structure(structure: StructureSpec, wavelength_a: float) -> SlabStack:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from importlib import import_module
+import pickle
 
 import numpy as np
 import pytest
@@ -18,6 +20,17 @@ from xrr_fitter.model.analysis import (
     UncertaintyReport,
 )
 from xrr_fitter.model.instrument import PhysicsDiagnostic
+
+
+def _published_arrays(value: object):
+    if isinstance(value, np.ndarray):
+        yield value
+    elif hasattr(value, "__dataclass_fields__"):
+        for field in value.__dataclass_fields__:
+            yield from _published_arrays(getattr(value, field))
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            yield from _published_arrays(item)
 
 
 def test_analysis_arrays_are_copied_read_only_and_shape_checked() -> None:
@@ -102,6 +115,24 @@ def test_bootstrap_and_ensemble_results_copy_aligned_arrays() -> None:
     assert ensemble.samples_unit.flags.writeable is False
 
 
+@pytest.mark.parametrize(
+    ("names", "intervals"),
+    [
+        (("a", "a"), (("a", 0.5, 1.5), ("a", 0.5, 1.5))),
+        (("a", "b"), (("b", 0.5, 1.5), ("a", 0.5, 1.5))),
+        (("a", "b"), (("a", 1.5, 0.5), ("b", 0.5, 1.5))),
+        (("a", "b"), (("a", 0.5, float("nan")), ("b", 0.5, 1.5))),
+    ],
+    ids=["duplicate-names", "interval-order", "reversed-bounds", "nonfinite-bound"],
+)
+def test_bootstrap_result_rejects_invalid_parameter_intervals(
+    names: tuple[str, ...],
+    intervals: tuple[tuple[str, float, float], ...],
+) -> None:
+    with pytest.raises(ValueError, match="parameter|interval"):
+        BootstrapResult(names, np.ones((2, 2)), intervals, 0.0)
+
+
 def test_mcmc_config_and_report_validate_sampling_geometry() -> None:
     config = McmcConfig.standard(3)
     report = McmcReport(
@@ -147,6 +178,55 @@ def test_mcmc_config_accepts_zero_burn_in() -> None:
     assert config.burn_in == 0
 
 
+def test_published_analysis_arrays_remain_read_only_after_pickle() -> None:
+    config = McmcConfig(walkers=4, burn_in=0, production_steps=2)
+    profile = ParameterProfile("a", np.array([0.0, 1.0]), np.array([1.0, 2.0]), True, False)
+    bootstrap = BootstrapResult(("a",), np.ones((2, 1)), (("a", 0.5, 1.5),), 0.0)
+    ensemble = EnsembleSamples(
+        np.ones((2, 4, 1)),
+        np.ones((2, 4)),
+        np.ones(4),
+        np.ones(1),
+        np.ones(1),
+    )
+    mcmc = McmcReport(
+        config,
+        42,
+        ("a",),
+        np.ones((8, 1)),
+        np.ones(8),
+        np.ones(4),
+        np.ones(1),
+        np.ones(1),
+        (),
+    )
+    uncertainty = UncertaintyReport(
+        ("a",),
+        np.eye(1),
+        (profile,),
+        bootstrap.intervals,
+        bootstrap.failure_rate,
+        (),
+        (),
+        False,
+        (),
+        mcmc=mcmc,
+    )
+    result = FitResult.from_search(
+        fit_result(),
+        confidence=ConfidenceClass.TRUSTED,
+        uncertainty=uncertainty,
+    )
+
+    restored = pickle.loads(
+        pickle.dumps((profile, bootstrap, ensemble, mcmc, uncertainty, result))
+    )
+
+    arrays = tuple(_published_arrays(restored))
+    assert arrays
+    assert all(not array.flags.writeable for array in arrays)
+
+
 def test_final_fit_result_owns_confidence_without_back_edge_from_fitting() -> None:
     result = FitResult.from_search(
         fit_result(),
@@ -169,3 +249,28 @@ def test_structure_evidence_preserves_observation_order_and_validates_schema() -
         StructureEvidence(1, 1, None, (20.0, 10.0))
     with pytest.raises(TypeError, match="warning"):
         StructureEvidence(1, 1, 3, (20.0,))
+
+
+def test_profile_basin_decision_is_immutable_pickle_safe_evidence() -> None:
+    analysis = import_module("xrr_fitter.model.analysis")
+    source = np.array([0.25, 0.75])
+
+    decision = analysis.ProfileBasinDecision(
+        parameter_name="component.0.thickness_a",
+        unit_vector=source,
+        objective=0.125,
+        evidence=("materially_better_profile_basin",),
+    )
+    source[0] = 0.5
+    restored = pickle.loads(pickle.dumps(decision))
+
+    np.testing.assert_array_equal(decision.unit_vector, np.array([0.25, 0.75]))
+    np.testing.assert_array_equal(restored.unit_vector, decision.unit_vector)
+    assert decision.unit_vector.flags.writeable is False
+    assert restored.unit_vector.flags.writeable is False
+    assert restored.evidence == ("materially_better_profile_basin",)
+
+    with pytest.raises(ValueError, match="unit vector"):
+        replace(decision, unit_vector=np.array([1.1, 0.5]))
+    with pytest.raises(ValueError, match="objective"):
+        replace(decision, objective=float("nan"))

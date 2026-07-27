@@ -61,6 +61,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/unit/physics",
                 "tests/unit/test_evaluation.py",
                 "tests/unit/fit",
+                "tests/unit/analysis",
                 "-q",
             ),
         )
@@ -71,6 +72,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
             + (
                 "tests/regression/test_numerical_reference.py",
                 "tests/regression/test_recovery_metrics.py",
+                "tests/regression/test_profile_basin_regressions.py",
                 "-q",
             ),
         )

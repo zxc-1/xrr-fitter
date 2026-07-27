@@ -305,6 +305,7 @@ xrr-rewrite-r23/
 │       │   ├── structure.py
 │       │   ├── parameters.py
 │       │   ├── fitting.py
+│       │   ├── provenance.py
 │       │   ├── analysis.py
 │       │   ├── project.py
 │       │   ├── operations.py
@@ -489,6 +490,7 @@ xrr-rewrite-r23/
 - `structure.py`：材料、层、梯度、周期块、结构声明和 slab-stack 值。
 - `parameters.py`：定义、坐标、边界、锁定、设置、引用和共享规则。
 - `fitting.py`：拟合配置/进度、候选项、检查点和单数据集拟合结果；不引用 project 或 operation 值。
+- `provenance.py`：对完整不可变 fitting/analysis evidence 进行 canonical identity 编码并绑定 evaluation context；不运行 physics 或优化器。
 - `analysis.py`：置信度类别、剖面、bootstrap/MCMC/报告值和分析配置。
 - `project.py`：数据集、数据源状态、失效状态、项目根目录和已持久化工作区状态。
 - `operations.py`：跨数据集 `ProjectFitResult`、不可变 `OperationEvent` 和
@@ -500,6 +502,7 @@ xrr-rewrite-r23/
 
 ```text
 fitting -> data + instrument + structure + parameters
+provenance -> fitting
 analysis -> data + parameters + fitting
 project -> data + instrument + structure + parameters + fitting + analysis
 operations -> fitting + analysis + project
@@ -2452,18 +2455,32 @@ cd /Users/dala/Desktop/xrr-rewrite-r23 && git diff --check && git add src/xrr_fi
 
 **创建：**
 `src/xrr_fitter/analysis/{__init__,classification,profiles,binary_profiles,derivatives,bootstrap,mcmc,diagnostics,report}.py`、
+`src/xrr_fitter/model/provenance.py`、
 `tests/unit/analysis/{test_classification,test_profiles,test_binary_profiles,test_derivatives,test_bootstrap,test_mcmc,test_diagnostics,test_report}.py`、
 `tests/regression/test_profile_basin_regressions.py`、
-`tools/reference_groups/analysis.py`。**修改：** `tools/reference_groups/registry.py`、
+`tests/unit/fit/test_frozen_stage_search.py`、
+`tools/reference_groups/{analysis,fit_search}.py`。**修改：**
+`src/xrr_fitter/evaluation.py`、
+`src/xrr_fitter/model/{analysis,fitting,parameters,project}.py`、
+`src/xrr_fitter/physics/stack.py`、
+`src/xrr_fitter/fit/{candidates,checkpoint,joint_pipeline,local_search,pipeline,problem,stages}.py`、
+`tests/unit/test_evaluation.py`、
+`tests/unit/model/{test_analysis_values,test_fitting_values,test_project_state}.py`、
+`tests/unit/fit/{test_joint_evaluation,test_joint_pipeline,test_objective,test_problem_compilation,test_stage_search}.py`、
+`tools/reference_groups/{fit_compile,registry}.py`、
 `tests/unit/tools/test_compare_r22_reference.py`、
-`docs/architecture/r22-r23-test-ledger.csv`、`tools/verify.py`、
-`tests/architecture/test_quality_gate.py` 和 `.github/workflows/verify.yml`。
+`tests/unit/tools/test_verify.py`、
+`docs/architecture/{r22-r23-test-ledger.csv,r23-clean-break.md}`、
+`tools/verify.py` 和 `tests/architecture/test_dependency_rules.py`。
 
 - [ ] 为 classification、profile、binary-derived profile、gradient、bootstrap、MCMC、diagnostic 和 report 编写 RED 测试。
 - [ ] 迁移 analysis，且不得从 `fit` 进行任何 import。
 - [ ] 直接消费任务 3 已实现的 model value 和任务 6 的
-  `evaluation.py` 纯函数；不修改 `fit`、不将 likelihood/profile evaluation 下沉到
-  `physics`，不引入 callable bag。
+  `evaluation.py` 纯函数。前置合同复查已确认 Task 7 handoff 缺少 typed immutable
+  evaluation context、完整 evidence provenance 和 fit-owned profile continuation；因此本任务
+  只在上述扩展路径补齐这些共享/fit-owned 合同。`analysis` 仍不得导入或调用 `fit`，fit
+  仍不得导入 `analysis`，不得将 likelihood/profile evaluation 下沉到 `physics`，也不得
+  引入 callable bag。
 - [ ] 按语义迁移 R21 独有的 reconvergence 和 profile-basin 行为。
 - [ ] 保留 deterministic stochastic stream 和 cancellation，同时为 service-owned worker boundary 返回 pickle-safe request/result value。
 - [ ] 先取得 `analysis` 未注册 RED，再实现 actual adapter。运行 analysis
@@ -2472,7 +2489,7 @@ cd /Users/dala/Desktop/xrr-rewrite-r23 && git diff --check && git add src/xrr_fi
 - [ ] 提交：
 
 ```bash
-cd /Users/dala/Desktop/xrr-rewrite-r23 && git diff --check && git add src/xrr_fitter/analysis tests/unit/analysis tests/regression/test_profile_basin_regressions.py tools/reference_groups/analysis.py tools/reference_groups/registry.py tests/unit/tools/test_compare_r22_reference.py docs/architecture/r22-r23-test-ledger.csv tools/verify.py tests/architecture/test_quality_gate.py .github/workflows/verify.yml && git diff --cached --check && git diff --cached --name-status && git commit -m 'refactor: separate uncertainty analysis from fitting' && test -z "$(git status --porcelain=v1 --untracked-files=all)"
+cd /Users/dala/Desktop/xrr-rewrite-r23 && git diff --check && git add docs/architecture/r22-r23-test-ledger.csv docs/architecture/r23-clean-break.md src/xrr_fitter/analysis src/xrr_fitter/evaluation.py src/xrr_fitter/fit/candidates.py src/xrr_fitter/fit/checkpoint.py src/xrr_fitter/fit/joint_pipeline.py src/xrr_fitter/fit/local_search.py src/xrr_fitter/fit/pipeline.py src/xrr_fitter/fit/problem.py src/xrr_fitter/fit/stages.py src/xrr_fitter/model/analysis.py src/xrr_fitter/model/fitting.py src/xrr_fitter/model/parameters.py src/xrr_fitter/model/project.py src/xrr_fitter/model/provenance.py src/xrr_fitter/physics/stack.py tests/architecture/test_dependency_rules.py tests/regression/test_profile_basin_regressions.py tests/unit/analysis tests/unit/fit/test_frozen_stage_search.py tests/unit/fit/test_joint_evaluation.py tests/unit/fit/test_joint_pipeline.py tests/unit/fit/test_objective.py tests/unit/fit/test_problem_compilation.py tests/unit/fit/test_stage_search.py tests/unit/model/test_analysis_values.py tests/unit/model/test_fitting_values.py tests/unit/model/test_project_state.py tests/unit/test_evaluation.py tests/unit/tools/test_compare_r22_reference.py tests/unit/tools/test_verify.py tools/reference_groups/analysis.py tools/reference_groups/fit_compile.py tools/reference_groups/fit_search.py tools/reference_groups/registry.py tools/verify.py && git diff --cached --check && git diff --cached --name-status && git commit -m 'refactor: separate uncertainty analysis from fitting' && test -z "$(git status --porcelain=v1 --untracked-files=all)"
 ```
 
 ### 任务 9：迁移导出与示例的纯 I/O 能力

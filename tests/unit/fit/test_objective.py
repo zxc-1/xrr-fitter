@@ -225,7 +225,11 @@ def test_region_fallback_keeps_four_quartile_bins_for_short_vectors() -> None:
     np.testing.assert_array_equal(assign_fit_regions(np.array([0.0, 1.0])), [0, 3])
 
 
-@pytest.mark.parametrize("labels", [[0.0, 1.5], [0.0, np.nan], [0.0, np.inf]])
+@pytest.mark.parametrize(
+    "labels",
+    [[0.0, 1.5], [0.0, np.nan], [0.0, np.inf]],
+    ids=("fractional", "nan", "infinity"),
+)
 def test_region_weights_reject_fractional_and_nonfinite_labels(labels) -> None:
     with pytest.raises(ValueError, match="finite integer"):
         region_weights(np.asarray(labels))
@@ -238,6 +242,7 @@ def test_region_weights_reject_fractional_and_nonfinite_labels(labels) -> None:
         ([1.0, 1.0], [1.0, np.inf], 1e-8),
         ([1.0], [1.0], np.nan),
     ],
+    ids=("model-nan", "observed-infinity", "floor-nan"),
 )
 def test_log_residuals_reject_nonfinite_inputs(model, observed, floor) -> None:
     with pytest.raises(ValueError, match="finite"):
@@ -252,6 +257,7 @@ def test_log_residuals_reject_nonfinite_inputs(model, observed, floor) -> None:
         ([0.0], [1.0], np.nan),
         ([], [], 0.05),
     ],
+    ids=("delta-nan", "weights-infinity", "threshold-nan", "empty"),
 )
 def test_robust_log_cost_returns_infinity_for_nonfinite_numeric_inputs(
     delta, weights, c
@@ -267,6 +273,7 @@ def test_robust_log_cost_returns_infinity_for_nonfinite_numeric_inputs(
         (1.0, 1.0, np.nan, 10),
         (1.0, 1.0, 0.1, 0),
     ],
+    ids=("scale-nan", "estimate-infinity", "tau-nan", "count-zero"),
 )
 def test_scale_prior_rejects_nonfinite_numeric_inputs(
     scale, estimate, tau, count

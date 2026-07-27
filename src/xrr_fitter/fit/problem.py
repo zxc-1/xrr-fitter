@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from math import isfinite
 
 import numpy as np
@@ -16,7 +15,7 @@ from xrr_fitter.fit.parameters import (
     validate_instrument_modes,
 )
 from xrr_fitter.model.data import PreparedData
-from xrr_fitter.model.fitting import FitConfig
+from xrr_fitter.model.fitting import FitConfig, FitEvaluationContext
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
     ParameterCoordinate,
@@ -25,23 +24,6 @@ from xrr_fitter.model.parameters import (
 )
 from xrr_fitter.model.structure import StructureSpec
 from xrr_fitter.model.structure import LayerSpec, PeriodicBlock
-
-
-@dataclass(frozen=True, slots=True)
-class CompiledFitProblem:
-    data: PreparedData
-    structure: StructureSpec
-    instrument: InstrumentSpec
-    config: FitConfig
-    parameter_definitions: tuple[ParameterDefinition, ...]
-    variables: tuple[ParameterCoordinate, ...]
-    region_labels: np.ndarray
-    weights: np.ndarray
-    scale_prior_center: float | None
-    scale_prior_tau_decades: float = 0.1
-    scale_prior_reason: str | None = None
-    warnings: tuple[str, ...] = ()
-
 
 def _readonly(value: np.ndarray) -> np.ndarray:
     result = np.array(value, copy=True)
@@ -172,7 +154,7 @@ def compile_fit_problem(
     instrument: InstrumentSpec,
     config: FitConfig,
     parameter_settings: tuple[ParameterSetting, ...] = (),
-) -> CompiledFitProblem:
+) -> FitEvaluationContext:
     _validate_config(config)
     _validate_data_mode(data, instrument)
     _require_explicit_expert_density(structure, tuple(parameter_settings))
@@ -184,7 +166,7 @@ def compile_fit_problem(
     validate_instrument_modes(definitions, instrument)
     labels, weights = _region_layout(data)
     center, reason = _scale_prior_state(data, instrument, config)
-    return CompiledFitProblem(
+    return FitEvaluationContext(
         data=data,
         structure=structure,
         instrument=instrument,
@@ -201,10 +183,10 @@ def compile_fit_problem(
 
 
 def compile_stage_problem(
-    problem: CompiledFitProblem,
+    problem: FitEvaluationContext,
     stage: str,
     current_values: dict[str, float],
-) -> CompiledFitProblem:
+) -> FitEvaluationContext:
     settings = stage_parameter_settings(problem.parameter_definitions, stage, current_values)
     return compile_fit_problem(
         problem.data,
@@ -216,10 +198,10 @@ def compile_stage_problem(
 
 
 def compile_fixed_parameter_problem(
-    problem: CompiledFitProblem,
+    problem: FitEvaluationContext,
     parameter_name: str,
     value: float,
-) -> CompiledFitProblem:
+) -> FitEvaluationContext:
     definitions = {item.name: item for item in problem.parameter_definitions}
     selected = definitions.get(parameter_name)
     if selected is None:

@@ -40,6 +40,7 @@ def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
             "tests/unit/physics",
             "tests/unit/test_evaluation.py",
             "tests/unit/fit",
+            "tests/unit/analysis",
             "-q",
         ),
     )
@@ -48,6 +49,7 @@ def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
         + (
             "tests/regression/test_numerical_reference.py",
             "tests/regression/test_recovery_metrics.py",
+            "tests/regression/test_profile_basin_regressions.py",
             "-q",
         ),
     )

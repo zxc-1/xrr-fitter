@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass
+from enum import StrEnum
 from hashlib import sha256
 import json
 
@@ -20,31 +21,49 @@ class CheckpointIdentity:
     parameter_settings_fingerprint: str
 
 
+def _canonical_dataclass(value: object) -> dict[str, object]:
+    return {
+        field.name: _canonical(getattr(value, field.name))
+        for field in fields(value)
+    }
+
+
+def _canonical_sequence(value: tuple[object, ...] | list[object]) -> list[object]:
+    return [_canonical(item) for item in value]
+
+
+def _canonical_mapping(value: dict[object, object]) -> dict[str, object]:
+    return {
+        str(key): _canonical(value[key])
+        for key in sorted(value, key=lambda item: str(item))
+    }
+
+
 def _canonical(value: object) -> object:
     if is_dataclass(value):
-        return {
-            field.name: _canonical(getattr(value, field.name))
-            for field in fields(value)
-        }
+        return _canonical_dataclass(value)
     if isinstance(value, np.ndarray):
         return value.tolist()
     if isinstance(value, np.generic):
         return value.item()
     if isinstance(value, complex):
-        return {"imag": value.imag, "real": value.real}
+        return {"real": value.real, "imag": value.imag}
+    if isinstance(value, StrEnum):
+        return str(value)
     if isinstance(value, (tuple, list)):
-        return [_canonical(item) for item in value]
+        return _canonical_sequence(value)
     if isinstance(value, dict):
-        return {str(key): _canonical(value[key]) for key in sorted(value)}
-    return value
+        return _canonical_mapping(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
 
 
-def _fingerprint(schema: str, value: object) -> str:
-    payload = {"schema": schema, "value": _canonical(value)}
+def _fingerprint(value: object) -> str:
     encoded = json.dumps(
-        payload,
+        _canonical(value),
         allow_nan=False,
-        ensure_ascii=True,
+        ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
@@ -53,21 +72,12 @@ def _fingerprint(schema: str, value: object) -> str:
 
 def checkpoint_identity(problem: object) -> CheckpointIdentity:
     """Bind every resume-relevant declaration without source-path identity."""
-    parameter_layout = {
-        "definitions": problem.parameter_definitions,
-        "variables": problem.variables,
-        "region_labels": problem.region_labels,
-        "weights": problem.weights,
-    }
     return CheckpointIdentity(
         data_sha256=problem.data.source_sha256,
-        structure_fingerprint=_fingerprint("xrr-fit-structure-v1", problem.structure),
-        instrument_fingerprint=_fingerprint("xrr-fit-instrument-v1", problem.instrument),
-        config_fingerprint=_fingerprint("xrr-fit-config-v1", problem.config),
-        parameter_settings_fingerprint=_fingerprint(
-            "xrr-fit-parameter-layout-v1",
-            parameter_layout,
-        ),
+        structure_fingerprint=_fingerprint(problem.structure),
+        instrument_fingerprint=_fingerprint(problem.instrument),
+        config_fingerprint=_fingerprint(problem.config),
+        parameter_settings_fingerprint=_fingerprint(problem.parameter_definitions),
     )
 
 

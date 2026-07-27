@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
+from math import isfinite, log
+
+import numpy as np
 
 
 TRANSFORMS = frozenset({"linear", "log", "roughness_fraction"})
@@ -60,6 +62,148 @@ class ParameterDefinition:
             raise TypeError("parameter flags must be bool")
         if self.sharing_key is not None:
             _name(self.sharing_key, "sharing_key")
+
+
+def _effective_upper(
+    definition: ParameterDefinition,
+    dynamic_upper: float | None,
+) -> float:
+    """Allow candidate geometry to tighten, but never widen, declared bounds.
+
+    Dynamic roughness bounds may carry a ``nextafter`` value immediately below
+    a physical limit. Taking the exact minimum preserves that strict endpoint.
+    """
+    # Static metadata remains authoritative whenever geometry imposes no cap.
+    # A supplied cap may tighten only; it cannot silently broaden the project.
+    return definition.upper if dynamic_upper is None else min(definition.upper, dynamic_upper)
+
+
+def _zero_width_locked(definition: ParameterDefinition) -> bool:
+    return (definition.locked, definition.lower == definition.upper) == (True, True)
+
+
+class PhysicalValueError(ValueError):
+    """An expected candidate value outside its compiled physical domain."""
+
+
+def _validate_physical_value(
+    definition: ParameterDefinition,
+    value: float,
+    upper: float,
+) -> None:
+    """Reject invalid physical coordinates instead of clipping them.
+
+    Clipping would make a malformed project or candidate appear to have fitted
+    successfully at a boundary and would break encode/decode invertibility.
+    """
+    if not all((isfinite(value), value >= definition.lower, value <= upper)):
+        raise PhysicalValueError(f"value outside bounds: {definition.name}")
+
+
+def _log_physical_to_unit(
+    definition: ParameterDefinition,
+    value: float,
+    upper: float,
+) -> float:
+    """Normalize one positive value in logarithmic physical space.
+
+    Natural logarithms are used in both directions; their base cancels in the
+    unit ratio. A dynamic upper therefore participates in the inverse exactly.
+    """
+    if min(definition.lower, value) <= 0.0:
+        raise PhysicalValueError(f"log parameter must be positive: {definition.name}")
+    return (log(value) - log(definition.lower)) / (
+        log(upper) - log(definition.lower)
+    )
+
+
+def _validate_unit_value(definition: ParameterDefinition, unit: float) -> None:
+    """Reject nonfinite or out-of-domain solver coordinates before dispatch.
+
+    Solvers normally honor box bounds, but imported checkpoints and direct API
+    callers enter here too. No clipping or tolerance is applied at this layer.
+    """
+    if not all((isfinite(unit), unit >= 0.0, unit <= 1.0)):
+        raise ValueError(f"unit value outside [0,1]: {definition.name}")
+
+
+def _log_unit_to_physical(
+    definition: ParameterDefinition,
+    unit: float,
+    upper: float,
+) -> float:
+    """Decode a logarithmic coordinate while preserving exact endpoints.
+
+    Explicit branches at zero and one avoid exponential roundoff that could
+    place a decoded value just outside its persisted physical interval.
+    """
+    if min(definition.lower, upper - definition.lower) <= 0.0:
+        raise ValueError(f"invalid log bounds: {definition.name}")
+    if unit == 0.0:
+        return float(definition.lower)
+    if unit == 1.0:
+        return float(upper)
+    return float(
+        np.exp(log(definition.lower) + unit * (log(upper) - log(definition.lower)))
+    )
+
+
+def _linear_unit_to_physical(
+    definition: ParameterDefinition,
+    unit: float,
+    upper: float,
+) -> float:
+    """Decode affine and geometry-tightened roughness coordinates exactly.
+
+    Roughness shares this interpolation after its candidate-specific upper has
+    been computed. Endpoint branches preserve project and checkpoint equality.
+    """
+    if unit == 0.0:
+        return float(definition.lower)
+    if unit == 1.0:
+        return float(upper)
+    return float(definition.lower + unit * (upper - definition.lower))
+
+
+def physical_to_unit(
+    definition: ParameterDefinition,
+    value: float,
+    dynamic_upper: float | None = None,
+) -> float:
+    """Encode one legal physical value in its declared unit interval.
+
+    A locked zero-width declaration has no meaningful inverse coordinate and
+    maps to zero. All active declarations reject out-of-range values before
+    dispatching to their persisted transform identifier.
+    """
+    upper = _effective_upper(definition, dynamic_upper)
+    if _zero_width_locked(definition):
+        return 0.0
+    _validate_physical_value(definition, value, upper)
+    if definition.transform == "log":
+        return _log_physical_to_unit(definition, value, upper)
+    if definition.transform in {"linear", "roughness_fraction"}:
+        return (value - definition.lower) / (upper - definition.lower)
+    raise ValueError(f"unknown transform: {definition.transform}")
+
+
+def unit_to_physical(
+    definition: ParameterDefinition,
+    unit: float,
+    dynamic_upper: float | None = None,
+) -> float:
+    """Decode one finite unit coordinate using exact endpoint semantics.
+
+    Dispatch is restricted to the three persisted transform identifiers.
+    Unknown metadata remains an error instead of silently becoming affine.
+    """
+    _validate_unit_value(definition, unit)
+    upper = _effective_upper(definition, dynamic_upper)
+    if definition.transform == "log":
+        return _log_unit_to_physical(definition, unit, upper)
+    if definition.transform in {"linear", "roughness_fraction"}:
+        return _linear_unit_to_physical(definition, unit, upper)
+    raise ValueError(f"unknown transform: {definition.transform}")
 
 
 @dataclass(frozen=True, slots=True)

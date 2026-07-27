@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from math import log
 
 import numpy as np
 from scipy.optimize import least_squares
 
+from xrr_fitter.evaluation import (
+    least_squares_loss,
+    least_squares_residual,
+    least_squares_residual_jacobian,
+)
 from xrr_fitter.fit.objective import evaluate_jacobian, evaluate_vector
 from xrr_fitter.model.fitting import ModelEvaluation
 
@@ -43,91 +47,26 @@ def _validated_unit(problem: object, value: np.ndarray, field: str) -> np.ndarra
     return np.array(unit, copy=True)
 
 
-def _scale_prior_residual(problem: object, evaluation: ModelEvaluation) -> float | None:
-    if problem.scale_prior_center is None:
-        return None
-    scale = next(value.value for value in evaluation.parameters if value.name == "instrument.scale")
-    return (
-        (np.log10(scale) - np.log10(problem.scale_prior_center))
-        / problem.scale_prior_tau_decades
-    )
-
-
 def local_residual(problem: object, unit_vector: np.ndarray) -> np.ndarray:
-    """Return raw log residual rows followed by the optional scale-prior row."""
-    unit = _validated_unit(problem, unit_vector, "unit vector")
-    evaluation = evaluate_vector(problem, unit)
-    row_count = int(np.count_nonzero(problem.data.fit_mask)) + int(
-        problem.scale_prior_center is not None
+    """Delegate the solver residual chain to the shared evaluation boundary."""
+    return least_squares_residual(
+        problem,
+        _validated_unit(problem, unit_vector, "unit vector"),
+        evaluator=evaluate_vector,
     )
-    if not evaluation.valid:
-        return np.full(row_count, 1e6, dtype=float)
-    residual = np.array(evaluation.fit_log_residuals_decades, dtype=float, copy=True)
-    prior = _scale_prior_residual(problem, evaluation)
-    return residual if prior is None else np.concatenate((residual, np.asarray([prior])))
-
-
-def _scale_prior_jacobian(problem: object) -> np.ndarray:
-    row = np.zeros(len(problem.variables), dtype=float)
-    if problem.scale_prior_center is None:
-        return row
-    for index, coordinate in enumerate(problem.variables):
-        if coordinate.name != "instrument.scale":
-            continue
-        definition = problem.parameter_definitions[coordinate.parameter_index]
-        if definition.transform == "log":
-            derivative = log(definition.upper / definition.lower) / log(10.0)
-        else:
-            scale = definition.lower + 0.5 * (definition.upper - definition.lower)
-            derivative = (definition.upper - definition.lower) / (scale * log(10.0))
-        row[index] = derivative / problem.scale_prior_tau_decades
-    return row
 
 
 def local_jacobian(problem: object, unit_vector: np.ndarray) -> np.ndarray:
-    """Return the analytic raw-residual and optional prior Jacobian."""
-    unit = _validated_unit(problem, unit_vector, "unit vector")
-    try:
-        jacobian = np.array(evaluate_jacobian(problem, unit), dtype=float, copy=True)
-    except FloatingPointError:
-        jacobian = np.zeros(
-            (np.count_nonzero(problem.data.fit_mask), len(problem.variables)),
-            dtype=float,
-        )
-    except ValueError as error:
-        if str(error) != "cannot differentiate nonpositive fitted angle":
-            raise
-        jacobian = np.zeros(
-            (np.count_nonzero(problem.data.fit_mask), len(problem.variables)),
-            dtype=float,
-        )
-    if problem.scale_prior_center is not None:
-        jacobian = np.vstack((jacobian, _scale_prior_jacobian(problem)))
-    return jacobian
+    """Delegate the residual Jacobian chain to the shared evaluation boundary."""
+    return least_squares_residual_jacobian(
+        problem,
+        _validated_unit(problem, unit_vector, "unit vector"),
+        jacobian_evaluator=evaluate_jacobian,
+    )
 
 
 def _least_squares_loss(problem: object) -> Callable[[np.ndarray], np.ndarray]:
-    weights = np.asarray(problem.weights[problem.data.fit_mask], dtype=float)
-    c_decades = problem.config.c_decades
-    data_count = weights.size
-
-    def loss(squared: np.ndarray) -> np.ndarray:
-        values = np.asarray(squared, dtype=float)
-        rho = np.empty((3, values.size), dtype=float)
-        data = values[:data_count]
-        scaled = 1.0 + data / c_decades**2
-        rho[0, :data_count] = (
-            4.0 * weights**2 * c_decades**2 * (np.sqrt(scaled) - 1.0)
-        )
-        rho[1, :data_count] = 2.0 * weights**2 / np.sqrt(scaled)
-        rho[2, :data_count] = -(weights**2 / c_decades**2) * scaled ** (-1.5)
-        if values.size > data_count:
-            rho[0, data_count:] = 2.0 * values[data_count:]
-            rho[1, data_count:] = 2.0
-            rho[2, data_count:] = 0.0
-        return rho
-
-    return loss
+    return least_squares_loss(problem)
 
 
 def _poll(cancelled: Callable[[], bool] | None) -> None:
@@ -169,11 +108,16 @@ def solve_local(
         max_nfev=max_nfev,
         method="trf",
         x_scale="jac",
+        ftol=1e-10,
+        xtol=1e-10,
+        gtol=1e-10,
     )
     result_unit = _validated_unit(problem, optimized.x, "solver result")
     evaluation = evaluate_vector(problem, result_unit)
+    tolerance = max(1e-12, 1e-8 * start_evaluation.objective)
     if start_evaluation.valid and (
-        not evaluation.valid or evaluation.objective > start_evaluation.objective
+        not evaluation.valid
+        or evaluation.objective > start_evaluation.objective + tolerance
     ):
         return LocalSearchResult(
             unit,

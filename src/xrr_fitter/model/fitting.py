@@ -10,18 +10,60 @@ and deterministic seed lineage needed to replay a search.
 The values here deliberately do not run optimizers or evaluate reflectivity.
 They define the stable handoff between compilation, search, persistence, and
 analysis while keeping those higher layers independent of one another.
+
+``FitEvaluationContext`` is the complete numerical input contract. It retains
+the prepared data and declarations needed to decode a candidate, plus the exact
+compiled coordinate layout and residual weights. Its validation is repeated
+after unpickling so process boundaries cannot make nested NumPy buffers writable.
+
+Candidates own both physical parameter values and every reporting array derived
+from one evaluation. A candidate ID identifies publication lineage; seed index
+identifies deterministic stream position. Objective and ranking objective remain
+separate because archived evidence may be visible without remaining eligible for
+continuation.
+
+Stage summaries preserve publication order, work counts, and stop evidence.
+Search results retain the full candidate graph while choosing a best index only
+from eligible evidence. Checkpoints add input fingerprints and completed-stage
+identity without introducing filesystem or resume behavior into these values.
+
+All tuple members are normalized at construction. String identities reject
+empty placeholders, finite scalar contracts reject NaN, and array axes are
+checked before buffers become read-only. These rules make invalid serialized
+state fail at the value boundary rather than later inside a solver.
+
+Selection is a persisted contract rather than an incidental ``min`` call.
+Archived invalid and early-eliminated candidates remain addressable, while only
+the final published Stage-E scope may own ``best_index``. Joint fitting can use
+``ranking_objective`` for its shared objective without rewriting each dataset's
+local physical objective.
+
+Candidate arrays retain the full data axis and the expanded SLD reporting axis.
+Invalid physical evaluations use explicit reason and objective conventions but
+remain valid graph evidence. Stage summaries reference stable candidate IDs, so
+resume and later analysis can verify lineage without replaying optimization.
+
+Search results may carry a deterministic provenance seal supplied by their
+producer. The value validates seal syntax only; domain boundaries recompute the
+seal against their exact evaluation context before accepting or continuing the
+graph. This keeps construction pure and makes pickle validation inexpensive.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from math import isfinite
 
 import numpy as np
 
-from xrr_fitter.model.instrument import PhysicsDiagnostic
-from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue
-from xrr_fitter.model.structure import SlabStack
+from xrr_fitter.model.data import PreparedData
+from xrr_fitter.model.instrument import InstrumentSpec, PhysicsDiagnostic
+from xrr_fitter.model.parameters import (
+    ParameterCoordinate,
+    ParameterDefinition,
+    ParameterValue,
+)
+from xrr_fitter.model.structure import SlabStack, StructureSpec
 
 
 def _positive_integer(value: int, field: str, *, allow_zero: bool = False) -> None:
@@ -42,6 +84,10 @@ def _readonly(value: object, dtype: type, field: str, *, ndim: int = 1) -> np.nd
         raise ValueError(f"{field} must be {ndim}-dimensional")
     array.setflags(write=False)
     return array
+
+
+def _pickle_values(value: object) -> tuple[object, ...]:
+    return tuple(getattr(value, item.name) for item in fields(value))
 
 
 def _sha256(value: str, field: str) -> None:
@@ -200,6 +246,145 @@ class FitConfig:
         )
 
 
+def _validate_context_components(context: FitEvaluationContext) -> None:
+    """Require the four compiled value roots before inspecting nested state.
+
+    Keeping these ownership checks together makes the context boundary reject
+    lookalike objects before array or coordinate validation can observe them.
+    """
+    expected = (
+        (context.data, PreparedData, "data must be PreparedData"),
+        (context.structure, StructureSpec, "structure must be StructureSpec"),
+        (context.instrument, InstrumentSpec, "instrument must be InstrumentSpec"),
+        (context.config, FitConfig, "config must be FitConfig"),
+    )
+    for value, kind, message in expected:
+        if not isinstance(value, kind):
+            raise TypeError(message)
+
+
+def _context_layout(
+    definitions: object,
+    variables: object,
+) -> tuple[tuple[ParameterDefinition, ...], tuple[ParameterCoordinate, ...]]:
+    """Freeze and cross-check the compiled coordinate-to-definition mapping.
+
+    Coordinates retain their compiler order. Each index and persisted name must
+    identify the same definition so evaluation cannot silently decode a value
+    through another parameter's bounds or transform.
+    """
+    definition_values = tuple(definitions)
+    variable_values = tuple(variables)
+    if any(not isinstance(value, ParameterDefinition) for value in definition_values):
+        raise TypeError("parameter_definitions must contain ParameterDefinition values")
+    if any(not isinstance(value, ParameterCoordinate) for value in variable_values):
+        raise TypeError("variables must contain ParameterCoordinate values")
+    mismatched = any(
+        coordinate.parameter_index >= len(definition_values)
+        or definition_values[coordinate.parameter_index].name != coordinate.name
+        for coordinate in variable_values
+    )
+    if mismatched:
+        raise ValueError("variables must reference matching parameter definitions")
+    return definition_values, variable_values
+
+
+def _context_arrays(
+    context: FitEvaluationContext,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Own immutable region arrays aligned to every prepared observation.
+
+    All observations carry a label and weight, including points outside the fit
+    mask. Fitted rows additionally require strictly positive weights because
+    they participate in residual and likelihood calculations.
+    """
+    labels = _readonly(context.region_labels, int, "region_labels")
+    weights = _readonly(context.weights, float, "weights")
+    expected = context.data.qz_a_inv.shape
+    if labels.shape != expected or weights.shape != expected:
+        raise ValueError("region arrays must match prepared data")
+    if np.any(~np.isfinite(weights)) or np.any(weights < 0.0):
+        raise ValueError("weights must be finite and nonnegative")
+    if np.any(weights[context.data.fit_mask] <= 0.0):
+        raise ValueError("fitted weights must be positive")
+    return labels, weights
+
+
+def _validate_context_prior(context: FitEvaluationContext) -> None:
+    """Validate the optional plateau prior as one coherent declaration.
+
+    The center may be absent, while its scale remains positive for deterministic
+    serialization and for contexts that enable the prior after compilation.
+    """
+    center = context.scale_prior_center
+    if center is not None and (not isfinite(center) or center <= 0.0):
+        raise ValueError("scale_prior_center must be positive and finite or None")
+    tau = context.scale_prior_tau_decades
+    if not isfinite(tau) or tau <= 0.0:
+        raise ValueError("scale_prior_tau_decades must be positive and finite")
+    if context.scale_prior_reason is not None and not context.scale_prior_reason:
+        raise ValueError("scale_prior_reason must be nonempty or None")
+
+
+def _context_warnings(values: object) -> tuple[str, ...]:
+    """Normalize warning evidence without accepting empty placeholders."""
+    warnings = tuple(values)
+    if any(not isinstance(value, str) or not value for value in warnings):
+        raise ValueError("warnings must contain nonempty strings")
+    return warnings
+
+
+@dataclass(frozen=True, slots=True)
+class FitEvaluationContext:
+    """Compiled immutable handoff shared by fitting and analysis.
+
+    The context is the typed numerical contract that both domains may consume
+    without importing one another. It binds prepared observations, physical
+    declarations, compiled coordinates, regional weighting, and the optional
+    scale prior into a single pickle-safe value.
+
+    Construction owns all mutable array inputs. A nested ``PreparedData`` copy
+    is also reconstructed because NumPy write flags are not preserved by an
+    ordinary pickle round trip. Re-running this constructor during unpickling
+    restores the read-only contract at the process boundary.
+    """
+
+    data: PreparedData
+    structure: StructureSpec
+    instrument: InstrumentSpec
+    config: FitConfig
+    parameter_definitions: tuple[ParameterDefinition, ...]
+    variables: tuple[ParameterCoordinate, ...]
+    region_labels: np.ndarray
+    weights: np.ndarray
+    scale_prior_center: float | None
+    scale_prior_tau_decades: float = 0.1
+    scale_prior_reason: str | None = None
+    warnings: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _validate_context_components(self)
+        definitions, variables = _context_layout(
+            self.parameter_definitions,
+            self.variables,
+        )
+        labels, weights = _context_arrays(self)
+        _validate_context_prior(self)
+        warnings = _context_warnings(self.warnings)
+        # Reconstruct nested prepared data so a pickle round-trip cannot expose
+        # writable NumPy buffers through the shared context.
+        object.__setattr__(self, "data", replace(self.data))
+        object.__setattr__(self, "parameter_definitions", definitions)
+        object.__setattr__(self, "variables", variables)
+        object.__setattr__(self, "region_labels", labels)
+        object.__setattr__(self, "weights", weights)
+        object.__setattr__(self, "warnings", warnings)
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        values = tuple(getattr(self, field) for field in self.__dataclass_fields__)
+        return type(self), values
+
+
 @dataclass(frozen=True, slots=True)
 class FitProgress:
     """Serializable monotonic progress for one dataset and fitting stage."""
@@ -281,6 +466,9 @@ class FitCandidate:
         for field, value in arrays.items():
             object.__setattr__(self, field, value)
 
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), _pickle_values(self)
+
 
 @dataclass(frozen=True, slots=True)
 class ModelEvaluation:
@@ -326,6 +514,9 @@ class ModelEvaluation:
         for (name, _value), array in zip(fields, arrays, strict=True):
             object.__setattr__(self, name, array)
         return arrays
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), _pickle_values(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,8 +576,10 @@ class FitCheckpoint:
         object.__setattr__(self, "stage_summaries", summaries)
 
 
-def _ranking_objective(candidate: FitCandidate) -> float:
-    return candidate.objective if candidate.ranking_objective is None else candidate.ranking_objective
+def candidate_selection_objective(candidate: FitCandidate) -> float:
+    """Return the persisted objective that owns candidate selection."""
+    ranking = getattr(candidate, "ranking_objective", None)
+    return candidate.objective if ranking is None else ranking
 
 
 def _final_candidate_ids(summaries: tuple[FitStageSummary, ...]) -> frozenset[str] | None:
@@ -411,7 +604,7 @@ def _selectable_indices(
         if (final_ids is None or candidate.candidate_id in final_ids)
         and candidate.valid
         and candidate.stop_reason != "early_eliminated"
-        and isfinite(_ranking_objective(candidate))
+        and isfinite(candidate_selection_objective(candidate))
     )
 
 
@@ -452,8 +645,10 @@ def _validate_best_index(
         raise ValueError("best_index must identify a candidate")
     if best_index not in selectable:
         raise ValueError("best_index must identify a selectable candidate")
-    minimum = min(_ranking_objective(candidates[index]) for index in selectable)
-    if _ranking_objective(candidates[best_index]) != minimum:
+    minimum = min(
+        candidate_selection_objective(candidates[index]) for index in selectable
+    )
+    if candidate_selection_objective(candidates[best_index]) != minimum:
         raise ValueError("best_index must identify a minimum-objective candidate")
 
 
@@ -469,6 +664,7 @@ class FitSearchResult:
     stage_summaries: tuple[FitStageSummary, ...]
     region_labels: np.ndarray
     region_weights: np.ndarray
+    provenance_sha256: str | None = None
 
     def __post_init__(self) -> None:
         # Normalize every owned sequence before validating cross-record edges.
@@ -489,6 +685,8 @@ class FitSearchResult:
         weights = _readonly(self.region_weights, float, "region_weights")
         if labels.shape != weights.shape:
             raise ValueError("region arrays must have equal length")
+        if self.provenance_sha256 is not None:
+            _sha256(self.provenance_sha256, "provenance_sha256")
         object.__setattr__(self, "parameter_definitions", definitions)
         object.__setattr__(self, "candidates", candidates)
         object.__setattr__(self, "warnings", tuple(self.warnings))
@@ -496,6 +694,9 @@ class FitSearchResult:
         object.__setattr__(self, "stage_summaries", summaries)
         object.__setattr__(self, "region_labels", labels)
         object.__setattr__(self, "region_weights", weights)
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), _pickle_values(self)
 
     @property
     def best_candidate(self) -> FitCandidate | None:

@@ -2,11 +2,15 @@
 
 Coverage keeps parameter layout, stage locks, geometry-dependent bounds, and
 analytic evaluation tied to one immutable compiled snapshot.
+The suite also proves that the shared context survives serialization without
+exposing writable arrays or changing coordinate identity.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
+from importlib import import_module
+import pickle
 
 import numpy as np
 import pytest
@@ -59,6 +63,25 @@ def _initial_values(problem) -> dict[str, float]:
     return {
         definition.name: definition.initial for definition in problem.parameter_definitions
     }
+
+
+def test_compilation_returns_the_shared_typed_evaluation_context() -> None:
+    fitting = import_module("xrr_fitter.model.fitting")
+    problem_module = import_module("xrr_fitter.fit.problem")
+    problem = _problem()
+
+    assert isinstance(problem, fitting.FitEvaluationContext)
+    assert not hasattr(problem_module, "CompiledFitProblem")
+    assert problem.region_labels.flags.writeable is False
+    assert problem.weights.flags.writeable is False
+
+    restored = pickle.loads(pickle.dumps(problem))
+
+    assert isinstance(restored, fitting.FitEvaluationContext)
+    assert restored.region_labels.flags.writeable is False
+    assert restored.weights.flags.writeable is False
+    np.testing.assert_array_equal(restored.region_labels, problem.region_labels)
+    np.testing.assert_array_equal(restored.weights, problem.weights)
 
 
 def _richardson(problem, unit: np.ndarray) -> np.ndarray:

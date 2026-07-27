@@ -11,9 +11,8 @@ import numpy as np
 
 from xrr_fitter.fit.global_search import bounded_index_product, geometry_variants
 from xrr_fitter.fit.initialization import estimate_initial_candidates
-from xrr_fitter.fit.problem import CompiledFitProblem
 from xrr_fitter.model.data import PreparedData
-from xrr_fitter.model.fitting import FitCandidate, ModelEvaluation
+from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext, ModelEvaluation
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
@@ -620,7 +619,7 @@ def select_full_search_candidates(
 
 
 def candidate_from_evaluation(
-    problem: CompiledFitProblem,
+    problem: FitEvaluationContext,
     unit_vector: np.ndarray,
     evaluation: ModelEvaluation,
     candidate_id: str,

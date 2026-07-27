@@ -16,23 +16,56 @@ physics tangents directly and never re-evaluates the primal candidate.
 Expected physical-domain failures cross the boundary as
 ``EvaluationConstraintError``. Programming errors and unsupported layouts are
 left visible to callers rather than converted into invalid candidates.
+
+Parameter scalar transforms and immutable structure reconstruction are owned by
+their lower-level model and physics modules. They are imported here as part of
+this boundary so fit and analysis continue to consume one coordinate contract.
+Neither domain reaches around evaluation to assemble candidate physics itself.
+
+SciPy least-squares integration retains data residuals and the optional scale
+prior as separate rows. Regional weights remain outside residual values and are
+applied exactly once by the custom three-row loss. Invalid physical candidates
+produce a fixed residual sentinel and a zero data Jacobian with stable axes;
+unexpected callback errors remain visible.
+
+The analytic optimizer path uses the same unit decoding and full model Jacobian
+as ordinary evaluation. Only expected physical constraints, floating-point
+failures, and the declared nonpositive-angle derivative boundary become a zero
+Jacobian. Other ``ValueError`` instances identify unsupported layouts or defects
+and are re-raised.
+
+Analysis MCMC consumes a robust pseudo-posterior derived from the same soft-L1
+data loss. Unit vectors outside the compiled box and expected physical failures
+have negative-infinite density. The optional scale row contributes its explicit
+Gaussian log prior and is not folded into regional data weighting.
+
+These optimizer-facing functions accept an evaluator override only for narrow
+unit testing of the boundary. Production callers use the module's primal and
+analytic evaluators directly; no persistent callable collection is stored in a
+problem, request, result, or checkpoint value.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from functools import partial
 from math import isfinite, log
 
 import numpy as np
 
-from xrr_fitter.model.fitting import ModelEvaluation
+from xrr_fitter.model.fitting import FitEvaluationContext, ModelEvaluation
 from xrr_fitter.model.instrument import PhysicsDiagnostic, resolution_to_sigma_q
-from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue
+from xrr_fitter.model.parameters import (
+    ParameterDefinition,
+    ParameterValue,
+    PhysicalValueError,
+    physical_to_unit,
+    unit_to_physical,
+)
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
     LayerSpec,
-    MaterialSpec,
     PeriodicBlock,
     SlabStack,
     StructureSpec,
@@ -44,7 +77,7 @@ from xrr_fitter.physics.derivatives import (
 )
 from xrr_fitter.physics.materials import material_sld
 from xrr_fitter.physics.reflectivity import instrument_reflectivity
-from xrr_fitter.physics.stack import expand_structure
+from xrr_fitter.physics.stack import expand_structure, rebuild_structure
 
 
 def _float_vectors(
@@ -224,296 +257,6 @@ def scale_prior_penalty(
     # Dividing by N makes this additive term compatible with a mean data loss.
     standardized = (np.log10(scale) - np.log10(scale_hat)) / tau_s
     return float(standardized**2 / n)
-
-
-def _effective_upper(
-    definition: ParameterDefinition,
-    dynamic_upper: float | None,
-) -> float:
-    """Allow candidate geometry to tighten, but never widen, declared bounds.
-
-    Dynamic roughness bounds may carry a ``nextafter`` value immediately below
-    a physical limit. Taking the exact minimum preserves that strict endpoint.
-    """
-    # Static metadata remains authoritative whenever geometry imposes no cap.
-    # A supplied cap may tighten only; it cannot silently broaden the project.
-    return definition.upper if dynamic_upper is None else min(definition.upper, dynamic_upper)
-
-
-def _zero_width_locked(definition: ParameterDefinition) -> bool:
-    return (definition.locked, definition.lower == definition.upper) == (True, True)
-
-
-class PhysicalValueError(ValueError):
-    """An expected candidate value outside its compiled physical domain."""
-
-
-def _validate_physical_value(
-    definition: ParameterDefinition,
-    value: float,
-    upper: float,
-) -> None:
-    """Reject invalid physical coordinates instead of clipping them.
-
-    Clipping would make a malformed project or candidate appear to have fitted
-    successfully at a boundary and would break encode/decode invertibility.
-    """
-    if not all((isfinite(value), value >= definition.lower, value <= upper)):
-        raise PhysicalValueError(f"value outside bounds: {definition.name}")
-
-
-def _log_physical_to_unit(
-    definition: ParameterDefinition,
-    value: float,
-    upper: float,
-) -> float:
-    """Normalize one positive value in logarithmic physical space.
-
-    Natural logarithms are used in both directions; their base cancels in the
-    unit ratio. A dynamic upper therefore participates in the inverse exactly.
-    """
-    if min(definition.lower, value) <= 0.0:
-        raise PhysicalValueError(f"log parameter must be positive: {definition.name}")
-    return (log(value) - log(definition.lower)) / (
-        log(upper) - log(definition.lower)
-    )
-
-
-def _validate_unit_value(definition: ParameterDefinition, unit: float) -> None:
-    """Reject nonfinite or out-of-domain solver coordinates before dispatch.
-
-    Solvers normally honor box bounds, but imported checkpoints and direct API
-    callers enter here too. No clipping or tolerance is applied at this layer.
-    """
-    if not all((isfinite(unit), unit >= 0.0, unit <= 1.0)):
-        raise ValueError(f"unit value outside [0,1]: {definition.name}")
-
-
-def _log_unit_to_physical(
-    definition: ParameterDefinition,
-    unit: float,
-    upper: float,
-) -> float:
-    """Decode a logarithmic coordinate while preserving exact endpoints.
-
-    Explicit branches at zero and one avoid exponential roundoff that could
-    place a decoded value just outside its persisted physical interval.
-    """
-    if min(definition.lower, upper - definition.lower) <= 0.0:
-        raise ValueError(f"invalid log bounds: {definition.name}")
-    if unit == 0.0:
-        return float(definition.lower)
-    if unit == 1.0:
-        return float(upper)
-    return float(
-        np.exp(log(definition.lower) + unit * (log(upper) - log(definition.lower)))
-    )
-
-
-def _linear_unit_to_physical(
-    definition: ParameterDefinition,
-    unit: float,
-    upper: float,
-) -> float:
-    """Decode affine and geometry-tightened roughness coordinates exactly.
-
-    Roughness shares this interpolation after its candidate-specific upper has
-    been computed. Endpoint branches preserve project and checkpoint equality.
-    """
-    if unit == 0.0:
-        return float(definition.lower)
-    if unit == 1.0:
-        return float(upper)
-    return float(definition.lower + unit * (upper - definition.lower))
-
-
-def physical_to_unit(
-    definition: ParameterDefinition,
-    value: float,
-    dynamic_upper: float | None = None,
-) -> float:
-    """Encode one legal physical value in its declared unit interval.
-
-    A locked zero-width declaration has no meaningful inverse coordinate and
-    maps to zero. All active declarations reject out-of-range values before
-    dispatching to their persisted transform identifier.
-    """
-    upper = _effective_upper(definition, dynamic_upper)
-    if _zero_width_locked(definition):
-        return 0.0
-    _validate_physical_value(definition, value, upper)
-    if definition.transform == "log":
-        return _log_physical_to_unit(definition, value, upper)
-    if definition.transform in {"linear", "roughness_fraction"}:
-        return (value - definition.lower) / (upper - definition.lower)
-    raise ValueError(f"unknown transform: {definition.transform}")
-
-
-def unit_to_physical(
-    definition: ParameterDefinition,
-    unit: float,
-    dynamic_upper: float | None = None,
-) -> float:
-    """Decode one finite unit coordinate using exact endpoint semantics.
-
-    Dispatch is restricted to the three persisted transform identifiers.
-    Unknown metadata remains an error instead of silently becoming affine.
-    """
-    _validate_unit_value(definition, unit)
-    upper = _effective_upper(definition, dynamic_upper)
-    if definition.transform == "log":
-        return _log_unit_to_physical(definition, unit, upper)
-    if definition.transform in {"linear", "roughness_fraction"}:
-        return _linear_unit_to_physical(definition, unit, upper)
-    raise ValueError(f"unknown transform: {definition.transform}")
-
-
-def _replace_material(
-    material: MaterialSpec,
-    prefix: str,
-    values: dict[str, float],
-) -> MaterialSpec:
-    """Rebuild an optional explicit complex-SLD material override.
-
-    Formula-backed materials intentionally omit override coordinates and retain
-    their original identity. Explicit real and imaginary parts are consumed as
-    one value so a half-specified mapping cannot escape reconstruction.
-    """
-    real_name = f"{prefix}.sld_real_a2"
-    if real_name not in values:
-        return material
-    return replace(
-        material,
-        sld_override_a2=complex(values[real_name], values[f"{prefix}.sld_imag_a2"]),
-    )
-
-
-def _replace_layer(
-    layer: LayerSpec,
-    prefix: str,
-    values: dict[str, float],
-) -> LayerSpec:
-    """Apply one layer's material, thickness, density, and roughness values.
-
-    Name construction remains positional because compiled definitions and
-    periodic sharing both refer to the same component-index prefixes.
-    """
-    return replace(
-        layer,
-        material=_replace_material(layer.material, prefix, values),
-        thickness_a=values[f"{prefix}.thickness_a"],
-        density_scale=values[f"{prefix}.density_scale"],
-        roughness_a=values[f"{prefix}.roughness_a"],
-    )
-
-
-def _replace_indexed_layer(
-    item: tuple[int, LayerSpec],
-    prefix: str,
-    values: dict[str, float],
-) -> LayerSpec:
-    index, layer = item
-    return _replace_layer(layer, f"{prefix}.layer.{index}", values)
-
-
-def _replace_periodic(
-    block: PeriodicBlock,
-    prefix: str,
-    values: dict[str, float],
-) -> PeriodicBlock:
-    """Rebuild shared periodic-cell coordinates without expanding repeats.
-
-    Repeat count is persisted as numeric metadata but represents exact topology.
-    ``None`` top roughness remains an inheritance sentinel rather than being
-    materialized from the first layer during reconstruction.
-    """
-    layers = tuple(
-        map(
-            partial(_replace_indexed_layer, prefix=prefix, values=values),
-            enumerate(block.layers),
-        )
-    )
-    # A missing top override is semantic inheritance, not a zero roughness value.
-    # Preserve the sentinel so later expansion chooses layer zero exactly once.
-    top_roughness = (
-        None
-        if block.top_roughness_a is None
-        else values[f"{prefix}.top_roughness_a"]
-    )
-    return replace(
-        block,
-        layers=layers,
-        repeats=int(round(values[f"{prefix}.repeats"])),
-        top_roughness_a=top_roughness,
-    )
-
-
-def _replace_gradient(
-    layer: GradientLayerSpec,
-    prefix: str,
-    values: dict[str, float],
-) -> GradientLayerSpec:
-    """Rebuild complex gradient endpoints and topology-defining dimensions.
-
-    Thickness and microslab limit are independent coordinates because both can
-    change the expanded slab count used by the primal and tangent mappings.
-    """
-    return replace(
-        layer,
-        upper_sld_a2=complex(
-            values[f"{prefix}.upper_sld_real_a2"],
-            values[f"{prefix}.upper_sld_imag_a2"],
-        ),
-        lower_sld_a2=complex(
-            values[f"{prefix}.lower_sld_real_a2"],
-            values[f"{prefix}.lower_sld_imag_a2"],
-        ),
-        thickness_a=values[f"{prefix}.thickness_a"],
-        roughness_a=values[f"{prefix}.roughness_a"],
-        microslab_max_a=values[f"{prefix}.microslab_max_a"],
-    )
-
-
-def _replace_component(
-    component: LayerSpec | PeriodicBlock | GradientLayerSpec,
-    prefix: str,
-    values: dict[str, float],
-) -> LayerSpec | PeriodicBlock | GradientLayerSpec:
-    if isinstance(component, LayerSpec):
-        return _replace_layer(component, prefix, values)
-    if isinstance(component, PeriodicBlock):
-        return _replace_periodic(component, prefix, values)
-    return _replace_gradient(component, prefix, values)
-
-
-def _replace_indexed_component(
-    item: tuple[int, LayerSpec | PeriodicBlock | GradientLayerSpec],
-    values: dict[str, float],
-) -> LayerSpec | PeriodicBlock | GradientLayerSpec:
-    index, component = item
-    return _replace_component(component, f"component.{index}", values)
-
-
-def rebuild_structure(
-    structure: StructureSpec,
-    values: dict[str, float],
-) -> StructureSpec:
-    """Return an immutable structure from one complete physical value map.
-
-    Component order is retained exactly. Rebuilding never mutates the compiled
-    problem's declared structure, allowing parallel candidates to share it.
-    """
-    components = tuple(
-        map(
-            partial(_replace_indexed_component, values=values),
-            enumerate(structure.components),
-        )
-    )
-    return replace(
-        structure,
-        components=components,
-        backing_roughness_a=values["backing.roughness_a"],
-    )
 
 
 GRADIENT_INTERNAL_INTERFACE = "__gradient_internal_zero__"
@@ -1163,7 +906,7 @@ def _decode_nonrough_values(
 
 
 def values_and_jacobians(
-    problem: object,
+    problem: FitEvaluationContext,
     unit_vector: np.ndarray,
 ) -> tuple[dict[str, float], dict[str, np.ndarray]]:
     """Decode physical values and their analytic unit-coordinate tangents.
@@ -1217,7 +960,10 @@ def values_and_jacobians(
     return values, value_jacobians
 
 
-def values_by_name(problem: object, unit_vector: np.ndarray) -> dict[str, float]:
+def values_by_name(
+    problem: FitEvaluationContext,
+    unit_vector: np.ndarray,
+) -> dict[str, float]:
     """Decode nonrough coordinates before geometry-dependent roughness values.
 
     Locked initial values seed the complete mapping. Free coordinates overwrite
@@ -1249,7 +995,7 @@ def _physical_parameter_pair(
 
 
 def encode_physical_vector(
-    problem: object,
+    problem: FitEvaluationContext,
     physical_values: dict[str, float],
 ) -> np.ndarray:
     """Encode a partial physical mapping with declaration defaults for omissions.
@@ -1709,7 +1455,10 @@ def _model_evaluation(
     )
 
 
-def evaluate_model(problem: object, unit_vector: np.ndarray) -> ModelEvaluation:
+def evaluate_model(
+    problem: FitEvaluationContext,
+    unit_vector: np.ndarray,
+) -> ModelEvaluation:
     """Evaluate one candidate through the single shared numerical chain.
 
     This public pure function intentionally exposes no alternate engine or
@@ -1719,7 +1468,7 @@ def evaluate_model(problem: object, unit_vector: np.ndarray) -> ModelEvaluation:
 
 
 def expanded_structure_jacobian(
-    problem: object,
+    problem: FitEvaluationContext,
     unit_vector: np.ndarray,
 ) -> DifferentiableStack:
     """Expand the primary-wavelength stack and its analytic unit tangents.
@@ -2268,7 +2017,7 @@ def _masked_optional(
 
 
 def evaluate_model_jacobian(
-    problem: object,
+    problem: FitEvaluationContext,
     unit_vector: np.ndarray,
 ) -> np.ndarray:
     """Return the analytic Jacobian of unweighted fitted log residuals.
@@ -2280,12 +2029,17 @@ def evaluate_model_jacobian(
     denominator. The final matrix is an owned, read-only
     ``(fit_count, variable_count)`` array.
     """
-    values, value_jacobians = values_and_jacobians(problem, unit_vector)
-    primary_wavelength, primary_stack, secondary_stack = _differentiable_stacks(
-        problem,
-        values,
-        value_jacobians,
-    )
+    try:
+        values, value_jacobians = values_and_jacobians(problem, unit_vector)
+        primary_wavelength, primary_stack, secondary_stack = _differentiable_stacks(
+            problem,
+            values,
+            value_jacobians,
+        )
+    except PhysicalValueError as error:
+        raise EvaluationConstraintError(
+            f"constraint_violation:{type(error).__name__}"
+        ) from error
     theta = problem.data.two_theta_deg / 2.0 + values["instrument.angle_offset_deg"]
     model_mask = np.isfinite(theta) & (theta > 0.0)
     if np.any(problem.data.fit_mask & ~model_mask):
@@ -2353,3 +2107,280 @@ def evaluate_model_jacobian(
     result = np.array(residual_jacobian, dtype=float, copy=True)
     result.setflags(write=False)
     return result
+
+
+def _scale_prior_residual(problem: object, evaluation: ModelEvaluation) -> float | None:
+    """Return the signed standardized logarithmic scale displacement.
+
+    A missing plateau center removes the row completely. Active contexts always
+    carry the compiled ``instrument.scale`` parameter value, and the same
+    decades-based tau is used by least squares and MCMC.
+
+    The lookup uses the published evaluation snapshot rather than decoding the
+    unit vector again. This keeps prior accounting tied to the exact candidate
+    that produced the model residuals. The sign is retained for the solver row;
+    callers that need a penalty square the standardized displacement themselves.
+
+    ``scale_prior_center`` and ``scale_prior_tau_decades`` are compilation-time
+    invariants. This boundary therefore does not repair a missing scale value or
+    reinterpret nonpositive metadata after optimization has begun.
+    """
+    if problem.scale_prior_center is None:
+        return None
+    scale = next(
+        value.value
+        for value in evaluation.parameters
+        if value.name == "instrument.scale"
+    )
+    return float(
+        (np.log10(scale) - np.log10(problem.scale_prior_center))
+        / problem.scale_prior_tau_decades
+    )
+
+
+def _least_squares_row_count(problem: object) -> int:
+    """Count fitted data rows plus the optional independent prior row.
+
+    The result is the stable solver axis used even when candidate evaluation
+    fails. It depends only on compiled fit selection and prior activation, never
+    on a candidate's validity, so sentinel residuals cannot change shape between
+    calls.
+    """
+    return int(np.count_nonzero(problem.data.fit_mask)) + int(
+        problem.scale_prior_center is not None
+    )
+
+
+def least_squares_residual(
+    problem: FitEvaluationContext,
+    unit_vector: np.ndarray,
+    *,
+    evaluator: Callable[[FitEvaluationContext, np.ndarray], ModelEvaluation] | None = None,
+) -> np.ndarray:
+    """Return fitted log residuals followed by the optional scale-prior row.
+
+    Unit coordinates are validated before the evaluator is invoked. Expected
+    physical constraints and invalid evaluations produce the fixed ``1e6``
+    solver sentinel with the exact compiled row count; they do not masquerade as
+    a successful model evaluation.
+
+    Valid data residuals are copied from the immutable model evaluation. Regional
+    weights are intentionally absent because ``least_squares_loss`` applies them
+    outside soft-L1. When active, the signed prior displacement is appended after
+    every fitted data row.
+
+    The evaluator override is a test boundary, not a second production dispatch
+    mechanism. It must honor ``evaluate_model``'s result contract. Unexpected
+    exceptions remain visible so malformed contexts and unsupported structures
+    cannot be misclassified as merely unfavorable candidates.
+    """
+    unit = _validated_unit(problem, unit_vector)
+    evaluate = evaluate_model if evaluator is None else evaluator
+    try:
+        observed = evaluate(problem, unit)
+    except EvaluationConstraintError:
+        observed = None
+    if observed is None or not observed.valid:
+        return np.full(_least_squares_row_count(problem), 1e6, dtype=float)
+    residual = np.array(observed.fit_log_residuals_decades, dtype=float, copy=True)
+    prior = _scale_prior_residual(problem, observed)
+    return residual if prior is None else np.concatenate((residual, np.asarray([prior])))
+
+
+def _scale_prior_jacobian(problem: object) -> np.ndarray:
+    """Differentiate the optional scale-prior row in unit coordinates.
+
+    Log transforms have a constant decades-per-unit derivative. The affine case
+    follows the persisted midpoint convention used by the frozen optimizer
+    contract. All non-scale coordinates remain exactly zero.
+
+    The row is allocated even when the prior is inactive so its coordinate axis
+    remains explicit and testable. Callers append it only for an active prior.
+    A compiled problem has at most one free scale coordinate; locked scale values
+    consequently leave the full derivative row at zero.
+
+    This derivative intentionally follows the frozen optimizer convention rather
+    than the current candidate scale for affine transforms. Changing that rule
+    would alter reference search trajectories and checkpoint replay.
+    """
+    row = np.zeros(len(problem.variables), dtype=float)
+    if problem.scale_prior_center is None:
+        return row
+    for index, coordinate in enumerate(problem.variables):
+        if coordinate.name != "instrument.scale":
+            continue
+        definition = problem.parameter_definitions[coordinate.parameter_index]
+        if definition.transform == "log":
+            derivative = log(definition.upper / definition.lower) / log(10.0)
+        else:
+            scale = definition.lower + 0.5 * (definition.upper - definition.lower)
+            derivative = (definition.upper - definition.lower) / (scale * log(10.0))
+        row[index] = derivative / problem.scale_prior_tau_decades
+    return row
+
+
+def _empty_residual_jacobian(problem: object) -> np.ndarray:
+    """Return a zero data-only Jacobian with the compiled solver axes.
+
+    Prior rows are excluded here because they remain analytically valid when the
+    physical model cannot be differentiated. The public wrapper appends that row
+    after replacing only the failed data block.
+    """
+    return np.zeros(
+        (np.count_nonzero(problem.data.fit_mask), len(problem.variables)),
+        dtype=float,
+    )
+
+
+def least_squares_residual_jacobian(
+    problem: FitEvaluationContext,
+    unit_vector: np.ndarray,
+    *,
+    jacobian_evaluator: Callable[[FitEvaluationContext, np.ndarray], np.ndarray]
+    | None = None,
+) -> np.ndarray:
+    """Return the analytic residual Jacobian with the optional prior row.
+
+    The primary evaluator must return one column per compiled free coordinate.
+    Expected candidate constraints, numerical derivative failure, and the known
+    nonpositive fitted-angle boundary become a zero data Jacobian so SciPy can
+    reject the matching residual sentinel deterministically.
+
+    Other value errors remain programming or unsupported-layout failures and are
+    re-raised. The prior row is appended only after data-Jacobian normalization,
+    preserving the same row order as ``least_squares_residual``.
+
+    The test override must return the data block only. Prior differentiation is
+    owned here so production and test evaluators cannot apply it twice. Copying
+    through ``np.array`` also detaches the solver-facing matrix from an immutable
+    evaluation snapshot before the optional row is stacked.
+
+    No finite-value repair occurs at this layer. The analytic model boundary is
+    responsible for rejecting nonfinite tangents, while shape errors remain
+    visible through NumPy or SciPy instead of producing a plausible zero matrix.
+    """
+    unit = _validated_unit(problem, unit_vector)
+    evaluate = evaluate_model_jacobian if jacobian_evaluator is None else jacobian_evaluator
+    try:
+        jacobian = np.array(evaluate(problem, unit), dtype=float, copy=True)
+    except (EvaluationConstraintError, FloatingPointError, ValueError) as error:
+        expected_value_error = (
+            isinstance(error, ValueError)
+            and str(error) == "cannot differentiate nonpositive fitted angle"
+        )
+        if isinstance(error, ValueError) and not expected_value_error:
+            raise
+        jacobian = _empty_residual_jacobian(problem)
+    if problem.scale_prior_center is not None:
+        jacobian = np.vstack((jacobian, _scale_prior_jacobian(problem)))
+    return jacobian
+
+
+def least_squares_loss(
+    problem: FitEvaluationContext,
+) -> Callable[[np.ndarray], np.ndarray]:
+    """Build SciPy's three-row soft-L1 loss with external region weights.
+
+    SciPy supplies squared residuals and expects loss value plus first and second
+    derivatives with respect to those squared values. Data rows use the frozen
+    factor-two soft-L1 convention, with regional weights squared outside the
+    robust expression.
+
+    Rows after the fitted data count are independent quadratic priors. Their
+    derivative rows therefore stay constant and do not inherit regional weights
+    or the data robustness scale. The returned closure captures immutable
+    compiled weights and the configured decades scale.
+
+    SciPy passes squared residuals, so ``rho[1]`` and ``rho[2]`` differentiate
+    with respect to that squared coordinate rather than the signed residual.
+    Keeping all three rows together prevents the objective and analytic solver
+    derivatives from acquiring different factor-two conventions.
+
+    The closure accepts an arbitrary number of trailing prior rows even though
+    the current compiler emits at most one. Every trailing row uses the same
+    exact quadratic contract and remains independent of regional balancing.
+    """
+    weights = np.asarray(problem.weights[problem.data.fit_mask], dtype=float)
+    c_decades = problem.config.c_decades
+    data_count = weights.size
+
+    def loss(squared: np.ndarray) -> np.ndarray:
+        """Evaluate loss value and two derivatives without changing row axes.
+
+        The returned shape is always ``(3, squared.size)`` as required by SciPy's
+        callable-loss protocol. Empty data selections and prior-only vectors use
+        the same allocation path, avoiding special cases in optimizer dispatch.
+        """
+        values = np.asarray(squared, dtype=float)
+        rho = np.empty((3, values.size), dtype=float)
+        data = values[:data_count]
+        scaled = 1.0 + data / c_decades**2
+        rho[0, :data_count] = (
+            4.0 * weights**2 * c_decades**2 * (np.sqrt(scaled) - 1.0)
+        )
+        rho[1, :data_count] = 2.0 * weights**2 / np.sqrt(scaled)
+        rho[2, :data_count] = -(weights**2 / c_decades**2) * scaled ** (-1.5)
+        if values.size > data_count:
+            rho[0, data_count:] = 2.0 * values[data_count:]
+            rho[1, data_count:] = 2.0
+            rho[2, data_count:] = 0.0
+        return rho
+
+    return loss
+
+
+def problem_log_probability(
+    problem: FitEvaluationContext,
+    unit_vector: np.ndarray,
+) -> float:
+    """Return the robust pseudo-posterior density used by uncertainty MCMC.
+
+    This is a deterministic analysis density, not a normalized probability
+    distribution. The data term is the same weighted soft-L1 loss used by fit,
+    converted from its mean form back to a sum and scaled by ``2*c**2``.
+
+    Invalid unit coordinates, expected physical constraints, and invalid model
+    evaluations have negative-infinite density. Unsupported layouts and other
+    programming errors are not swallowed. An active scale prior contributes
+    ``-0.5 * standardized**2`` independently of fitted-point count.
+
+    Returning ``-inf`` at declared domain boundaries gives ensemble samplers a
+    conventional rejection signal without inventing a finite penalty magnitude.
+    The accepted path uses the same weighted soft-L1 expression as deterministic
+    fitting while retaining the sampler's frozen pointwise summation order. That
+    explicit grouping is required for bitwise replay of stored log probabilities.
+
+    This density omits normalization constants because downstream analysis uses
+    only relative log probability. It also performs no mutation, caching, or
+    random work, making repeated evaluation deterministic for a fixed context
+    and unit vector.
+    """
+    try:
+        unit = _validated_unit(problem, unit_vector)
+    except ValueError:
+        return -np.inf
+    try:
+        observed = evaluate_model(problem, unit)
+    except EvaluationConstraintError:
+        return -np.inf
+    if not all((observed.valid, isfinite(observed.objective))):
+        return -np.inf
+    residual = np.asarray(observed.fit_log_residuals_decades, dtype=float)
+    weights = np.asarray(problem.weights[problem.data.fit_mask], dtype=float)
+    c_decades = problem.config.c_decades
+    # Preserve the frozen sampler grouping: sum point losses before dividing by
+    # the robust scale. Replacing this with mean * count changes retained log
+    # probabilities by a few ULPs even though the expressions are algebraically
+    # equivalent, which breaks deterministic checkpoint and reference replay.
+    data_loss = np.sum(
+        weights**2
+        * 2.0
+        * c_decades**2
+        * (np.sqrt(1.0 + (residual / c_decades) ** 2) - 1.0)
+    )
+    log_probability = -float(data_loss) / (2.0 * c_decades**2)
+    if problem.scale_prior_center is not None:
+        prior = _scale_prior_residual(problem, observed)
+        assert prior is not None
+        log_probability -= 0.5 * prior**2
+    return float(log_probability)

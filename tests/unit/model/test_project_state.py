@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from tests.support.model_cases import dataset_project, final_fit_result, fit_candidate, project
-from xrr_fitter.model.analysis import McmcConfig, McmcReport, UncertaintyReport
+from xrr_fitter.model.analysis import ConfidenceClass, McmcConfig, McmcReport, UncertaintyReport
 from xrr_fitter.model.parameters import ParameterReference, SharingRule
 from xrr_fitter.model.project import (
     DatasetProject,
@@ -266,3 +266,28 @@ def test_joint_project_validates_global_rank_against_local_mean() -> None:
     bad_second = dataset_project("second", result=final_fit_result(bad_second_candidate))
     with pytest.raises(ValueError, match="global ranking"):
         replace(project(bad_first, bad_second), batch_mode="joint")
+
+
+def test_joint_project_allows_dataset_local_classification_and_warnings() -> None:
+    first_candidate = replace(fit_candidate("shared", 1.0), ranking_objective=1.5)
+    second_candidate = replace(fit_candidate("shared", 2.0), ranking_objective=1.5)
+    first_result = replace(
+        final_fit_result(first_candidate),
+        confidence=ConfidenceClass.CORRELATED,
+        warnings=("shared fit warning", "left diagnostic"),
+    )
+    second_result = replace(
+        final_fit_result(second_candidate),
+        confidence=ConfidenceClass.MULTIPLE,
+        warnings=("shared fit warning", "right diagnostic"),
+    )
+
+    joint = replace(
+        project(
+            dataset_project("first", result=first_result),
+            dataset_project("second", result=second_result),
+        ),
+        batch_mode="joint",
+    )
+
+    validate_project(joint)

@@ -16,7 +16,10 @@ from dataclasses import dataclass, replace
 import numpy as np
 from scipy.optimize import differential_evolution, least_squares
 
-from xrr_fitter.evaluation import encode_physical_vector, values_by_name
+from xrr_fitter.evaluation import (
+    encode_physical_vector,
+    values_by_name,
+)
 from xrr_fitter.fit.candidates import best_candidate_index, bounded_perturbations, candidate_from_evaluation
 from xrr_fitter.fit.checkpoint import build_checkpoint
 from xrr_fitter.fit.global_search import (
@@ -51,6 +54,7 @@ from xrr_fitter.model.fitting import (
     FitStageSummary,
 )
 from xrr_fitter.model.parameters import SharingRule
+from xrr_fitter.model.provenance import fit_search_provenance_sha256
 
 
 @dataclass(frozen=True, slots=True)
@@ -635,7 +639,7 @@ def _result_tuple(
 ) -> tuple[FitSearchResult, ...]:
     eligible_ids = next(summary.candidate_ids for summary in reversed(state.summaries) if summary.stage == "E")
     winner = best_candidate_index(state.candidates[0], eligible_ids=eligible_ids)
-    return tuple(
+    results = tuple(
         FitSearchResult(
             local_problem.parameter_definitions,
             candidates,
@@ -647,6 +651,13 @@ def _result_tuple(
             local_problem.weights,
         )
         for local_problem, candidates in zip(request.problem.problems, state.candidates, strict=True)
+    )
+    return tuple(
+        replace(
+            result,
+            provenance_sha256=fit_search_provenance_sha256(local_problem, result),
+        )
+        for local_problem, result in zip(request.problem.problems, results, strict=True)
     )
 
 

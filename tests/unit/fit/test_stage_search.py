@@ -32,6 +32,42 @@ Real encoding and evaluation continue to validate published candidate state.
 Cancellation cases assert the last fully completed unit of observable work.
 Archive cases distinguish retained evidence from eligible continuation parents.
 Together these checks characterize replay, not implementation call structure.
+
+The result graph is intentionally larger than the selectable final population.
+Historical candidates document declared launches, eliminated rows, cluster
+representatives, local descendants, and final seeded paths. Assertions use
+stable candidate IDs to distinguish retained evidence from active parents.
+
+Checkpoints are observed only after a complete stage commits. Resume tests bind
+them to data, structure, instrument, parameter settings, configuration, seed
+consumption, warnings, and stage history. A suffix replay must reproduce the
+same immutable candidates without republishing partial work.
+
+Progress follows committed algorithm units. Stage A reports screened starts;
+global and local stages preserve their deterministic order; Stage E reports
+each completed seed but nothing for a cancelled path. Solver replacements keep
+real encoding and evaluation active so publication remains physically checked.
+
+Profile-basin continuation crosses a narrower boundary than ordinary resume.
+The incoming result must still belong to the exact context, the proposed center
+must show material full-data gain, and four reserved final seeds must reconverge.
+Only a complete publishable replacement may atomically update Stage E and emit
+a checkpoint; every no-op and cancellation path preserves the original graph.
+
+Typed contexts and pickle tests close the process boundary. Request and result
+values carry data rather than callbacks, nested arrays return read-only after
+unpickling, and top-level handlers remain importable by future service-owned
+workers without moving process ownership into fit.
+
+Every scenario is deterministic under its declared master seed.
+
+Stage-B clustering is asserted in structure-coordinate space rather than over
+incidental instrument coordinates. Declared launch evidence remains visible
+beside a distant optimizer result, while same-geometry results retain one
+deterministic representative. Lineage assertions map that declared identity
+explicitly into later local stages. This keeps history checks meaningful even
+when candidate ranking differs from publication order.
+The frozen replay itself lives in a dedicated focused test module.
 """
 
 from __future__ import annotations
@@ -49,7 +85,7 @@ from xrr_fitter.evaluation import encode_physical_vector, values_by_name
 from xrr_fitter.fit.candidates import CandidateStart, candidate_from_evaluation
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem, compile_stage_problem
-from xrr_fitter.model.fitting import FitConfig, SearchBudget
+from xrr_fitter.model.fitting import FitCheckpoint, FitConfig, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.structure import LayerSpec, PeriodicBlock
 
@@ -140,7 +176,9 @@ def _assert_candidate_lineage(by_stage, candidate_ids) -> None:
     assert by_stage["E"] == ("E-0", "E-1", "E-2", "E-3")
     assert candidate_ids[-4:] == by_stage["E"]
     for value in by_stage["C"]:
-        assert f"B-{value.split('-')[1]}" in candidate_ids
+        lineage = value.split("-")[1]
+        parent = "B-declared-start" if lineage == "declared" else f"B-{lineage}"
+        assert parent in candidate_ids
     _assert_stage_d_lineage(by_stage, candidate_ids)
 
 
@@ -316,6 +354,73 @@ def test_fit_search_request_handler_and_result_are_pickle_safe() -> None:
         np.testing.assert_array_equal(left.model_normalized, right.model_normalized)
 
 
+def test_fit_search_request_rejects_a_lookalike_evaluation_context() -> None:
+    api = _pipeline_api()
+
+    with pytest.raises(TypeError, match="FitEvaluationContext"):
+        api.FitSearchRequest("curve", SimpleNamespace())
+
+
+def _assert_resumed_profile_result(continued, resumed) -> None:
+    assert resumed.stage_summaries == continued.stage_summaries
+    assert resumed.child_seeds == continued.child_seeds
+    assert tuple(item.candidate_id for item in resumed.candidates) == tuple(
+        item.candidate_id for item in continued.candidates
+    )
+    for left, right in zip(resumed.candidates, continued.candidates, strict=True):
+        np.testing.assert_array_equal(left.unit_vector, right.unit_vector)
+        np.testing.assert_array_equal(left.model_normalized, right.model_normalized)
+
+
+def test_profile_continuation_publishes_a_resumable_stage_e_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _pipeline_api()
+    problem = _problem(seed=741)
+    search = api.run_fit_search(api.FitSearchRequest("curve", problem))
+    best = search.best_candidate
+    assert best is not None
+    required = max(
+        problem.config.confidence.equivalent_cost_fraction * abs(best.objective),
+        problem.config.confidence.equivalent_cost_floor,
+    )
+    monkeypatch.setattr(
+        api,
+        "evaluate_model",
+        lambda *_args: SimpleNamespace(
+            valid=True,
+            objective=best.objective - 2.0 * required,
+        ),
+    )
+    monkeypatch.setattr(
+        api,
+        "reconverge_profile_basin",
+        lambda _problem, candidates, *_args, **_kwargs: candidates,
+    )
+    checkpoints: list[FitCheckpoint] = []
+
+    continued = api.continue_profile_basin(
+        problem,
+        search,
+        best.unit_vector,
+        parameter_name="component.0.thickness_a",
+        checkpoint=checkpoints.append,
+    )
+
+    assert len(checkpoints) == 1
+    checkpoint = checkpoints[0]
+    assert isinstance(checkpoint, FitCheckpoint)
+    assert checkpoint.stage == "E"
+    assert checkpoint.candidates == continued.candidates
+    assert checkpoint.child_seeds == continued.child_seeds
+    assert checkpoint.stage_summaries == continued.stage_summaries
+
+    resumed = api.run_fit_search(
+        api.FitSearchRequest("curve", problem, checkpoint)
+    )
+    _assert_resumed_profile_result(continued, resumed)
+
+
 def test_checkpoint_callback_failure_is_not_converted_to_search_success() -> None:
     api = _pipeline_api()
     sentinel = RuntimeError("checkpoint publication failed")
@@ -400,7 +505,7 @@ def test_ideal_reflectivity_above_one_records_full_dataset_indices(
     assert diagnostic.point_indices == (3, 38)
 
 
-def test_stage_b_keeps_a_better_declared_baseline_than_the_de_result(
+def test_stage_b_keeps_declared_baseline_alongside_a_distant_de_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api = _stages_api()
@@ -430,9 +535,22 @@ def test_stage_b_keeps_a_better_declared_baseline_than_the_de_result(
         cancelled=None,
     )
 
-    assert len(outcome.candidates) == 1
+    expected_de = encode_physical_vector(
+        problem,
+        {value.name: value.value for value in case.drift_evaluation.parameters},
+    )
+    assert np.linalg.norm(expected_de - case.baseline_unit) > (
+        problem.config.confidence.cluster_join_distance
+    )
+    assert tuple(candidate.candidate_id for candidate in outcome.candidates) == (
+        "B-declared-start",
+        "B-0",
+    )
     np.testing.assert_array_equal(outcome.candidates[0].unit_vector, case.baseline_unit)
     assert outcome.candidates[0].objective == case.baseline.objective
+    np.testing.assert_array_equal(outcome.candidates[1].unit_vector, expected_de)
+    assert outcome.candidates[1].stop_reason == "worse DE"
+    assert outcome.candidates[1].nfev == 6
 
 
 def test_stage_b_publishes_candidates_in_coarse_input_order(
@@ -445,9 +563,13 @@ def test_stage_b_publishes_candidates_in_coarse_input_order(
         CandidateStart((), "second"),
     )
     initial = encode_physical_vector(problem, {})
+    first_unit = np.array(initial, copy=True)
+    second_unit = np.array(initial, copy=True)
+    first_unit[0] = 0.2
+    second_unit[0] = 0.8
     by_index = (
-        replace(_candidate(problem, "B-0", initial), objective=2.0),
-        replace(_candidate(problem, "B-1", initial), objective=1.0),
+        replace(_candidate(problem, "B-0", first_unit), objective=2.0),
+        replace(_candidate(problem, "B-1", second_unit), objective=1.0),
     )
 
     monkeypatch.setattr(

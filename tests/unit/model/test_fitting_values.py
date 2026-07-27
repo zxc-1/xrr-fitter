@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, fields, replace
 from importlib import import_module
+import pickle
 
 import numpy as np
 
@@ -78,6 +79,54 @@ def test_model_evaluation_copies_reporting_arrays() -> None:
 
     assert evaluation.qz_a_inv[0] == 0.01
     assert evaluation.qz_a_inv.flags.writeable is False
+
+
+def test_published_fitting_arrays_remain_read_only_after_pickle() -> None:
+    candidate = fit_candidate()
+    evaluation = ModelEvaluation(
+        valid=True,
+        reason="evaluated",
+        parameters=candidate.parameters,
+        qz_a_inv=candidate.qz_a_inv,
+        model_normalized=candidate.model_normalized,
+        fit_log_residuals_decades=candidate.log_residuals_decades,
+        fit_weighted_residuals=candidate.weighted_residuals,
+        objective=candidate.objective,
+        expanded_stack=None,
+        diagnostics=(),
+    )
+    search = fit_result(candidate)
+
+    restored_candidate, restored_evaluation, restored_search = pickle.loads(
+        pickle.dumps((candidate, evaluation, search))
+    )
+
+    candidate_fields = (
+        "unit_vector",
+        "qz_a_inv",
+        "model_normalized",
+        "log_residuals_decades",
+        "weighted_residuals",
+        "sld_depth_a",
+        "sld_profile_a2",
+    )
+    evaluation_fields = (
+        "qz_a_inv",
+        "model_normalized",
+        "fit_log_residuals_decades",
+        "fit_weighted_residuals",
+    )
+    assert all(
+        not getattr(restored_candidate, field).flags.writeable
+        for field in candidate_fields
+    )
+    assert all(
+        not getattr(restored_evaluation, field).flags.writeable
+        for field in evaluation_fields
+    )
+    assert restored_search.region_labels.flags.writeable is False
+    assert restored_search.region_weights.flags.writeable is False
+    assert restored_search.candidates[0].unit_vector.flags.writeable is False
 
 
 def test_search_budget_allows_disabled_de_stages() -> None:

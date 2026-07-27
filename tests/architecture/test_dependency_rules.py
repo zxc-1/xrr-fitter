@@ -82,6 +82,7 @@ MODEL_ALLOWED = {
     "structure": set(),
     "parameters": set(),
     "fitting": {"data", "instrument", "structure", "parameters"},
+    "provenance": {"fitting"},
     "analysis": {"data", "parameters", "fitting"},
     "project": {"data", "instrument", "structure", "parameters", "fitting", "analysis"},
     "operations": {"fitting", "analysis", "project"},
@@ -585,12 +586,24 @@ def build():
 
 
 def test_fixture_checker_enforces_model_module_dag_and_services_composition() -> None:
-    known = {"model.analysis", "model.fitting", "services.batch", "services.fitting"}
+    known = {
+        "model.analysis",
+        "model.fitting",
+        "model.provenance",
+        "services.batch",
+        "services.fitting",
+    }
     assert _module_violations(
         "model.analysis", "from xrr_fitter.model import fitting", known
     ) == ()
+    assert _module_violations(
+        "model.provenance", "from xrr_fitter.model import fitting", known
+    ) == ()
     assert "model-edge" in _fixture_kinds(
         "model.fitting", "from xrr_fitter.model import analysis", *known
+    )
+    assert "model-edge" in _fixture_kinds(
+        "model.fitting", "from xrr_fitter.model import provenance", *known
     )
     assert _module_violations(
         "services.fitting", "import xrr_fitter.fit\nimport xrr_fitter.analysis", known

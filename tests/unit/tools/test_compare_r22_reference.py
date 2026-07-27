@@ -1,3 +1,9 @@
+"""Closed-reference manifest, replay, and comparison-policy contracts.
+
+These tests keep every registered adapter bound to declared bytes and verify
+that exact, mapped, and numerical comparison policies reject drift.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -294,25 +300,27 @@ def test_unregistered_group_fails_without_discovery(tmp_path: Path, load_tool_mo
         module.compare_group(manifest, "physics", registry={})
 
 
-def test_fit_search_group_remains_closed_until_analysis_is_available(
+def test_fit_search_adapter_replays_committed_reference_after_registration(
     load_tool_module,
 ) -> None:
-    # The frozen fit_search payload includes confidence, classification, and
-    # uncertainty history. Those fields can only come from Task 8 production;
-    # registering a fitting-only adapter here would turn a known contract gap
-    # into a fabricated intermediate PASS. Keep the registry explicitly closed.
     module = load_tool_module("compare_r22_reference")
     root = Path(__file__).resolve().parents[3]
-
-    assert "fit_search" not in module.GROUP_REGISTRY
-    with pytest.raises(
-        ValueError,
-        match="reference group is not registered: fit_search",
-    ):
-        module.compare_group(
+    assert tuple(module.GROUP_REGISTRY) == (
+        "model_project",
+        "io",
+        "physics",
+        "fit_compile",
+        "fit_search",
+        "analysis",
+    )
+    source = (root / "tools/reference_groups/fit_search.py").read_text(encoding="utf-8")
+    assert "tests.support" not in source
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert module.compare_group(
             root / "verification/r22/reference/manifest.json",
             "fit_search",
-        )
+        ) == {"group": "fit_search", "status": "PASS", "artifact_count": 2}
 
 
 def test_physics_adapter_replays_committed_reference_after_registration(
@@ -325,6 +333,8 @@ def test_physics_adapter_replays_committed_reference_after_registration(
         "io",
         "physics",
         "fit_compile",
+        "fit_search",
+        "analysis",
     )
     source = (root / "tools/reference_groups/physics.py").read_text(encoding="utf-8")
     assert "tests.support" not in source
@@ -346,6 +356,8 @@ def test_fit_compile_adapter_replays_committed_reference_after_registration(
         "io",
         "physics",
         "fit_compile",
+        "fit_search",
+        "analysis",
     )
     source = (root / "tools/reference_groups/fit_compile.py").read_text(encoding="utf-8")
     assert "tests.support" not in source
@@ -355,6 +367,29 @@ def test_fit_compile_adapter_replays_committed_reference_after_registration(
             root / "verification/r22/reference/manifest.json",
             "fit_compile",
         ) == {"group": "fit_compile", "status": "PASS", "artifact_count": 2}
+
+
+def test_analysis_adapter_replays_committed_reference_after_registration(
+    load_tool_module,
+) -> None:
+    module = load_tool_module("compare_r22_reference")
+    root = Path(__file__).resolve().parents[3]
+    assert tuple(module.GROUP_REGISTRY) == (
+        "model_project",
+        "io",
+        "physics",
+        "fit_compile",
+        "fit_search",
+        "analysis",
+    )
+    source = (root / "tools/reference_groups/analysis.py").read_text(encoding="utf-8")
+    assert "tests.support" not in source
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert module.compare_group(
+            root / "verification/r22/reference/manifest.json",
+            "analysis",
+        ) == {"group": "analysis", "status": "PASS", "artifact_count": 2}
 
 
 def test_registered_group_uses_closed_adapter_and_policy(tmp_path: Path, load_tool_module) -> None:
@@ -513,6 +548,8 @@ def test_model_project_adapter_is_explicit_and_matches_committed_reference(
         "io",
         "physics",
         "fit_compile",
+        "fit_search",
+        "analysis",
     )
     source = (root / "tools/reference_groups/model_project.py").read_text(encoding="utf-8")
     assert "tests.support" not in source
@@ -629,6 +666,8 @@ def test_io_adapter_is_explicit_and_matches_committed_reference(
         "io",
         "physics",
         "fit_compile",
+        "fit_search",
+        "analysis",
     )
     source = (root / "tools/reference_groups/io.py").read_text(encoding="utf-8")
     assert "tests.support" not in source
@@ -789,4 +828,67 @@ def test_fit_compile_adapter_rejects_replay_context_field_drift(
     context = _committed_group_context(module, "fit_compile")
 
     with pytest.raises(ValueError, match="fit_compile|artifact|input|configuration|seed"):
+        adapter(mutation(context))
+
+
+@pytest.mark.parametrize("group", ["fit_search", "analysis"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda context: replace(context, group="physics"),
+        lambda context: replace(context, artifacts=context.artifacts[:-1]),
+        lambda context: replace(context, artifacts=tuple(reversed(context.artifacts))),
+        lambda context: replace(context, inputs=context.inputs[:-1]),
+        lambda context: replace(context, inputs=tuple(reversed(context.inputs))),
+        lambda context: replace(
+            context,
+            inputs=(replace(context.inputs[0], input_id="wrong"), *context.inputs[1:]),
+        ),
+        lambda context: replace(
+            context,
+            inputs=(replace(context.inputs[0], input_class="wrong"), *context.inputs[1:]),
+        ),
+        lambda context: replace(
+            context,
+            inputs=(replace(context.inputs[0], path="wrong.xy"), *context.inputs[1:]),
+        ),
+        lambda context: replace(
+            context,
+            inputs=(replace(context.inputs[0], content=b"drift"), *context.inputs[1:]),
+        ),
+        lambda context: replace(
+            context,
+            inputs=(replace(context.inputs[0], sha256="0" * 64), *context.inputs[1:]),
+        ),
+        lambda context: replace(
+            context,
+            configuration={**context.configuration, "extra": True},
+        ),
+        lambda context: replace(context, seeds=context.seeds + (0,)),
+    ],
+    ids=[
+        "group",
+        "artifact-missing",
+        "artifact-order",
+        "input-missing",
+        "input-order",
+        "input-id",
+        "input-class",
+        "input-path",
+        "input-content",
+        "input-hash",
+        "configuration",
+        "seeds",
+    ],
+)
+def test_stochastic_adapters_reject_replay_context_field_drift(
+    load_tool_module,
+    group: str,
+    mutation,
+) -> None:
+    module = load_tool_module("compare_r22_reference")
+    adapter = module.GROUP_REGISTRY[group]
+    context = _committed_group_context(module, group)
+
+    with pytest.raises(ValueError, match=f"{group}|artifact|input|configuration|seed"):
         adapter(mutation(context))

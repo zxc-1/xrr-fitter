@@ -336,7 +336,13 @@ def test_joint_loss_rejects_invalid_squared_residual_rows(invalid_rows) -> None:
 def test_joint_loss_rejects_invalid_compiled_layout(mutation) -> None:
     api = import_module("xrr_fitter.fit.joint_evaluation")
 
-    with pytest.raises(ValueError, match="joint loss|layout|weight|c_decades|dataset"):
+    # The typed evaluation context now rejects several malformed dataset
+    # layouts before the joint-loss boundary is reached. Both boundaries are
+    # valid owners of this invariant and must keep the rejection explicit.
+    with pytest.raises(
+        (TypeError, ValueError),
+        match="joint loss|layout|weight|c_decades|dataset|region arrays|config",
+    ):
         api.joint_least_squares_loss(mutation(_joint(scale_prior=True)))
 
 

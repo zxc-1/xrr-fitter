@@ -10,10 +10,11 @@ import numpy as np
 
 from xrr_fitter.evaluation import encode_physical_vector
 from xrr_fitter.fit.objective import evaluate_jacobian, evaluate_vector
-from xrr_fitter.fit.problem import CompiledFitProblem, compile_fit_problem
+from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.io.project_codec import project_from_bytes
 from xrr_fitter.io.xy import read_xy_bytes
 from xrr_fitter.model.data import with_fit_mask
+from xrr_fitter.model.fitting import FitEvaluationContext
 
 
 ARTIFACTS = ("golden/fit_compile.json", "golden/fit_compile.npz")
@@ -87,7 +88,7 @@ def _validate_context(context: object) -> dict[str, bytes]:
     return {value.input_id: _validate_input(value) for value in inputs}
 
 
-def _compile_case(contents: dict[str, bytes], stem: str) -> CompiledFitProblem:
+def _compile_case(contents: dict[str, bytes], stem: str) -> FitEvaluationContext:
     project = project_from_bytes(contents[f"{stem}-project"])
     if len(project.datasets) != 1:
         raise ValueError(f"fit_compile project dataset drift: {stem}")
@@ -112,7 +113,7 @@ def _compile_case(contents: dict[str, bytes], stem: str) -> CompiledFitProblem:
     )
 
 
-def _region_counts(problem: CompiledFitProblem) -> dict[str, int]:
+def _region_counts(problem: FitEvaluationContext) -> dict[str, int]:
     labels, counts = np.unique(
         problem.region_labels[problem.data.fit_mask],
         return_counts=True,
@@ -123,7 +124,7 @@ def _region_counts(problem: CompiledFitProblem) -> dict[str, int]:
     }
 
 
-def _definition_bounds(problem: CompiledFitProblem) -> list[dict[str, object]]:
+def _definition_bounds(problem: FitEvaluationContext) -> list[dict[str, object]]:
     return [
         {
             "name": definition.name,
@@ -147,7 +148,7 @@ def _jacobian_summary(jacobian: np.ndarray) -> dict[str, object]:
 
 
 def _case_artifacts(
-    problem: CompiledFitProblem,
+    problem: FitEvaluationContext,
     prefix: str,
 ) -> tuple[dict[str, object], dict[str, np.ndarray]]:
     initial_unit = encode_physical_vector(problem, {})

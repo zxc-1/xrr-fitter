@@ -512,15 +512,13 @@ def _candidate_identity(candidate: object) -> tuple[object, ...]:
 
 
 def _result_identity(result: FitResult) -> tuple[object, ...]:
-    # Result identity extends candidate lineage with the shared selection,
-    # stages, confidence, seed consumption, and warnings.
+    # Joint search owns aligned lineage, selection, seeds, and stage history.
+    # Confidence and analysis-enriched warnings remain dataset-local evidence.
     return (
         tuple(_candidate_identity(candidate) for candidate in result.candidates),
         result.best_index,
         result.child_seeds,
         result.stage_summaries,
-        result.confidence,
-        result.warnings,
     )
 
 
