@@ -335,6 +335,46 @@ def test_compile_stage_problem_releases_the_exact_stage_parameter_groups() -> No
     assert stage_names["E"] == {coordinate.name for coordinate in problem.variables}
 
 
+def test_compile_stage_problem_locks_current_values_and_preserves_user_locks() -> None:
+    problem = _problem(
+        settings=(
+            ParameterSetting("instrument.scale", 1.25, 1.25, 1.25, locked=True),
+        )
+    )
+    values = _initial_values(problem)
+    values.update(
+        {
+            "component.0.thickness_a": values["component.0.thickness_a"] * 1.05,
+            "component.0.density_scale": 0.9,
+            "component.0.roughness_a": 3.5,
+            "instrument.scale": 2.0,
+        }
+    )
+
+    stage_b = compile_stage_problem(problem, "B", values)
+    definitions = {value.name: value for value in stage_b.parameter_definitions}
+
+    assert definitions["component.0.thickness_a"].initial == values[
+        "component.0.thickness_a"
+    ]
+    assert not definitions["component.0.thickness_a"].locked
+    for name in ("component.0.density_scale", "component.0.roughness_a"):
+        assert definitions[name].initial == values[name]
+        assert definitions[name].locked
+        assert definitions[name].lower == definitions[name].upper == values[name]
+    assert definitions["instrument.scale"].initial == 1.25
+    assert definitions["instrument.scale"].locked
+
+
+def test_compile_stage_problem_rejects_incomplete_current_candidate_values() -> None:
+    problem = _problem()
+    values = _initial_values(problem)
+    del values["component.0.density_scale"]
+
+    with pytest.raises(ValueError, match="missing current stage values.*density_scale"):
+        compile_stage_problem(problem, "B", values)
+
+
 def test_compile_stage_problem_respects_theta_resolution_and_disabled_footprint() -> None:
     problem = _theta_resolution_problem()
     values = _initial_values(problem)
@@ -347,6 +387,18 @@ def test_compile_stage_problem_respects_theta_resolution_and_disabled_footprint(
     assert "instrument.footprint_spill_angle_deg" not in names_b
     assert "instrument.relative_sigma" not in names_d
     assert "instrument.sigma_theta_deg" in names_d
+
+
+def test_theta_domain_does_not_silently_ignore_point_resolution_columns() -> None:
+    data = _angular_point_resolution_jacobian_problem().data
+
+    with pytest.raises(ValueError, match="per-point resolution.*theta-domain"):
+        compile_fit_problem(
+            data,
+            simple_structure(),
+            InstrumentSpec(footprint_mode="none", resolution_domain="theta"),
+            _config(27),
+        )
 
 
 @pytest.mark.parametrize(

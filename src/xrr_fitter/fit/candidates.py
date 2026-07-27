@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import product
 from math import isfinite, prod
 
 import numpy as np
-from scipy.stats import qmc
 
-from xrr_fitter.fit.initialization import InitialCandidates, estimate_initial_candidates
+from xrr_fitter.fit.global_search import bounded_index_product, geometry_variants
+from xrr_fitter.fit.initialization import estimate_initial_candidates
 from xrr_fitter.fit.problem import CompiledFitProblem
 from xrr_fitter.model.data import PreparedData
 from xrr_fitter.model.fitting import FitCandidate, ModelEvaluation
@@ -35,6 +35,13 @@ class CandidateStart:
 
     def value(self, name: str) -> float:
         return dict(self.values)[name]
+
+
+@dataclass(frozen=True, slots=True)
+class StageBArchive:
+    active: tuple[FitCandidate, ...]
+    archived: tuple[FitCandidate, ...]
+    perturbation_counts: tuple[int, ...]
 
 
 def _readonly(value: object, dtype: type | None = None) -> np.ndarray:
@@ -89,244 +96,6 @@ def bounded_perturbations(
         1.0,
     )
     return tuple(_readonly(vector, float) for vector in perturbed)
-
-
-def _ratio_variants(
-    declared_thickness: np.ndarray,
-    rng: np.random.Generator,
-    binary_defaults: tuple[float, ...],
-) -> tuple[np.ndarray, ...]:
-    """Build deterministic layer fractions before geometry products.
-
-    Declared and equal fractions are protected. Binary defaults and one-axis
-    offsets retain interpretable starts; larger stacks add seeded simplex LHS.
-    """
-    base = declared_thickness / declared_thickness.sum()
-    variants = [base, np.full(base.size, 1.0 / base.size)]
-    if base.size == 2:
-        variants.extend(
-            np.array([fraction, 1.0 - fraction], dtype=float)
-            for fraction in binary_defaults
-        )
-    for index in range(base.size):
-        for change in (-0.15, 0.15):
-            candidate = base.copy()
-            candidate[index] = max(0.02, candidate[index] + change)
-            candidate /= candidate.sum()
-            variants.append(candidate)
-    if base.size > 2:
-        seed = int(rng.integers(0, np.iinfo(np.uint64).max, dtype=np.uint64))
-        unit = qmc.LatinHypercube(d=base.size, seed=seed).random(8)
-        positive = -np.log(np.clip(unit, 1e-12, 1.0))
-        variants.extend(positive / positive.sum(axis=1, keepdims=True))
-    unique: dict[tuple[float, ...], np.ndarray] = {}
-    for variant in variants:
-        array = np.asarray(variant, dtype=float)
-        unique.setdefault(tuple(np.round(array, 12)), array)
-    return tuple(unique.values())
-
-
-def _ordinary_components(
-    structure: StructureSpec,
-) -> list[tuple[int, LayerSpec | GradientLayerSpec]]:
-    return [
-        (index, component)
-        for index, component in enumerate(structure.components)
-        if isinstance(component, (LayerSpec, GradientLayerSpec))
-    ]
-
-
-def _ordinary_geometry_group(
-    ordinary: list[tuple[int, LayerSpec | GradientLayerSpec]],
-    initial: InitialCandidates,
-    rng: np.random.Generator,
-) -> tuple[tuple[tuple[str, float], ...], ...]:
-    """Build ordinary-layer geometries from total thickness and layer ratios.
-
-    The exact declared geometry is always first and survives generated dedup.
-    """
-    declared = np.array([component.thickness_a for _, component in ordinary], dtype=float)
-    ratios = _ratio_variants(declared, rng, initial.layer_fractions)
-    totals = initial.thickness_a or (float(declared.sum()),)
-    declared_geometry = tuple(
-        (f"component.{index}.thickness_a", float(component.thickness_a))
-        for index, component in ordinary
-    )
-    generated = tuple(
-        tuple(
-            (f"component.{index}.thickness_a", float(total * ratio))
-            for (index, _component), ratio in zip(ordinary, ratio_vector, strict=True)
-        )
-        for total in totals
-        for ratio_vector in ratios
-        if np.all(total * ratio_vector >= 2.0)
-    )
-    return tuple(dict.fromkeys((declared_geometry, *generated)))
-
-
-def _periodic_geometry_group(
-    component_index: int,
-    block: PeriodicBlock,
-    initial: InitialCandidates,
-    rng: np.random.Generator,
-) -> tuple[tuple[tuple[str, float], ...], ...]:
-    """Build one periodic block's shared-cell thickness hypotheses.
-
-    Every returned geometry preserves a legal two-angstrom minimum per layer.
-    """
-    declared = np.array([layer.thickness_a for layer in block.layers], dtype=float)
-    ratios = _ratio_variants(declared, rng, initial.layer_fractions)
-    periods = initial.period_a or (float(declared.sum()),)
-    declared_geometry = tuple(
-        (
-            f"component.{component_index}.layer.{index}.thickness_a",
-            float(layer.thickness_a),
-        )
-        for index, layer in enumerate(block.layers)
-    )
-    generated = tuple(
-        tuple(
-            (
-                f"component.{component_index}.layer.{index}.thickness_a",
-                float(period * ratio),
-            )
-            for index, ratio in enumerate(ratio_vector)
-        )
-        for period in periods
-        for ratio_vector in ratios
-        if np.all(period * ratio_vector >= 2.0)
-    )
-    return tuple(dict.fromkeys((declared_geometry, *generated)))
-
-
-def _axis_cover(
-    sizes: tuple[int, ...],
-    center: tuple[int, ...],
-    selected: set[tuple[int, ...]],
-    limit: int,
-) -> bool:
-    """Add every one-axis option around the center in stable axis order."""
-    for dimension, size in enumerate(sizes):
-        for option in range(size):
-            candidate = list(center)
-            candidate[dimension] = option
-            selected.add(tuple(candidate))
-            if len(selected) >= limit:
-                return True
-    return False
-
-
-def _latin_hypercube_fill(
-    sizes: tuple[int, ...],
-    selected: set[tuple[int, ...]],
-    rng: np.random.Generator,
-    limit: int,
-) -> None:
-    """Fill a bounded discrete product with the versioned LHS retry policy.
-
-    The sampler is seeded from the caller's stream exactly once. A batch stops
-    as soon as the cap is reached, preserving the historical selected set.
-    """
-    seed = int(rng.integers(0, np.iinfo(np.uint64).max, dtype=np.uint64))
-    sampler = qmc.LatinHypercube(d=len(sizes), seed=seed)
-    stagnant = 0
-    while len(selected) < limit and stagnant < 32:
-        before = len(selected)
-        for row in sampler.random(max(32, limit - len(selected))):
-            selected.add(
-                tuple(
-                    min(int(value * size), size - 1)
-                    for value, size in zip(row, sizes, strict=True)
-                )
-            )
-            if len(selected) == limit:
-                return
-        stagnant = stagnant + 1 if len(selected) == before else 0
-
-
-def _cartesian_fill(
-    sizes: tuple[int, ...],
-    selected: set[tuple[int, ...]],
-    limit: int,
-) -> None:
-    """Deterministically complete any points LHS could not discover."""
-    for indices in product(*(range(size) for size in sizes)):
-        selected.add(indices)
-        if len(selected) == limit:
-            return
-
-
-def _validate_index_sizes(sizes: tuple[int, ...]) -> None:
-    if not sizes or any(size < 1 for size in sizes):
-        raise ValueError("index-product dimensions must be nonempty")
-
-
-def _bounded_index_product(
-    sizes: tuple[int, ...],
-    rng: np.random.Generator,
-    limit: int,
-) -> tuple[tuple[int, ...], ...]:
-    """Select a capped product while protecting corners and axis coverage.
-
-    Products below the cap retain canonical itertools order. Larger products
-    protect center/corners, then axis probes, LHS points, and a stable fallback.
-    """
-    _validate_index_sizes(sizes)
-    if prod(sizes) <= limit:
-        return tuple(product(*(range(size) for size in sizes)))
-    center = tuple(size // 2 for size in sizes)
-    selected = {center, tuple(0 for _ in sizes), tuple(size - 1 for size in sizes)}
-    if _axis_cover(sizes, center, selected, limit):
-        return tuple(sorted(selected)[:limit])
-    _latin_hypercube_fill(sizes, selected, rng, limit)
-    if len(selected) < limit:
-        _cartesian_fill(sizes, selected, limit)
-    return tuple(sorted(selected))
-
-
-def _geometry_groups(
-    structure: StructureSpec,
-    initial: InitialCandidates,
-    rng: np.random.Generator,
-) -> tuple[tuple[tuple[tuple[str, float], ...], ...], ...]:
-    groups: list[tuple[tuple[tuple[str, float], ...], ...]] = []
-    ordinary = _ordinary_components(structure)
-    if ordinary:
-        groups.append(_ordinary_geometry_group(ordinary, initial, rng))
-    for index, component in enumerate(structure.components):
-        if isinstance(component, PeriodicBlock):
-            groups.append(_periodic_geometry_group(index, component, initial, rng))
-    return tuple(groups)
-
-
-def _geometry_variants(
-    structure: StructureSpec,
-    initial: InitialCandidates,
-    rng: np.random.Generator,
-    limit: int = 128,
-) -> tuple[tuple[str, tuple[tuple[str, float], ...]], ...]:
-    """Combine independently derived ordinary and periodic geometries.
-
-    One source group maps to one index dimension. The bounded product therefore
-    cannot accidentally couple periods belonging to separate periodic blocks.
-    """
-    groups = _geometry_groups(structure, initial, rng)
-    if not groups:
-        return (("declared-geometry", ()),)
-    if any(not group for group in groups):
-        raise ValueError("no legal geometry variants within the 2 Å hard bound")
-    indices = _bounded_index_product(tuple(len(group) for group in groups), rng, limit)
-    return tuple(
-        (
-            "geometry-" + "-".join(str(index) for index in option_indices),
-            tuple(
-                value
-                for group_index, option_index in enumerate(option_indices)
-                for value in groups[group_index][option_index]
-            ),
-        )
-        for option_indices in indices
-    )
 
 
 def _ordinary_interface_values(
@@ -540,7 +309,7 @@ def _selected_combinations(
 ) -> Iterable[tuple[object, ...]]:
     if prod(len(values) for values in dimensions) <= limit:
         return product(*dimensions)
-    indices = _bounded_index_product(tuple(len(values) for values in dimensions), rng, limit)
+    indices = bounded_index_product(tuple(len(values) for values in dimensions), rng, limit)
     return (
         tuple(dimensions[dimension][option] for dimension, option in enumerate(index_tuple))
         for index_tuple in indices
@@ -564,7 +333,7 @@ def build_candidate_pool(
     if limit == 1:
         return (baseline,)
     initial = estimate_initial_candidates(data, structure, instrument, rng)
-    geometry = _geometry_variants(structure, initial, rng)
+    geometry = geometry_variants(structure, initial, rng)
     dimensions = (
         initial.density_scales,
         initial.roughness_fractions,
@@ -598,6 +367,80 @@ def _start_distance(first: CandidateStart, second: CandidateStart) -> float:
 
 def _curve_distance(first: np.ndarray, second: np.ndarray) -> float:
     return float(np.sqrt(np.mean((first - second) ** 2)))
+
+
+def _effective_objective(candidate: FitCandidate) -> float:
+    return (
+        candidate.objective
+        if candidate.ranking_objective is None
+        else candidate.ranking_objective
+    )
+
+
+def rank_candidate_indices(
+    candidates: tuple[FitCandidate, ...],
+    *,
+    eligible_ids: tuple[str, ...] | None = None,
+) -> tuple[int, ...]:
+    """Return selectable candidate indices in stable effective-cost order."""
+    values = tuple(candidates)
+    eligible = None if eligible_ids is None else frozenset(eligible_ids)
+    selected = (
+        index
+        for index, candidate in enumerate(values)
+        if candidate.valid
+        and candidate.stop_reason != "early_eliminated"
+        and isfinite(_effective_objective(candidate))
+        and (eligible is None or candidate.candidate_id in eligible)
+    )
+    return tuple(
+        sorted(selected, key=lambda index: (_effective_objective(values[index]), index))
+    )
+
+
+def best_candidate_index(
+    candidates: tuple[FitCandidate, ...],
+    *,
+    eligible_ids: tuple[str, ...] | None = None,
+) -> int | None:
+    """Return the deterministic winner, or ``None`` for an empty scope."""
+    ranked = rank_candidate_indices(candidates, eligible_ids=eligible_ids)
+    return ranked[0] if ranked else None
+
+
+def cluster_candidate_indices(
+    candidates: tuple[FitCandidate, ...],
+    *,
+    distance: float,
+) -> tuple[tuple[int, ...], ...]:
+    """Build stable connected components in normalized parameter space."""
+    values = tuple(candidates)
+    if not isfinite(distance) or distance < 0.0:
+        raise ValueError("cluster distance must be finite and nonnegative")
+    if values and any(
+        candidate.unit_vector.size != values[0].unit_vector.size
+        for candidate in values
+    ):
+        raise ValueError("candidate unit vectors must have equal width")
+    remaining = set(range(len(values)))
+    clusters: list[tuple[int, ...]] = []
+    while remaining:
+        pending = [min(remaining)]
+        component: list[int] = []
+        remaining.remove(pending[0])
+        while pending:
+            current = pending.pop(0)
+            component.append(current)
+            neighbors = tuple(
+                index
+                for index in sorted(remaining)
+                if np.linalg.norm(values[current].unit_vector - values[index].unit_vector)
+                <= distance
+            )
+            pending.extend(neighbors)
+            remaining.difference_update(neighbors)
+        clusters.append(tuple(sorted(component)))
+    return tuple(clusters)
 
 
 def _connected_components(
@@ -812,3 +655,90 @@ def candidate_from_evaluation(
         sld_profile_a2=_readonly(profile, complex),
         diagnostics=evaluation.diagnostics,
     )
+
+
+def _archived_candidate(candidate: FitCandidate) -> FitCandidate:
+    return replace(candidate, seed_index=-1, stop_reason="early_eliminated")
+
+
+def _validate_archive_policy(threshold_ratio: float, base_perturbations: int) -> None:
+    if not isfinite(threshold_ratio) or threshold_ratio <= 1.0:
+        raise ValueError("stage-B archive threshold must exceed one")
+    if (
+        isinstance(base_perturbations, bool)
+        or not isinstance(base_perturbations, int)
+        or base_perturbations < 0
+    ):
+        raise ValueError("base perturbation count must be a nonnegative integer")
+
+
+def _ordered_archive_candidates(
+    candidates: tuple[FitCandidate, ...],
+) -> tuple[FitCandidate, ...]:
+    return tuple(
+        sorted(
+            candidates,
+            key=lambda candidate: (
+                not candidate.valid,
+                candidate.objective,
+                candidate.candidate_id,
+            ),
+        )
+    )
+
+
+def _is_selectable_archive_candidate(candidate: FitCandidate) -> bool:
+    return candidate.valid and isfinite(candidate.objective)
+
+
+def _partition_stage_b_archive(
+    ordered: tuple[FitCandidate, ...],
+    threshold_ratio: float,
+) -> tuple[tuple[FitCandidate, ...], tuple[FitCandidate, ...]]:
+    selectable = tuple(
+        candidate
+        for candidate in ordered
+        if _is_selectable_archive_candidate(candidate)
+    )
+    if not selectable:
+        return (), tuple(_archived_candidate(candidate) for candidate in ordered)
+    cutoff = threshold_ratio * selectable[0].objective
+    active = tuple(candidate for candidate in selectable if candidate.objective <= cutoff)
+    active_ids = {candidate.candidate_id for candidate in active}
+    archived = tuple(
+        _archived_candidate(candidate)
+        for candidate in ordered
+        if candidate.candidate_id not in active_ids
+    )
+    return active, archived
+
+
+def _reclaimed_perturbation_counts(
+    active_count: int,
+    archived_count: int,
+    base_perturbations: int,
+) -> tuple[int, ...]:
+    counts = [base_perturbations] * active_count
+    for index in range((base_perturbations + 1) * archived_count):
+        counts[index % active_count] += 1
+    return tuple(counts)
+
+
+def archive_stage_b_candidates(
+    candidates: tuple[FitCandidate, ...],
+    *,
+    threshold_ratio: float = 10.0,
+    base_perturbations: int = 2,
+) -> StageBArchive:
+    """Archive hopeless Stage-B evidence and retain the local-start budget."""
+    _validate_archive_policy(threshold_ratio, base_perturbations)
+    ordered = _ordered_archive_candidates(candidates)
+    active, archived = _partition_stage_b_archive(ordered, threshold_ratio)
+    if not active:
+        return StageBArchive((), archived, ())
+    counts = _reclaimed_perturbation_counts(
+        len(active),
+        len(archived),
+        base_perturbations,
+    )
+    return StageBArchive(active, archived, counts)

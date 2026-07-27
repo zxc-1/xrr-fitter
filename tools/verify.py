@@ -66,7 +66,14 @@ MODE_REGISTRY: Mapping[str, Mode] = {
         )
     ),
     "regression": Mode(
-        commands=(PYTEST_PREFIX + ("tests/regression/test_numerical_reference.py", "-q"),)
+        commands=(
+            PYTEST_PREFIX
+            + (
+                "tests/regression/test_numerical_reference.py",
+                "tests/regression/test_recovery_metrics.py",
+                "-q",
+            ),
+        )
     ),
 }
 

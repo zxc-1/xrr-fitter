@@ -294,6 +294,27 @@ def test_unregistered_group_fails_without_discovery(tmp_path: Path, load_tool_mo
         module.compare_group(manifest, "physics", registry={})
 
 
+def test_fit_search_group_remains_closed_until_analysis_is_available(
+    load_tool_module,
+) -> None:
+    # The frozen fit_search payload includes confidence, classification, and
+    # uncertainty history. Those fields can only come from Task 8 production;
+    # registering a fitting-only adapter here would turn a known contract gap
+    # into a fabricated intermediate PASS. Keep the registry explicitly closed.
+    module = load_tool_module("compare_r22_reference")
+    root = Path(__file__).resolve().parents[3]
+
+    assert "fit_search" not in module.GROUP_REGISTRY
+    with pytest.raises(
+        ValueError,
+        match="reference group is not registered: fit_search",
+    ):
+        module.compare_group(
+            root / "verification/r22/reference/manifest.json",
+            "fit_search",
+        )
+
+
 def test_physics_adapter_replays_committed_reference_after_registration(
     load_tool_module,
 ) -> None:

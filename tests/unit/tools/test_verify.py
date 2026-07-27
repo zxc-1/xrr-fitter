@@ -44,7 +44,12 @@ def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
         ),
     )
     expected_regression = (
-        module.PYTEST_PREFIX + ("tests/regression/test_numerical_reference.py", "-q"),
+        module.PYTEST_PREFIX
+        + (
+            "tests/regression/test_numerical_reference.py",
+            "tests/regression/test_recovery_metrics.py",
+            "-q",
+        ),
     )
     assert module.MODE_REGISTRY["quality"].commands == expected_quality
     assert module.MODE_REGISTRY["tools"].commands == expected_tools

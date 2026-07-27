@@ -117,6 +117,7 @@ FORBIDDEN_REFERENCES = {
 }
 DYNAMIC_REFERENCES = {"__import__", "builtins.__import__", "exec", "eval", "importlib.import_module"}
 GETATTR_REFERENCES = {"getattr", "builtins.getattr"}
+FIT_RUNTIME_MODULE_TOKENS = {"executor", "ipc", "process", "queue", "worker"}
 
 
 @dataclass(frozen=True)
@@ -530,6 +531,31 @@ def test_shared_evaluation_and_fit_have_one_declared_numerical_boundary() -> Non
     assert (PACKAGE / "fit" / "__init__.py").read_bytes() == b""
     assert not (PACKAGE / "fit" / "evaluation.py").exists()
     assert not (PACKAGE / "fit" / "jacobian.py").exists()
+
+
+def test_fit_defines_no_process_queue_worker_executor_or_ipc_modules() -> None:
+    # Fit is a pure calculation domain. Filename tokens prevent a later worker
+    # abstraction from being hidden behind an otherwise legal stdlib-only
+    # module, while the import check closes the direct in-memory queue path.
+    # Process creation itself remains covered by the exhaustive call scanner.
+    # Tokens are matched as underscore-delimited filename segments, so domain
+    # names such as checkpoint or request are not rejected by substring.
+    # This guard intentionally covers process, queue, worker, executor, and IPC
+    # ownership names together: all five belong to services in the final graph.
+    # The queue import is checked separately because a harmlessly named fit
+    # module could otherwise construct a private message channel without ever
+    # calling a forbidden process primitive.
+    fit_root = PACKAGE / "fit"
+    for path in sorted(fit_root.rglob("*.py")):
+        module_tokens = set(path.stem.split("_"))
+        assert module_tokens.isdisjoint(FIT_RUNTIME_MODULE_TOKENS), path.relative_to(PACKAGE)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        imported_roots = {
+            name.split(".", 1)[0]
+            for node in ast.walk(tree)
+            for name in _import_names(node)
+        }
+        assert "queue" not in imported_roots, path.relative_to(PACKAGE)
 
 
 def _fixture_kinds(module: str, source: str, *known_modules: str) -> set[str]:

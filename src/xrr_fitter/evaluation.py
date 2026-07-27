@@ -244,6 +244,10 @@ def _zero_width_locked(definition: ParameterDefinition) -> bool:
     return (definition.locked, definition.lower == definition.upper) == (True, True)
 
 
+class PhysicalValueError(ValueError):
+    """An expected candidate value outside its compiled physical domain."""
+
+
 def _validate_physical_value(
     definition: ParameterDefinition,
     value: float,
@@ -255,7 +259,7 @@ def _validate_physical_value(
     successfully at a boundary and would break encode/decode invertibility.
     """
     if not all((isfinite(value), value >= definition.lower, value <= upper)):
-        raise ValueError(f"value outside bounds: {definition.name}")
+        raise PhysicalValueError(f"value outside bounds: {definition.name}")
 
 
 def _log_physical_to_unit(
@@ -269,7 +273,7 @@ def _log_physical_to_unit(
     unit ratio. A dynamic upper therefore participates in the inverse exactly.
     """
     if min(definition.lower, value) <= 0.0:
-        raise ValueError(f"log parameter must be positive: {definition.name}")
+        raise PhysicalValueError(f"log parameter must be positive: {definition.name}")
     return (log(value) - log(definition.lower)) / (
         log(upper) - log(definition.lower)
     )
