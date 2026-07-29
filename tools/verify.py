@@ -169,20 +169,16 @@ def _invoke(
     runner(tuple(command), cwd=root, env=dict(environment), check=True)
 
 
-def run_mode(
+def _execute_mode(
     name: str,
     mode: Mode,
     *,
-    repo_root: str | Path,
-    report_dir: str | Path,
-    artifact_dir: str | Path | None = None,
-    runner: Runner = subprocess.run,
+    root: Path,
+    report: Path,
+    artifact: Path | None,
+    environment: Mapping[str, str],
+    runner: Runner,
 ) -> None:
-    root = Path(repo_root).resolve()
-    report = Path(report_dir).resolve()
-    artifact = None if artifact_dir is None else Path(artifact_dir).resolve()
-    report.mkdir(parents=True, exist_ok=True)
-    environment = build_environment(root, report)
     hygiene = (sys.executable, "tools/check_hygiene.py")
     if name == "distribution":
         hygiene = (*hygiene, "--require-git-clean")
@@ -201,6 +197,44 @@ def run_mode(
             failure = error
     if failure is not None:
         raise failure
+
+
+def run_mode(
+    name: str,
+    mode: Mode,
+    *,
+    repo_root: str | Path,
+    report_dir: str | Path,
+    artifact_dir: str | Path | None = None,
+    runner: Runner = subprocess.run,
+) -> None:
+    root = Path(repo_root).resolve()
+    report = Path(report_dir).resolve()
+    artifact = None if artifact_dir is None else Path(artifact_dir).resolve()
+    report.mkdir(parents=True, exist_ok=True)
+    if name != "distribution":
+        environment = build_environment(root, report)
+        _execute_mode(
+            name,
+            mode,
+            root=root,
+            report=report,
+            artifact=artifact,
+            environment=environment,
+            runner=runner,
+        )
+        return
+    with tempfile.TemporaryDirectory(prefix="xrr-r23-distribution-runtime-") as directory:
+        environment = build_environment(root, Path(directory))
+        _execute_mode(
+            name,
+            mode,
+            root=root,
+            report=report,
+            artifact=artifact,
+            environment=environment,
+            runner=runner,
+        )
 
 
 def _run_with_report(

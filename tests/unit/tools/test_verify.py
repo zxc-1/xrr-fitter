@@ -171,6 +171,39 @@ def test_runner_propagates_nonzero_and_checks_hygiene_before_and_after(
         assert "shell" not in kwargs
 
 
+def test_distribution_keeps_runtime_caches_outside_bundle_until_publication(
+    tmp_path: Path, load_tool_module
+) -> None:
+    module = load_tool_module("verify")
+    root = tmp_path / "repo"
+    root.mkdir()
+    report = tmp_path / "bundle"
+    artifact = report / "artifacts"
+    verifier_seen = False
+
+    def runner(args, **kwargs):
+        nonlocal verifier_seen
+        if "tools/verify_distribution.py" not in args:
+            return None
+        verifier_seen = True
+        assert report.is_dir()
+        assert tuple(report.iterdir()) == ()
+        assert not Path(kwargs["env"]["MPLCONFIGDIR"]).is_relative_to(report)
+        assert not Path(kwargs["env"]["XDG_CACHE_HOME"]).is_relative_to(report)
+        return None
+
+    module.run_mode(
+        "distribution",
+        module.MODE_REGISTRY["distribution"],
+        repo_root=root,
+        report_dir=report,
+        artifact_dir=artifact,
+        runner=runner,
+    )
+
+    assert verifier_seen
+
+
 def _write_verifier_fixture(root: Path, verifier: Path, outcome_gate: Path) -> None:
     (root / "src").mkdir(parents=True)
     (root / "tools").mkdir()
