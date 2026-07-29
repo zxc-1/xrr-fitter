@@ -5,8 +5,11 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QLabel, QMainWindow, QMessageBox, QSplitter, QVBoxLayout, QWidget
 
+from xrr_fitter.gui.data.panel import DataPanel
 from xrr_fitter.gui.document import ProjectDocument
+from xrr_fitter.gui.parameters.panel import ParametersPanel
 from xrr_fitter.gui.project.actions import ProjectActions
+from xrr_fitter.gui.structure.panel import StructurePanel
 
 
 def _column(name: str, label: str) -> QWidget:
@@ -60,7 +63,20 @@ class MainWindow(QMainWindow):
             splitter.addWidget(column)
             if name == "projectColumn":
                 self.project_actions = ProjectActions(self, self.document)
-                column.layout().insertWidget(1, self.project_actions)
+                self.data_panel = DataPanel(self.document)
+                self.structure_panel = StructurePanel(self.document)
+                for panel in (
+                    self.project_actions,
+                    self.data_panel,
+                    self.structure_panel,
+                ):
+                    column.layout().insertWidget(column.layout().count() - 1, panel)
+            elif name == "analysisColumn":
+                self.parameters_panel = ParametersPanel(self.document)
+                column.layout().insertWidget(
+                    column.layout().count() - 1,
+                    self.parameters_panel,
+                )
         for index in range(splitter.count()):
             splitter.setCollapsible(index, False)
         splitter.setStretchFactor(1, 1)
