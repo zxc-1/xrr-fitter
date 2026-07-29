@@ -130,7 +130,7 @@ jobs:
 
         "$PYTHON" tools/check_hygiene.py --require-git-clean
 
-        "$PYTHON" tools/verify.py gui
+        QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py gui
 
         '
   integration:

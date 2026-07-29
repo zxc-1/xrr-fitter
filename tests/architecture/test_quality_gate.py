@@ -30,6 +30,9 @@ def _payload() -> dict[str, object]:
 
 
 def _standard_run(mode: str) -> str:
+    verify = f'"$PYTHON" tools/verify.py {mode}'
+    if mode == "gui":
+        verify = f"QT_QPA_PLATFORM=offscreen {verify}"
     return "\n".join(
         (
             "set -euo pipefail",
@@ -39,7 +42,7 @@ def _standard_run(mode: str) -> str:
             '"$PYTHON" -m pip install pip==26.1.2',
             '"$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock',
             '"$PYTHON" tools/check_hygiene.py --require-git-clean',
-            f'"$PYTHON" tools/verify.py {mode}',
+            verify,
             "",
         )
     )
@@ -227,6 +230,11 @@ def test_standard_jobs_use_required_runner_and_explicit_verifier_modes() -> None
     jobs = _payload()["jobs"]
     for name in STANDARD_MODES:
         _assert_standard_job(name, jobs[name])
+
+
+def test_gui_job_uses_offscreen_qt_platform() -> None:
+    commands = _payload()["jobs"]["gui"]["steps"][1]["run"].splitlines()
+    assert 'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py gui' in commands
 
 
 @pytest.mark.parametrize(
