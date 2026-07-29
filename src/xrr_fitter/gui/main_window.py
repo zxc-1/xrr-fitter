@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QLabel, QMainWindow, QMessageBox, QSplitter, QVBoxLayout, QWidget
 
 from xrr_fitter.gui.document import ProjectDocument
+from xrr_fitter.gui.project.actions import ProjectActions
 
 
 def _column(name: str, label: str) -> QWidget:
@@ -55,7 +56,11 @@ class MainWindow(QMainWindow):
             ("plotColumn", "反射率与 SLD"),
             ("analysisColumn", "参数与结果"),
         ):
-            splitter.addWidget(_column(name, label))
+            column = _column(name, label)
+            splitter.addWidget(column)
+            if name == "projectColumn":
+                self.project_actions = ProjectActions(self, self.document)
+                column.layout().insertWidget(1, self.project_actions)
         for index in range(splitter.count()):
             splitter.setCollapsible(index, False)
         splitter.setStretchFactor(1, 1)
@@ -72,6 +77,59 @@ class MainWindow(QMainWindow):
     @property
     def force_close_prompt(self) -> QMessageBox | None:
         return self._force_close_prompt
+
+    def _require_idle(self, operation: str) -> None:
+        if self._operation_is_running():
+            raise RuntimeError(f"cannot {operation} while an operation is running")
+
+    def new_project(self, *, discard_unsaved: bool = False) -> None:
+        self._require_idle("create a project")
+        if self.document.is_dirty and not discard_unsaved:
+            raise RuntimeError("unsaved project changes require explicit discard")
+        self.document.new()
+
+    def open_project(
+        self,
+        path: str | object,
+        *,
+        discard_unsaved: bool = False,
+    ) -> None:
+        self._require_idle("open a project")
+        if self.document.is_dirty and not discard_unsaved:
+            raise RuntimeError("unsaved project changes require explicit discard")
+        self.document.open(path)
+
+    def save_project(self, path: str | object | None = None):
+        self._require_idle("save a project")
+        self.document.save(path)
+        return self.document.path
+
+    def select_active_dataset(self, dataset_id: str | None) -> None:
+        self.document.select_active_dataset(dataset_id)
+
+    def new_project_dialog(self, _checked: bool = False) -> None:
+        self.project_actions.new_project()
+
+    def open_project_dialog(self, _checked: bool = False) -> None:
+        self.project_actions.open_project()
+
+    def save_project_dialog(self, _checked: bool = False) -> None:
+        self.project_actions.save_project(save_as=False)
+
+    def save_project_as_dialog(self, _checked: bool = False) -> None:
+        self.project_actions.save_project(save_as=True)
+
+    def reload_source_dialog(self, _checked: bool = False) -> None:
+        self.project_actions.reload_source()
+
+    def relink_source_dialog(self, _checked: bool = False) -> None:
+        self.project_actions.relink_source()
+
+    def source_hash_status(self, dataset_id: str) -> str:
+        return self.document.source_status(dataset_id)
+
+    def source_warning_text(self, dataset_id: str) -> str:
+        return self.document.source_warning(dataset_id)
 
     def set_operation_controller(self, controller: object) -> None:
         if self._operation_controller is not None:
