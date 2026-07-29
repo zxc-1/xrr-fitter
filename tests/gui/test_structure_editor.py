@@ -1,0 +1,277 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QLineEdit,
+    QTableWidget,
+    QTableWidgetItem,
+    QTreeWidget,
+)
+
+import xrr_fitter.api as api
+
+
+AIR = api.MaterialSpec("Air", None, None, 0.0j)
+SI = api.MaterialSpec("Si", "Si", 2.329)
+SIO2 = api.MaterialSpec("SiO2", "SiO2", 2.20)
+
+
+def _write_curve(path: Path) -> Path:
+    path.write_text(
+        "\n".join(
+            f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}"
+            for index in range(32)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _document(tmp_path, *, beam=None):
+    from xrr_fitter.gui.document import ProjectDocument
+
+    project = api.add_dataset(
+        api.new_project(),
+        _write_curve(tmp_path / "sample.xy"),
+        api.InstrumentSpec(instrument_id="structure-gui"),
+        beam=beam,
+    )
+    return ProjectDocument(project)
+
+
+def _panel(qtbot, tmp_path, *, beam=None):
+    from xrr_fitter.gui.structure.panel import StructurePanel
+
+    panel = StructurePanel(_document(tmp_path, beam=beam))
+    qtbot.addWidget(panel)
+    return panel
+
+
+def _bare(backing=SI) -> api.StructureSpec:
+    return api.StructureSpec(AIR, (), backing)
+
+
+def _layer(name="film", material=SIO2, thickness=40.0) -> api.LayerSpec:
+    return api.LayerSpec(name, material, thickness, roughness_a=3.0)
+
+
+def _periodic() -> api.PeriodicBlock:
+    return api.PeriodicBlock(
+        "Mo/Si",
+        (
+            api.LayerSpec("Mo", api.MaterialSpec("Mo", "Mo", 10.28), 25.0),
+            api.LayerSpec("Si", SI, 40.0),
+        ),
+        repeats=8,
+    )
+
+
+def test_structure_edit_replaces_active_dataset_project_structure(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    panel = _panel(qtbot, tmp_path)
+    original = panel.document.project
+    structure = api.StructureSpec(AIR, (_layer(),), SI)
+    updated = api.set_structure(original, "sample", structure)
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        api,
+        "set_structure",
+        lambda project, dataset_id, value: (
+            calls.append((project, dataset_id, value)),
+            updated,
+        )[1],
+    )
+    events: list[tuple[str, object]] = []
+    panel.structure_changed.connect(lambda key, value: events.append((key, value)))
+
+    panel.set_structure(structure)
+
+    assert calls == [(original, "sample", structure)]
+    assert panel.document.project is updated
+    assert panel.structure == structure
+    assert events == [("sample", structure)]
+
+
+def test_structure_edit_failure_rolls_back_project_editor_and_signal(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    panel = _panel(qtbot, tmp_path)
+    before = panel.document.project
+    events: list[object] = []
+    panel.structure_changed.connect(events.append)
+    monkeypatch.setattr(
+        api,
+        "set_structure",
+        lambda *_args: (_ for _ in ()).throw(ValueError("structure rejected")),
+    )
+
+    with pytest.raises(ValueError, match="structure rejected"):
+        panel.set_structure(_bare())
+
+    assert panel.document.project is before
+    assert panel.structure is None
+    assert events == []
+
+
+def test_structure_editor_validates_with_active_mixed_kalpha_beam(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    beam = api.BeamSpec("mixed_kalpha")
+    panel = _panel(qtbot, tmp_path, beam=beam)
+    original = panel.document.project
+    structure = _bare()
+    updated = api.set_structure(original, "sample", structure)
+    observed: list[api.BeamSpec] = []
+
+    def set_structure(project, dataset_id, candidate):
+        observed.append(project.datasets[0].beam)
+        return updated
+
+    monkeypatch.setattr(api, "set_structure", set_structure)
+
+    panel.set_structure(structure)
+
+    assert observed == [beam]
+
+
+def test_structure_editor_adds_and_removes_ordinary_layer(qtbot, tmp_path) -> None:
+    panel = _panel(qtbot, tmp_path)
+    panel.set_structure(_bare())
+    layer = _layer()
+
+    panel.add_layer(layer)
+    assert panel.structure.components == (layer,)
+
+    panel.remove_component(0)
+    assert panel.structure.components == ()
+
+
+def test_structure_editor_adds_and_moves_periodic_block(qtbot, tmp_path) -> None:
+    panel = _panel(qtbot, tmp_path)
+    layer = _layer()
+    block = _periodic()
+    panel.set_structure(api.StructureSpec(AIR, (layer,), SI))
+
+    panel.add_periodic_block(block)
+    changed = panel.move_component(1, 0)
+
+    assert changed is True
+    assert panel.structure.components == (block, layer)
+
+
+@pytest.mark.parametrize(
+    ("method", "arguments"),
+    (
+        ("remove_component", (-1,)),
+        ("remove_component", (1,)),
+        ("move_component", (-1, 0)),
+        ("move_component", (0, 1)),
+        ("move_component", (1, 0)),
+    ),
+)
+def test_structure_editor_rejects_invalid_component_indices_transactionally(
+    qtbot,
+    tmp_path,
+    method,
+    arguments,
+) -> None:
+    panel = _panel(qtbot, tmp_path)
+    panel.set_structure(api.StructureSpec(AIR, (_layer(),), SI))
+    before = panel.document.project
+    events: list[object] = []
+    panel.structure_changed.connect(events.append)
+
+    with pytest.raises(IndexError, match="component index out of range"):
+        getattr(panel, method)(*arguments)
+
+    assert panel.document.project is before
+    assert events == []
+
+
+def test_structure_editor_noop_move_emits_nothing_and_preserves_identity(
+    qtbot,
+    tmp_path,
+) -> None:
+    panel = _panel(qtbot, tmp_path)
+    panel.set_structure(api.StructureSpec(AIR, (_layer(),), SI))
+    before = panel.document.project
+    events: list[object] = []
+    panel.structure_changed.connect(events.append)
+
+    changed = panel.move_component(0, 0)
+
+    assert changed is False
+    assert panel.document.project is before
+    assert events == []
+
+
+def test_structure_editor_tree_keeps_fixed_roots_and_periodic_children_contained(
+    qtbot,
+    tmp_path,
+) -> None:
+    panel = _panel(qtbot, tmp_path)
+    block = _periodic()
+    panel.set_structure(api.StructureSpec(AIR, (_layer(), block), SI))
+    tree = panel.findChild(QTreeWidget, "structureTree")
+
+    assert tree.topLevelItemCount() == 4
+    assert tree.topLevelItem(0).text(0) == "Air"
+    assert tree.topLevelItem(3).text(0) == "基底"
+    periodic = tree.topLevelItem(2)
+    assert periodic.text(0) == "Mo/Si"
+    assert periodic.childCount() == 2
+    assert [periodic.child(index).text(0) for index in range(2)] == ["Mo", "Si"]
+
+
+def test_add_layer_dialog_commits_explicit_nm_fields_through_direct_method(qtbot) -> None:
+    from xrr_fitter.gui.structure.dialogs import LayerDialog
+
+    dialog = LayerDialog()
+    qtbot.addWidget(dialog)
+    dialog.findChild(QLineEdit, "layerNameInput").setText("cap")
+    dialog.findChild(QLineEdit, "layerFormulaInput").setText("SiO2")
+    dialog.findChild(QDoubleSpinBox, "layerDensityInput").setValue(2.2)
+    dialog.findChild(QDoubleSpinBox, "layerThicknessInput").setValue(4.5)
+    dialog.findChild(QDoubleSpinBox, "layerRoughnessInput").setValue(0.3)
+    buttons = dialog.findChild(QDialogButtonBox, "layerDialogButtons")
+
+    qtbot.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Ok), Qt.LeftButton)
+
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert dialog.layer() == api.LayerSpec("cap", SIO2, 45.0, roughness_a=3.0)
+
+
+def test_add_periodic_dialog_commits_ordered_children_through_direct_method(qtbot) -> None:
+    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+
+    dialog = PeriodicDialog()
+    qtbot.addWidget(dialog)
+    dialog.findChild(QLineEdit, "periodicNameInput").setText("Mo/Si")
+    table = dialog.findChild(QTableWidget, "periodicLayerTable")
+    values = (("Mo", "Mo", "10.28", "2.5", "0.2"), ("Si", "Si", "2.329", "4", "0.3"))
+    for row, fields in enumerate(values):
+        for column, value in enumerate(fields):
+            table.setItem(row, column, QTableWidgetItem(value))
+    buttons = dialog.findChild(QDialogButtonBox, "periodicDialogButtons")
+
+    qtbot.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Ok), Qt.LeftButton)
+
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    block = dialog.block()
+    assert block.name == "Mo/Si"
+    assert [layer.name for layer in block.layers] == ["Mo", "Si"]
+    assert [layer.thickness_a for layer in block.layers] == [25.0, 40.0]
