@@ -11,6 +11,10 @@ import tempfile
 from typing import Callable, Mapping, Sequence
 
 
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
+
+
 TOOL_DIRECTORY = str(Path(__file__).resolve().parent)
 if TOOL_DIRECTORY not in sys.path:
     sys.path.insert(0, TOOL_DIRECTORY)

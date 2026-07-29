@@ -277,6 +277,7 @@ def test_copied_verifier_derives_each_repository_root_from_its_own_file(
         environment["EXECUTION_LOG"] = str(execution_log)
         environment["PYTHONPATH"] = "/polluted/caller"
         environment["PYTEST_ADDOPTS"] = "-p no:terminal -k fixture"
+        environment.pop("PYTHONDONTWRITEBYTECODE", None)
         report = tmp_path / f"report-{root.parent.name}"
         result = subprocess.run(
             (sys.executable, str(root / "tools/verify.py"), "quality", "--report-dir", str(report)),
@@ -289,6 +290,7 @@ def test_copied_verifier_derives_each_repository_root_from_its_own_file(
         assert result.returncode == 0, result.stdout + result.stderr
         assert len(execution_log.read_text(encoding="utf-8").splitlines()) == 6
         assert str(other) not in result.stdout + result.stderr
+        assert not (root / "tools/__pycache__").exists()
 
 
 @pytest.mark.parametrize(
