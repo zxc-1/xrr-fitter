@@ -26,8 +26,12 @@ def _registry_names() -> tuple[str, ...]:
         "integration",
         "spawn",
         "regression",
+        "statistical",
         "r22-reference",
+        "approved-data",
         "distribution",
+        "identity",
+        "release",
     )
 
 
@@ -143,11 +147,13 @@ def test_subprocess_environment_is_root_relative_and_drops_caller_pythonpath(
     monkeypatch.setenv("PYTHONPATH", "/private/caller")
     monkeypatch.setenv("PYTEST_ADDOPTS", "-p no:terminal -k fixture")
     monkeypatch.setenv("PYTEST_PLUGINS", "caller_plugin")
+    monkeypatch.setenv("PYTHONOPTIMIZE", "2")
     env = module.build_environment(root, tmp_path / "report")
     assert env["PYTHONPATH"] == str(root / "src")
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert "/private/caller" not in env.values()
     assert not any(name.startswith("PYTEST_") for name in env)
+    assert "PYTHONOPTIMIZE" not in env
     assert Path(env["MPLCONFIGDIR"]).is_relative_to(tmp_path / "report")
 
 
@@ -217,6 +223,7 @@ def _write_verifier_fixture(root: Path, verifier: Path, outcome_gate: Path) -> N
     (root / "tests/unit/tools").mkdir(parents=True)
     (root / "tests/__init__.py").write_bytes(b"")
     shutil.copy2(verifier, root / "tools/verify.py")
+    shutil.copy2(verifier.parent / "verify_registry.py", root / "tools/verify_registry.py")
     shutil.copy2(outcome_gate, root / "tests/outcome_gate.py")
     checker = (
         "from pathlib import Path\n"

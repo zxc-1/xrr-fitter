@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+from tests.support import synthetic_recovery_runs
 from tests.support.recovery_cases import (
     METRIC_THRESHOLDS,
     RecoveryMetric,
@@ -145,4 +147,45 @@ def test_recovery_metric_cases_are_deterministic_and_family_complete() -> None:
         "component.thickness_a",
         "instrument.scale",
         "instrument.background",
+    )
+
+
+def test_corpus_fit_dispatch_is_spawned_bounded_and_ordered(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    class FakeExecutor:
+        def __init__(self, *, max_workers, mp_context, initializer) -> None:
+            observed["setup"] = (max_workers, mp_context, initializer)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def map(self, function, case_ids, *, chunksize):
+            observed["map"] = (function, tuple(case_ids), chunksize)
+            return ("first-outcome", "second-outcome")
+
+    monkeypatch.setattr(synthetic_recovery_runs, "ProcessPoolExecutor", FakeExecutor)
+    monkeypatch.setattr(synthetic_recovery_runs.os, "cpu_count", lambda: 10)
+    monkeypatch.setattr(
+        synthetic_recovery_runs.multiprocessing,
+        "get_context",
+        lambda name: f"{name}-context",
+    )
+    cases = (SimpleNamespace(case_id="case-b"), SimpleNamespace(case_id="case-a"))
+
+    outcomes = synthetic_recovery_runs._parallel_case_outcomes(cases)
+
+    assert outcomes == ("first-outcome", "second-outcome")
+    assert observed["setup"] == (
+        5,
+        "spawn-context",
+        synthetic_recovery_runs._initialize_worker_cases,
+    )
+    assert observed["map"] == (
+        synthetic_recovery_runs._fit_worker_case,
+        ("case-b", "case-a"),
+        1,
     )

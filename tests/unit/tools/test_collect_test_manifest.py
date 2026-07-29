@@ -213,6 +213,84 @@ def test_collection_isolates_pythonpath_clears_default_addopts_and_collects_slow
     ]
 
 
+def test_collection_accepts_duplicate_module_basenames_in_distinct_directories(
+    tmp_path: Path,
+    load_tool_module,
+) -> None:
+    module = load_tool_module("collect_test_manifest")
+    root = tmp_path / "repo"
+    lock, _source_commit = _collection_repo(root)
+    for owner in ("model", "services"):
+        directory = root / "tests/unit" / owner
+        directory.mkdir(parents=True)
+        (directory / "test_parameters.py").write_text(
+            f"def test_{owner}_parameters(): pass\n",
+            encoding="utf-8",
+        )
+    _git(root, "add", "tests")
+    _git(root, "commit", "-qm", "add duplicate basenames")
+    source_commit = _git(root, "rev-parse", "HEAD")
+    output = tmp_path / "manifest.json"
+
+    result = _run_collector(
+        module,
+        root,
+        lock,
+        source_commit,
+        output,
+        python_path=tmp_path / "polluted",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    nodeids = {
+        item["nodeid"]
+        for item in json.loads(output.read_text(encoding="utf-8"))["nodes"]
+    }
+    assert {
+        "tests/unit/model/test_parameters.py::test_model_parameters",
+        "tests/unit/services/test_parameters.py::test_services_parameters",
+    } <= nodeids
+
+
+def test_collection_allows_explicit_repository_tool_imports(
+    tmp_path: Path,
+    load_tool_module,
+) -> None:
+    module = load_tool_module("collect_test_manifest")
+    root = tmp_path / "repo"
+    lock, _source_commit = _collection_repo(root)
+    tools = root / "tools"
+    tools.mkdir()
+    (tools / "__init__.py").write_bytes(b"")
+    (tools / "fixture_helper.py").write_text("VALUE = 'tool'\n", encoding="utf-8")
+    (root / "tests/test_tool_import.py").write_text(
+        "from tools.fixture_helper import VALUE\n\n"
+        "def test_tool_import():\n"
+        "    assert VALUE == 'tool'\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", "tests", "tools")
+    _git(root, "commit", "-qm", "add repository tool import")
+    source_commit = _git(root, "rev-parse", "HEAD")
+    output = tmp_path / "manifest.json"
+
+    result = _run_collector(
+        module,
+        root,
+        lock,
+        source_commit,
+        output,
+        python_path=tmp_path / "polluted",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    nodeids = {
+        item["nodeid"]
+        for item in json.loads(output.read_text(encoding="utf-8"))["nodes"]
+    }
+    assert "tests/test_tool_import.py::test_tool_import" in nodeids
+
+
 def test_collection_rejects_unknown_marker_without_writing_output(
     tmp_path: Path, load_tool_module
 ) -> None:

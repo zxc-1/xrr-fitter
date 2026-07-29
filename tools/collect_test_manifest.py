@@ -235,8 +235,9 @@ def _trusted_sys_path_entries(entries: Iterable[str]) -> list[str]:
 
 
 @contextmanager
-def _isolated_import_state(python_path: Path) -> Iterator[None]:
+def _isolated_import_state(python_path: Path, repo_root: Path) -> Iterator[None]:
     import_root = str(python_path.resolve())
+    repository = str(repo_root.resolve())
     previous_pythonpath = os.environ.get("PYTHONPATH")
     previous_pytest_environment = {
         name: value for name, value in os.environ.items() if name.startswith("PYTEST_")
@@ -246,7 +247,7 @@ def _isolated_import_state(python_path: Path) -> Iterator[None]:
     for name in previous_pytest_environment:
         os.environ.pop(name)
     os.environ["PYTHONPATH"] = import_root
-    sys.path[:] = [import_root, *_trusted_sys_path_entries(previous_sys_path)]
+    sys.path[:] = [import_root, repository, *_trusted_sys_path_entries(previous_sys_path)]
     sys.dont_write_bytecode = True
     try:
         yield
@@ -273,6 +274,7 @@ def collect_records(repo_root: Path, suite: str, python_path: Path) -> tuple[dic
     arguments = [
         "-o",
         "addopts=",
+        "--import-mode=importlib",
         "--strict-config",
         "--strict-markers",
         "-p",
@@ -281,7 +283,7 @@ def collect_records(repo_root: Path, suite: str, python_path: Path) -> tuple[dic
         suite,
         "-q",
     ]
-    with _isolated_import_state(python_path), _working_directory(repo_root):
+    with _isolated_import_state(python_path, repo_root), _working_directory(repo_root):
         import pytest
 
         exit_code = pytest.main(arguments, plugins=[recorder])

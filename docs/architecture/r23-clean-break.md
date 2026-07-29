@@ -2966,7 +2966,7 @@ cd /Users/dala/Desktop/xrr-rewrite-r23 && TEST_SOURCE_COMMIT=$(/Users/dala/Deskt
   的 root member、wheel/sdist、artifact manifest 与 release identity 必须逐字节相同：
 
 ```bash
-set -euo pipefail; test -z "${GH_TOKEN-}${GITHUB_TOKEN-}${GH_ENTERPRISE_TOKEN-}${GITHUB_ENTERPRISE_TOKEN-}"; test -z "${GH_HOST-}" || test "$GH_HOST" = github.com; export GH_HOST=github.com GH_PROMPT_DISABLED=1 GIT_TERMINAL_PROMPT=0; cd /Users/dala/Desktop/xrr-rewrite-r23; GITHUB_REPOSITORY=zxc-1/xrr-fitter; PYTHON=/Users/dala/Desktop/xrr-r23-venv/bin/python; REPORT_DIR=/Users/dala/Desktop/xrr-r23-release-final; ARTIFACT_DIR="$REPORT_DIR/artifacts"; HEAD_COMMIT=$(git rev-parse HEAD); RUN_REF=r23-clean-architecture; test -z "$(git status --porcelain=v1 --untracked-files=all)"; test "$(git remote get-url origin)" = "https://github.com/$GITHUB_REPOSITORY"; test ! -e "$REPORT_DIR"; RUN_TOTAL=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/runs" -f head_sha="$HEAD_COMMIT" -f event=push -f branch="$RUN_REF" -F per_page=100 --jq .total_count); test "$RUN_TOTAL" -le 100; RUN_ID=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/runs" -f head_sha="$HEAD_COMMIT" -f event=push -f branch="$RUN_REF" -F per_page=100 --jq '[.workflow_runs[] | select(.path == ".github/workflows/verify.yml" and .status == "completed" and .conclusion == "success")] | if length == 1 then .[0].id else error("expected exactly one successful verify.yml run") end'); test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq .path)" = .github/workflows/verify.yml; test "$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion --jq .conclusion)" = success; test "$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json headSha --jq .headSha)" = "$HEAD_COMMIT"; test "$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json event --jq .event)" = push; test "$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json headBranch --jq .headBranch)" = "$RUN_REF"; CHECKPOINT=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs --jq '[.jobs[] | select(.name == "checkpoint") | .conclusion] | if length == 1 then .[0] else "invalid" end'); test "$CHECKPOINT" = success; CI_BUNDLE=$(mktemp -d /tmp/xrr-r23-ci-release.XXXXXX); trap 'rm -rf "$CI_BUNDLE"' EXIT; gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "r23-release-$HEAD_COMMIT" --dir "$CI_BUNDLE"; env -u PYTHONPATH PYTHONDWRITEBYTECODE=1 PYTHONPATH=/Users/dala/Desktop/xrr-rewrite-r23/src "$PYTHON" tools/verify.py release --approved-data-root /Users/dala/Desktop/xrr-approved-data-r22-final --report-dir "$REPORT_DIR" --artifact-dir "$ARTIFACT_DIR"; cmp "$REPORT_DIR/artifact-manifest.json" "$CI_BUNDLE/artifact-manifest.json"; cmp "$REPORT_DIR/release-identity.json" "$CI_BUNDLE/release-identity.json"; env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE "$PYTHON" -I -c 'import json,sys; from pathlib import Path; root=Path(sys.argv[1]); manifest=json.load(open(sys.argv[2], encoding="utf-8")); expected={"artifact-manifest.json", "release-identity.json"} | {item["path"] for item in manifest["artifacts"]}; members=list(root.rglob("*")); all(not path.is_symlink() for path in members) or sys.exit("bundle contains symlink"); all(path.is_file() or path.is_dir() for path in members) or sys.exit("bundle contains unsupported member type"); files={path.relative_to(root).as_posix() for path in members if path.is_file()}; directories={path.relative_to(root).as_posix() for path in members if path.is_dir()}; files == expected or sys.exit(f"unexpected bundle files: {files!r}"); directories == {"artifacts"} or sys.exit(f"unexpected bundle directories: {directories!r}")' "$CI_BUNDLE" "$REPORT_DIR/artifact-manifest.json"; set -- "$REPORT_DIR"/artifacts/*; test "$#" -eq 2; for SOURCE in "$REPORT_DIR"/artifacts/*; do cmp "$SOURCE" "$CI_BUNDLE/artifacts/$(basename "$SOURCE")"; done; test -z "$(git status --porcelain=v1 --untracked-files=all)"
+set -euo pipefail; test -z "${GH_TOKEN-}${GITHUB_TOKEN-}${GH_ENTERPRISE_TOKEN-}${GITHUB_ENTERPRISE_TOKEN-}"; test -z "${GH_HOST-}" || test "$GH_HOST" = github.com; export GH_HOST=github.com GH_PROMPT_DISABLED=1 GIT_TERMINAL_PROMPT=0; cd /Users/dala/Desktop/xrr-rewrite-r23; GITHUB_REPOSITORY=zxc-1/xrr-fitter; PYTHON=/Users/dala/Desktop/xrr-r23-venv/bin/python; REPORT_DIR=/Users/dala/Desktop/xrr-r23-release-final; ARTIFACT_DIR="$REPORT_DIR/artifacts"; HEAD_COMMIT=$(git rev-parse HEAD); RUN_REF=r23-clean-architecture; test -z "$(git status --porcelain=v1 --untracked-files=all)"; test "$(git remote get-url origin)" = "https://github.com/$GITHUB_REPOSITORY"; test ! -e "$REPORT_DIR"; RUN_TOTAL=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/runs" -f head_sha="$HEAD_COMMIT" -f event=push -f branch="$RUN_REF" -F per_page=100 --jq .total_count); test "$RUN_TOTAL" -le 100; RUN_ID=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/runs" -f head_sha="$HEAD_COMMIT" -f event=push -f branch="$RUN_REF" -F per_page=100 --jq '[.workflow_runs[] | select(.path == ".github/workflows/verify.yml" and .status == "completed" and .conclusion == "success")] | if length == 1 then .[0].id else error("expected exactly one successful verify.yml run") end'); test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq .path)" = .github/workflows/verify.yml; test "$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion --jq .conclusion)" = success; test "$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json headSha --jq .headSha)" = "$HEAD_COMMIT"; test "$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json event --jq .event)" = push; test "$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json headBranch --jq .headBranch)" = "$RUN_REF"; CHECKPOINT=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs --jq '[.jobs[] | select(.name == "checkpoint") | .conclusion] | if length == 1 then .[0] else "invalid" end'); test "$CHECKPOINT" = success; CI_BUNDLE=$(mktemp -d /tmp/xrr-r23-ci-release.XXXXXX); trap 'rm -rf "$CI_BUNDLE"' EXIT; gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "r23-release-$HEAD_COMMIT" --dir "$CI_BUNDLE"; env -u PYTHONPATH PYTHONDWRITEBYTECODE=1 PYTHONPATH=/Users/dala/Desktop/xrr-rewrite-r23/src "$PYTHON" tools/verify.py release --report-dir "$REPORT_DIR" --artifact-dir "$ARTIFACT_DIR"; cmp "$REPORT_DIR/artifact-manifest.json" "$CI_BUNDLE/artifact-manifest.json"; cmp "$REPORT_DIR/release-identity.json" "$CI_BUNDLE/release-identity.json"; env -u PYTHONPATH -u PYTHONHOME -u PYTHONOPTIMIZE "$PYTHON" -I -c 'import json,sys; from pathlib import Path; root=Path(sys.argv[1]); manifest=json.load(open(sys.argv[2], encoding="utf-8")); expected={"artifact-manifest.json", "release-identity.json"} | {item["path"] for item in manifest["artifacts"]}; members=list(root.rglob("*")); all(not path.is_symlink() for path in members) or sys.exit("bundle contains symlink"); all(path.is_file() or path.is_dir() for path in members) or sys.exit("bundle contains unsupported member type"); files={path.relative_to(root).as_posix() for path in members if path.is_file()}; directories={path.relative_to(root).as_posix() for path in members if path.is_dir()}; files == expected or sys.exit(f"unexpected bundle files: {files!r}"); directories == {"artifacts"} or sys.exit(f"unexpected bundle directories: {directories!r}")' "$CI_BUNDLE" "$REPORT_DIR/artifact-manifest.json"; set -- "$REPORT_DIR"/artifacts/*; test "$#" -eq 2; for SOURCE in "$REPORT_DIR"/artifacts/*; do cmp "$SOURCE" "$CI_BUNDLE/artifacts/$(basename "$SOURCE")"; done; test -z "$(git status --porcelain=v1 --untracked-files=all)"
 ```
 
 - [ ] `release` 要求 `artifact-dir` 起初不存在，在该路径创建唯一制品目录；distribution mode 从 clean tracked source 的外部 staging copy 使用已锁定 build dependency 构建，绝不在 repository root 运行 setuptools。等价的独立调用为：
@@ -3002,7 +3002,7 @@ set -euo pipefail; cd /Users/dala/Desktop/xrr-rewrite-r23; PYTHON=/Users/dala/De
   candidate/signoff hash 和 raw approved-source tree，原子写外部 freeze receipt：
 
 ```bash
-set -euo pipefail; cd /Users/dala/Desktop/xrr-rewrite-r23; PYTHON=/Users/dala/Desktop/xrr-r23-venv/bin/python; REPORT_DIR=/Users/dala/Desktop/xrr-r23-release-final; FREEZE="$REPORT_DIR/r23-final-freeze.json"; test -z "$(git status --porcelain=v1 --untracked-files=all)"; test -s "$REPORT_DIR/release-identity.json"; test -s "$REPORT_DIR/artifact-manifest.json"; test ! -e "$FREEZE"; HEAD_COMMIT=$(git rev-parse HEAD); TAG_COMMIT=$(git rev-parse -q --verify 'refs/tags/R23-final^{commit}' 2>/dev/null || true); TAG_TYPE=$(git cat-file -t refs/tags/R23-final 2>/dev/null || true); { test -z "$TAG_COMMIT" || { test "$TAG_COMMIT" = "$HEAD_COMMIT" && test "$TAG_TYPE" = tag; }; }; { test -n "$TAG_COMMIT" || git tag -a R23-final -m 'XRR R23 final accepted release' "$HEAD_COMMIT"; }; test "$(git rev-parse 'R23-final^{commit}')" = "$HEAD_COMMIT"; env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/Users/dala/Desktop/xrr-rewrite-r23/src "$PYTHON" tools/release_identity.py validate --repo-root /Users/dala/Desktop/xrr-rewrite-r23 --release-identity "$REPORT_DIR/release-identity.json" --artifact-dir "$REPORT_DIR/artifacts" --artifact-manifest "$REPORT_DIR/artifact-manifest.json" --approved-data-root /Users/dala/Desktop/xrr-approved-data-r22-final --expected-tag R23-final --write-freeze-receipt "$FREEZE"; test -z "$(git status --porcelain=v1 --untracked-files=all)"
+set -euo pipefail; cd /Users/dala/Desktop/xrr-rewrite-r23; PYTHON=/Users/dala/Desktop/xrr-r23-venv/bin/python; REPORT_DIR=/Users/dala/Desktop/xrr-r23-release-final; FREEZE="$REPORT_DIR/r23-final-freeze.json"; test -z "$(git status --porcelain=v1 --untracked-files=all)"; test -s "$REPORT_DIR/release-identity.json"; test -s "$REPORT_DIR/artifact-manifest.json"; test ! -e "$FREEZE"; HEAD_COMMIT=$(git rev-parse HEAD); TAG_COMMIT=$(git rev-parse -q --verify 'refs/tags/R23-final^{commit}' 2>/dev/null || true); TAG_TYPE=$(git cat-file -t refs/tags/R23-final 2>/dev/null || true); { test -z "$TAG_COMMIT" || { test "$TAG_COMMIT" = "$HEAD_COMMIT" && test "$TAG_TYPE" = tag; }; }; { test -n "$TAG_COMMIT" || git tag -a R23-final -m 'XRR R23 final accepted release' "$HEAD_COMMIT"; }; test "$(git rev-parse 'R23-final^{commit}')" = "$HEAD_COMMIT"; env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/Users/dala/Desktop/xrr-rewrite-r23/src "$PYTHON" tools/release_identity.py validate --repo-root /Users/dala/Desktop/xrr-rewrite-r23 --release-identity "$REPORT_DIR/release-identity.json" --artifact-dir "$REPORT_DIR/artifacts" --artifact-manifest "$REPORT_DIR/artifact-manifest.json" --expected-tag R23-final --write-freeze-receipt "$FREEZE"; test -z "$(git status --porcelain=v1 --untracked-files=all)"
 ```
 
   receipt schema 固定为 `xrr-r23-final-freeze-v1`，包含 commit/tree/tag-object ID、
@@ -3028,7 +3028,7 @@ set -euo pipefail; test -z "${GH_TOKEN-}${GITHUB_TOKEN-}${GH_ENTERPRISE_TOKEN-}$
   `r23-clean-architecture`。不得使用 `--clobber`：
 
 ```bash
-set -euo pipefail; test -z "${GH_TOKEN-}${GITHUB_TOKEN-}${GH_ENTERPRISE_TOKEN-}${GITHUB_ENTERPRISE_TOKEN-}"; test -z "${GH_HOST-}" || test "$GH_HOST" = github.com; export GH_HOST=github.com GH_PROMPT_DISABLED=1 GIT_TERMINAL_PROMPT=0; ROOT=/Users/dala/Desktop/xrr-rewrite-r23; REPORT_DIR=/Users/dala/Desktop/xrr-r23-release-final; PYTHON=/Users/dala/Desktop/xrr-r23-venv/bin/python; GITHUB_REPOSITORY=zxc-1/xrr-fitter; cd "$ROOT"; test "$(git remote get-url origin)" = "https://github.com/$GITHUB_REPOSITORY"; WHEEL_REL=$("$PYTHON" -c 'import json,sys; rows=[item["path"] for item in json.load(open(sys.argv[1], encoding="utf-8"))["artifacts"] if item["kind"] == "wheel"]; print(rows[0]) if len(rows) == 1 else sys.exit(1)' "$REPORT_DIR/artifact-manifest.json"); SDIST_REL=$("$PYTHON" -c 'import json,sys; rows=[item["path"] for item in json.load(open(sys.argv[1], encoding="utf-8"))["artifacts"] if item["kind"] == "sdist"]; print(rows[0]) if len(rows) == 1 else sys.exit(1)' "$REPORT_DIR/artifact-manifest.json"); WHEEL="$REPORT_DIR/$WHEEL_REL"; SDIST="$REPORT_DIR/$SDIST_REL"; MANIFEST="$REPORT_DIR/artifact-manifest.json"; IDENTITY="$REPORT_DIR/release-identity.json"; FREEZE="$REPORT_DIR/r23-final-freeze.json"; for SOURCE in "$WHEEL" "$SDIST" "$MANIFEST" "$IDENTITY" "$FREEZE"; do test -s "$SOURCE"; done; gh release create R23-final "$WHEEL" "$SDIST" "$MANIFEST" "$IDENTITY" "$FREEZE" --repo "$GITHUB_REPOSITORY" --verify-tag --title 'XRR R23 final' --notes-file docs/acceptance/r23-release-acceptance.md --draft; VERIFY_DIR=$(mktemp -d /tmp/xrr-r23-github-release.XXXXXX); trap 'rm -rf "$VERIFY_DIR"' EXIT; gh release download R23-final --repo "$GITHUB_REPOSITORY" --dir "$VERIFY_DIR"; set -- "$VERIFY_DIR"/*; test "$#" -eq 5; for SOURCE in "$WHEEL" "$SDIST" "$MANIFEST" "$IDENTITY" "$FREEZE"; do cmp "$SOURCE" "$VERIFY_DIR/$(basename "$SOURCE")"; done; test "$(gh release view R23-final --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true; gh release edit R23-final --repo "$GITHUB_REPOSITORY" --draft=false --latest; test "$(gh release view R23-final --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = false; test "$(gh release view R23-final --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)" = false; gh repo edit "$GITHUB_REPOSITORY" --default-branch r23-clean-architecture; test "$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef --jq .defaultBranchRef.name)" = r23-clean-architecture; test "$(git ls-remote --heads origin refs/heads/r23-clean-architecture | awk '{print $1}')" = "$(git rev-parse HEAD)"
+set -euo pipefail; test -z "${GH_TOKEN-}${GITHUB_TOKEN-}${GH_ENTERPRISE_TOKEN-}${GITHUB_ENTERPRISE_TOKEN-}"; test -z "${GH_HOST-}" || test "$GH_HOST" = github.com; export GH_HOST=github.com GH_PROMPT_DISABLED=1 GIT_TERMINAL_PROMPT=0; ROOT=/Users/dala/Desktop/xrr-rewrite-r23; REPORT_DIR=/Users/dala/Desktop/xrr-r23-release-final; PYTHON=/Users/dala/Desktop/xrr-r23-venv/bin/python; GITHUB_REPOSITORY=zxc-1/xrr-fitter; cd "$ROOT"; test "$(git remote get-url origin)" = "https://github.com/$GITHUB_REPOSITORY"; WHEEL_REL=$("$PYTHON" -c 'import json,sys; rows=[item["path"] for item in json.load(open(sys.argv[1], encoding="utf-8"))["artifacts"] if item["kind"] == "wheel"]; print(rows[0]) if len(rows) == 1 else sys.exit(1)' "$REPORT_DIR/artifact-manifest.json"); SDIST_REL=$("$PYTHON" -c 'import json,sys; rows=[item["path"] for item in json.load(open(sys.argv[1], encoding="utf-8"))["artifacts"] if item["kind"] == "sdist"]; print(rows[0]) if len(rows) == 1 else sys.exit(1)' "$REPORT_DIR/artifact-manifest.json"); WHEEL="$REPORT_DIR/$WHEEL_REL"; SDIST="$REPORT_DIR/$SDIST_REL"; MANIFEST="$REPORT_DIR/artifact-manifest.json"; IDENTITY="$REPORT_DIR/release-identity.json"; FREEZE="$REPORT_DIR/r23-final-freeze.json"; for SOURCE in "$WHEEL" "$SDIST" "$MANIFEST" "$IDENTITY" "$FREEZE"; do test -s "$SOURCE"; done; gh release create R23-final "$WHEEL" "$SDIST" "$MANIFEST" "$IDENTITY" "$FREEZE" --repo "$GITHUB_REPOSITORY" --verify-tag --title 'XRR R23 final' --notes-file docs/acceptance/r23-release-acceptance.md --draft --latest=false; VERIFY_DIR=$(mktemp -d /tmp/xrr-r23-github-release.XXXXXX); trap 'rm -rf "$VERIFY_DIR"' EXIT; gh release download R23-final --repo "$GITHUB_REPOSITORY" --dir "$VERIFY_DIR"; set -- "$VERIFY_DIR"/*; test "$#" -eq 5; for SOURCE in "$WHEEL" "$SDIST" "$MANIFEST" "$IDENTITY" "$FREEZE"; do cmp "$SOURCE" "$VERIFY_DIR/$(basename "$SOURCE")"; done; test "$(gh release view R23-final --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true; test "$(gh release view R23-final --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)" = false; gh repo edit "$GITHUB_REPOSITORY" --default-branch r23-clean-architecture; test "$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef --jq .defaultBranchRef.name)" = r23-clean-architecture; test "$(git ls-remote --heads origin refs/heads/r23-clean-architecture | awk '{print $1}')" = "$(git rev-parse HEAD)"
 ```
 
 GitHub Release 的平铺资产只是传输层；后续下载后必须按
@@ -3056,7 +3056,7 @@ identity
 release
 ```
 
-每个模式都有显式测试路径列表。不得实现路径发现兜底。`release` 严格按 `quality -> tools -> unit -> integration -> gui -> spawn -> regression -> statistical -> r22-reference -> approved-data -> distribution -> identity` 调用全部模式，并要求 `--approved-data-root`、外部 `--report-dir` 和起初不存在的 `--artifact-dir`；任一子模式非零时立即失败。`distribution` 强制 `artifact-dir == report-dir/artifacts`，并在该 report dir 原子产出精确名为 `artifact-manifest.json` 的文件。独立 `identity` mode 必须显式接收 `--artifact-dir` 与 `--artifact-manifest`，要求前者 basename 为 `artifacts`、后者 basename 为 `artifact-manifest.json` 且二者 parent 相同；identity 自己的 `report-dir` 可以不同，并在其中原子写入精确文件名 `release-identity.json`。`release` 原样保留这些路径和文件名，不 flatten、rename 或另起一份 identity。
+每个模式都有显式测试路径列表。不得实现路径发现兜底。`release` 严格按 `quality -> tools -> unit -> integration -> gui -> spawn -> regression -> statistical -> r22-reference -> distribution -> identity` 调用全部软件模式，并要求外部 `--report-dir` 和起初不存在的 `--artifact-dir`；任一子模式非零时立即失败。`approved-data` 是交付后 owner acceptance 的独立人工 mode，不属于 `release` 顺序。`distribution` 强制 `artifact-dir == report-dir/artifacts`，并在该 report dir 原子产出精确名为 `artifact-manifest.json` 的文件。独立 `identity` mode 必须显式接收 `--artifact-dir` 与 `--artifact-manifest`，要求前者 basename 为 `artifacts`、后者 basename 为 `artifact-manifest.json` 且二者 parent 相同；identity 的 `report-dir` 必须位于仓库外，并在其中原子写入精确文件名 `release-identity.json`。`release` 原样保留这些路径和文件名，不 flatten、rename 或另起一份 identity。
 
 `approved-data --capture-candidate` 是任务 13 唯一显式的候选证据生成路径：它
 要求起初不存在的外部 `--report-dir`，只能直接与 `approved-data`
@@ -3126,7 +3126,8 @@ path 重复收集上述 suite。
 `test_process_workers.py` 单独注册为 `spawn`，并启用 distribution 内容检查；
 任务 11 首 slice 加入 entrypoint 并启用 GUI，最后 slice 加入 GUI integration 和完整
 `distribution`；任务 12 启用 `r22-reference`；任务 13 同批加入
-`statistical`、`approved-data`、`identity` 和 `release` mode/job。
+`statistical`、`approved-data`、`identity` 和 `release` mode，但 CI 只注册
+`statistical`、`identity` 和 `release` job。
 `--capture-candidate` 仍只用于任务 13 的人工候选验收命令，绝不注册为 CI
 job。任务 13 只验证 identity/release 的 wiring 和失败前置条件；二者在任务 14
 提交最终 `verification/r23/tests.json` 前必须因该 manifest 缺失而硬失败，不能提前
@@ -3140,13 +3141,13 @@ GitHub event contract 与能力同步演进：任务 2 的初始 workflow 只接
 `pull_request_target`，也不把 fork PR 放到 self-hosted runner。任务 13 在最终四个 mode/job
 存在时才加入精确 tag `R23-final` 的 `push` trigger，以及受测的 `candidate-readiness` job。
 readiness 只检查 repository 内可由 standard runner 复算的静态条件：committed
-`verification/r23/tests.json`、approved manifest/records，以及候选 jobs 所需的已提交配置和
-路径声明；它不得探测或读取 standard runner 上不存在的 raw approved data。上述静态输入
+`verification/r23/tests.json`、最终 ledger，以及候选 jobs 所需的已提交配置和
+路径声明；它不得探测或读取 raw approved data。上述静态输入
 同时存在且通过 strict preflight 时才输出 `true`：任务 13 branch push
 必须明确输出 `false`，任务 14 final-manifest commit 的 branch push 和 `R23-final` tag push
 必须输出 `true` 并运行完整候选矩阵。不得用 commit message、latest run、人工 skip、
 workflow dispatch 或缺数据后成功退出决定 readiness。raw data 挂载、只读性和可见桌面会话
-由 Task 14 push 前的 runner 门禁及随后每个 approved-visible candidate job 自身硬校验。
+留给交付后 owner acceptance，不参与软件候选 readiness。
 
 每版 workflow 都有唯一 `checkpoint` aggregator，并使用 `if: always()` 检查完整 `needs`
 集合。任务 2-12 只要求本事件已注册的 standard jobs 全部为 `success`。任务 13 起再按
@@ -3164,18 +3165,14 @@ artifact，固定短 retention，并保持 bundle root，不得把 approved raw 
 signoff 外部原件或 freeze receipt 之前的临时 report 上传为 Actions artifact/cache。
 
 任务 2 首次 push 前必须确认至少一个 online standard self-hosted runner 具有
-`self-hosted, macOS, ARM64, xrr-ci` 全部 label；任务 14 final-manifest commit push 前还必须确认
-至少一个 online approved runner 具有
-`self-hosted, macOS, ARM64, xrr-approved-data, visible-gui` 全部 label，并已在本机以只读
-方式挂载 `XRR_APPROVED_DATA_ROOT`。runner/挂载缺失时停止，不把真实数据复制到 GitHub 来
-绕过基础设施缺口。
+`self-hosted, macOS, ARM64, xrr-ci` 全部 label。真实数据不复制到 GitHub，也不作为
+Task 14 软件发行的基础设施前置。
 
 ### 15.1 CI 矩阵
 
 CI 使用显式作业，不在默认 pytest 选项中隐藏慢速测试。workflow 先设置
-`PYTHON="$RUNNER_TEMP/venv/bin/python"`；标准 runner class 固定为
-`[self-hosted, macOS, ARM64, xrr-ci]`，真实数据 runner class 固定为
-`[self-hosted, macOS, ARM64, xrr-approved-data, visible-gui]`：
+`PYTHON="$RUNNER_TEMP/venv/bin/python"`；runner class 固定为
+`[self-hosted, macOS, ARM64, xrr-ci]`：
 
 | Job | 精确 verifier 命令 | Runner / 输入 | 要求频率 |
 |---|---|---|---|
@@ -3188,27 +3185,23 @@ CI 使用显式作业，不在默认 pytest 选项中隐藏慢速测试。workfl
 | regression | `"$PYTHON" tools/verify.py regression` | standard | 能力注册后的每个 R23 branch/tag push |
 | statistical | `"$PYTHON" tools/verify.py statistical --report-dir "$RUNNER_TEMP/statistical"` | standard | candidate-ready branch/tag push |
 | r22-reference | `QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py r22-reference --report-dir "$RUNNER_TEMP/r22-reference"` | standard / committed R22 oracle | 能力注册后的每个 R23 branch/tag push |
-| approved-data | `"$PYTHON" tools/verify.py approved-data --approved-data-root "$XRR_APPROVED_DATA_ROOT" --report-dir "$RUNNER_TEMP/approved-data"` | approved-visible / read-only data | candidate-ready branch/tag push |
 | distribution | `"$PYTHON" tools/verify.py distribution --report-dir "$RUNNER_TEMP/distribution-bundle" --artifact-dir "$RUNNER_TEMP/distribution-bundle/artifacts"` | standard | 能力注册后的每个 R23 branch/tag push |
-| identity | `"$PYTHON" tools/verify.py identity --approved-data-root "$XRR_APPROVED_DATA_ROOT" --report-dir "$RUNNER_TEMP/identity" --artifact-dir "$RUNNER_TEMP/downloaded-distribution/artifacts" --artifact-manifest "$RUNNER_TEMP/downloaded-distribution/artifact-manifest.json"` | approved-visible / `needs: distribution` 下载物 | candidate-ready branch/tag push |
-| release | `"$PYTHON" tools/verify.py release --approved-data-root "$XRR_APPROVED_DATA_ROOT" --report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts"` | approved-visible / read-only data | candidate-ready branch/tag push |
+| identity | `"$PYTHON" tools/verify.py identity --report-dir "$RUNNER_TEMP/identity" --artifact-dir "$RUNNER_TEMP/downloaded-distribution/artifacts" --artifact-manifest "$RUNNER_TEMP/downloaded-distribution/artifact-manifest.json"` | standard / `needs: distribution` 下载物 | candidate-ready branch/tag push |
+| release | `QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release --report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts"` | standard | candidate-ready branch/tag push |
 | candidate-readiness | strict preflight；只输出受测的 `ready=true/false` | standard / committed inputs | 任务 13 起每个 R23 branch/tag push |
 | checkpoint | 无产品命令；验证本事件全部 required `needs` result | standard | 每个 R23 branch/tag push |
 
 当必需测试被跳过、预期失败、意外取消选择，或缺少其外部已批准数据清单时，作业不得视为 GREEN。
 
-`approved-data`、`identity` 和最终 `release` job 只运行在上表的 approved-visible
-runner class；三类原始数据以只读
-方式挂载到 `XRR_APPROVED_DATA_ROOT`，workflow 将该绝对路径显式传给
-`--approved-data-root`。distribution 从生成时就只拥有
+CI 不注册 `approved-data` job，`identity` 和最终 `release` 只绑定软件制品与
+`NOT_RUN: owner post-delivery acceptance` 状态。distribution 从生成时就只拥有
 `$RUNNER_TEMP/distribution-bundle/`：其 root 含 `artifact-manifest.json`，唯一制品目录为
 同 root 下的 `artifacts/`。workflow 原样上传整个 bundle root，不在上传/下载阶段 flatten、
 rename 或重排；identity job 通过 `needs: distribution` 精确下载到
 `$RUNNER_TEMP/downloaded-distribution`，用显式
 `--artifact-dir`/`--artifact-manifest` 验证，不重建或重新选择制品。这些 job
-在启动 GUI 前先按已提交 manifest 逐文件验证 path/size/SHA-256；挂载缺失、
-桌面会话不可见、hash 不一致、capture flag 或 synthetic substitute 都直接失败。
-standard CI 不伪装执行该候选发行版门禁；`release` job 自己完整重跑 distribution 和
+按已提交 manifest 逐文件验证 path/size/SHA-256；hash 不一致或 capture flag
+直接失败。standard CI 不伪装执行 owner real-data acceptance；`release` job 自己完整重跑 distribution 和
 identity，不消费其他 job 的历史成功状态。
 
 candidate-ready 的 `release` job 只上传名为 `r23-release-${{ github.sha }}` 的单一 Actions
