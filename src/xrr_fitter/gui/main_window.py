@@ -1,13 +1,24 @@
-"""Minimal desktop shell and asynchronous close coordination."""
+"""Main application shell and asynchronous close coordination.
+
+The window composes visible panels while :class:`ProjectDocument` owns the
+immutable project identity. Plot projection is registered synchronously at
+that document boundary; ordinary Qt signals run only after a successful
+precommit. Close handling remains asynchronous so active workers never block
+the GUI event loop.
+"""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from dataclasses import replace
+
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer
 from PySide6.QtWidgets import QLabel, QMainWindow, QMessageBox, QSplitter, QVBoxLayout, QWidget
 
+import xrr_fitter.api as api
 from xrr_fitter.gui.data.panel import DataPanel
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.parameters.panel import ParametersPanel
+from xrr_fitter.gui.plots.panel import PlotPanel
 from xrr_fitter.gui.project.actions import ProjectActions
 from xrr_fitter.gui.structure.panel import StructurePanel
 
@@ -45,6 +56,8 @@ class MainWindow(QMainWindow):
         self._close_cancel_timer.setInterval(5000)
         self._close_cancel_timer.timeout.connect(self.close_cancel_deadline_reached)
         self._install_workspace()
+        self._register_plot_projection()
+        self._connect_plot_workflow()
         self.setWindowTitle("XRR 全自动拟合")
         self.setMinimumSize(1280, 760)
         if operation_controller is not None:
@@ -52,6 +65,7 @@ class MainWindow(QMainWindow):
 
     def _install_workspace(self) -> None:
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.workspace_splitter = splitter
         splitter.setObjectName("workspaceSplitter")
         splitter.setChildrenCollapsible(False)
         for name, label in (
@@ -71,6 +85,12 @@ class MainWindow(QMainWindow):
                     self.structure_panel,
                 ):
                     column.layout().insertWidget(column.layout().count() - 1, panel)
+            elif name == "plotColumn":
+                self.plot_panel = PlotPanel()
+                column.layout().insertWidget(
+                    column.layout().count() - 1,
+                    self.plot_panel,
+                )
             elif name == "analysisColumn":
                 self.parameters_panel = ParametersPanel(self.document)
                 column.layout().insertWidget(
@@ -80,7 +100,68 @@ class MainWindow(QMainWindow):
         for index in range(splitter.count()):
             splitter.setCollapsible(index, False)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes(list(self.document.project.ui_state.workspace_splitter_sizes))
         self.setCentralWidget(splitter)
+
+    def _register_plot_projection(self) -> None:
+        self.document.register_project_projection(self._project_plots)
+        try:
+            self._project_plots(self.document.project)
+        except Exception:
+            self.document.unregister_project_projection(self._project_plots)
+            raise
+
+    def _connect_plot_workflow(self) -> None:
+        self.plot_panel.fit_range_requested.connect(self._plot_range_requested)
+        self.plot_panel.point_mask_requested.connect(self._plot_point_requested)
+        self.plot_panel.view_changed.connect(self._plot_tab_changed)
+        self.workspace_splitter.splitterMoved.connect(self._workspace_changed)
+
+    def _project_plots(self, project: api.XrrProject) -> None:
+        self.plot_panel.project_project(project)
+
+    def _plot_range_requested(self, lower: float, upper: float) -> None:
+        dataset_id = self.document.active_dataset_id
+        if dataset_id is None:
+            raise RuntimeError("plot range requires an active dataset")
+        self.data_panel.set_fit_range(dataset_id, lower, upper)
+
+    def _plot_point_requested(self, index: int) -> None:
+        dataset_id = self.document.active_dataset_id
+        if dataset_id is None:
+            raise RuntimeError("plot point mask requires an active dataset")
+        self.data_panel.set_point_enabled(dataset_id, index, False)
+
+    def _plot_tab_changed(self, index: int) -> None:
+        if index == self.document.project.ui_state.plot_tab_index:
+            return
+        self._commit_workspace(plot_tab_index=index)
+
+    def _workspace_changed(self, _position: int, _index: int) -> None:
+        self._commit_workspace()
+
+    def _commit_workspace(self, *, plot_tab_index: int | None = None) -> None:
+        current = self.document.project
+        state = replace(
+            current.ui_state,
+            workspace_splitter_sizes=tuple(self.workspace_splitter.sizes()),
+            plot_tab_index=(
+                current.ui_state.plot_tab_index
+                if plot_tab_index is None
+                else plot_tab_index
+            ),
+        )
+        updated = api.set_workspace_state(current, state)
+        if updated == current:
+            return
+        try:
+            self.document.replace_project(updated)
+        except Exception:
+            blocker = QSignalBlocker(self.workspace_splitter)
+            self.workspace_splitter.setSizes(
+                list(current.ui_state.workspace_splitter_sizes)
+            )
+            del blocker
 
     @property
     def close_pending(self) -> bool:

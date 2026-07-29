@@ -1,0 +1,240 @@
+"""Prepared-data and candidate reflectivity diagnostic rendering."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+import xrr_fitter.api as api
+from xrr_fitter.gui.plots.diagnostics import DiagnosticView, apply_figure_font, draw_empty
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedProjectPlots:
+    datasets: dict[str, api.PreparedData]
+    masks: dict[str, np.ndarray]
+    dataset_id: str | None
+    data: api.PreparedData | None
+    mask: np.ndarray | None
+    result: object | None
+    candidate_id: str | None
+
+
+def validate_plot_data(data: api.PreparedData, mask: object) -> np.ndarray:
+    arrays = (
+        np.asarray(data.two_theta_deg),
+        np.asarray(data.intensity_raw),
+        np.asarray(data.intensity_normalized),
+    )
+    sizes = {array.size for array in arrays}
+    converted = np.asarray(mask, dtype=bool)
+    if len(sizes) != 1 or converted.ndim != 1 or converted.size != arrays[0].size:
+        raise ValueError("plot data arrays and mask must have equal lengths")
+    return converted.copy()
+
+
+def validate_candidate(data: api.PreparedData, candidate: object) -> None:
+    size = data.two_theta_deg.size
+    arrays = (
+        candidate.qz_a_inv,
+        candidate.model_normalized,
+        candidate.log_residuals_decades,
+        candidate.weighted_residuals,
+    )
+    if any(np.asarray(values).size != size for values in arrays):
+        raise ValueError("candidate arrays must match prepared point count")
+    if np.asarray(candidate.sld_depth_a).size != np.asarray(candidate.sld_profile_a2).size:
+        raise ValueError("candidate SLD arrays must have equal lengths")
+
+
+def validate_result(data: api.PreparedData, result: object) -> None:
+    for candidate in result.candidates:
+        validate_candidate(data, candidate)
+
+
+def _source_path(project: api.XrrProject, dataset: api.DatasetProject) -> Path:
+    source = Path(dataset.source_path)
+    if source.is_absolute() or project.base_directory is None:
+        return source
+    return Path(project.base_directory) / source
+
+
+def _prepared_dataset(
+    project: api.XrrProject,
+    dataset: api.DatasetProject,
+) -> tuple[api.PreparedData, np.ndarray] | None:
+    try:
+        data = api.import_data(
+            _source_path(project, dataset),
+            dataset.beam,
+            dataset.import_angle_offset_deg,
+            dataset.column_mapping,
+        )
+    except (OSError, ValueError):
+        return None
+    return data, validate_plot_data(data, dataset.fit_mask)
+
+
+def _prepared_datasets(
+    project: api.XrrProject,
+) -> tuple[dict[str, api.PreparedData], dict[str, np.ndarray]]:
+    datasets: dict[str, api.PreparedData] = {}
+    masks: dict[str, np.ndarray] = {}
+    for dataset in project.datasets:
+        prepared = _prepared_dataset(project, dataset)
+        if prepared is not None:
+            datasets[dataset.dataset_id], masks[dataset.dataset_id] = prepared
+    return datasets, masks
+
+
+def _project_dataset(
+    project: api.XrrProject,
+    dataset_id: str,
+) -> api.DatasetProject:
+    matches = tuple(
+        dataset for dataset in project.datasets if dataset.dataset_id == dataset_id
+    )
+    if len(matches) != 1:
+        raise KeyError(f"unknown project dataset: {dataset_id}")
+    return matches[0]
+
+
+def _project_candidate_id(
+    project: api.XrrProject,
+    dataset: api.DatasetProject | None,
+) -> str | None:
+    if dataset is None or dataset.last_valid_result is None:
+        return None
+    selected = dict(project.ui_state.selected_candidate_ids).get(dataset.dataset_id)
+    best = dataset.last_valid_result.best_candidate
+    return selected if selected is not None else (None if best is None else best.candidate_id)
+
+
+def prepare_project_plots(project: api.XrrProject) -> PreparedProjectPlots:
+    if not isinstance(project, api.XrrProject):
+        raise TypeError("project must be an XrrProject")
+    datasets, masks = _prepared_datasets(project)
+    dataset_id = project.ui_state.active_dataset_id
+    data = None if dataset_id is None else datasets.get(dataset_id)
+    mask = None if dataset_id is None else masks.get(dataset_id)
+    active = None if dataset_id is None else _project_dataset(project, dataset_id)
+    result = None if active is None or data is None else active.last_valid_result
+    candidate_id = None if data is None else _project_candidate_id(project, active)
+    if data is not None and result is not None:
+        validate_result(data, result)
+    return PreparedProjectPlots(
+        datasets,
+        masks,
+        dataset_id,
+        data,
+        mask,
+        result,
+        candidate_id,
+    )
+
+
+def _finish(view: DiagnosticView) -> None:
+    apply_figure_font(view.figure)
+    view.canvas.draw_idle()
+
+
+def draw_raw(
+    view: DiagnosticView,
+    data: api.PreparedData,
+    mask: np.ndarray,
+    candidate: object | None,
+) -> None:
+    axes = view.axes
+    axes.clear()
+    angles = np.asarray(data.two_theta_deg, dtype=float)
+    raw = np.asarray(data.intensity_raw, dtype=float)
+    finite = np.isfinite(angles) & np.isfinite(raw)
+    included = finite & mask
+    excluded = finite & ~mask
+    axes.plot(
+        angles[included],
+        raw[included],
+        linestyle="none",
+        marker="o",
+        color="#0072B2",
+        markerfacecolor="#0072B2",
+        label="拟合点",
+    )
+    axes.plot(
+        angles[excluded],
+        raw[excluded],
+        linestyle="none",
+        marker="x",
+        color="#202020",
+        markerfacecolor="none",
+        label="排除点",
+    )
+    if candidate is not None:
+        axes.plot(
+            angles,
+            np.asarray(candidate.model_normalized) * data.normalization,
+            "--",
+            color="#D55E00",
+            label="当前候选模型",
+        )
+    axes.set(title="原始数据与模型", xlabel="2θ (deg)", ylabel="原始强度")
+    axes.legend()
+    _finish(view)
+
+
+def draw_log(
+    view: DiagnosticView,
+    data: api.PreparedData,
+    candidate: object | None,
+) -> None:
+    axes = view.axes
+    axes.clear()
+    angles = np.asarray(data.two_theta_deg, dtype=float)
+    observed = np.maximum(np.asarray(data.intensity_normalized, dtype=float), data.r_floor)
+    axes.plot(angles, observed, "o", color="#0072B2", label="归一化数据")
+    if candidate is not None:
+        model = np.maximum(np.asarray(candidate.model_normalized, dtype=float), data.r_floor)
+        axes.plot(angles, model, "--", color="#D55E00", label="当前候选模型")
+    axes.set(
+        title="对数反射率",
+        xlabel="2θ (deg)",
+        ylabel=f"归一化 R (display floor={data.r_floor:g})",
+        yscale="log",
+    )
+    axes.legend()
+    _finish(view)
+
+
+def draw_qz4(
+    view: DiagnosticView,
+    data: api.PreparedData,
+    candidate: object | None,
+) -> None:
+    if candidate is None:
+        draw_empty(view, "qz⁴R", "暂无当前候选")
+        return
+    qz = np.asarray(candidate.qz_a_inv, dtype=float)
+    transform = qz**4
+    axes = view.axes
+    axes.clear()
+    axes.plot(qz, np.asarray(data.intensity_normalized) * transform, "o", label="归一化数据")
+    axes.plot(qz, np.asarray(candidate.model_normalized) * transform, "--", label="当前候选模型")
+    axes.set(title="qz⁴R 诊断变换（非拟合数据）", xlabel=r"qz (Å$^{-1}$)", ylabel="qz⁴R")
+    axes.legend()
+    _finish(view)
+
+
+def draw_residual(view: DiagnosticView, candidate: object | None) -> None:
+    if candidate is None:
+        draw_empty(view, "加权残差", "暂无当前候选")
+        return
+    qz = np.asarray(candidate.qz_a_inv, dtype=float)
+    axes = view.axes
+    axes.clear()
+    axes.plot(qz, candidate.weighted_residuals, "-o", label="加权残差")
+    axes.plot(qz, np.zeros_like(qz), ":", label="零参考线")
+    axes.set(title="加权残差", xlabel=r"qz (Å$^{-1}$)", ylabel="加权残差")
+    axes.legend()
+    _finish(view)

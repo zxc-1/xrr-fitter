@@ -1,0 +1,299 @@
+"""Atomic interaction-mode controls for diagnostic plots.
+
+One controller owns every Matplotlib callback and Qt event filter installed for
+a plot panel.  It caches the parent watched for teardown events so destruction
+never needs to dereference an already deleted panel wrapper, and its release
+path disconnects callback state before queued Qt events can observe it.
+"""
+
+from __future__ import annotations
+
+from math import isfinite
+
+import numpy as np
+from matplotlib.widgets import SpanSelector
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QToolButton, QWidget
+
+
+MODE_SPECS = (
+    ("view", "plotModeView", "查看", "查看和缩放诊断图"),
+    ("range", "plotModeRange", "范围", "选择拟合角度范围"),
+    ("mask", "plotModeMask", "掩膜", "切换单个预处理点的掩膜"),
+)
+
+
+class PlotInteractionToolbar(QWidget):
+    """Own one exclusive, programmatically validated plot mode."""
+
+    mode_changed = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("plotInteractionToolbar")
+        self.setAccessibleName("绘图交互模式")
+        self._buttons: dict[str, QToolButton] = {}
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        for index, (mode, name, text, description) in enumerate(MODE_SPECS):
+            button = QToolButton(self)
+            button.setObjectName(name)
+            button.setText(text)
+            button.setCheckable(True)
+            button.setAccessibleName(text)
+            button.setToolTip(description)
+            self._group.addButton(button, index)
+            self._buttons[mode] = button
+            layout.addWidget(button)
+            button.setProperty("plotMode", mode)
+            button.clicked.connect(self._button_clicked)
+        layout.addStretch(1)
+        self._buttons["view"].setChecked(True)
+        self._mode = "view"
+
+    def buttons(self) -> dict[str, QToolButton]:
+        return dict(self._buttons)
+
+    def mode(self) -> str:
+        return self._mode
+
+    def set_mode(self, mode: str) -> None:
+        if mode not in self._buttons:
+            raise ValueError(f"unsupported plot interaction mode: {mode}")
+        if mode == self._mode:
+            return
+        self._buttons[mode].setChecked(True)
+        self._mode = mode
+        self.mode_changed.emit(mode)
+
+    def _button_clicked(self, checked: bool) -> None:
+        button = self.sender()
+        mode = str(button.property("plotMode"))
+        if not checked:
+            self._buttons[self._mode].setChecked(True)
+            return
+        self._mode = mode
+        self.mode_changed.emit(mode)
+
+
+def ordered_finite_range(first: float, second: float) -> tuple[float, float]:
+    lower = float(first)
+    upper = float(second)
+    if not isfinite(lower) or not isfinite(upper):
+        raise ValueError("fit range values must be finite")
+    return (lower, upper) if lower <= upper else (upper, lower)
+
+
+def prepared_point_index(index: int, point_count: int) -> int:
+    if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < point_count:
+        raise IndexError("point index is outside the prepared data")
+    return index
+
+
+class PlotInteractionController(QObject):
+    """Own Matplotlib callbacks, tab visibility, and scoped keyboard input."""
+
+    def __init__(self, panel: object, toolbar: PlotInteractionToolbar) -> None:
+        super().__init__(panel)
+        self._panel = panel
+        self._toolbar = toolbar
+        self._tabs = panel.tabs
+        self._views = panel._views
+        self._watched_parent = None
+        self._requested_tab_index = 0
+        self._projecting_tabs = False
+        self._range_selector = SpanSelector(
+            panel.view("raw").axes,
+            self._span_selected,
+            "horizontal",
+            useblit=False,
+            button=1,
+        )
+        self._range_selector.set_active(False)
+        self._mask_callback_id = panel.view("raw").canvas.mpl_connect(
+            "button_press_event",
+            self._point_clicked,
+        )
+        toolbar.mode_changed.connect(self._mode_changed)
+        self._tabs.currentChanged.connect(self._tab_changed)
+        panel.installEventFilter(self)
+        for child in panel.findChildren(QWidget):
+            child.installEventFilter(self)
+        self.watch_parent()
+
+    def current_view_key(self) -> str:
+        return self._panel.view_keys()[self._tabs.currentIndex()]
+
+    def select_view(self, key: str) -> None:
+        keys = self._panel.view_keys()
+        if key not in keys:
+            raise KeyError(f"unknown diagnostic view: {key}")
+        index = keys.index(key)
+        if not self._tabs.isTabVisible(index):
+            raise ValueError(f"diagnostic view is hidden: {key}")
+        self._tabs.setCurrentIndex(index)
+
+    def set_expert_mode(self, enabled: bool) -> None:
+        if not isinstance(enabled, bool):
+            raise TypeError("expert mode must be bool")
+        self._apply_tabs(enabled, self._requested_tab_index)
+
+    def apply_workspace(self, expert_mode: bool, tab_index: int) -> None:
+        if not 0 <= tab_index < self._tabs.count():
+            raise IndexError("plot tab index is out of range")
+        self._requested_tab_index = tab_index
+        self._apply_tabs(expert_mode, tab_index)
+
+    def select_fit_range(self, first: float, second: float) -> bool:
+        if self._toolbar.mode() != "range":
+            return False
+        lower, upper = ordered_finite_range(first, second)
+        self._panel.fit_range_requested.emit(lower, upper)
+        return True
+
+    def request_point_mask(self, index: int) -> bool:
+        if self._toolbar.mode() != "mask":
+            return False
+        data = self._panel._active_data()
+        value = prepared_point_index(index, data.two_theta_deg.size)
+        self._panel.point_mask_requested.emit(value)
+        return True
+
+    def cancel(self) -> None:
+        self._panel._clear_visible_range()
+        self._toolbar.set_mode("view")
+
+    def callback_counts(self) -> tuple[tuple[str, tuple[tuple[str, int], ...]], ...]:
+        return tuple(
+            (key, self._canvas_callback_counts(view.canvas))
+            for key, view in self._views.items()
+        )
+
+    def _canvas_callback_counts(self, canvas: object) -> tuple[tuple[str, int], ...]:
+        return tuple(
+            sorted(
+                (name, len(callbacks))
+                for name, callbacks in canvas.callbacks.callbacks.items()
+            )
+        )
+
+    def watch_parent(self) -> None:
+        panel = self._panel
+        if panel is None:
+            return
+        parent = panel.parent()
+        if parent is not None and parent is not self._watched_parent:
+            parent.installEventFilter(self)
+            self._watched_parent = parent
+
+    def release(self, *_args: object) -> None:
+        if self._panel is None:
+            return
+        selector = self._range_selector
+        self._range_selector = None
+        selector.disconnect_events()
+        selector.set_active(False)
+        raw = self._views.get("raw")
+        if raw is not None and self._mask_callback_id is not None:
+            raw.canvas.mpl_disconnect(self._mask_callback_id)
+        self._mask_callback_id = None
+        self._panel = None
+        self._watched_parent = None
+
+    def _mode_changed(self, mode: str) -> None:
+        if self._range_selector is not None:
+            self._range_selector.set_active(mode == "range")
+
+    def _span_selected(self, first: float, second: float) -> None:
+        panel = self._panel
+        selector = self._range_selector
+        canvas = panel.view("raw").canvas
+        if selector is None or not canvas.widgetlock.available(selector):
+            return
+        lower, upper = ordered_finite_range(first, second)
+        panel.show_range(lower, upper)
+        panel.fit_range_requested.emit(lower, upper)
+
+    def _point_clicked(self, event: object) -> None:
+        panel = self._panel
+        canvas = panel.view("raw").canvas
+        if not self._point_event_is_available(event, panel, canvas):
+            return
+        data = panel._active_data()
+        indices = np.asarray(panel.displayed_prepared_indices(), dtype=int)
+        if indices.size:
+            angles = np.asarray(data.two_theta_deg, dtype=float)
+            nearest = int(indices[np.argmin(np.abs(angles[indices] - float(event.xdata)))])
+            panel.request_point_mask(nearest)
+
+    def _point_event_is_available(
+        self,
+        event: object,
+        panel: object,
+        canvas: object,
+    ) -> bool:
+        return bool(
+            self._toolbar.mode() == "mask"
+            and event.inaxes is panel.view("raw").axes
+            and event.button == 1
+            and event.xdata is not None
+            and canvas.widgetlock.available(self)
+        )
+
+    def _tab_changed(self, index: int) -> None:
+        if self._projecting_tabs or index < 0:
+            return
+        self._requested_tab_index = index
+        self._panel.view_changed.emit(index)
+
+    def _apply_tabs(self, expert_mode: bool, requested_index: int) -> None:
+        sld_index = self._panel.view_keys().index("sld")
+        self._projecting_tabs = True
+        try:
+            self._tabs.setTabVisible(sld_index, expert_mode)
+            self._select_projected_tab(expert_mode, requested_index, sld_index)
+        finally:
+            self._projecting_tabs = False
+
+    def _select_projected_tab(
+        self,
+        expert_mode: bool,
+        requested_index: int,
+        sld_index: int,
+    ) -> None:
+        if expert_mode or requested_index != sld_index:
+            self._tabs.setCurrentIndex(requested_index)
+        elif self._tabs.currentIndex() == sld_index:
+            self._tabs.setCurrentIndex(0)
+
+    def eventFilter(self, watched: object, event: QEvent) -> bool:
+        panel = getattr(self, "_panel", None)
+        if panel is None:
+            return False
+        if self._is_scoped_escape(watched, event, panel):
+            self.cancel()
+            event.accept()
+            return True
+        if watched is self._watched_parent and event.type() in (
+            QEvent.Type.Close,
+            QEvent.Type.DeferredDelete,
+        ):
+            panel.release_resources()
+        return super().eventFilter(watched, event)
+
+    def _is_scoped_escape(
+        self,
+        watched: object,
+        event: QEvent,
+        panel: object,
+    ) -> bool:
+        return bool(
+            event.type() == QEvent.Type.KeyPress
+            and event.key() == Qt.Key.Key_Escape
+            and (
+                watched is panel
+                or (isinstance(watched, QWidget) and panel.isAncestorOf(watched))
+            )
+        )
