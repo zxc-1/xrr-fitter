@@ -1,0 +1,135 @@
+"""Qt timer projection for the public nonblocking operation-job protocol."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+import traceback
+
+from PySide6.QtCore import QObject, QTimer, Signal
+
+import xrr_fitter.api as api
+
+
+class FitController(QObject):
+    """Poll one API-owned job without recreating its process protocol."""
+
+    running_changed = Signal(bool)
+    event_received = Signal(object)
+    progress_changed = Signal(object)
+    checkpoint_ready = Signal(object)
+    fit_finished = Signal(object)
+    mcmc_finished = Signal(object)
+    cancelled = Signal(str)
+    failed = Signal(object)
+    stopped = Signal()
+
+    def __init__(self, parent: QObject | None = None, *, poll_interval_ms: int = 25) -> None:
+        super().__init__(parent)
+        self._job: object | None = None
+        self._timer = QTimer(self)
+        self._timer.setObjectName("operationPollTimer")
+        self._timer.setInterval(poll_interval_ms)
+        self._timer.timeout.connect(self.poll_now)
+
+    @property
+    def timer(self) -> QTimer:
+        return self._timer
+
+    @property
+    def is_running(self) -> bool:
+        return self._job is not None
+
+    def start_fit(
+        self,
+        project: api.XrrProject,
+        checkpoint_path=None,
+    ) -> bool:
+        return self._begin(
+            lambda: api.start_fit_job(project, checkpoint_path),
+        )
+
+    def start_mcmc(
+        self,
+        project: api.XrrProject,
+        dataset_id: str,
+        candidate_id: str,
+        config: api.McmcConfig,
+    ) -> bool:
+        return self._begin(
+            lambda: api.start_mcmc_job(project, dataset_id, candidate_id, config),
+        )
+
+    def _begin(self, start: Callable[[], object]) -> bool:
+        if self.is_running:
+            raise RuntimeError("an operation is already running")
+        try:
+            job = start()
+        except Exception as error:
+            self.failed.emit(
+                api.OperationError(
+                    type(error).__name__,
+                    str(error) or type(error).__name__,
+                    traceback.format_exc(),
+                )
+            )
+            return False
+        self._job = job
+        self._timer.start()
+        self.running_changed.emit(True)
+        return True
+
+    def poll_now(self) -> tuple[api.OperationEvent, ...]:
+        job = self._job
+        if job is None:
+            return ()
+        events = tuple(job.poll())
+        self._dispatch_batch(events)
+        return events
+
+    def _dispatch_batch(self, events: tuple[api.OperationEvent, ...]) -> None:
+        pending_progress: api.FitProgress | None = None
+        for event in events:
+            self.event_received.emit(event)
+            if event.kind == "progress":
+                pending_progress = event.progress
+                continue
+            self._flush_progress(pending_progress)
+            pending_progress = None
+            self._dispatch_durable(event)
+        self._flush_progress(pending_progress)
+
+    def _flush_progress(self, progress: api.FitProgress | None) -> None:
+        if progress is not None:
+            self.progress_changed.emit(progress)
+
+    def _dispatch_durable(self, event: api.OperationEvent) -> None:
+        if event.kind == "checkpoint":
+            self.checkpoint_ready.emit(event.checkpoint)
+        elif event.kind == "fit_result":
+            self.fit_finished.emit(event.fit_result)
+        elif event.kind == "mcmc_result":
+            self.mcmc_finished.emit(event.mcmc_result)
+        elif event.kind == "cancelled":
+            self.cancelled.emit(event.cancellation)
+        elif event.kind == "error":
+            self.failed.emit(event.error)
+        elif event.kind == "stopped":
+            self._finish()
+
+    def _finish(self) -> None:
+        job = self._job
+        if job is None:
+            return
+        self._timer.stop()
+        job.close()
+        self._job = None
+        self.running_changed.emit(False)
+        self.stopped.emit()
+
+    def cancel(self) -> None:
+        if self._job is not None:
+            self._job.cancel()
+
+    def force_stop(self) -> None:
+        if self._job is not None:
+            self._job.force_stop()
