@@ -27,6 +27,7 @@ PYTEST_PREFIX = (
     "pytest",
     "-o",
     "addopts=",
+    "--import-mode=importlib",
     "--strict-config",
     "--strict-markers",
     "-p",
@@ -45,6 +46,8 @@ MODE_REGISTRY: Mapping[str, Mode] = {
             + (
                 "tests/architecture/test_dependency_rules.py",
                 "tests/architecture/test_naming_rules.py",
+                "tests/architecture/test_public_api.py",
+                "tests/architecture/test_distribution.py",
                 "tests/architecture/test_quality_gate.py",
                 "tests/architecture/test_removed_legacy_modules.py",
                 "-q",
@@ -62,8 +65,29 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/unit/test_evaluation.py",
                 "tests/unit/fit",
                 "tests/unit/analysis",
+                "tests/unit/services",
                 "-q",
             ),
+        )
+    ),
+    "gui": Mode(commands=(PYTEST_PREFIX + ("tests/gui", "-q"),)),
+    "integration": Mode(
+        commands=(
+            PYTEST_PREFIX
+            + (
+                "tests/integration/test_entrypoints.py",
+                "tests/integration/test_project_roundtrip.py",
+                "tests/integration/test_single_fit_workflow.py",
+                "tests/integration/test_joint_fit_workflow.py",
+                "tests/integration/test_batch_resume.py",
+                "tests/integration/test_export_workflow.py",
+                "-q",
+            ),
+        )
+    ),
+    "spawn": Mode(
+        commands=(
+            PYTEST_PREFIX + ("tests/integration/test_process_workers.py", "-q"),
         )
     ),
     "regression": Mode(

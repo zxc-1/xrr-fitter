@@ -2,7 +2,7 @@
 
 The scanner checks module paths, symbols, package initializers, responsibility
 prefixes, permanent task-stage names, and Qt camelCase overrides. Qt methods
-are exempt only when an imported PySide6 base really exposes that method.
+are exempt only when an imported Qt base really exposes that method.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ SNAKE_CASE = re.compile(r"_*[a-z][a-z0-9_]*")
 CAP_WORDS = re.compile(r"_?[A-Z][A-Za-z0-9]*")
 UPPER_SNAKE_CASE = re.compile(r"[A-Z][A-Z0-9_]*")
 TASK_STAGE = re.compile(r"(?:^|_)task\d+(?:_|$)")
+QT_BASE_PREFIXES = ("PySide6.", "matplotlib.backends.backend_qtagg.")
 
 
 @dataclass(frozen=True)
@@ -112,7 +113,11 @@ def _class_qt_bases(
         if qualified in local_bases:
             bases.extend(local_bases[qualified])
             continue
-        value = _import_object(qualified) if qualified and qualified.startswith("PySide6.") else None
+        value = (
+            _import_object(qualified)
+            if qualified and qualified.startswith(QT_BASE_PREFIXES)
+            else None
+        )
         if isinstance(value, type):
             bases.append(value)
     return tuple(bases)
@@ -314,6 +319,21 @@ def public_function(argument_name):
     tree = ast.parse(source)
     qt_overrides = _qt_overrides(tree)
     assert ("MainPanel", "closeEvent") in qt_overrides
+    assert _symbol_violations(tree, qt_overrides) == ()
+
+
+def test_symbol_fixture_accepts_qt_override_from_matplotlib_qt_canvas() -> None:
+    source = """
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+
+class DiagnosticCanvas(FigureCanvasQTAgg):
+    def closeEvent(self, event):
+        return event
+"""
+    tree = ast.parse(source)
+    qt_overrides = _qt_overrides(tree)
+
+    assert ("DiagnosticCanvas", "closeEvent") in qt_overrides
     assert _symbol_violations(tree, qt_overrides) == ()
 
 

@@ -17,15 +17,33 @@ def _commands(module) -> tuple[tuple[str, ...], ...]:
     )
 
 
-def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
+def _registry_names() -> tuple[str, ...]:
+    return (
+        "quality",
+        "tools",
+        "unit",
+        "gui",
+        "integration",
+        "spawn",
+        "regression",
+    )
+
+
+def test_registry_names_are_exact_for_completed_suites(load_tool_module) -> None:
     module = load_tool_module("verify")
-    assert tuple(module.MODE_REGISTRY) == ("quality", "tools", "unit", "regression")
+    assert tuple(module.MODE_REGISTRY) == _registry_names()
+
+
+def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> None:
+    module = load_tool_module("verify")
     expected_quality = (
         (module.PYTHON, "tools/check_radon.py", "--output", f"{module.REPORT}/radon.json"),
         module.PYTEST_PREFIX
         + (
             "tests/architecture/test_dependency_rules.py",
             "tests/architecture/test_naming_rules.py",
+            "tests/architecture/test_public_api.py",
+            "tests/architecture/test_distribution.py",
             "tests/architecture/test_quality_gate.py",
             "tests/architecture/test_removed_legacy_modules.py",
             "-q",
@@ -41,6 +59,7 @@ def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
             "tests/unit/test_evaluation.py",
             "tests/unit/fit",
             "tests/unit/analysis",
+            "tests/unit/services",
             "-q",
         ),
     )
@@ -53,9 +72,29 @@ def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
             "-q",
         ),
     )
+    expected_gui = (module.PYTEST_PREFIX + ("tests/gui", "-q"),)
+    expected_integration = (
+        module.PYTEST_PREFIX
+        + (
+            "tests/integration/test_entrypoints.py",
+            "tests/integration/test_project_roundtrip.py",
+            "tests/integration/test_single_fit_workflow.py",
+            "tests/integration/test_joint_fit_workflow.py",
+            "tests/integration/test_batch_resume.py",
+            "tests/integration/test_export_workflow.py",
+            "-q",
+        ),
+    )
+    expected_spawn = (
+        module.PYTEST_PREFIX
+        + ("tests/integration/test_process_workers.py", "-q"),
+    )
     assert module.MODE_REGISTRY["quality"].commands == expected_quality
     assert module.MODE_REGISTRY["tools"].commands == expected_tools
     assert module.MODE_REGISTRY["unit"].commands == expected_unit
+    assert module.MODE_REGISTRY["gui"].commands == expected_gui
+    assert module.MODE_REGISTRY["integration"].commands == expected_integration
+    assert module.MODE_REGISTRY["spawn"].commands == expected_spawn
     assert module.MODE_REGISTRY["regression"].commands == expected_regression
 
 
@@ -71,6 +110,7 @@ def test_every_pytest_command_uses_outcome_plugin(load_tool_module) -> None:
     pytest_commands = [command for command in _commands(module) if "pytest" in command]
     assert pytest_commands
     assert all("tests.outcome_gate" in command for command in pytest_commands)
+    assert all("--import-mode=importlib" in command for command in pytest_commands)
 
 
 def test_subprocess_environment_is_root_relative_and_drops_caller_pythonpath(
@@ -150,6 +190,8 @@ def _write_verifier_fixture(root: Path, verifier: Path, outcome_gate: Path) -> N
     for name in (
         "test_dependency_rules.py",
         "test_naming_rules.py",
+        "test_public_api.py",
+        "test_distribution.py",
         "test_quality_gate.py",
         "test_removed_legacy_modules.py",
     ):
@@ -184,7 +226,7 @@ def test_copied_verifier_derives_each_repository_root_from_its_own_file(
             text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        assert len(execution_log.read_text(encoding="utf-8").splitlines()) == 4
+        assert len(execution_log.read_text(encoding="utf-8").splitlines()) == 6
         assert str(other) not in result.stdout + result.stderr
 
 

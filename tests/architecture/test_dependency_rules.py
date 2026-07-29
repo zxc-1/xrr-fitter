@@ -49,6 +49,14 @@ remain hard failures, unresolved external roots remain violations, and issue
 ordering is stable enough to identify the exact module and broken boundary.
 No import form receives a test-only exception, and no missing module is
 invented to make an otherwise invalid edge appear registered.
+
+The GUI fixture proves that GUI modules may import the public API while direct
+model and service edges remain violations. The concrete GUI tree is required
+to be nonempty so the filesystem scan can never pass vacuously. The exhaustive
+scan applies the same owner rule to every real GUI import, including imports in
+local scopes and type-only branches. No fixture grants GUI a second domain
+composition path or exempts a production module from graph validation. The
+public facade is therefore the only GUI domain vocabulary.
 """
 
 from __future__ import annotations
@@ -119,6 +127,22 @@ THIRD_PARTY_ROOTS = {
     "xlsxwriter",
     "matplotlib",
     "PySide6",
+}
+THIRD_PARTY_OWNER_ALLOWLIST = {
+    "numpy": {"model", "io", "physics", "evaluation", "fit", "analysis"},
+    "scipy": {"physics", "evaluation", "fit", "analysis"},
+    "PySide6": {"gui"},
+}
+THIRD_PARTY_MODULE_ALLOWLIST = {
+    "numpy": {"services.datasets", "gui.plots"},
+    "periodictable": {"physics.materials"},
+    "pandas": {"io.export_tables"},
+    "xlsxwriter": {"io.export_tables"},
+    "matplotlib": {"io.export_plots", "gui.plots"},
+}
+THIRD_PARTY_PREFIX_ALLOWLIST = {
+    "numpy": ("gui.plots.",),
+    "matplotlib": ("gui.plots.",),
 }
 FORBIDDEN_REFERENCES = {
     "concurrent.futures.ProcessPoolExecutor",
@@ -272,18 +296,11 @@ def _services_violations(
 
 
 def _third_party_allowed(root: str, module: str) -> bool:
-    owner = _owner(module)
-    if root == "numpy":
-        return owner in {"model", "io", "physics", "evaluation", "fit", "analysis"} or module == "services.datasets"
-    if root == "scipy":
-        return owner in {"physics", "evaluation", "fit", "analysis"}
-    if root == "periodictable":
-        return module == "physics.materials"
-    if root in {"pandas", "xlsxwriter"}:
-        return module == "io.export_tables"
-    if root == "matplotlib":
-        return module == "io.export_plots" or module == "gui.plots" or module.startswith("gui.plots.")
-    return root == "PySide6" and owner == "gui"
+    return bool(
+        _owner(module) in THIRD_PARTY_OWNER_ALLOWLIST.get(root, set())
+        or module in THIRD_PARTY_MODULE_ALLOWLIST.get(root, set())
+        or module.startswith(THIRD_PARTY_PREFIX_ALLOWLIST.get(root, ()))
+    )
 
 
 def _absolute_import_roots(tree: ast.AST) -> list[tuple[str, ast.AST]]:
@@ -669,6 +686,19 @@ def test_fixture_checker_enforces_model_module_dag_and_services_composition() ->
     )
 
 
+def test_fixture_checker_allows_gui_domain_access_only_through_public_api() -> None:
+    known = {"api", "gui.document", "model.project", "services.projects"}
+    public = "from xrr_fitter.api import XrrProject, set_workspace_state"
+
+    assert _module_violations("gui.document", public, known) == ()
+    assert "package-edge" in _fixture_kinds(
+        "gui.document", "from xrr_fitter.model.project import XrrProject", *known
+    )
+    assert "package-edge" in _fixture_kinds(
+        "gui.document", "from xrr_fitter.services.projects import new_project", *known
+    )
+
+
 @pytest.mark.parametrize(
     ("module", "source"),
     [
@@ -676,6 +706,7 @@ def test_fixture_checker_enforces_model_module_dag_and_services_composition() ->
         ("io.export_tables", "import pandas\nimport xlsxwriter"),
         ("io.export_plots", "import matplotlib"),
         ("gui.plots", "import matplotlib\nfrom PySide6 import QtWidgets"),
+        ("gui.plots.reflectivity", "import numpy"),
         ("services.datasets", "import numpy"),
     ],
 )
@@ -688,6 +719,7 @@ def test_fixture_checker_accepts_exact_third_party_owners(module: str, source: s
     [
         ("model.data", "import periodictable"),
         ("services.fitting", "import numpy"),
+        ("gui.document", "import numpy"),
         ("io.xy", "import pandas"),
         ("physics.reflectivity", "import matplotlib"),
         ("fit.search", "import refnx"),
@@ -749,6 +781,13 @@ def test_strong_component_checker_reports_only_multi_module_cycles() -> None:
 def test_all_production_modules_pass_exhaustive_rules_and_have_no_cycles() -> None:
     sources = _production_sources(PACKAGE)
     known = set(sources)
+    # The fixture-only GUI rule above proves the edge policy in isolation, but
+    # it cannot prove that the production scan visited a real GUI module. Keep
+    # this non-vacuity check adjacent to the exhaustive scan so deleting the GUI
+    # tree cannot turn architecture coverage into an empty successful loop.
+    # Requiring both the package initializer and one concrete module also keeps
+    # an empty placeholder package from satisfying the release boundary.
+    assert {"gui"} < {module for module in known if _owner(module) == "gui"}
     violations = tuple(
         violation
         for module, source in sources.items()

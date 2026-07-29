@@ -1,114 +1,272 @@
 name: verify
-
-"on":
+'on':
   push:
     branches:
-      - r23-clean-architecture
-
+    - r23-clean-architecture
 permissions:
   contents: read
-
 concurrency:
   group: verify-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
-
 jobs:
   quality:
-    runs-on: [self-hosted, macOS, ARM64, xrr-ci]
+    runs-on:
+    - self-hosted
+    - macOS
+    - ARM64
+    - xrr-ci
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Verify quality
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
-          "$PYTHON" tools/verify.py quality
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Verify quality
+      shell: bash
+      run: 'set -euo pipefail
 
+        python3.12 -c ''import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)''
+
+        python3.12 -m venv "$RUNNER_TEMP/venv"
+
+        PYTHON="$RUNNER_TEMP/venv/bin/python"
+
+        "$PYTHON" -m pip install pip==26.1.2
+
+        "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+
+        "$PYTHON" tools/check_hygiene.py --require-git-clean
+
+        "$PYTHON" tools/verify.py quality
+
+        '
   tools:
-    runs-on: [self-hosted, macOS, ARM64, xrr-ci]
+    runs-on:
+    - self-hosted
+    - macOS
+    - ARM64
+    - xrr-ci
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Verify tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
-          "$PYTHON" tools/verify.py tools
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Verify tools
+      shell: bash
+      run: 'set -euo pipefail
 
+        python3.12 -c ''import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)''
+
+        python3.12 -m venv "$RUNNER_TEMP/venv"
+
+        PYTHON="$RUNNER_TEMP/venv/bin/python"
+
+        "$PYTHON" -m pip install pip==26.1.2
+
+        "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+
+        "$PYTHON" tools/check_hygiene.py --require-git-clean
+
+        "$PYTHON" tools/verify.py tools
+
+        '
   unit:
-    runs-on: [self-hosted, macOS, ARM64, xrr-ci]
+    runs-on:
+    - self-hosted
+    - macOS
+    - ARM64
+    - xrr-ci
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Verify unit
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
-          "$PYTHON" tools/verify.py unit
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Verify unit
+      shell: bash
+      run: 'set -euo pipefail
 
+        python3.12 -c ''import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)''
+
+        python3.12 -m venv "$RUNNER_TEMP/venv"
+
+        PYTHON="$RUNNER_TEMP/venv/bin/python"
+
+        "$PYTHON" -m pip install pip==26.1.2
+
+        "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+
+        "$PYTHON" tools/check_hygiene.py --require-git-clean
+
+        "$PYTHON" tools/verify.py unit
+
+        '
+  gui:
+    runs-on:
+    - self-hosted
+    - macOS
+    - ARM64
+    - xrr-ci
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Verify gui
+      shell: bash
+      run: 'set -euo pipefail
+
+        python3.12 -c ''import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)''
+
+        python3.12 -m venv "$RUNNER_TEMP/venv"
+
+        PYTHON="$RUNNER_TEMP/venv/bin/python"
+
+        "$PYTHON" -m pip install pip==26.1.2
+
+        "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+
+        "$PYTHON" tools/check_hygiene.py --require-git-clean
+
+        "$PYTHON" tools/verify.py gui
+
+        '
+  integration:
+    runs-on:
+    - self-hosted
+    - macOS
+    - ARM64
+    - xrr-ci
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Verify integration
+      shell: bash
+      run: 'set -euo pipefail
+
+        python3.12 -c ''import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)''
+
+        python3.12 -m venv "$RUNNER_TEMP/venv"
+
+        PYTHON="$RUNNER_TEMP/venv/bin/python"
+
+        "$PYTHON" -m pip install pip==26.1.2
+
+        "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+
+        "$PYTHON" tools/check_hygiene.py --require-git-clean
+
+        "$PYTHON" tools/verify.py integration
+
+        '
+  spawn:
+    runs-on:
+    - self-hosted
+    - macOS
+    - ARM64
+    - xrr-ci
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Verify spawn
+      shell: bash
+      run: 'set -euo pipefail
+
+        python3.12 -c ''import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)''
+
+        python3.12 -m venv "$RUNNER_TEMP/venv"
+
+        PYTHON="$RUNNER_TEMP/venv/bin/python"
+
+        "$PYTHON" -m pip install pip==26.1.2
+
+        "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+
+        "$PYTHON" tools/check_hygiene.py --require-git-clean
+
+        "$PYTHON" tools/verify.py spawn
+
+        '
   regression:
-    runs-on: [self-hosted, macOS, ARM64, xrr-ci]
+    runs-on:
+    - self-hosted
+    - macOS
+    - ARM64
+    - xrr-ci
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Verify regression
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
-          "$PYTHON" tools/verify.py regression
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Verify regression
+      shell: bash
+      run: 'set -euo pipefail
 
+        python3.12 -c ''import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)''
+
+        python3.12 -m venv "$RUNNER_TEMP/venv"
+
+        PYTHON="$RUNNER_TEMP/venv/bin/python"
+
+        "$PYTHON" -m pip install pip==26.1.2
+
+        "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+
+        "$PYTHON" tools/check_hygiene.py --require-git-clean
+
+        "$PYTHON" tools/verify.py regression
+
+        '
   checkpoint:
-    needs: [quality, tools, unit, regression]
+    needs:
+    - quality
+    - tools
+    - unit
+    - gui
+    - integration
+    - spawn
+    - regression
     if: always()
-    runs-on: [self-hosted, macOS, ARM64, xrr-ci]
+    runs-on:
+    - self-hosted
+    - macOS
+    - ARM64
+    - xrr-ci
     timeout-minutes: 10
     steps:
-      - name: Require all gates
-        env:
-          QUALITY_RESULT: ${{ needs.quality.result }}
-          TOOLS_RESULT: ${{ needs.tools.result }}
-          UNIT_RESULT: ${{ needs.unit.result }}
-          REGRESSION_RESULT: ${{ needs.regression.result }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$QUALITY_RESULT" = success
-          test "$TOOLS_RESULT" = success
-          test "$UNIT_RESULT" = success
-          test "$REGRESSION_RESULT" = success
+    - name: Require all gates
+      env:
+        QUALITY_RESULT: ${{ needs.quality.result }}
+        TOOLS_RESULT: ${{ needs.tools.result }}
+        UNIT_RESULT: ${{ needs.unit.result }}
+        REGRESSION_RESULT: ${{ needs.regression.result }}
+        GUI_RESULT: ${{ needs.gui.result }}
+        INTEGRATION_RESULT: ${{ needs.integration.result }}
+        SPAWN_RESULT: ${{ needs.spawn.result }}
+      shell: bash
+      run: 'set -euo pipefail
+
+        test "$QUALITY_RESULT" = success
+
+        test "$TOOLS_RESULT" = success
+
+        test "$UNIT_RESULT" = success
+
+        test "$REGRESSION_RESULT" = success
+
+        test "$GUI_RESULT" = success
+
+        test "$INTEGRATION_RESULT" = success
+
+        test "$SPAWN_RESULT" = success
+
+        '

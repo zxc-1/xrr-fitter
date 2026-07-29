@@ -205,11 +205,32 @@ def test_gui_use_case_fixture_resolves_domain_calls_only_through_public_api() ->
     assert set(mapped) <= set(PUBLIC_NAMES)
 
 
+def test_real_gui_tree_is_nonempty() -> None:
+    assert _gui_sources()
+
+
+def test_real_gui_tree_uses_only_public_api_domain_names() -> None:
+    sources = _gui_sources()
+    observed_calls: set[str] = set()
+    for path, source in sources:
+        tree = ast.parse(source, filename=str(path))
+        aliases = _api_aliases(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if isinstance(node.func.value, ast.Name) and node.func.value.id in aliases:
+                observed_calls.add(node.func.attr)
+    assert observed_calls
+    assert observed_calls <= set(PUBLIC_NAMES)
+
+
 def test_package_initializers_remain_empty_and_do_not_reexport_api() -> None:
     root = Path(__file__).resolve().parents[2] / "src/xrr_fitter"
 
     assert (root / "__init__.py").read_bytes() == b""
     assert (root / "services/__init__.py").read_bytes() == b""
+    assert (root / "gui/__init__.py").read_bytes() == b""
+
     import xrr_fitter
 
     assert not hasattr(xrr_fitter, "fit_project")

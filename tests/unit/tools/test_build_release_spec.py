@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import stat
 import tarfile
+import tomllib
 
 import pytest
 
@@ -21,6 +22,7 @@ GENERATED_METADATA = (
     "src/xrr_fitter.egg-info/requires.txt",
     "src/xrr_fitter.egg-info/top_level.txt",
 )
+ENTRY_POINT_METADATA = "src/xrr_fitter.egg-info/entry_points.txt"
 INPUT_DIRECTORIES = ("docs", "examples", "src", "tests", "tools", "verification")
 INPUT_FILES = (
     "MANIFEST.in",
@@ -144,6 +146,15 @@ def test_manifest_matches_the_audited_sdist_input_allowlist() -> None:
     )
 
     assert tuple((root / "MANIFEST.in").read_text(encoding="utf-8").splitlines()) == expected
+
+
+def test_committed_pyproject_declares_the_single_gui_entrypoint() -> None:
+    root = Path(__file__).resolve().parents[3]
+    payload = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert payload["project"]["gui-scripts"] == {
+        "xrr-fitter": "xrr_fitter.__main__:main"
+    }
 
 
 def test_calculation_binds_build_requirements_to_the_lock(
@@ -345,7 +356,9 @@ def test_pinned_fixture_builds_twice_with_exact_metadata_set(load_tool_module) -
     module = load_tool_module("build_release_spec")
     payload = module._pyproject(Path(__file__).resolve().parents[3] / "pyproject.toml")
 
-    assert module.build_generated_metadata(payload) == GENERATED_METADATA
+    assert module.build_generated_metadata(payload) == tuple(
+        sorted((*GENERATED_METADATA, ENTRY_POINT_METADATA))
+    )
 
 
 def test_generated_metadata_rejects_unknown_egg_info_member(
