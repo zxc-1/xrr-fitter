@@ -69,6 +69,14 @@ def _json_value(value: object) -> object:
     return value
 
 
+def _r22_dataset_field_order() -> list[str]:
+    return [
+        field.name
+        for field in dataclass_fields(DatasetProject)
+        if field.name != "display_name"
+    ]
+
+
 def _validate_input_identity(value: object, expected: tuple[str, str, str]) -> str:
     input_class, path, stem = expected
     if value.input_class != input_class or value.path != path:
@@ -130,7 +138,7 @@ def _cases(contents: dict[str, bytes]) -> tuple[dict[str, XrrProject], dict[str,
         cases[stem] = {
             "project": serialized,
             "project_field_order": [field.name for field in dataclass_fields(XrrProject)],
-            "dataset_field_order": [field.name for field in dataclass_fields(DatasetProject)],
+            "dataset_field_order": _r22_dataset_field_order(),
             "roundtrip_equal": True,
         }
     return projects, cases
