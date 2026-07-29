@@ -631,9 +631,9 @@ def run_stage_b(
 def _local_stage_candidate(
     problem: object,
     stage_problem: object,
-    parent: FitCandidate,
     start: np.ndarray,
     candidate_id: str,
+    seed_index: int,
     cancelled: Callable[[], bool] | None,
 ) -> FitCandidate:
     maximum = max(
@@ -646,7 +646,7 @@ def _local_stage_candidate(
         stage_problem,
         solved.unit_vector,
         candidate_id,
-        parent.seed_index,
+        seed_index,
         solved.stop_reason,
         solved.nfev,
     )
@@ -682,8 +682,9 @@ def run_local_stage(
     """Refine each parent and its deterministic bounded perturbations.
 
     Stage-specific compilation releases only the intended parameter groups.
-    Candidate lineage and retained perturbation counts are preserved for the next
-    stage and for checkpoint resume.
+    Selected parents receive compact stage-local lineage identifiers. Retained
+    perturbation counts preserve that order for the next stage and checkpoint
+    resume.
     """
     counts = (
         (0,) * len(parents)
@@ -703,14 +704,13 @@ def run_local_stage(
         values = _candidate_values(parent)
         stage_problem = compile_stage_problem(problem, stage, values)
         starts = _local_stage_starts(problem, stage_problem, parent, stage, index, count)
-        lineage = parent.candidate_id.split("-")[1]
         for restart, start in enumerate(starts):
             candidate = _local_stage_candidate(
                 problem,
                 stage_problem,
-                parent,
                 start,
-                f"{stage}-{lineage}-{restart}",
+                f"{stage}-{index}-{restart}",
+                index,
                 cancelled,
             )
             candidates.append(candidate)

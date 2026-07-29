@@ -11,7 +11,7 @@ from xrr_fitter.fit.candidates import candidate_from_evaluation
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, FitStageSummary, SearchBudget
-from xrr_fitter.model.instrument import InstrumentSpec
+from xrr_fitter.model.instrument import InstrumentSpec, PhysicsDiagnostic
 
 
 def _checkpoint_api():
@@ -113,6 +113,33 @@ def test_resume_plan_accepts_an_exact_seed_prefix_and_starts_after_checkpoint() 
     assert plan.remaining_stages == ("C", "D", "E")
     assert plan.consumed_child_seeds == (101, 102)
     assert tuple(candidate.candidate_id for candidate in plan.candidates) == ("B-0", "B-1")
+
+
+def test_resume_normalizes_analysis_enriched_candidate_diagnostics() -> None:
+    api = _resume_api()
+    problem = _problem(seed=771)
+    checkpoint = _stage_b_checkpoint(problem)
+    analysis_diagnostic = PhysicsDiagnostic(
+        "analysis_only",
+        "diagnostic derived after search completion",
+    )
+    first, second = checkpoint.candidates
+    enriched = replace(
+        checkpoint,
+        candidates=(
+            replace(first, diagnostics=(*first.diagnostics, analysis_diagnostic)),
+            second,
+        ),
+    )
+
+    plan = api.validate_resume_checkpoint(
+        problem,
+        enriched,
+        reserved_child_seeds=(101, 102, 201, 202),
+    )
+
+    assert plan.candidates[0].diagnostics == first.diagnostics
+    assert plan.candidates[1].diagnostics == second.diagnostics
 
 
 @pytest.mark.parametrize(

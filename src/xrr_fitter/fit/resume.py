@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -48,21 +48,21 @@ def _validate_identity(
         raise ValueError("single-fit resume checkpoint contains a joint layout")
 
 
-def _expected_stage_prefix(stage: str) -> tuple[str, ...]:
-    order = ("A", "B", "C", "D", "E")
+def _expected_stage_prefix(stage: str, *, joint: bool) -> tuple[str, ...]:
+    order = ("B", "C", "D", "E") if joint else ("A", "B", "C", "D", "E")
     if stage not in {"B", "C", "D", "E"}:
         raise ValueError(f"unsupported resume checkpoint stage: {stage}")
     return order[: order.index(stage) + 1]
 
 
-def _validate_history(checkpoint: FitCheckpoint) -> None:
+def _validate_history(checkpoint: FitCheckpoint, *, joint: bool) -> None:
     observed = tuple(summary.stage for summary in checkpoint.stage_summaries)
-    if observed != _expected_stage_prefix(checkpoint.stage):
+    if observed != _expected_stage_prefix(checkpoint.stage, joint=joint):
         raise ValueError("resume checkpoint history has a missing or reordered stage")
     expected_ids = tuple(
         candidate_id
         for summary in checkpoint.stage_summaries
-        if summary.stage != "A"
+        if joint or summary.stage != "A"
         for candidate_id in summary.candidate_ids
     )
     candidate_ids = tuple(candidate.candidate_id for candidate in checkpoint.candidates)
@@ -93,7 +93,6 @@ def _candidate_metadata(candidate: FitCandidate) -> tuple[object, ...]:
         candidate.objective,
         candidate.valid,
         candidate.stop_reason,
-        candidate.diagnostics,
     )
 
 
@@ -128,8 +127,9 @@ def _validate_candidate_layout(
     candidates: tuple[FitCandidate, ...],
     *,
     joint: bool,
-) -> None:
+) -> tuple[FitCandidate, ...]:
     width = len(problem.variables)
+    normalized = []
     for candidate in candidates:
         if candidate.unit_vector.shape != (width,):
             raise ValueError("resume checkpoint candidate unit width mismatch")
@@ -147,6 +147,10 @@ def _validate_candidate_layout(
         )
         if not _derived_candidate_equal(candidate, expected):
             raise ValueError("resume checkpoint candidate derived state mismatch")
+        normalized.append(
+            replace(expected, ranking_objective=candidate.ranking_objective)
+        )
+    return tuple(normalized)
 
 
 def _summary_for_candidates(
@@ -175,7 +179,7 @@ def _summary_for_candidates(
 def _validate_summaries(checkpoint: FitCheckpoint, *, joint: bool) -> None:
     offset = 0
     for summary in checkpoint.stage_summaries:
-        if summary.stage == "A":
+        if summary.stage == "A" and not joint:
             continue
         stop = offset + len(summary.candidate_ids)
         candidates = checkpoint.candidates[offset:stop]
@@ -187,9 +191,20 @@ def _validate_summaries(checkpoint: FitCheckpoint, *, joint: bool) -> None:
 def _validate_seeds(
     checkpoint: FitCheckpoint,
     reserved_child_seeds: tuple[int, ...],
+    *,
+    joint: bool,
 ) -> tuple[int, ...]:
     reserved = tuple(reserved_child_seeds)
-    expected = reserved if checkpoint.stage == "E" else reserved[:2]
+    if joint:
+        expected = reserved[:1]
+        if checkpoint.stage == "E":
+            final_ids = checkpoint.stage_summaries[-1].candidate_ids
+            expected_ids = tuple(f"E-{index}" for index in range(len(final_ids)))
+            if len(final_ids) > len(reserved) - 1 or final_ids != expected_ids:
+                raise ValueError("joint resume Stage-E candidates must form a child seed prefix")
+            expected = reserved[: len(final_ids) + 1]
+    else:
+        expected = reserved if checkpoint.stage == "E" else reserved[:2]
     consumed = tuple(checkpoint.child_seeds)
     if consumed != expected:
         raise ValueError("resume checkpoint child seed count or order mismatch")
@@ -208,16 +223,16 @@ def validate_resume_checkpoint(
         raise TypeError("resume checkpoint must be a FitCheckpoint")
     expected_joint_layout = str(expected_joint_layout_fingerprint)
     _validate_identity(problem, checkpoint, expected_joint_layout)
-    _validate_history(checkpoint)
     joint = bool(expected_joint_layout)
-    _validate_candidate_layout(problem, checkpoint.candidates, joint=joint)
+    _validate_history(checkpoint, joint=joint)
+    candidates = _validate_candidate_layout(problem, checkpoint.candidates, joint=joint)
     _validate_summaries(checkpoint, joint=joint)
-    consumed = _validate_seeds(checkpoint, reserved_child_seeds)
+    consumed = _validate_seeds(checkpoint, reserved_child_seeds, joint=joint)
     return ResumePlan(
         checkpoint.stage,
         remaining_stages(checkpoint.stage),
         consumed,
-        checkpoint.candidates,
+        candidates,
         checkpoint.runtime_warnings,
         checkpoint.stage_summaries,
     )

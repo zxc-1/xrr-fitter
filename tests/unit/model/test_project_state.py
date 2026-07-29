@@ -84,6 +84,7 @@ def test_project_and_dataset_serialization_field_order_is_stable() -> None:
         "parameter_settings",
         "last_valid_result",
         "checkpoint",
+        "display_name",
     ]
 
 

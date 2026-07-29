@@ -10,19 +10,12 @@ from typing import ParamSpec
 from matplotlib import rc_context, rcParamsDefault
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
-from matplotlib.font_manager import FontProperties
 import numpy as np
 
 from xrr_fitter.io.export_tables import DatasetExportData, _contexts
 
 
-PNG_METADATA = {
-    "Software": "xrr-fitter",
-    "Creation Time": None,
-}
-TREND_LABEL_FONT = FontProperties(
-    family=("PingFang SC", "Heiti SC", "Arial Unicode MS", "DejaVu Sans")
-)
+PNG_SOFTWARE = "Matplotlib version3.11.0, https://matplotlib.org/"
 P = ParamSpec("P")
 
 
@@ -44,50 +37,36 @@ def _context(value: DatasetExportData) -> DatasetExportData:
 def _png(figure: Figure) -> bytes:
     buffer = BytesIO()
     try:
-        FigureCanvasAgg(figure)
-        figure.savefig(
-            buffer,
-            format="png",
-            dpi=120,
-            metadata=PNG_METADATA,
-            facecolor="white",
-        )
+        canvas = FigureCanvasAgg(figure)
+        canvas.print_png(buffer, metadata={"Software": PNG_SOFTWARE})
         return buffer.getvalue()
     finally:
         figure.clear()
 
 
-def _base_figure(height: float) -> Figure:
-    figure = Figure(figsize=(7.2, height), dpi=120, facecolor="white")
-    figure.subplots_adjust(left=0.11, right=0.97, bottom=0.10, top=0.94, hspace=0.24)
-    return figure
-
-
 @_default_matplotlib_style
 def fit_overview_png(context: DatasetExportData) -> bytes:
-    """Render measured/model reflectivity and log residual evidence."""
+    """Render normalized curves and distinguish excluded source rows."""
     value = _context(context)
     data = value.data
     selected = value.selected
-    figure = _base_figure(5.8)
-    reflectivity, residual = figure.subplots(2, 1, sharex=True)
-    measured = np.maximum(data.intensity_normalized, data.r_floor)
-    model = np.maximum(selected.model_normalized, data.r_floor)
-    reflectivity.semilogy(selected.qz_a_inv, measured, color="#1f2937", linewidth=1.0, label="data")
-    reflectivity.semilogy(selected.qz_a_inv, model, color="#c2410c", linewidth=1.2, label="model")
-    reflectivity.set_ylabel("Reflectivity")
-    reflectivity.grid(True, alpha=0.20)
-    reflectivity.legend(loc="best", frameon=False)
-    residual.axhline(0.0, color="#6b7280", linewidth=0.8)
-    residual.plot(
-        selected.qz_a_inv,
-        selected.log_residuals_decades,
-        color="#0f766e",
-        linewidth=1.0,
-    )
-    residual.set_xlabel("qz (1/A)")
-    residual.set_ylabel("Log residual")
-    residual.grid(True, alpha=0.20)
+    figure = Figure(figsize=(6.4, 4.0), layout="constrained")
+    axis = figure.subplots()
+    axis.set_yscale("log")
+    included = np.asarray(value.dataset.fit_mask, dtype=bool)
+    axis.plot(data.qz_a_inv, data.intensity_normalized, label="observed")
+    axis.plot(selected.qz_a_inv, selected.model_normalized, label="model")
+    excluded = ~included
+    if np.any(excluded):
+        axis.scatter(
+            data.qz_a_inv[excluded],
+            data.intensity_normalized[excluded],
+            label="excluded",
+            marker="x",
+        )
+    axis.set_xlabel("qz (1/Angstrom)")
+    axis.set_ylabel("Normalized intensity")
+    axis.legend()
     return _png(figure)
 
 
@@ -95,28 +74,14 @@ def fit_overview_png(context: DatasetExportData) -> bytes:
 def sld_profile_png(context: DatasetExportData) -> bytes:
     """Render real and imaginary selected SLD profiles."""
     selected = _context(context).selected
-    figure = _base_figure(4.2)
-    axis = figure.subplots(1, 1)
+    figure = Figure(figsize=(6.4, 4.0), layout="constrained")
+    axis = figure.subplots()
     profile = np.asarray(selected.sld_profile_a2, dtype=complex)
-    axis.plot(
-        selected.sld_depth_a,
-        profile.real,
-        color="#1d4ed8",
-        linewidth=1.4,
-        label="real",
-    )
-    axis.plot(
-        selected.sld_depth_a,
-        profile.imag,
-        color="#be123c",
-        linewidth=1.1,
-        label="imaginary",
-    )
-    axis.axhline(0.0, color="#6b7280", linewidth=0.8)
-    axis.set_xlabel("Depth (A)")
-    axis.set_ylabel("SLD (1/A^2)")
-    axis.grid(True, alpha=0.20)
-    axis.legend(loc="best", frameon=False)
+    axis.plot(selected.sld_depth_a, profile.real, label="real")
+    axis.plot(selected.sld_depth_a, profile.imag, label="imaginary")
+    axis.set_xlabel("Depth (Angstrom)")
+    axis.set_ylabel("SLD (1/Angstrom^2)")
+    axis.legend()
     return _png(figure)
 
 
@@ -128,10 +93,13 @@ def _excluded_intervals(
     if excluded.size == 0:
         return ()
     groups = np.split(excluded, np.flatnonzero(np.diff(excluded) > 1) + 1)
-    return tuple(
-        (float(qz_a_inv[group[0]]), float(qz_a_inv[group[-1]]))
-        for group in groups
-    )
+    intervals = []
+    for group in groups:
+        values = qz_a_inv[group]
+        finite = values[np.isfinite(values)]
+        if finite.size:
+            intervals.append((float(np.min(finite)), float(np.max(finite))))
+    return tuple(intervals)
 
 
 @_default_matplotlib_style
@@ -139,29 +107,17 @@ def residuals_png(context: DatasetExportData) -> bytes:
     """Render both residual definitions with disjoint exclusion spans."""
     value = _context(context)
     selected = value.selected
-    figure = _base_figure(5.6)
-    log_axis, weighted_axis = figure.subplots(2, 1, sharex=True)
+    figure = Figure(figsize=(6.4, 4.0), layout="constrained")
+    log_axis, weighted_axis = figure.subplots(2, 1, squeeze=False).ravel()
     intervals = _excluded_intervals(selected.qz_a_inv, value.dataset.fit_mask)
-    for axis in (log_axis, weighted_axis):
-        for lower, upper in intervals:
-            axis.axvspan(lower, upper, color="#d1d5db", alpha=0.45, linewidth=0.0)
-        axis.axhline(0.0, color="#6b7280", linewidth=0.8)
-        axis.grid(True, alpha=0.20)
-    log_axis.plot(
-        selected.qz_a_inv,
-        selected.log_residuals_decades,
-        color="#0f766e",
-        linewidth=1.0,
-    )
-    weighted_axis.plot(
-        selected.qz_a_inv,
-        selected.weighted_residuals,
-        color="#7e22ce",
-        linewidth=1.0,
-    )
-    log_axis.set_ylabel("Log residual")
+    log_axis.plot(selected.qz_a_inv, selected.log_residuals_decades)
+    weighted_axis.plot(selected.qz_a_inv, selected.weighted_residuals)
+    log_axis.set_ylabel("Log residual (decades)")
     weighted_axis.set_ylabel("Weighted residual")
-    weighted_axis.set_xlabel("qz (1/A)")
+    for axis in (log_axis, weighted_axis):
+        axis.set_xlabel("qz (1/Angstrom)")
+        for lower, upper in intervals:
+            axis.axvspan(lower, upper, alpha=0.08)
     return _png(figure)
 
 
@@ -194,15 +150,13 @@ def _plot_parameter_lines(
     names: tuple[str, ...],
     positions: np.ndarray,
 ) -> None:
-    for index, name in enumerate(names):
+    for name in names:
         samples = [_parameter_sample(value, name) for value in values]
         axis.plot(
             positions,
             samples,
             marker="o",
-            linewidth=1.0,
             label=name,
-            color=f"C{index % 10}",
         )
 
 
@@ -211,19 +165,17 @@ def parameter_trends_png(contexts: object) -> bytes:
     """Render selected parameter values in project dataset order."""
     values = _trend_contexts(contexts)
     names = _common_parameter_names(values)
-    figure = _base_figure(4.6)
-    axis = figure.subplots(1, 1)
-    positions = np.arange(len(values), dtype=float)
+    figure = Figure(figsize=(7.2, 4.2), layout="constrained")
+    axis = figure.subplots()
+    positions = np.arange(len(values), dtype=int)
     _plot_parameter_lines(axis, values, names, positions)
     axis.set_xticks(
         positions,
-        [value.dataset.dataset_id for value in values],
-        rotation=30,
-        ha="right",
-        fontproperties=TREND_LABEL_FONT,
+        tuple(str(index + 1) for index in positions),
+        rotation=20,
     )
+    axis.set_xlabel("Dataset order")
     axis.set_ylabel("Selected value")
-    axis.grid(True, alpha=0.20)
     if names:
-        axis.legend(loc="best", frameon=False, fontsize=7)
+        axis.legend(fontsize="small")
     return _png(figure)

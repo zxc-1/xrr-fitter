@@ -185,7 +185,7 @@ def _ui_from_dict(value: object) -> ProjectUiState:
 
 
 def _dataset_to_dict(value: DatasetProject) -> dict[str, object]:
-    return {
+    payload = {
         "dataset_id": value.dataset_id,
         "source_path": value.source_path,
         "source_sha256": value.source_sha256,
@@ -207,6 +207,9 @@ def _dataset_to_dict(value: DatasetProject) -> dict[str, object]:
         "last_valid_result": fit_result_to_dict(value.last_valid_result),
         "checkpoint": _checkpoint_to_dict(value.checkpoint),
     }
+    if value.display_name != value.dataset_id:
+        payload["display_name"] = value.display_name
+    return payload
 
 
 def _dataset_fields() -> set[str]:
@@ -231,7 +234,7 @@ def _dataset_fields() -> set[str]:
 
 
 def _dataset_from_dict(value: object) -> DatasetProject:
-    payload = _mapping(value, _dataset_fields(), "dataset")
+    payload = _mapping(value, _dataset_fields(), "dataset", {"display_name"})
     return DatasetProject(
         dataset_id=payload["dataset_id"],
         source_path=payload["source_path"],
@@ -260,6 +263,7 @@ def _dataset_from_dict(value: object) -> DatasetProject:
         ),
         last_valid_result=fit_result_from_dict(payload["last_valid_result"]),
         checkpoint=_checkpoint_from_dict(payload["checkpoint"]),
+        display_name=payload.get("display_name"),
     )
 
 

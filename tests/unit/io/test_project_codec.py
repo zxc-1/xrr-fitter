@@ -16,6 +16,7 @@ from xrr_fitter.io.project_codec import (
     fit_result_to_dict,
     load_project,
     project_from_bytes,
+    project_to_bytes,
     project_to_dict,
     save_project,
 )
@@ -40,6 +41,21 @@ REFERENCE_INPUTS = ROOT / "verification/r22/reference/xrr_fitter/examples"
 
 def _simple_project():
     return project(dataset_project("sample-1"))
+
+
+def test_codec_omits_default_display_name_and_round_trips_custom_value() -> None:
+    default = dataset_project("sample")
+    default_document = project_to_dict(project(default))
+    assert "display_name" not in default_document["datasets"][0]
+
+    custom = replace(default, display_name="measured wafer")
+    custom_project = project(custom)
+    document = project_to_dict(custom_project)
+    assert document["datasets"][0]["display_name"] == "measured wafer"
+
+    restored = project_from_bytes(project_to_bytes(custom_project))
+    assert restored.datasets[0].display_name == "measured wafer"
+    assert restored == custom_project
 
 
 def _manual_result_graph() -> tuple[FitResult, FitCheckpoint]:

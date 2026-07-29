@@ -178,7 +178,16 @@ def _asymmetric_joint_problem():
 
 
 def _assert_atomic_checkpoints(checkpoints) -> None:
-    assert tuple(batch[0].stage for batch in checkpoints) == ("B", "C", "D", "E")
+    assert tuple(batch[0].stage for batch in checkpoints) == (
+        "B",
+        "C",
+        "D",
+        "E",
+        "E",
+        "E",
+        "E",
+    )
+    assert tuple(len(batch[0].child_seeds) for batch in checkpoints) == (1, 1, 1, 2, 3, 4, 5)
     assert all(len(batch) == 2 for batch in checkpoints)
     for batch in checkpoints:
         assert len({value.stage for value in batch}) == 1
@@ -226,15 +235,75 @@ def _replace_first_checkpoint(checkpoints, **changes):
 def test_joint_pipeline_projects_aligned_results_and_atomic_checkpoints() -> None:
     api = import_module("xrr_fitter.fit.joint_pipeline")
     checkpoints: list[tuple[object, ...]] = []
+    progress: list[object] = []
 
     results = api.run_joint_fit(
         api.JointFitRequest(_joint_problem()),
+        progress=progress.append,
         checkpoint=checkpoints.append,
     )
 
     assert len(results) == 2
     _assert_atomic_checkpoints(checkpoints)
     _assert_aligned_results(results)
+    expected_ids = ("A-0", "B-0", "C-0", "D-0", "E-0", "E-1", "E-2", "E-3")
+    expected_seeds = (
+        11356364422455651221,
+        2456937646021945087,
+        13860652228729505114,
+        6048956452989709052,
+        7082095701162067864,
+    )
+    assert all(
+        tuple(candidate.candidate_id for candidate in result.candidates) == expected_ids
+        for result in results
+    )
+    assert all(result.child_seeds == expected_seeds for result in results)
+    assert tuple(summary.candidate_ids for summary in results[0].stage_summaries) == (
+        ("A-0",),
+        ("B-0",),
+        ("C-0",),
+        ("D-0",),
+        ("E-0", "E-1", "E-2", "E-3"),
+    )
+    assert tuple(
+        (value.stage, value.completed, value.total, value.message)
+        for value in progress
+    ) == (
+        ("A", 1, 1, "joint A"),
+        ("B", 1, 1, "joint B"),
+        ("C", 1, 1, "joint C"),
+        ("D", 1, 1, "joint D"),
+        ("E", 1, 4, "joint E"),
+        ("E", 2, 4, "joint E"),
+        ("E", 3, 4, "joint E"),
+        ("E", 4, 4, "joint E"),
+    )
+    assert tuple(
+        tuple(candidate.candidate_id for candidate in batch[0].candidates)
+        for batch in checkpoints
+    ) == tuple(expected_ids[1:stop] for stop in (2, 3, 4, 5, 6, 7, 8))
+    assert tuple(
+        tuple(summary.stage for summary in batch[0].stage_summaries)
+        for batch in checkpoints
+    ) == (
+        ("B",),
+        ("B", "C"),
+        ("B", "C", "D"),
+        ("B", "C", "D", "E"),
+        ("B", "C", "D", "E"),
+        ("B", "C", "D", "E"),
+        ("B", "C", "D", "E"),
+    )
+    assert tuple(batch[0].child_seeds for batch in checkpoints) == (
+        expected_seeds[:1],
+        expected_seeds[:1],
+        expected_seeds[:1],
+        expected_seeds[:2],
+        expected_seeds[:3],
+        expected_seeds[:4],
+        expected_seeds[:5],
+    )
 
 
 def test_joint_analysis_publishes_coherent_shared_ranking_history() -> None:
@@ -282,7 +351,7 @@ def test_joint_analysis_results_are_publishable_as_one_project() -> None:
     assert tuple(dataset.last_valid_result for dataset in published.datasets) == results
 
 
-def test_joint_analysis_publishes_dataset_local_classification_to_one_project() -> None:
+def test_joint_analysis_publishes_dataset_local_evidence_to_one_project() -> None:
     fit_api = import_module("xrr_fitter.fit.joint_pipeline")
     analysis_api = import_module("xrr_fitter.analysis.report")
     joint = _asymmetric_joint_problem()
@@ -292,7 +361,9 @@ def test_joint_analysis_publishes_dataset_local_classification_to_one_project() 
         for problem, search in zip(joint.problems, searches, strict=True)
     )
     assert tuple(len(problem.variables) for problem in joint.problems) == (1, 2)
-    assert results[0].confidence != results[1].confidence
+    assert results[0].best_candidate.objective != results[1].best_candidate.objective
+    assert results[0].best_candidate.ranking_objective == results[1].best_candidate.ranking_objective
+    assert results[0].uncertainty is not results[1].uncertainty
     datasets = tuple(
         dataset_project(dataset_id, result=result)
         for dataset_id, result in zip(joint.dataset_ids, results, strict=True)
@@ -325,15 +396,15 @@ def test_joint_pipeline_preserves_fully_locked_lineage_through_stage_e() -> None
         assert result.best_candidate in final
 
 
-def test_joint_pipeline_uses_stage_layouts_short_and_full_de_then_local_refinement(
+def test_joint_pipeline_uses_one_global_layout_short_and_full_de_then_local_refinement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api = import_module("xrr_fitter.fit.joint_pipeline")
     de_calls: list[tuple[int, int]] = []
     local_calls: list[int] = []
 
-    def fake_de(objective, bounds, *, x0, init, maxiter, **_kwargs):
-        unit = np.array(x0, dtype=float, copy=True)
+    def fake_de(objective, bounds, *, init, maxiter, **_kwargs):
+        unit = np.array(init[0], dtype=float, copy=True)
         de_calls.append((len(bounds), maxiter))
         value = objective(unit)
         return SimpleNamespace(
@@ -356,12 +427,13 @@ def test_joint_pipeline_uses_stage_layouts_short_and_full_de_then_local_refineme
 
     results = api.run_joint_fit(api.JointFitRequest(_staged_joint_problem()))
 
-    assert de_calls == [(2, 0), (2, 0), (3, 0), (3, 0), (3, 0), (3, 0)]
-    assert local_calls == [1, 1, 3, 3, 3, 3]
-    assert tuple(summary.candidate_ids for summary in results[0].stage_summaries[1:]) == (
-        ("B-0", "B-1"),
-        ("C-0-0", "C-1-0"),
-        ("D-0-0", "D-1-0"),
+    assert de_calls == [(3, 0), (3, 0), (3, 0), (3, 0), (3, 0)]
+    assert local_calls == [3, 3, 3, 3, 3, 3]
+    assert tuple(summary.candidate_ids for summary in results[0].stage_summaries) == (
+        ("A-0",),
+        ("B-0",),
+        ("C-0",),
+        ("D-0",),
         ("E-0", "E-1", "E-2", "E-3"),
     )
 
@@ -393,16 +465,17 @@ def test_joint_resume_requires_one_checkpoint_for_every_dataset() -> None:
 
 
 @pytest.mark.parametrize(
-    ("completed_stage", "expected_suffix"),
+    ("checkpoint_index", "expected_suffix"),
     [
-        pytest.param("B", ("C", "D", "E"), id="from-b"),
-        pytest.param("C", ("D", "E"), id="from-c"),
-        pytest.param("D", ("E",), id="from-d"),
-        pytest.param("E", (), id="from-e"),
+        pytest.param(0, ("C", "D", "E", "E", "E", "E"), id="from-b"),
+        pytest.param(1, ("D", "E", "E", "E", "E"), id="from-c"),
+        pytest.param(2, ("E", "E", "E", "E"), id="from-d"),
+        pytest.param(3, ("E", "E", "E"), id="from-first-e-seed"),
+        pytest.param(6, (), id="from-complete-e"),
     ],
 )
 def test_joint_resume_runs_only_the_suffix_and_matches_fresh_results(
-    completed_stage: str,
+    checkpoint_index: int,
     expected_suffix: tuple[str, ...],
 ) -> None:
     api = import_module("xrr_fitter.fit.joint_pipeline")
@@ -412,9 +485,7 @@ def test_joint_resume_runs_only_the_suffix_and_matches_fresh_results(
         api.JointFitRequest(joint),
         checkpoint=fresh_checkpoints.append,
     )
-    resume_from = next(
-        batch for batch in fresh_checkpoints if batch[0].stage == completed_stage
-    )
+    resume_from = fresh_checkpoints[checkpoint_index]
     resumed_checkpoints: list[tuple[object, ...]] = []
 
     resumed = api.run_joint_fit(
@@ -438,15 +509,17 @@ def test_joint_resume_rejects_cross_dataset_drift_before_callbacks() -> None:
         ranking_objective=(first.candidates[0].ranking_objective or first.candidates[0].objective)
         + 0.25,
     )
-    wrong_unit = replace(
-        first.candidates[0],
-        unit_vector=np.clip(first.candidates[0].unit_vector + 0.01, 0.0, 1.0),
-    )
+    changed_unit = np.array(first.candidates[0].unit_vector, copy=True)
+    changed_unit[0] = 0.0 if changed_unit[0] > 0.5 else 1.0
+    wrong_unit = replace(first.candidates[0], unit_vector=changed_unit)
     cases = (
         tuple(reversed(stage_d)),
         _replace_first_checkpoint(stage_d, joint_layout_fingerprint="0" * 64),
         _replace_first_checkpoint(stage_d, candidates=tuple(reversed(first.candidates))),
-        _replace_first_checkpoint(stage_d, child_seeds=tuple(reversed(first.child_seeds))),
+        _replace_first_checkpoint(
+            stage_d,
+            child_seeds=(first.child_seeds[0] + 1,),
+        ),
         _replace_first_checkpoint(stage_d, stage="C"),
         _replace_first_checkpoint(
             stage_d,

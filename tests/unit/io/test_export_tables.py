@@ -2,6 +2,8 @@
 
 Fixtures cover synthetic aligned curves, parser-owned raw provenance, and
 nonempty stochastic replay state across strict JSON and workbook views.
+Frozen R22 field presence and insertion order remain part of the JSON contract.
+Run-log text is checked independently from workbook JSON cell encoding.
 """
 
 from __future__ import annotations
@@ -376,6 +378,83 @@ def test_export_json_uses_project_codec_and_complete_provenance() -> None:
     _assert_json_provenance(payload, context)
 
 
+def test_export_json_matches_the_frozen_r22_field_shape() -> None:
+    original = _context()
+    dataset = replace(original.dataset, display_name="Measured curve")
+    value = replace(original.project, datasets=(dataset,))
+    context = replace(original, project=value, dataset=dataset)
+
+    payload = json.loads(dataset_json_bytes(context))
+
+    assert project_to_dict(value)["datasets"][0]["display_name"] == "Measured curve"
+    assert "display_name" not in payload["project"]["datasets"][0]
+    assert payload["raw_data"]["beam_kind"] == context.data.beam.kind
+    assert "beam" not in payload["raw_data"]
+    assert "candidate_count" not in payload["run_info"]
+    assert "fit_mask" not in payload["model_residuals"]
+    assert "diagnostics" not in payload["model_residuals"]
+
+
+def test_export_json_preserves_the_frozen_r22_field_order() -> None:
+    content = dataset_json_bytes(_context())
+    payload = json.loads(content)
+
+    assert tuple(payload) == (
+        "dataset_id",
+        "source_path",
+        "source_sha256",
+        "beam",
+        "instrument",
+        "scale_prior",
+        "structure_evidence",
+        "oxide_decisions",
+        "raw_data",
+        "model_residuals",
+        "fit_result",
+        "project",
+        "candidates",
+        "convergence",
+        "run_info",
+    )
+    assert tuple(payload["model_residuals"]) == (
+        "qz_a_inv",
+        "model_normalized",
+        "log_residuals_decades",
+        "weighted_residuals",
+        "candidate_id",
+    )
+    assert tuple(payload["run_info"]) == (
+        "schema_version",
+        "algorithm_version",
+        "fit_config",
+        "project_master_seed",
+        "service_seed_tree_version",
+        "independent_root_child",
+        "joint_root_child",
+        "optimizer_child_seeds",
+        "mcmc_child_seed",
+        "selected_candidate_id",
+        "fitted_instrument_parameters",
+        "dataset_id",
+        "source_path",
+        "source_sha256",
+        "beam",
+        "instrument",
+        "scale_prior",
+        "structure_evidence",
+        "oxide_decisions",
+        "confidence",
+        "warnings",
+        "fringe_screen_threshold_version",
+        "budget_reclaim_threshold_version",
+        "downsample_rule_version",
+        "jacobian_version",
+        "dataset_directory",
+        "dataset_directory_mapping",
+    )
+    assert json_text({"second": 2, "first": 1}) == '{"second": 2, "first": 1}'
+
+
 def test_export_json_encodes_nonfinite_excluded_points_as_null() -> None:
     original = _context()
     mask = np.array(original.data.fit_mask, copy=True)
@@ -688,6 +767,35 @@ def test_export_workbook_run_info_matches_json_and_keeps_strings_literal() -> No
     workbook_bytes = dataset_workbook_bytes(context)
     row = pd.read_excel(BytesIO(workbook_bytes), sheet_name="RunInfo").iloc[0]
 
+    assert row.index.tolist() == [
+        "dataset_id",
+        "dataset_directory",
+        "dataset_directory_mapping",
+        "source_path",
+        "source_sha256",
+        "schema_version",
+        "algorithm_version",
+        "project_master_seed",
+        "service_seed_tree_version",
+        "independent_root_child",
+        "joint_root_child",
+        "optimizer_child_seeds",
+        "mcmc_child_seed",
+        "selected_candidate_id",
+        "fitted_instrument_parameters",
+        "confidence",
+        "candidate_count",
+        "warnings",
+        "beam",
+        "instrument",
+        "scale_prior",
+        "structure_evidence",
+        "oxide_decisions",
+        "fringe_screen_threshold_version",
+        "budget_reclaim_threshold_version",
+        "downsample_rule_version",
+        "jacobian_version",
+    ]
     assert row["dataset_id"] == "=1+1"
     assert json.loads(row["dataset_directory_mapping"]) == payload["run_info"][
         "dataset_directory_mapping"
@@ -709,7 +817,7 @@ def test_export_json_and_workbook_retain_nonempty_mcmc_replay_identity() -> None
         BytesIO(dataset_workbook_bytes(context)),
         sheet_name="RunInfo",
     ).iloc[0]
-    expected = {
+    expected_json = {
         "fit_config": project_to_dict(context.project)["fit_config"],
         "service_seed_tree_version": 1,
         "independent_root_child": 10101,
@@ -718,11 +826,13 @@ def test_export_json_and_workbook_retain_nonempty_mcmc_replay_identity() -> None
         "mcmc_child_seed": 30303,
         "fitted_instrument_parameters": {"instrument.background": 2.5e-7},
     }
+    expected_workbook = {
+        key: value for key, value in expected_json.items() if key != "fit_config"
+    }
 
     json_info = payload["run_info"]
-    observed_json = {key: json_info[key] for key in expected}
+    observed_json = {key: json_info[key] for key in expected_json}
     observed_workbook = {
-        "fit_config": json.loads(row["fit_config"]),
         "service_seed_tree_version": row["service_seed_tree_version"],
         "independent_root_child": row["independent_root_child"],
         "joint_root_child": row["joint_root_child"],
@@ -732,8 +842,8 @@ def test_export_json_and_workbook_retain_nonempty_mcmc_replay_identity() -> None
             row["fitted_instrument_parameters"]
         ),
     }
-    assert observed_json == expected
-    assert observed_workbook == expected
+    assert observed_json == expected_json
+    assert observed_workbook == expected_workbook
 
 
 def test_export_workbook_json_codec_rejects_unknown_objects() -> None:
@@ -762,6 +872,7 @@ def test_export_csv_and_compatibility_workbook_are_deterministic() -> None:
         "summary_columns": summary.columns.tolist(),
         "warnings": json.loads(summary.loc[0, "warnings"]),
         "length_columns": parameters_nm.columns.tolist(),
+        "curve_columns": curves.columns.tolist(),
         "value_angstrom": parameters_nm.loc[0, "value_angstrom"],
         "value_nm": parameters_nm.loc[0, "value_nm"],
     }
@@ -784,6 +895,15 @@ def test_export_csv_and_compatibility_workbook_are_deterministic() -> None:
             "parameter_name",
             "value_angstrom",
             "value_nm",
+        ],
+        "curve_columns": [
+            "dataset_id",
+            "two_theta_deg",
+            "qz_a_inv",
+            "intensity_raw",
+            "intensity_normalized",
+            "model_normalized",
+            "fit_included",
         ],
         "value_angstrom": 25.0,
         "value_nm": 2.5,
@@ -839,22 +959,32 @@ def test_export_log_records_warnings_seed_tree_stages_and_diagnostics() -> None:
 
     text = run_log_bytes(context).decode("utf-8")
 
-    expected_fragments = (
-        "warning: review-warning",
-        "optimizer_child_seeds: [101,202]",
-        "stage review-stage:",
-        'stop_reasons=["review-stop"]',
-        "review-code",
-        "uncertainty-code",
-        "full_data_indices=[0,2,4]",
-        "project_master_seed: 1201",
-        "independent_root_child: 10101",
-        "joint_root_child: 20202",
-        "mcmc_child_seed: 30303",
-        "suspected_unmodeled_surface_oxide_after_rejection",
+    expected = "\n".join(
+        (
+            "dataset_id: curve",
+            "confidence: 可信",
+            "candidate_count: 1",
+            "project_master_seed: 1201",
+            "service_seed_tree_version: 1",
+            "independent_root_child: 10101",
+            "joint_root_child: 20202",
+            "optimizer_child_seeds: [101,202]",
+            "mcmc_child_seed: 30303",
+            "warning: review-warning",
+            'stage review-stage: candidate_ids=["candidate-0"]; '
+            'best_objective=1.0; total_nfev=17; stop_reasons=["review-stop"]',
+            "review-code: review diagnostic; full_data_indices=[0,2,4]; "
+            "qz_a_inv_range=[0.00711815248633,0.0355906540161]",
+            "surface_thin_layer_residual: surface residual; "
+            "full_data_indices=[1]; "
+            "qz_a_inv_range=[0.0142362995519,0.0142362995519]",
+            "uncertainty-code: uncertainty diagnostic; full_data_indices=[3]; "
+            "qz_a_inv_range=[0.0284725557375,0.0284725557375]",
+            "疑似缺失自然氧化层（此前已拒绝建议）",
+            "",
+        )
     )
-    missing = tuple(value for value in expected_fragments if value not in text)
-    assert missing == ()
+    assert text == expected
 
 
 def test_export_log_ignores_unrelated_surface_oxide_rejection() -> None:
@@ -891,7 +1021,7 @@ def test_export_log_ignores_unrelated_surface_oxide_rejection() -> None:
     text = run_log_bytes(context).decode("utf-8")
 
     assert "surface_thin_layer_residual" in text
-    assert "suspected_unmodeled_surface_oxide_after_rejection" not in text
+    assert "疑似缺失自然氧化层（此前已拒绝建议）" not in text
 
 
 def test_export_log_retains_stale_diagnostic_indices_without_indexing_them() -> None:
@@ -920,4 +1050,4 @@ def test_export_log_retains_stale_diagnostic_indices_without_indexing_them() -> 
 
     qz = float(original.data.qz_a_inv[0])
     assert f"full_data_indices=[0,{stale_index}]" in text
-    assert f"qz_a_inv_range=[{qz:.17g},{qz:.17g}]" in text
+    assert f"qz_a_inv_range=[{qz:.12g},{qz:.12g}]" in text

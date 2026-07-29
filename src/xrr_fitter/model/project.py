@@ -23,6 +23,15 @@ from dangling cross-record references and preserves the errors used by callers.
 State transition helpers always use ``dataclasses.replace`` and therefore
 return a newly validated project. They cannot mutate a previous snapshot or
 bypass the invariants applied while loading a persisted project.
+
+Dataset identity and presentation are separate persisted concepts. ``dataset_id``
+is the stable namespace key for sharing, selection, seeds, and export paths.
+``display_name`` is user-facing metadata and may change without renumbering.
+Loading fills a missing display name from ``dataset_id`` for older documents.
+Validation checks its type and content locally but never feeds it into
+cross-record identity. Source-stem allocation remains a service operation and
+does not live in this model.
+Display names never participate in persisted candidate ownership.
 """
 
 from __future__ import annotations
@@ -174,6 +183,7 @@ class DatasetProject:
     parameter_settings: tuple[ParameterSetting, ...] = ()
     last_valid_result: FitResult | None = None
     checkpoint: FitCheckpoint | None = None
+    display_name: str | None = None
 
     def __post_init__(self) -> None:
         _validate_dataset_header(self)
@@ -184,6 +194,7 @@ class DatasetProject:
         object.__setattr__(self, "fit_range_two_theta_deg", fit_range)
         object.__setattr__(self, "oxide_decisions", tuple(self.oxide_decisions))
         object.__setattr__(self, "parameter_settings", tuple(self.parameter_settings))
+        object.__setattr__(self, "display_name", self.display_name or self.dataset_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -377,6 +388,11 @@ def _validate_scale_prior(state: ScalePriorState) -> None:
 
 def _validate_dataset_header(dataset: DatasetProject) -> None:
     _dataset_id(dataset.dataset_id)
+    if dataset.display_name is not None:
+        if not isinstance(dataset.display_name, str):
+            raise TypeError("display_name must be str or None")
+        if not dataset.display_name.strip():
+            raise ValueError("display_name must not be empty")
     if not dataset.source_path:
         raise ValueError("source_path must not be empty")
     _sha256(dataset.source_sha256, "source_sha256")

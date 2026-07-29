@@ -5,7 +5,6 @@ import warnings
 
 import numpy as np
 import matplotlib
-from matplotlib.font_manager import FontProperties
 from matplotlib._pylab_helpers import Gcf
 import pytest
 
@@ -133,7 +132,7 @@ def test_export_parameter_trends_are_deterministic_and_use_project_order() -> No
     assert tuple(Gcf.get_all_fig_managers()) == before
 
 
-def test_export_parameter_trends_render_unicode_dataset_ids(
+def test_export_parameter_trends_use_stable_order_labels_for_unicode_dataset_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from matplotlib.axes import Axes
@@ -158,8 +157,7 @@ def test_export_parameter_trends_render_unicode_dataset_ids(
         payload = parameter_trends_png(tuple(reversed(contexts)))
 
     assert payload.startswith(b"\x89PNG\r\n\x1a\n")
-    assert tick_calls[0][0] == ("样品一", "样品二")
-    assert isinstance(tick_calls[0][1], FontProperties)
+    assert tick_calls[0] == (("1", "2"), None)
 
 
 def test_export_pngs_ignore_process_global_matplotlib_style() -> None:

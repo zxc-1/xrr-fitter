@@ -143,9 +143,10 @@ def _log_unit_to_physical(
         return float(definition.lower)
     if unit == 1.0:
         return float(upper)
-    return float(
+    decoded = float(
         np.exp(log(definition.lower) + unit * (log(upper) - log(definition.lower)))
     )
+    return min(max(decoded, float(definition.lower)), float(upper))
 
 
 def _linear_unit_to_physical(

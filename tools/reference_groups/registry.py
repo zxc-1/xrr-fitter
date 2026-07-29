@@ -6,6 +6,7 @@ from reference_groups.fit_search import replay as replay_fit_search
 from reference_groups.io import replay as replay_io
 from reference_groups.model_project import replay as replay_model_project
 from reference_groups.physics import replay as replay_physics
+from reference_groups.services import replay as replay_services
 
 
 GROUP_REGISTRY: dict[str, object] = {
@@ -15,4 +16,5 @@ GROUP_REGISTRY: dict[str, object] = {
     "fit_compile": replay_fit_compile,
     "fit_search": replay_fit_search,
     "analysis": replay_analysis,
+    "services": replay_services,
 }

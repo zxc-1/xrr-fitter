@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 
+import numpy as np
 import pytest
 
 from xrr_fitter.model.parameters import (
@@ -11,6 +12,7 @@ from xrr_fitter.model.parameters import (
     ParameterSetting,
     ParameterValue,
     SharingRule,
+    unit_to_physical,
 )
 
 
@@ -41,6 +43,24 @@ def test_parameter_coordinates_use_declared_r22_transforms() -> None:
     assert coordinate.transform == "roughness_fraction"
     with pytest.raises(ValueError, match="unsupported parameter transform"):
         ParameterCoordinate(0, "interface.roughness_a", "logit")
+
+
+def test_log_unit_interior_roundoff_stays_within_physical_bounds() -> None:
+    definition = ParameterDefinition(
+        name="component.0.thickness_a",
+        display_name="Thickness",
+        unit="A",
+        category="structure",
+        initial=180.0,
+        lower=58.46351284627307,
+        upper=69454.62186224229,
+        transform="log",
+        locked=False,
+    )
+
+    value = unit_to_physical(definition, np.nextafter(0.0, 1.0))
+
+    assert definition.lower <= value <= definition.upper
 
 
 def test_parameter_settings_and_values_are_finite_immutable_values() -> None:

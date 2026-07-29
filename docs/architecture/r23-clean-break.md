@@ -581,6 +581,15 @@ generic utility bag。
 - `exports.py`：导出编排。
 - `workers.py`：拟合和分析处理器共用的进程创建、spawn 上下文、队列、取消、进度、请求/结果封装、`OperationJob` 以及 `start_fit_job`/`start_mcmc_job` 的唯一负责人。
 
+`load_project` 和 `save_project` 由 `services.projects` 在发布 workspace 前关联 source
+validation 与实际解析快照：最多执行两次有界重验证，校验持久化 mask 的派生长度，且按
+independent/joint 影响范围清除非 `ok` source 的 evidence、scale prior、result、checkpoint
+和 candidate selection。`save_project` 在 Save As 时由 service 重定位相对 source
+declaration；同一 base directory 的普通保存逐字节保留原 declaration。GUI 不复制这些
+路径、竞态或失效规则。`accept_source_update` 在提交 preview 绑定的字节时只保留仍能通过
+当前 parameter definitions 验证的首个同名 setting；GUI 只比较提交前后 setting 名称并展示
+移除项。
+
 `services.fitting` 是唯一组合拟合与分析的模块。`fit` 和 `analysis` 绝不相互导入，包括局部导入或 `TYPE_CHECKING` 导入。
 module-level allowlist 进一步强制：只有 `services.fitting` 可同时导入
 `fit` 和 `analysis`；`services.batch` 只通过 `services.fitting` 组合分析，不直接
@@ -760,7 +769,7 @@ validate_structure
 ```text
 import_data(path: str | Path, beam: BeamSpec, import_angle_offset_deg: float = 0.0, column_mapping: DataColumnMapping | None = None) -> PreparedData
 new_project() -> XrrProject
-add_dataset(project: XrrProject, source_path: str | Path, instrument: InstrumentSpec, display_name: str | None = None, column_mapping: DataColumnMapping | None = None, import_angle_offset_deg: float = 0.0) -> XrrProject
+add_dataset(project: XrrProject, source_path: str | Path, instrument: InstrumentSpec, display_name: str | None = None, column_mapping: DataColumnMapping | None = None, import_angle_offset_deg: float = 0.0, beam: BeamSpec | None = None) -> XrrProject
 remove_dataset(project: XrrProject, dataset_id: str) -> XrrProject
 preview_source_update(project: XrrProject, dataset_id: str, new_path: str | Path | None = None) -> SourceUpdatePreview
 accept_source_update(project: XrrProject, preview: SourceUpdatePreview) -> XrrProject
@@ -829,7 +838,9 @@ OperationEvent.error: OperationError | None
 `add_dataset` 使用 source stem 作为首个 ID；发生碰撞时依次分配 `stem-2`、`stem-3`。
 同一 project 内已加载和本次会话新增的 dataset 共享一个 namespace。`display_name=None`
 时使用 source stem 作为显示名，但显示名不参与 ID 唯一性；GUI 只提交 source/instrument，
-不得调用或复制 ID allocator。
+不得调用或复制 ID allocator。GUI 的显式 beam 选择通过 `add_dataset(..., beam=...)`
+提交；`beam=None` 只为非 GUI 调用保留 monochromatic 默认值，service 不得覆盖显式的
+mixed Kα `BeamSpec`。
 
 每个 GUI mutation 都映射到一个显式 API use case：
 
@@ -2642,13 +2653,20 @@ cd /Users/dala/Desktop/xrr-rewrite-r23 && /Users/dala/Desktop/xrr-r23-venv/bin/p
 | 5 parameters/expert | `test_parameter_table.py`, `test_parameter_sharing.py`, `test_expert_views.py` | `gui/parameters/{__init__,panel,table,sharing}.py`, `main_window.py` |
 | 6 fit lifecycle | `test_fit_controller.py`, `test_fit_progress.py` | `gui/fitting/{__init__,panel,controller,progress}.py` |
 | 7 results/MCMC | `test_results.py` | `gui/results/{__init__,panel,candidates,uncertainty}.py` |
-| 8 plots | `test_plots.py` | `gui/plots/{__init__,panel,reflectivity,diagnostics,sld,interactions}.py` |
+| 8 plots | `test_plots.py` | `gui/plots/{__init__,panel,reflectivity,diagnostics,sld,interactions}.py`, `gui/document.py`, `gui/data/{panel,mask_editor}.py`, `gui/main_window.py` |
 | 9 export/workspace/a11y | `test_export_dialog.py`, `test_workspace.py`, `test_accessibility.py`, `test_focus_navigation.py` | `gui/export/{__init__,dialog}.py`, `gui/workspace.py`, `gui/accessibility.py` |
 | 10 complete workflow | `tests/integration/test_gui_project_workflow.py`, distribution/GUI adapter tests | final orchestration, installed distribution verifier, `reference_groups/gui.py` |
 
 表中省略的 `tests/gui/` 前缀只为提高表格可读性；完整路径就是第 10.3 节
 列出的文件，不允许换成 task-number filename。每个子包的 `__init__.py` 由首次拥有该
 子包的 slice 创建并保持 0 bytes；不得在更早 slice 预建。每个 slice GREEN 后、stage 前都运行：
+
+Slice 8 经运行时审计后显式拥有绘图投影的同步事务边界：`ProjectDocument` 在发布新项目
+前先执行已注册的具体 plot projection，失败时恢复旧投影且不得发成功 signal；dataset tree
+和 mask editor 只在该同步投影成功后提交自身可见状态。否则 PySide6 queued/direct signal
+slot 的异常不会回传给 `emit()`，无法满足活动数据集、mask 和候选重绘的原子回滚合同。
+因此本 slice 可修改上表列出的 `document.py`、data owner 和 `main_window.py`，但不得借此
+改动 service、扩张 `api.__all__`，或提前实现 Slice 9/10 的 export/workspace 编排。
 
 ```bash
 cd /Users/dala/Desktop/xrr-rewrite-r23 && env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/Users/dala/Desktop/xrr-rewrite-r23/src QT_QPA_PLATFORM=offscreen /Users/dala/Desktop/xrr-r23-venv/bin/python tools/verify.py gui && env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/Users/dala/Desktop/xrr-rewrite-r23/src /Users/dala/Desktop/xrr-r23-venv/bin/python tools/verify.py quality && env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/Users/dala/Desktop/xrr-rewrite-r23/src /Users/dala/Desktop/xrr-r23-venv/bin/python tools/validate_test_ledger.py --phase source-draft --active-manifest verification/r22/collections/tests-active.json --r21-manifest verification/r22/collections/tests-r21.json --ledger docs/architecture/r22-r23-test-ledger.csv
@@ -2695,7 +2713,7 @@ cd /Users/dala/Desktop/xrr-rewrite-r23 && git diff --check && git add src/xrr_fi
 ```
 
 ```bash
-cd /Users/dala/Desktop/xrr-rewrite-r23 && git diff --check && git add src/xrr_fitter/gui/plots tests/gui/test_plots.py docs/architecture/r22-r23-test-ledger.csv && git diff --cached --check && git diff --cached --name-status && git commit -m 'refactor: migrate GUI plots and diagnostics' && test -z "$(git status --porcelain=v1 --untracked-files=all)"
+cd /Users/dala/Desktop/xrr-rewrite-r23 && git diff --check && git add src/xrr_fitter/gui/plots src/xrr_fitter/gui/document.py src/xrr_fitter/gui/data/panel.py src/xrr_fitter/gui/data/mask_editor.py src/xrr_fitter/gui/main_window.py tests/gui/test_plots.py docs/architecture/r23-clean-break.md docs/architecture/r22-r23-test-ledger.csv && git diff --cached --check && git diff --cached --name-status && git commit -m 'refactor: migrate GUI plots and diagnostics' && test -z "$(git status --porcelain=v1 --untracked-files=all)"
 ```
 
 ```bash

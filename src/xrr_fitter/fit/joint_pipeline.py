@@ -1,11 +1,13 @@
 """Pure joint fitting, atomic checkpoints, resume, and batch dispatch.
 
-Each joint stage compiles only the coordinates that are free at that stage.
-Sharing rules survive compilation only when every member remains jointly free.
-Solvers work in stage coordinates, then solutions are encoded into the full
-joint layout and reevaluated before candidates or progress are published.
-Checkpoint batches transpose that full solution history back by dataset.
-Resume accepts a batch only when every member describes the same joint state.
+Joint search uses one compiled global coordinate layout for every stage. Stage A
+retains the declared initial candidate, Stage B consumes one reserved short-DE
+seed, C and D refine that single lineage, and each Stage-E seed publishes an
+atomic resumable prefix. Checkpoint batches transpose the aligned global history
+back by dataset. Resume accepts a batch only when every member describes the
+same joint state and deterministic child-seed prefix.
+Stage-E summaries accumulate only completed seeds, so cancellation cannot expose
+a candidate or checkpoint for an unfinished prefix.
 """
 
 from __future__ import annotations
@@ -16,18 +18,9 @@ from dataclasses import dataclass, replace
 import numpy as np
 from scipy.optimize import differential_evolution, least_squares
 
-from xrr_fitter.evaluation import (
-    encode_physical_vector,
-    values_by_name,
-)
-from xrr_fitter.fit.candidates import best_candidate_index, bounded_perturbations, candidate_from_evaluation
+from xrr_fitter.fit.candidates import best_candidate_index, candidate_from_evaluation
 from xrr_fitter.fit.checkpoint import build_checkpoint
-from xrr_fitter.fit.global_search import (
-    build_de_population,
-    build_stage_e_population,
-    downsample_prepared_data,
-    feature_grid_indices,
-)
+from xrr_fitter.fit.global_search import build_de_population
 from xrr_fitter.fit.joint_evaluation import (
     JointEvaluation,
     evaluate_joint_jacobian,
@@ -38,12 +31,10 @@ from xrr_fitter.fit.joint_problem import JointFitProblem, compile_joint_problem
 from xrr_fitter.fit.joint_sharing import (
     initial_joint_vector,
     joint_candidate_vectors,
-    scatter_joint_vector,
     validate_joint_candidate_alignment,
 )
 from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.fit.pipeline import FitSearchRequest, run_fit_search
-from xrr_fitter.fit.problem import compile_stage_problem
 from xrr_fitter.fit.resume import validate_resume_checkpoint
 from xrr_fitter.fit.stages import reserve_child_seeds
 from xrr_fitter.model.fitting import (
@@ -95,6 +86,7 @@ class _SolvedJoint:
     evaluation: JointEvaluation
     stop_reason: str
     nfev: int
+    objective_increased: bool = False
 
 
 def _poll(cancelled: Callable[[], bool] | None) -> None:
@@ -112,6 +104,7 @@ def _solve_joint(
     _poll(cancelled)
     if unit.size == 0:
         return _SolvedJoint(unit, evaluate_joint_vector(problem, unit), "no_free_parameters", 1)
+    initial_evaluation = evaluate_joint_vector(problem, unit)
 
     def residual(value: np.ndarray) -> np.ndarray:
         _poll(cancelled)
@@ -127,13 +120,34 @@ def _solve_joint(
         jac=jacobian,
         bounds=(0.0, 1.0),
         loss=joint_least_squares_loss(problem),
+        ftol=1e-10,
+        xtol=1e-10,
+        gtol=1e-10,
+        x_scale="jac",
         max_nfev=max_nfev,
-        method="trf",
+        callback=lambda *_args, **_kwargs: _poll(cancelled),
     )
     result_unit = np.array(solved.x, dtype=float, copy=True)
+    evaluation = evaluate_joint_vector(problem, result_unit)
+    tolerance = max(1e-12, 1e-8 * initial_evaluation.objective)
+    objective_increased = bool(
+        initial_evaluation.valid
+        and (
+            not evaluation.valid
+            or evaluation.objective > initial_evaluation.objective + tolerance
+        )
+    )
+    if objective_increased:
+        return _SolvedJoint(
+            np.array(unit, dtype=float, copy=True),
+            initial_evaluation,
+            "local_objective_increased",
+            int(solved.nfev),
+            True,
+        )
     return _SolvedJoint(
         result_unit,
-        evaluate_joint_vector(problem, result_unit),
+        evaluation,
         str(solved.message),
         int(solved.nfev),
     )
@@ -159,14 +173,15 @@ def _solve_joint_global(
 
     solved = differential_evolution(
         objective,
-        tuple((0.0, 1.0) for _ in problem.global_variables),
-        x0=unit,
+        [(0.0, 1.0)] * len(problem.global_variables),
         init=np.asarray(population, dtype=float),
         seed=np.random.default_rng(seed),
         maxiter=maxiter,
         updating="deferred",
         polish=False,
+        tol=1e-6,
         workers=1,
+        callback=lambda *_args, **_kwargs: _poll(cancelled),
     )
     result_unit = np.array(solved.x, dtype=float, copy=True)
     return _SolvedJoint(
@@ -174,60 +189,6 @@ def _solve_joint_global(
         evaluate_joint_vector(problem, result_unit),
         str(solved.message),
         int(solved.nfev),
-    )
-
-
-def _evaluation_values(evaluation: object) -> dict[str, float]:
-    return {value.name: value.value for value in evaluation.parameters}
-
-
-def _joint_unit_from_values(
-    problem: JointFitProblem,
-    values_by_dataset: tuple[dict[str, float], ...],
-) -> np.ndarray:
-    if len(values_by_dataset) != len(problem.problems):
-        raise ValueError("joint physical values must align with every dataset")
-    global_unit = np.full(len(problem.global_variables), np.nan, dtype=float)
-    for local_problem, values, scatter in zip(
-        problem.problems,
-        values_by_dataset,
-        problem.scatter_maps,
-        strict=True,
-    ):
-        local_unit = encode_physical_vector(local_problem, values)
-        for local_index, global_index in enumerate(scatter):
-            value = local_unit[local_index]
-            if np.isnan(global_unit[global_index]):
-                global_unit[global_index] = value
-            elif global_unit[global_index] != value:
-                raise ValueError("joint shared physical values map to different unit coordinates")
-    if np.any(~np.isfinite(global_unit)):
-        raise ValueError("joint physical values leave a global coordinate unbound")
-    return global_unit
-
-
-def _values_from_full_vector(
-    problem: JointFitProblem,
-    global_unit: np.ndarray,
-) -> tuple[dict[str, float], ...]:
-    local_units = scatter_joint_vector(problem, global_unit)
-    return tuple(
-        values_by_name(local_problem, local_unit)
-        for local_problem, local_unit in zip(problem.problems, local_units, strict=True)
-    )
-
-
-def _publish_full_solution(
-    full_problem: JointFitProblem,
-    solved: _SolvedJoint,
-) -> _SolvedJoint:
-    values = tuple(_evaluation_values(item) for item in solved.evaluation.local_evaluations)
-    full_unit = _joint_unit_from_values(full_problem, values)
-    return _SolvedJoint(
-        full_unit,
-        evaluate_joint_vector(full_problem, full_unit),
-        solved.stop_reason,
-        solved.nfev,
     )
 
 
@@ -253,7 +214,10 @@ def _project_candidate(
             solved.stop_reason,
             solved.nfev,
         )
-        projected.append(replace(candidate, ranking_objective=solved.evaluation.objective))
+        ranking = None if solved.objective_increased else solved.evaluation.objective
+        if solved.objective_increased:
+            candidate = replace(candidate, valid=False)
+        projected.append(replace(candidate, ranking_objective=ranking))
     return tuple(projected)
 
 
@@ -262,7 +226,12 @@ def _summary(
     projected: tuple[tuple[FitCandidate, ...], ...],
 ) -> FitStageSummary:
     first_dataset = tuple(aligned[0] for aligned in projected)
-    best = min(candidate.ranking_objective for candidate in first_dataset)
+    selectable = tuple(
+        candidate.ranking_objective
+        for candidate in first_dataset
+        if candidate.valid and candidate.ranking_objective is not None
+    )
+    best = min(selectable, default=float("inf"))
     return FitStageSummary(
         stage,
         tuple(candidate.candidate_id for candidate in first_dataset),
@@ -296,6 +265,37 @@ def _append_stage(
     )
 
 
+def _append_stage_e(
+    state: _JointState,
+    candidate: tuple[FitCandidate, ...],
+) -> _JointState:
+    projected = (candidate,)
+    if not state.summaries or state.summaries[-1].stage != "E":
+        return _append_stage(state, projected, _summary("E", projected))
+    previous = state.summaries[-1]
+    primary = candidate[0]
+    objective = (
+        primary.ranking_objective
+        if primary.valid and primary.ranking_objective is not None
+        else float("inf")
+    )
+    summary = FitStageSummary(
+        "E",
+        previous.candidate_ids + (primary.candidate_id,),
+        min(previous.best_objective, objective),
+        previous.total_nfev + primary.nfev,
+        previous.stop_reasons + (primary.stop_reason,),
+    )
+    return _JointState(
+        tuple(
+            existing + (addition,)
+            for existing, addition in zip(state.candidates, candidate, strict=True)
+        ),
+        state.warnings,
+        state.summaries[:-1] + (summary,),
+    )
+
+
 def _emit(
     callback: Callable[[FitProgress], None] | None,
     stage: str,
@@ -308,53 +308,11 @@ def _emit(
         callback(FitProgress(None, stage, completed, total, best, message))
 
 
-def _stage_base_problem(problem: object, stage: str) -> object:
-    if stage != "B":
-        return problem
-    indices = feature_grid_indices(problem.data)
-    if np.array_equal(indices, np.arange(problem.data.qz_a_inv.size)):
-        return problem
-    return replace(problem, data=downsample_prepared_data(problem.data, indices))
-
-
-def _stage_sharing_rules(
-    problem: JointFitProblem,
-    local_problems: tuple[object, ...],
-) -> tuple[SharingRule, ...]:
-    by_dataset = dict(zip(problem.dataset_ids, local_problems, strict=True))
-    selected = []
-    for rule in problem.sharing_rules:
-        free = tuple(
-            member.parameter_name
-            in {coordinate.name for coordinate in by_dataset[member.dataset_id].variables}
-            for member in rule.members
-        )
-        if any(free) and not all(free):
-            raise ValueError("joint stage sharing members must have aligned free state")
-        if all(free):
-            selected.append(rule)
-    return tuple(selected)
-
-
-def _compile_stage_joint(
-    problem: JointFitProblem,
-    stage: str,
-    full_unit: np.ndarray,
-) -> JointFitProblem:
-    current = _values_from_full_vector(problem, full_unit)
-    local_problems = tuple(
-        compile_stage_problem(_stage_base_problem(local_problem, stage), stage, values)
-        for local_problem, values in zip(problem.problems, current, strict=True)
-    )
-    rules = _stage_sharing_rules(problem, local_problems)
-    return compile_joint_problem(problem.dataset_ids, local_problems, rules)
-
-
 def _local_budget(problem: JointFitProblem) -> int:
     budget = problem.problems[0].config.budget
     return max(
         budget.local_min_nfev,
-        budget.local_nfev_per_parameter * max(1, len(problem.global_variables)),
+        budget.local_nfev_per_parameter * (len(problem.global_variables) + 1),
     )
 
 
@@ -371,10 +329,14 @@ def _append_solution(
     best: float,
     progress: Callable[[FitProgress], None] | None,
 ) -> float:
-    published = _publish_full_solution(problem, solved)
-    projected.append(_project_candidate(problem, published, candidate_id, seed_index))
-    current_best = min(best, published.evaluation.objective)
-    _emit(progress, stage, completed, total, current_best, published.stop_reason)
+    projected.append(_project_candidate(problem, solved, candidate_id, seed_index))
+    objective = (
+        solved.evaluation.objective
+        if solved.evaluation.valid and not solved.objective_increased
+        else float("inf")
+    )
+    current_best = min(best, objective)
+    _emit(progress, stage, completed, total, current_best, f"joint {stage}")
     return current_best
 
 
@@ -387,40 +349,41 @@ def _run_stage_b(
 ) -> tuple[tuple[tuple[FitCandidate, ...], ...], FitStageSummary]:
     if initial is None:
         raise RuntimeError("joint stage B requires the fresh initial vector")
-    stage_problem = _compile_stage_joint(problem, "B", initial)
-    center = initial_joint_vector(stage_problem)
+    seed = seeds[0]
     projected: list[tuple[FitCandidate, ...]] = []
-    best = float("inf")
-    for index, seed in enumerate(seeds[:2]):
-        start = _seeded_start(center, seed, 0.1)
-        if stage_problem.global_variables:
-            population = build_de_population(
-                start,
-                seed=seed,
-                population_size=max(32, 6 * len(stage_problem.global_variables)),
-            )
-            solved = _solve_joint_global(
-                stage_problem,
-                start,
-                population,
-                seed=seed,
-                maxiter=problem.problems[0].config.budget.short_de_maxiter,
-                cancelled=cancelled,
-            )
-        else:
-            solved = _solve_joint(stage_problem, start, 1, cancelled)
-        best = _append_solution(
-            problem,
-            solved,
-            f"B-{index}",
-            index,
-            projected,
-            stage="B",
-            completed=index + 1,
-            total=2,
-            best=best,
-            progress=progress,
+    if problem.global_variables:
+        population = build_de_population(
+            initial,
+            seed=seed,
+            population_size=max(32, 6 * len(problem.global_variables)),
         )
+        solved = _solve_joint_global(
+            problem,
+            initial,
+            population,
+            seed=seed,
+            maxiter=problem.problems[0].config.budget.short_de_maxiter,
+            cancelled=cancelled,
+        )
+    else:
+        solved = _SolvedJoint(
+            initial,
+            evaluate_joint_vector(problem, initial),
+            "no_free_parameters",
+            1,
+        )
+    _append_solution(
+        problem,
+        solved,
+        "B-0",
+        0,
+        projected,
+        stage="B",
+        completed=1,
+        total=1,
+        best=float("inf"),
+        progress=progress,
+    )
     result = tuple(projected)
     return result, _summary("B", result)
 
@@ -433,113 +396,59 @@ def _run_local_joint_stage(
     cancelled: Callable[[], bool] | None,
 ) -> tuple[tuple[tuple[FitCandidate, ...], ...], FitStageSummary]:
     parent_stage = "B" if stage == "C" else "C"
-    parent_summary = next(value for value in reversed(state.summaries) if value.stage == parent_stage)
     parents = _vectors_from_state(problem, state, parent_stage)
+    if len(parents) != 1:
+        raise ValueError(f"joint stage {stage} requires one parent candidate")
     projected: list[tuple[FitCandidate, ...]] = []
-    best = float("inf")
-    for index, (parent_id, parent) in enumerate(
-        zip(parent_summary.candidate_ids, parents, strict=True)
-    ):
-        stage_problem = _compile_stage_joint(problem, stage, parent)
-        start = initial_joint_vector(stage_problem)
-        solved = _solve_joint(stage_problem, start, _local_budget(stage_problem), cancelled)
-        lineage = parent_id.split("-")[1]
-        best = _append_solution(
-            problem,
-            solved,
-            f"{stage}-{lineage}-0",
-            index,
-            projected,
-            stage=stage,
-            completed=index + 1,
-            total=len(parents),
-            best=best,
-            progress=progress,
-        )
+    solved = _solve_joint(problem, parents[0], _local_budget(problem), cancelled)
+    _append_solution(
+        problem,
+        solved,
+        f"{stage}-0",
+        0,
+        projected,
+        stage=stage,
+        completed=1,
+        total=1,
+        best=float("inf"),
+        progress=progress,
+    )
     result = tuple(projected)
     return result, _summary(stage, result)
 
 
 def _stage_e_solution(
     problem: JointFitProblem,
-    stage_problem: JointFitProblem,
     start: np.ndarray,
-    centers: tuple[np.ndarray, ...],
     seed: int,
     cancelled: Callable[[], bool] | None,
 ) -> _SolvedJoint:
-    if not stage_problem.global_variables:
-        return _solve_joint(stage_problem, start, 1, cancelled)
-    population = build_stage_e_population(
-        centers,
+    if not problem.global_variables:
+        return _SolvedJoint(
+            start,
+            evaluate_joint_vector(problem, start),
+            "no_free_parameters",
+            1,
+        )
+    population = build_de_population(
+        start,
         seed=seed,
-        population_size=max(64, 8 * len(stage_problem.global_variables)),
-        perturbations_per_center=2,
+        population_size=max(64, 8 * len(problem.global_variables)),
     )
     global_solved = _solve_joint_global(
-        stage_problem,
+        problem,
         start,
         population,
         seed=seed,
         maxiter=problem.problems[0].config.budget.full_de_maxiter,
         cancelled=cancelled,
     )
-    local_solved = _solve_joint(
-        stage_problem,
+    return _solve_joint(
+        problem,
         global_solved.unit_vector,
-        _local_budget(stage_problem),
+        _local_budget(problem),
         cancelled,
     )
-    return _SolvedJoint(
-        local_solved.unit_vector,
-        local_solved.evaluation,
-        local_solved.stop_reason,
-        global_solved.nfev + local_solved.nfev,
-    )
-
-
-def _run_stage_e(
-    problem: JointFitProblem,
-    state: _JointState,
-    seeds: tuple[int, ...],
-    progress: Callable[[FitProgress], None] | None,
-    cancelled: Callable[[], bool] | None,
-) -> tuple[tuple[tuple[FitCandidate, ...], ...], FitStageSummary]:
-    parents = _vectors_from_state(problem, state, "D")
-    parent_values = tuple(_values_from_full_vector(problem, parent) for parent in parents)
-    final_seeds = seeds[2:]
-    projected: list[tuple[FitCandidate, ...]] = []
-    best = float("inf")
-    for index, seed in enumerate(final_seeds):
-        parent = parents[index % len(parents)]
-        stage_problem = _compile_stage_joint(problem, "E", parent)
-        start = initial_joint_vector(stage_problem)
-        centers = tuple(
-            _joint_unit_from_values(stage_problem, values)
-            for values in parent_values
-        )
-        solved = _stage_e_solution(
-            problem,
-            stage_problem,
-            start,
-            centers,
-            seed,
-            cancelled,
-        )
-        best = _append_solution(
-            problem,
-            solved,
-            f"E-{index}",
-            index,
-            projected,
-            stage="E",
-            completed=index + 1,
-            total=len(final_seeds),
-            best=best,
-            progress=progress,
-        )
-    result = tuple(projected)
-    return result, _summary("E", result)
 
 
 def _vectors_from_state(
@@ -553,7 +462,7 @@ def _vectors_from_state(
 
 def _seed_ledger(problem: JointFitProblem) -> tuple[int, ...]:
     config = problem.problems[0].config
-    streams = ("B-0", "B-1", *(f"E-{index}" for index in range(config.final_seed_count)))
+    streams = ("B-0", *(f"E-{index}" for index in range(config.final_seed_count)))
     return tuple(child.seed for child in reserve_child_seeds(config.master_seed, streams))
 
 
@@ -563,15 +472,20 @@ def _checkpoint_batch(
     stage: str,
     seeds: tuple[int, ...],
 ) -> tuple[FitCheckpoint, ...]:
-    consumed = seeds if stage == "E" else seeds[:2]
+    if stage == "E":
+        final_count = len(state.summaries[-1].candidate_ids)
+        consumed = seeds[: final_count + 1]
+    else:
+        consumed = seeds[:1]
+    checkpoint_summaries = state.summaries[1:]
     return tuple(
         build_checkpoint(
             local_problem,
             stage=stage,
-            candidates=candidates,
+            candidates=candidates[1:],
             child_seeds=consumed,
             runtime_warnings=state.warnings,
-            stage_summaries=state.summaries,
+            stage_summaries=checkpoint_summaries,
             joint_layout_fingerprint=request.problem.layout_fingerprint,
         )
         for local_problem, candidates in zip(request.problem.problems, state.candidates, strict=True)
@@ -614,21 +528,36 @@ def _validate_joint_resume(
         for plan in plans[1:]
     ):
         raise ValueError("joint resume stage, seed, warning, or history mismatch")
+    initial_state, _initial = _fresh_state(request.problem)
     state = _JointState(
-        tuple(plan.candidates for plan in plans),
+        tuple(
+            initial + plan.candidates
+            for initial, plan in zip(initial_state.candidates, plans, strict=True)
+        ),
         first.runtime_warnings,
-        first.stage_summaries,
+        initial_state.summaries + first.stage_summaries,
     )
     validate_joint_candidate_alignment(request.problem, state.candidates, state.summaries)
-    return state, first.remaining_stages
+    remaining = first.remaining_stages
+    if first.completed_stage == "E":
+        completed_final = len(first.stage_summaries[-1].candidate_ids)
+        final_count = request.problem.problems[0].config.final_seed_count
+        remaining = ("E",) if completed_final < final_count else ()
+    return state, remaining
 
 
 def _fresh_state(problem: JointFitProblem) -> tuple[_JointState, np.ndarray]:
     warnings = tuple(dict.fromkeys(warning for value in problem.problems for warning in value.warnings))
     initial = initial_joint_vector(problem)
     evaluation = evaluate_joint_vector(problem, initial)
-    summary = FitStageSummary("A", ("joint-initial",), evaluation.objective, 1, ("evaluated",))
-    state = _JointState(tuple(() for _ in problem.problems), warnings, (summary,))
+    solved = _SolvedJoint(initial, evaluation, "declared_initial", 1)
+    projected = _project_candidate(problem, solved, "A-0", 0)
+    summary = _summary("A", (projected,))
+    state = _JointState(
+        tuple((candidate,) for candidate in projected),
+        warnings,
+        (summary,),
+    )
     return state, initial
 
 
@@ -672,11 +601,6 @@ def _initial_joint_run(
     return state, None, remaining
 
 
-def _seeded_start(center: np.ndarray, seed: int, sigma: float) -> np.ndarray:
-    perturbations = bounded_perturbations(center, 1, seed=seed, sigma=sigma)
-    return center if not perturbations else perturbations[0]
-
-
 def _run_joint_stage(
     problem: JointFitProblem,
     state: _JointState,
@@ -688,9 +612,62 @@ def _run_joint_stage(
 ) -> tuple[tuple[tuple[FitCandidate, ...], ...], FitStageSummary]:
     if stage == "B":
         return _run_stage_b(problem, initial, seeds, progress, cancelled)
-    if stage in {"C", "D"}:
-        return _run_local_joint_stage(problem, state, stage, progress, cancelled)
-    return _run_stage_e(problem, state, seeds, progress, cancelled)
+    if stage not in {"C", "D"}:
+        raise ValueError(f"unsupported single-candidate joint stage: {stage}")
+    return _run_local_joint_stage(problem, state, stage, progress, cancelled)
+
+
+def _completed_stage_e(state: _JointState) -> int:
+    summary = next(
+        (value for value in reversed(state.summaries) if value.stage == "E"),
+        None,
+    )
+    return 0 if summary is None else len(summary.candidate_ids)
+
+
+def _run_stage_e_prefix(
+    request: JointFitRequest,
+    state: _JointState,
+    seeds: tuple[int, ...],
+    progress: Callable[[FitProgress], None] | None,
+    checkpoint: Callable[[tuple[FitCheckpoint, ...]], None] | None,
+    cancelled: Callable[[], bool] | None,
+) -> _JointState:
+    parents = _vectors_from_state(request.problem, state, "D")
+    if len(parents) != 1:
+        raise ValueError("joint stage E requires one stage-D parent candidate")
+    start = parents[0]
+    final_seeds = seeds[1:]
+    completed = _completed_stage_e(state)
+    best = (
+        float("inf")
+        if completed == 0
+        else next(summary for summary in reversed(state.summaries) if summary.stage == "E").best_objective
+    )
+    for index in range(completed, len(final_seeds)):
+        solved = _stage_e_solution(
+            request.problem,
+            start,
+            final_seeds[index],
+            cancelled,
+        )
+        projected: list[tuple[FitCandidate, ...]] = []
+        best = _append_solution(
+            request.problem,
+            solved,
+            f"E-{index}",
+            index,
+            projected,
+            stage="E",
+            completed=index + 1,
+            total=len(final_seeds),
+            best=best,
+            progress=progress,
+        )
+        state = _append_stage_e(state, projected[0])
+        if checkpoint is not None:
+            checkpoint(_checkpoint_batch(request, state, "E", seeds))
+    return state
 
 
 def run_joint_fit(
@@ -704,8 +681,24 @@ def run_joint_fit(
     if not isinstance(request, JointFitRequest):
         raise TypeError("request must be a JointFitRequest")
     seeds = _seed_ledger(request.problem)
+    fresh = request.resume_checkpoints is None
+    if fresh:
+        _poll(cancelled)
     state, initial, remaining = _initial_joint_run(request, seeds)
+    if fresh:
+        summary = state.summaries[0]
+        _emit(progress, "A", 1, 1, summary.best_objective, "joint A")
     for stage in remaining:
+        if stage == "E":
+            state = _run_stage_e_prefix(
+                request,
+                state,
+                seeds,
+                progress,
+                checkpoint,
+                cancelled,
+            )
+            continue
         projected, summary = _run_joint_stage(
             request.problem,
             state,

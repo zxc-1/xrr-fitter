@@ -67,6 +67,11 @@ beside a distant optimizer result, while same-geometry results retain one
 deterministic representative. Lineage assertions map that declared identity
 explicitly into later local stages. This keeps history checks meaningful even
 when candidate ranking differs from publication order.
+Local-stage lineage is assigned after active parents are selected. Archived or
+filtered parents therefore cannot leave gaps in C or D candidate identifiers.
+The reindexing scenarios use real evaluation while replacing only local solve,
+so the contract covers published lineage rather than a private helper call.
+Both C and D apply the same stage-local numbering rule.
 The frozen replay itself lives in a dedicated focused test module.
 """
 
@@ -144,6 +149,15 @@ def _candidate(problem, candidate_id: str, unit: np.ndarray):
     )
 
 
+def _unchanged_local_solution(problem, start, **_kwargs):
+    return SimpleNamespace(
+        unit_vector=np.array(start, copy=True),
+        evaluation=evaluate_vector(problem, start),
+        stop_reason="captured local",
+        nfev=1,
+    )
+
+
 def _stage_prefixes(result) -> tuple[str, ...]:
     return tuple(summary.stage for summary in result.stage_summaries)
 
@@ -175,10 +189,9 @@ def _assert_candidate_lineage(by_stage, candidate_ids) -> None:
     assert all(value.startswith("D-") for value in by_stage["D"])
     assert by_stage["E"] == ("E-0", "E-1", "E-2", "E-3")
     assert candidate_ids[-4:] == by_stage["E"]
-    for value in by_stage["C"]:
-        lineage = value.split("-")[1]
-        parent = "B-declared-start" if lineage == "declared" else f"B-{lineage}"
-        assert parent in candidate_ids
+    stage_c_lineages = tuple(dict.fromkeys(value.split("-")[1] for value in by_stage["C"]))
+    assert stage_c_lineages == tuple(str(index) for index in range(len(stage_c_lineages)))
+    assert len(stage_c_lineages) <= len(by_stage["B"])
     _assert_stage_d_lineage(by_stage, candidate_ids)
 
 
@@ -641,12 +654,7 @@ def test_pipeline_uses_coarse_global_and_full_resolution_local_search(
 
     def no_op_local(problem_value, start, **_kwargs):
         local_sizes.append(problem_value.data.qz_a_inv.size)
-        return SimpleNamespace(
-            unit_vector=np.array(start, copy=True),
-            evaluation=evaluate_vector(problem_value, start),
-            stop_reason="captured local",
-            nfev=1,
-        )
+        return _unchanged_local_solution(problem_value, start)
 
     monkeypatch.setattr(stages, "solve_global", no_op_global)
     monkeypatch.setattr(stages, "solve_local", no_op_local)
@@ -679,21 +687,13 @@ def test_pipeline_archives_stage_b_evidence_and_routes_only_active_clusters(
             nfev=1,
         )
 
-    def no_op_local(problem_value, start, **_kwargs):
-        return SimpleNamespace(
-            unit_vector=np.array(start, copy=True),
-            evaluation=evaluate_vector(problem_value, start),
-            stop_reason="captured local",
-            nfev=1,
-        )
-
     def forced_archive(values, **_kwargs):
         archive_calls.append(tuple(value.candidate_id for value in values))
         archived = replace(values[1], seed_index=-1, stop_reason="early_eliminated")
         return candidates.StageBArchive((values[0],), (archived,), (5,))
 
     monkeypatch.setattr(stages, "solve_global", no_op_global)
-    monkeypatch.setattr(stages, "solve_local", no_op_local)
+    monkeypatch.setattr(stages, "solve_local", _unchanged_local_solution)
     monkeypatch.setattr(stages, "archive_stage_b_candidates", forced_archive)
 
     result = pipeline.run_fit_search(
@@ -710,6 +710,42 @@ def test_pipeline_archives_stage_b_evidence_and_routes_only_active_clusters(
         f"C-0-{index}" for index in range(6)
     )
     assert not any(value.startswith(("C-1-", "D-1-")) for value in candidate_ids)
+
+
+@pytest.mark.parametrize(
+    ("stage", "parent_id", "expected_id"),
+    (
+        pytest.param("C", "B-1", "C-0-0", id="stage-c"),
+        pytest.param("D", "C-1-0", "D-0-0", id="stage-d"),
+    ),
+)
+def test_local_stage_reindexes_selected_parent_lineages_within_each_stage(
+    stage: str,
+    parent_id: str,
+    expected_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stages = _stages_api()
+    problem = _problem(seed=761)
+    parent = replace(
+        _candidate(problem, parent_id, np.full(len(problem.variables), 0.5)),
+        seed_index=1,
+    )
+
+    monkeypatch.setattr(stages, "solve_local", _unchanged_local_solution)
+
+    outcome = stages.run_local_stage(
+        problem,
+        "curve",
+        stage,
+        (parent,),
+        perturbation_counts=(0,),
+        progress=None,
+        cancelled=None,
+    )
+
+    assert tuple(candidate.candidate_id for candidate in outcome.candidates) == (expected_id,)
+    assert tuple(candidate.seed_index for candidate in outcome.candidates) == (0,)
 
 
 def test_stage_e_runs_de_four_ranked_locals_and_two_restarts(
@@ -743,12 +779,7 @@ def test_stage_e_runs_de_four_ranked_locals_and_two_restarts(
 
     def no_op_local(problem_value, start, **_kwargs):
         local_starts.append(np.array(start, copy=True))
-        return SimpleNamespace(
-            unit_vector=np.array(start, copy=True),
-            evaluation=evaluate_vector(problem_value, start),
-            stop_reason="captured local",
-            nfev=1,
-        )
+        return _unchanged_local_solution(problem_value, start)
 
     monkeypatch.setattr(api, "solve_global", no_op_global)
     monkeypatch.setattr(api, "solve_local", no_op_local)
@@ -879,16 +910,8 @@ def test_stage_e_does_not_publish_progress_for_a_cancelled_seed(
             nfev=1,
         )
 
-    def no_op_local(problem_value, start, **_kwargs):
-        return SimpleNamespace(
-            unit_vector=np.array(start, copy=True),
-            evaluation=evaluate_vector(problem_value, start),
-            stop_reason="captured local",
-            nfev=1,
-        )
-
     monkeypatch.setattr(api, "solve_global", cancel_second_global)
-    monkeypatch.setattr(api, "solve_local", no_op_local)
+    monkeypatch.setattr(api, "solve_local", _unchanged_local_solution)
 
     with pytest.raises(api.SearchCancelled, match="cancelled second"):
         api.run_stage_e(

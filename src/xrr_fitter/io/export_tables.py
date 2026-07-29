@@ -190,6 +190,13 @@ def _project_dataset_document(context: DatasetExportData) -> dict[str, Any]:
     return document["datasets"][index]
 
 
+def _export_project_document(project: XrrProject) -> dict[str, Any]:
+    document = project_to_dict(project)
+    for dataset in document["datasets"]:
+        dataset.pop("display_name", None)
+    return document
+
+
 def _finite_scalar(value: object) -> object:
     if isinstance(value, np.generic):
         value = value.item()
@@ -226,7 +233,7 @@ def _raw_data_payload(
         "raw_rows": list(data.raw_rows),
         "raw_parse_status": list(data.raw_parse_status),
         "source_row_groups": [list(value) for value in data.source_row_groups],
-        "beam": document["beam"],
+        "beam_kind": data.beam.kind,
         "import_angle_offset_deg": data.import_angle_offset_deg,
         "column_mapping": document["column_mapping"],
         "two_theta_deg": _array_values(data.two_theta_deg),
@@ -251,13 +258,11 @@ def _raw_data_payload(
 def _model_residuals_payload(context: DatasetExportData) -> dict[str, object]:
     selected = context.selected
     return {
-        "candidate_id": selected.candidate_id,
         "qz_a_inv": _array_values(selected.qz_a_inv),
         "model_normalized": _array_values(selected.model_normalized),
         "log_residuals_decades": _array_values(selected.log_residuals_decades),
         "weighted_residuals": _array_values(selected.weighted_residuals),
-        "fit_mask": list(context.dataset.fit_mask),
-        "diagnostics": _diagnostics(selected.diagnostics),
+        "candidate_id": selected.candidate_id,
     }
 
 
@@ -276,11 +281,6 @@ def _run_info_payload(
     }
     mcmc = result.uncertainty.mcmc if result.uncertainty is not None else None
     return {
-        "dataset_id": context.dataset.dataset_id,
-        "dataset_directory": dict(context.directory_mapping)[context.dataset.dataset_id],
-        "dataset_directory_mapping": dict(context.directory_mapping),
-        "source_path": context.dataset.source_path,
-        "source_sha256": context.dataset.source_sha256,
         "schema_version": context.project.schema_version,
         "algorithm_version": context.project.algorithm_version,
         "fit_config": project_document["fit_config"],
@@ -292,18 +292,22 @@ def _run_info_payload(
         "mcmc_child_seed": None if mcmc is None else mcmc.child_seed,
         "selected_candidate_id": context.selected.candidate_id,
         "fitted_instrument_parameters": fitted_instrument,
-        "confidence": result.confidence.value,
-        "candidate_count": len(result.candidates),
-        "warnings": list(result.warnings),
+        "dataset_id": context.dataset.dataset_id,
+        "source_path": context.dataset.source_path,
+        "source_sha256": context.dataset.source_sha256,
         "beam": document["beam"],
         "instrument": document["instrument"],
         "scale_prior": document["scale_prior"],
         "structure_evidence": document["structure_evidence"],
         "oxide_decisions": document["oxide_decisions"],
+        "confidence": result.confidence.value,
+        "warnings": list(result.warnings),
         "fringe_screen_threshold_version": config.fringe_screen_threshold_version,
         "budget_reclaim_threshold_version": config.budget_reclaim_threshold_version,
         "downsample_rule_version": config.downsample_rule_version,
         "jacobian_version": config.jacobian_version,
+        "dataset_directory": dict(context.directory_mapping)[context.dataset.dataset_id],
+        "dataset_directory_mapping": dict(context.directory_mapping),
     }
 
 
@@ -336,7 +340,7 @@ def dataset_payload(context: DatasetExportData) -> dict[str, object]:
     """Build the complete strict-JSON payload for one selected dataset."""
     if not isinstance(context, DatasetExportData):
         raise TypeError("context must be DatasetExportData")
-    project_document = project_to_dict(context.project)
+    project_document = _export_project_document(context.project)
     dataset_document = _project_dataset_document(context)
     fit_result, candidates = _candidate_views(context.result)
     return {
@@ -348,12 +352,12 @@ def dataset_payload(context: DatasetExportData) -> dict[str, object]:
         "scale_prior": dataset_document["scale_prior"],
         "structure_evidence": dataset_document["structure_evidence"],
         "oxide_decisions": dataset_document["oxide_decisions"],
-        "project": project_document,
-        "fit_result": fit_result,
-        "candidates": candidates,
-        "convergence": _convergence_payload(context.result),
         "raw_data": _raw_data_payload(context, dataset_document),
         "model_residuals": _model_residuals_payload(context),
+        "fit_result": fit_result,
+        "project": project_document,
+        "candidates": candidates,
+        "convergence": _convergence_payload(context.result),
         "run_info": _run_info_payload(context, dataset_document),
     }
 
@@ -362,11 +366,19 @@ def _strict_json(value: object, *, pretty: bool) -> str:
     options = {
         "ensure_ascii": False,
         "allow_nan": False,
-        "sort_keys": True,
     }
     if pretty:
         return json.dumps(value, indent=2, **options)
-    return json.dumps(value, separators=(",", ":"), **options)
+    return json.dumps(value, **options)
+
+
+def _compact_json(value: object) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    )
 
 
 def json_text(value: object) -> str:
@@ -574,21 +586,36 @@ def _profiles_frame(context: DatasetExportData) -> pd.DataFrame:
 
 def _run_info_frame(context: DatasetExportData) -> pd.DataFrame:
     info = _run_info_payload(context, _project_dataset_document(context))
-    structured = {
-        "dataset_directory_mapping",
-        "fit_config",
-        "optimizer_child_seeds",
-        "fitted_instrument_parameters",
-        "warnings",
-        "beam",
-        "instrument",
-        "scale_prior",
-        "structure_evidence",
-        "oxide_decisions",
-    }
     row = {
-        key: json_text(value) if key in structured else value
-        for key, value in info.items()
+        "dataset_id": info["dataset_id"],
+        "dataset_directory": info["dataset_directory"],
+        "dataset_directory_mapping": json_text(info["dataset_directory_mapping"]),
+        "source_path": info["source_path"],
+        "source_sha256": info["source_sha256"],
+        "schema_version": info["schema_version"],
+        "algorithm_version": info["algorithm_version"],
+        "project_master_seed": info["project_master_seed"],
+        "service_seed_tree_version": info["service_seed_tree_version"],
+        "independent_root_child": info["independent_root_child"],
+        "joint_root_child": info["joint_root_child"],
+        "optimizer_child_seeds": json_text(info["optimizer_child_seeds"]),
+        "mcmc_child_seed": info["mcmc_child_seed"],
+        "selected_candidate_id": info["selected_candidate_id"],
+        "fitted_instrument_parameters": json_text(
+            info["fitted_instrument_parameters"]
+        ),
+        "confidence": info["confidence"],
+        "candidate_count": len(context.result.candidates),
+        "warnings": json_text(info["warnings"]),
+        "beam": json_text(info["beam"]),
+        "instrument": json_text(info["instrument"]),
+        "scale_prior": json_text(info["scale_prior"]),
+        "structure_evidence": json_text(info["structure_evidence"]),
+        "oxide_decisions": json_text(info["oxide_decisions"]),
+        "fringe_screen_threshold_version": info["fringe_screen_threshold_version"],
+        "budget_reclaim_threshold_version": info["budget_reclaim_threshold_version"],
+        "downsample_rule_version": info["downsample_rule_version"],
+        "jacobian_version": info["jacobian_version"],
     }
     return pd.DataFrame([row])
 
@@ -686,9 +713,9 @@ def _curves_frame(contexts: tuple[DatasetExportData, ...]) -> pd.DataFrame:
                 "dataset_id": [context.dataset.dataset_id]
                 * context.data.two_theta_deg.size,
                 "two_theta_deg": context.data.two_theta_deg,
+                "qz_a_inv": context.selected.qz_a_inv,
                 "intensity_raw": context.data.intensity_raw,
                 "intensity_normalized": context.data.intensity_normalized,
-                "qz_a_inv": context.selected.qz_a_inv,
                 "model_normalized": context.selected.model_normalized,
                 "fit_included": context.dataset.fit_mask,
             }
@@ -757,24 +784,21 @@ def _diagnostic_qz_range(
     indices: tuple[int, ...],
 ) -> str:
     size = context.data.qz_a_inv.size
-    valid = tuple(index for index in indices if index < size)
+    valid = tuple(index for index in indices if 0 <= index < size)
     if not valid:
-        return "none"
+        return "[]"
     qz = context.data.qz_a_inv[list(valid)]
-    finite = qz[np.isfinite(qz)]
-    if finite.size == 0:
-        return "none"
-    return f"[{float(np.min(finite)):.17g},{float(np.max(finite)):.17g}]"
+    return f"[{float(np.min(qz)):.12g},{float(np.max(qz)):.12g}]"
 
 
 def _diagnostic_line(
     context: DatasetExportData,
     diagnostic: PhysicsDiagnostic,
 ) -> str:
-    indices = json_text(diagnostic.point_indices)
+    indices = _compact_json(diagnostic.point_indices)
     qz_range = _diagnostic_qz_range(context, diagnostic.point_indices)
     return (
-        f"diagnostic {diagnostic.code}: {diagnostic.message}; "
+        f"{diagnostic.code}: {diagnostic.message}; "
         f"full_data_indices={indices}; qz_a_inv_range={qz_range}"
     )
 
@@ -805,27 +829,25 @@ def run_log_bytes(context: DatasetExportData) -> bytes:
     mcmc = result.uncertainty.mcmc if result.uncertainty is not None else None
     lines = [
         f"dataset_id: {context.dataset.dataset_id}",
-        f"source_path: {context.dataset.source_path}",
-        f"source_sha256: {context.dataset.source_sha256}",
+        f"confidence: {result.confidence.value}",
+        f"candidate_count: {len(result.candidates)}",
         f"project_master_seed: {context.project.master_seed}",
         f"service_seed_tree_version: {identity.service_seed_tree_version}",
         f"independent_root_child: {identity.independent_root_child}",
         f"joint_root_child: {identity.joint_root_child}",
-        f"optimizer_child_seeds: {json_text(result.child_seeds)}",
+        f"optimizer_child_seeds: {_compact_json(result.child_seeds)}",
         f"mcmc_child_seed: {None if mcmc is None else mcmc.child_seed}",
-        f"selected_candidate_id: {context.selected.candidate_id}",
-        f"confidence: {result.confidence.value}",
     ]
     lines.extend(f"warning: {value}" for value in result.warnings)
     lines.extend(
         "stage "
-        f"{stage.stage}: candidate_ids={json_text(stage.candidate_ids)} "
-        f"best_objective={stage.best_objective:.17g} total_nfev={stage.total_nfev} "
-        f"stop_reasons={json_text(stage.stop_reasons)}"
+        f"{stage.stage}: candidate_ids={_compact_json(stage.candidate_ids)}; "
+        f"best_objective={stage.best_objective}; total_nfev={stage.total_nfev}; "
+        f"stop_reasons={_compact_json(stage.stop_reasons)}"
         for stage in result.stage_summaries
     )
     diagnostics = _persisted_diagnostics(context)
     lines.extend(_diagnostic_line(context, value) for value in diagnostics)
     if _rejected_surface_oxide(context, diagnostics):
-        lines.append("warning: suspected_unmodeled_surface_oxide_after_rejection")
+        lines.append("疑似缺失自然氧化层（此前已拒绝建议）")
     return ("\n".join(lines) + "\n").encode("utf-8")
