@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "verify.yml"
 RUNNER = ["self-hosted", "macOS", "ARM64", "xrr-ci"]
 CHECKOUT = "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+UPLOAD_ARTIFACT = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
 STANDARD_MODES = (
     "quality",
     "tools",
@@ -20,6 +21,7 @@ STANDARD_MODES = (
     "integration",
     "spawn",
     "regression",
+    "distribution",
 )
 
 
@@ -61,6 +63,30 @@ def _standard_job(mode: str) -> dict[str, object]:
     }
 
 
+def _distribution_job() -> dict[str, object]:
+    job = _standard_job("distribution")
+    job["steps"][1]["run"] = _standard_run("distribution").replace(
+        '"$PYTHON" tools/verify.py distribution',
+        '"$PYTHON" tools/verify.py distribution '
+        '--report-dir "$RUNNER_TEMP/distribution-bundle" '
+        '--artifact-dir "$RUNNER_TEMP/distribution-bundle/artifacts"',
+    )
+    job["steps"].append(
+        {
+            "name": "Upload distribution bundle",
+            "uses": UPLOAD_ARTIFACT,
+            "with": {
+                "name": "r23-distribution-${{ github.sha }}",
+                "path": "${{ runner.temp }}/distribution-bundle",
+                "if-no-files-found": "error",
+                "retention-days": 1,
+                "compression-level": 0,
+            },
+        }
+    )
+    return job
+
+
 def _checkpoint_job() -> dict[str, object]:
     return {
         "needs": list(STANDARD_MODES),
@@ -78,6 +104,7 @@ def _checkpoint_job() -> dict[str, object]:
                     "GUI_RESULT": "${{ needs.gui.result }}",
                     "INTEGRATION_RESULT": "${{ needs.integration.result }}",
                     "SPAWN_RESULT": "${{ needs.spawn.result }}",
+                    "DISTRIBUTION_RESULT": "${{ needs.distribution.result }}",
                 },
                 "shell": "bash",
                 "run": (
@@ -89,6 +116,7 @@ def _checkpoint_job() -> dict[str, object]:
                     'test "$GUI_RESULT" = success\n'
                     'test "$INTEGRATION_RESULT" = success\n'
                     'test "$SPAWN_RESULT" = success\n'
+                    'test "$DISTRIBUTION_RESULT" = success\n'
                 ),
             }
         ],
@@ -112,6 +140,7 @@ def _expected_workflow() -> dict[str, object]:
             "integration": _standard_job("integration"),
             "spawn": _standard_job("spawn"),
             "regression": _standard_job("regression"),
+            "distribution": _distribution_job(),
             "checkpoint": _checkpoint_job(),
         },
     }
@@ -149,6 +178,7 @@ def test_checkpoint_step_requires_every_gate() -> None:
         "GUI_RESULT": "${{ needs.gui.result }}",
         "INTEGRATION_RESULT": "${{ needs.integration.result }}",
         "SPAWN_RESULT": "${{ needs.spawn.result }}",
+        "DISTRIBUTION_RESULT": "${{ needs.distribution.result }}",
     }
     commands = step["run"].splitlines()
     assert 'test "$QUALITY_RESULT" = success' in commands
@@ -158,6 +188,7 @@ def test_checkpoint_step_requires_every_gate() -> None:
     assert 'test "$INTEGRATION_RESULT" = success' in commands
     assert 'test "$SPAWN_RESULT" = success' in commands
     assert 'test "$REGRESSION_RESULT" = success' in commands
+    assert 'test "$DISTRIBUTION_RESULT" = success' in commands
 
 
 def test_concurrency_never_cancels_an_exact_sha_run() -> None:

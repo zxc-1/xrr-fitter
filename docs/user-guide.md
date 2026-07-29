@@ -1,7 +1,8 @@
-# XRR Services 用户指南
+# XRR Fitter 用户指南
 
-本指南面向不依赖 GUI 的项目、拟合、批处理和导出工作流。示例只调用稳定的
-`xrr_core` facade；`xrr` 内部模块不是应用集成边界。
+本指南覆盖公共 Python API 与 PySide6 图形工作台。所有集成代码只应通过
+`xrr_fitter.api` 调用项目、拟合、批处理和导出能力；`xrr_fitter` 的其他模块是
+内部实现，不是受支持的应用边界。
 
 ## 1. 坐标、单位和输入
 
@@ -18,10 +19,10 @@
 
 ```python
 from pathlib import Path
-import xrr_core
+import xrr_fitter.api as api
 
-beam = xrr_core.BeamSpec(kind="monochromatic", wavelength_a=1.5406)
-data = xrr_core.import_data(
+beam = api.BeamSpec(kind="monochromatic", wavelength_a=1.5406)
+data = api.import_data(
     Path("sample.xy"),
     beam,
     import_angle_offset_deg=0.0,
@@ -65,33 +66,37 @@ JSON。
 ### 创建、保存和加载
 
 ```python
-from dataclasses import replace
 from pathlib import Path
-import xrr_core
+import xrr_fitter.api as api
 
-beam = xrr_core.BeamSpec(kind="monochromatic", wavelength_a=1.5406)
-instrument = xrr_core.InstrumentSpec(footprint_mode="none")
-air = xrr_core.MaterialSpec("Air", None, None, 0.0j)
-si = xrr_core.MaterialSpec("Si", "Si", 2.329)
-film = xrr_core.MaterialSpec("SiO2", "SiO2", 2.20)
-structure = xrr_core.StructureSpec(
+source = Path("sample.xy").resolve()
+beam = api.BeamSpec(kind="monochromatic", wavelength_a=1.5406)
+instrument = api.InstrumentSpec(footprint_mode="none")
+
+project = api.new_project()
+project = api.add_dataset(
+    project,
+    source,
+    instrument,
+    display_name="sample",
+    beam=beam,
+)
+
+air = api.MaterialSpec("Air", None, None, 0.0j)
+si = api.MaterialSpec("Si", "Si", 2.329)
+film = api.MaterialSpec("SiO2", "SiO2", 2.20)
+structure = api.StructureSpec(
     air,
-    (xrr_core.LayerSpec("film", film, 173.0, roughness_a=3.0),),
+    (api.LayerSpec("film", film, 173.0, roughness_a=3.0),),
     si,
     backing_roughness_a=4.0,
 )
+dataset_id = project.datasets[0].dataset_id
+project = api.set_structure(project, dataset_id, structure)
 
-source = Path("sample.xy").resolve()
-data = xrr_core.import_data(source, beam, 0.0, None)
-dataset = xrr_core.DatasetProject.from_prepared_data(
-    "sample-1", data, structure, instrument
-)
-dataset = replace(dataset, source_path=source.name)
-project = xrr_core.XrrProject.new((dataset,), master_seed=20260715)
-project = replace(project, base_directory=str(source.parent))
-xrr_core.save_project(project, source.parent / "sample.xrrproj.json")
-
-loaded = xrr_core.load_project(source.parent / "sample.xrrproj.json")
+target = source.parent / "sample.xrrproj.json"
+api.save_project(project, target)
+loaded = api.load_project(target)
 ```
 
 保存使用同目录临时文件、写满、`fsync` 和原子替换。写入失败会传播原异常并
@@ -115,12 +120,11 @@ loaded = xrr_core.load_project(source.parent / "sample.xrrproj.json")
 公开工作流中的：
 
 ```text
-xrr_core.validate_project(project) -> ProjectValidation
+api.inspect_sources(project) -> ProjectValidation
 ```
 
-只观察当前 source/hash，不修改项目。它不同于内部
-`xrr.project.validate_project(project) -> None` 的 schema/object-graph 校验；
-应用代码只应调用 facade。source status 精确为：
+只观察当前 source/hash，不修改项目。schema/object-graph 校验由项目构造和加载
+内部执行，应用代码不应导入其内部实现。source status 精确为：
 
 - `ok`：文件可读且原始字节 SHA-256 与声明一致；
 - `missing`：路径不存在；
@@ -131,25 +135,30 @@ xrr_core.validate_project(project) -> ProjectValidation
 `source_path` 或 expected hash。拟合和导出会在读取前校验，并在解析后再次比较
 真实字节哈希，以关闭 validate/read 之间的 TOCTOU 窗口。
 
-失效必须显式应用：
+`load_project()` 会在恢复 workspace 时重新校验 source，并按 `independent` 或
+`joint` 影响范围清除不再可信的派生状态。`save_project()` 在写入前也会重新校验，
+不会把已知 stale 的结果持久化。接受当前路径的新字节或重新链接到另一文件必须走
+两阶段事务：
 
 ```python
-validation = xrr_core.validate_project(project)
+validation = api.inspect_sources(project)
 if not validation.valid:
-    project = xrr_core.invalidate_changed_results(project, validation)
+    preview = api.preview_source_update(project, dataset_id, Path("replacement.xy"))
+    # 在应用中显示 old/new path 与 expected/observed SHA-256，再取得用户确认。
+    project = api.accept_source_update(project, preview)
 ```
 
-- `independent` 模式只清理 non-`ok` dataset 的 `structure_evidence`、已解析
-  scale prior、`last_valid_result` 和 checkpoint，并删除该 dataset 的 UI
-  candidate selection；其他 dataset 保持不变。
-- `joint` 模式中任一 source non-`ok` 会清理所有 datasets 的上述派生状态，
-  并令 `selected_candidate_ids=()`，因为共享结果不能局部复用。
-- 任意 structure、mask 或 parameter edit 同样必须由调用者作为事务显式清理
-  旧派生状态；直接 `dataclasses.replace()` 不会自动推断业务失效。
+- `independent` 模式只清理受影响 dataset 的 `structure_evidence`、已解析 scale
+  prior、`last_valid_result`、checkpoint 和 candidate selection。
+- `joint` 模式中任一 source 变更会清理所有 datasets 的共享派生状态。
+- structure、mask、instrument、parameter 和 sharing 修改必须调用对应的
+  `api.set_*` operation；这些 operation 在同一 immutable transaction 中处理失效。
+- `accept_source_update()` 会再次核对 preview 对应的路径和字节。preview 之后发生
+  变化会硬失败，不会接受未展示给用户的 source identity。
 
 ## 4. 结构证据、尺度先验与氧化层
 
-`xrr_core.analyze_structure(project, dataset_id)` 返回观察性的
+`api.analyze_structure(project, dataset_id)` 返回观察性的
 `structure_evidence`，不会自动附加到项目。它记录数据可支持的结构复杂度、峰位
 等 provenance，供调用者决定是否持久化。
 
@@ -162,7 +171,7 @@ if not validation.valid:
 inactive 表示已明确关闭并保留原因；unresolved 表示尚未由真实 compiled problem
 解析。source 失效会回到 unresolved，不能保留旧平台估计。
 
-`xrr_core.suggest_oxide_layers(structure)` 返回 immutable `OxideSuggestion`
+`api.suggest_oxide_layers(structure)` 返回 immutable `OxideSuggestion`
 tuple，不修改输入结构。接受或拒绝另存为 `OxideDecision`，字段为
 `base_material`、`oxide_material`、`location`、`accepted` 和
 `oxide_table_version`。决定记录 provenance；真正改变 layer structure 仍是单独、
@@ -170,15 +179,14 @@ tuple，不修改输入结构。接受或拒绝另存为 `OxideDecision`，字�
 
 ## 5. 参数描述与校验
 
-只从 facade 获取稳定参数 namespace：
+只从公共 API 获取稳定参数 namespace，并通过 service operation 提交设置：
 
 ```python
-from dataclasses import replace
-import xrr_core
+import xrr_fitter.api as api
 
-definitions = xrr_core.describe_parameters(project, "sample-1")
+definitions = api.describe_parameters(project, dataset_id)
 settings = tuple(
-    xrr_core.ParameterSetting(
+    api.ParameterSetting(
         item.name,
         item.initial,
         item.lower,
@@ -187,9 +195,8 @@ settings = tuple(
     )
     for item in definitions
 )
-settings = xrr_core.validate_parameter_settings(definitions, settings)
-dataset = replace(project.datasets[0], parameter_settings=settings)
-project = replace(project, datasets=(dataset,))
+settings = api.validate_parameter_settings(definitions, settings)
+project = api.set_parameter_settings(project, dataset_id, settings)
 ```
 
 名称、单位、bounds、transform、integer/expert flags 和 sharing identity 都是
@@ -250,8 +257,10 @@ dataset 的有效结果。
 - constant/linear/power-law background 的全部参数。
 
 每条规则需要不同 dataset 的唯一成员；同一 local parameter 不能进入两条规则。
-调用 `xrr_core.validate_sharing_rules(project)` 可在启动 solver 前完成真实 joint
-compile 校验。joint 不合法或 resume 失败时不得静默 fallback 到 independent。
+调用 `api.validate_sharing_rules(project, rules)` 校验声明，再通过
+`api.set_sharing_rules(project, rules)` 持久化并使受影响结果失效。真实 joint compile
+仍由 `api.preflight_fit()` 在启动 solver 前完成；joint 不合法或 resume 失败时不得
+静默 fallback 到 independent。
 
 ### 单 dataset 与 joint objective
 
@@ -280,14 +289,15 @@ joint local solver 保持 residual row 为未缩放的 `Delta_di`，外部 row w
 
 ## 8. 进度、取消、检查点和恢复
 
-`auto_fit()` 可接收三个显式 callback/token：
+同步拟合接收显式 progress 与 checkpoint callback：
 
 ```python
-fit_output = xrr_core.auto_fit(
+progress = []
+checkpoints = []
+fit_output = api.fit_project(
     project,
-    progress_callback=None,
-    cancel_token=None,
-    checkpoint_callback=None,
+    progress_callback=progress.append,
+    checkpoint_callback=checkpoints.append,
 )
 ```
 
@@ -295,6 +305,11 @@ fit_output = xrr_core.auto_fit(
 message。checkpoint callback 收到的是包含最新 checkpoint 的 immutable
 whole-project snapshot；服务先保存 snapshot 再调用用户 callback。因此 callback
 失败不会抹掉最新可恢复证据，而会产生显式 `checkpoint_failed` 不可信结果。
+
+需要协作取消或独立进程隔离时，使用 `api.start_fit_job(project,
+checkpoint_path=None)`。调用方轮询 `OperationJob.poll()` 的有序 `OperationEvent`，
+通过 `cancel()` 请求协作取消；超时后才可显式 `force_stop()`，并最终调用 `close()`
+回收进程和队列。GUI 使用的也是这条公共边界，不在界面线程执行 optimizer。
 
 取消或拟合失败：
 
@@ -311,8 +326,9 @@ stage graph、candidate order、seed ledger 和 joint layout fingerprints。任�
 拟合。
 
 `run_mcmc()` 只接受当前 source、parameter definitions 与有效 candidate 完全一致
-的项目。MCMC 取消抛出 `InterruptedError`，输入项目和 source bytes 保持不变；
-成功时只为选定结果附加新的 MCMC report。
+的项目。同步调用成功时只为选定结果附加新的 MCMC report；需要取消时使用
+`start_mcmc_job()` 并通过同一 `OperationJob` 协议处理事件。取消或失败不会修改输入
+项目和 source bytes。
 
 ## 9. Confidence 与不确定度
 
@@ -337,7 +353,7 @@ stage graph、candidate order、seed ledger 和 joint layout fingerprints。任�
 - 可选 expert MCMC 的 acceptance fraction、split-Rhat、ESS 和 boundary hits。
 
 MCMC 输出固定标为“目标函数伪后验”，不是有已知计数似然时的严格贝叶斯覆盖；
-一键 `auto_fit()` 不自动运行 MCMC。
+一键 `fit_project()` 不自动运行 MCMC。
 
 ## 10. Example projects
 
@@ -355,31 +371,26 @@ examples/mo-si-periodic.xrrproj.json
 - project 只保存 `.xy` basename，没有 candidate、fit result、checkpoint 或预埋
   recovery answer。
 
-Canonical fixture regeneration（应在仓库的专用 examples 位置运行；generator
-只创建/覆盖四个 canonical names，不负责删除目录里原有的其他文件）：
-
-```bash
-cd xrr_fitter && PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/generate_examples.py
-```
-
-使用任一 example 的稳定 facade workflow：
+四个文件是受版本控制和发行身份校验约束的 canonical input。仓库维护者可通过
+`xrr_fitter.io.examples.write_examples()` 在受控目标目录重建它们；该内部 writer
+不是应用集成 API。使用任一 example 的公共 API workflow：
 
 ```python
-from dataclasses import replace
 from pathlib import Path
-import xrr_core
+import xrr_fitter.api as api
 
 path = Path("examples/single-layer.xrrproj.json")
-project = xrr_core.load_project(path)
-validation = xrr_core.validate_project(project)
+project = api.load_project(path)
+validation = api.inspect_sources(project)
 if not validation.valid:
-    raise RuntimeError(tuple(item.message for item in validation.datasets))
+    raise RuntimeError(
+        tuple(item.message for item in validation.datasets if item.status.value != "ok")
+    )
 
-configured = []
 for dataset in project.datasets:
-    definitions = xrr_core.describe_parameters(project, dataset.dataset_id)
+    definitions = api.describe_parameters(project, dataset.dataset_id)
     settings = tuple(
-        xrr_core.ParameterSetting(
+        api.ParameterSetting(
             item.name,
             item.initial,
             item.lower,
@@ -388,31 +399,31 @@ for dataset in project.datasets:
         )
         for item in definitions
     )
-    settings = xrr_core.validate_parameter_settings(definitions, settings)
-    configured.append(replace(dataset, parameter_settings=settings))
-project = replace(project, datasets=tuple(configured))
+    settings = api.validate_parameter_settings(definitions, settings)
+    project = api.set_parameter_settings(project, dataset.dataset_id, settings)
 
-fit_output = xrr_core.auto_fit(project, None, None, None)
+readiness = api.preflight_fit(project)
+if not readiness.ready:
+    raise RuntimeError(readiness.message)
+
+fit_output = api.fit_project(project)
 if fit_output.cancelled:
     raise RuntimeError(fit_output.warnings)
 
-selected = []
+updated = fit_output.updated_project
 for dataset in fit_output.updated_project.datasets:
     result = dataset.last_valid_result
-    if result is None or result.best_index is None:
+    candidate = None if result is None else result.best_candidate
+    if candidate is None:
         raise RuntimeError(f"no valid result: {dataset.dataset_id}")
-    selected.append(
-        (dataset.dataset_id, result.candidates[result.best_index].candidate_id)
+    updated = api.select_candidate(
+        updated,
+        dataset.dataset_id,
+        candidate.candidate_id,
     )
-updated = replace(
-    fit_output.updated_project,
-    ui_state=replace(
-        fit_output.updated_project.ui_state,
-        selected_candidate_ids=tuple(selected),
-    ),
-)
-xrr_core.save_project(updated, path.with_name("single-layer-fitted.xrrproj.json"))
-manifest = xrr_core.export_result(updated, Path("exports"))
+
+api.save_project(updated, path.with_name("single-layer-fitted.xrrproj.json"))
+manifest = api.export_result(updated, Path("exports"))
 print(manifest.run_directory)
 ```
 
@@ -421,7 +432,7 @@ print(manifest.run_directory)
 
 ## 11. 导出文件和语义
 
-`xrr_core.export_result(result, output_dir)` 接受 fitted `XrrProject` 或
+`api.export_result(result, output_dir)` 接受 fitted `XrrProject` 或
 `ProjectFitResult`；后者先归一为 `updated_project`，持久
 `dataset.last_valid_result` 是 artifact source of truth。导出先完成 schema、
 result、source/TOCTOU 和 selected candidate preflight，才分配输出目录。
@@ -467,35 +478,71 @@ manifest path 位于 run tree 且非空，`fsync` 文件/目录，再以同 file
 exclusive rename 一次发布 `<UTC timestamp>-<8hex>` 目录。已有 run 不覆盖；任意
 异常只删除本次 owned partial tree 并原样传播。
 
-## 12. 稳定 facade 签名
+## 12. 公共 API
+
+唯一受支持的导入方式是：
+
+```python
+import xrr_fitter.api as api
+```
+
+R23 的公共 operation 按职责分组如下；完整类型和值对象集合由 `api.__all__` 固定，
+包根 `xrr_fitter` 不做 re-export：
 
 ```text
-import_data(path, beam, import_angle_offset_deg, column_mapping)
+new_project()
 load_project(path)
 save_project(project, path)
-validate_project(project)
+inspect_sources(project)
+select_active_dataset(project, dataset_id)
+select_candidate(project, dataset_id, candidate_id)
+set_batch_mode(project, mode)
+set_expert_mode(project, enabled)
+set_workspace_state(project, state)
+clear_fit_results(project, dataset_ids)
+
+import_data(path, beam, import_angle_offset_deg, column_mapping)
+add_dataset(project, source_path, instrument, display_name, column_mapping,
+            import_angle_offset_deg, beam)
+remove_dataset(project, dataset_id)
+set_fit_mask(project, dataset_id, mask)
+set_instrument(project, dataset_id, instrument)
+preview_source_update(project, dataset_id, new_path)
+accept_source_update(project, preview)
+
+set_structure(project, dataset_id, structure)
 describe_parameters(project, dataset_id)
 analyze_structure(project, dataset_id)
 validate_parameter_settings(definitions, settings)
-with_fit_mask(data, mask)
+set_parameter_settings(project, dataset_id, settings)
 validate_structure(structure, beam)
-validate_sharing_rules(project)
-invalidate_changed_results(project, validation)
+validate_sharing_rules(project, rules)
+set_sharing_rules(project, rules)
 suggest_oxide_layers(structure)
-auto_fit(project, progress_callback, cancel_token, checkpoint_callback)
-run_mcmc(project, dataset_id, candidate_id, config, progress_callback, cancel_token)
+accept_oxide_suggestion(project, dataset_id, suggestion)
+record_oxide_decision(project, dataset_id, decision)
+
+preflight_fit(project)
+fit_project(project, progress_callback, checkpoint_callback)
+run_mcmc(project, dataset_id, candidate_id, config, progress_callback)
+start_fit_job(project, checkpoint_path)
+start_mcmc_job(project, dataset_id, candidate_id, config)
 export_result(result, output_dir)
 ```
 
-调用者应显式处理异常、`ProjectValidation`、cancelled/untrusted result 和 export
-错误。服务不提供吞异常、静默 fallback 或“部分成功即成功”的替代合同。
+`OperationJob` 提供只读 `pid`/`is_running` 以及 `poll()`、`cancel()`、
+`force_stop()`、`close()`。调用者应显式处理异常、`ProjectValidation`、`FitReadiness`、
+cancelled/untrusted result、`OperationError` 和 export 错误。服务不提供吞异常、
+静默 fallback 或“部分成功即成功”的替代合同。
 
 ## 13. PySide6 图形工作台
 
 启动桌面程序：
 
 ```bash
-cd xrr_fitter && .venv/bin/python xrr_app.py
+python -m xrr_fitter
+# 安装 wheel 后也可使用：
+xrr-fitter
 ```
 
 主窗口最低尺寸为 `1280×760`，固定为数据/结构、图形诊断、参数/结果三列。
@@ -619,7 +666,8 @@ MCMC 只对当前有效候选运行，使用与自动拟合同一个 spawn contr
 
 ### 13.7 界面截图
 
-以下截图使用生成数据 `visual.xy`，不包含用户 source。平台为 macOS/PySide6 Fusion；
+以下截图使用仓库 canonical `single-layer` synthetic example 与固定 seed
+`20260726` 的快速拟合结果，不包含用户 source。平台为 macOS/PySide6 Fusion；
 覆盖 minimum/normal window、light/dark palette 与 standard/expert 状态：
 
 - [Light 1280×760](images/gui-light-1280x760.png)

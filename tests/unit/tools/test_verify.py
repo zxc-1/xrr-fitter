@@ -26,6 +26,7 @@ def _registry_names() -> tuple[str, ...]:
         "integration",
         "spawn",
         "regression",
+        "distribution",
     )
 
 
@@ -82,12 +83,25 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
             "tests/integration/test_joint_fit_workflow.py",
             "tests/integration/test_batch_resume.py",
             "tests/integration/test_export_workflow.py",
+            "tests/integration/test_gui_project_workflow.py",
             "-q",
         ),
     )
     expected_spawn = (
         module.PYTEST_PREFIX
         + ("tests/integration/test_process_workers.py", "-q"),
+    )
+    expected_distribution = (
+        (
+            module.PYTHON,
+            "tools/verify_distribution.py",
+            "--repo-root",
+            module.ROOT,
+            "--report-dir",
+            module.REPORT,
+            "--artifact-dir",
+            module.ARTIFACT,
+        ),
     )
     assert module.MODE_REGISTRY["quality"].commands == expected_quality
     assert module.MODE_REGISTRY["tools"].commands == expected_tools
@@ -96,6 +110,7 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
     assert module.MODE_REGISTRY["integration"].commands == expected_integration
     assert module.MODE_REGISTRY["spawn"].commands == expected_spawn
     assert module.MODE_REGISTRY["regression"].commands == expected_regression
+    assert module.MODE_REGISTRY["distribution"].commands == expected_distribution
 
 
 def test_registry_uses_nonempty_argument_vectors(load_tool_module) -> None:

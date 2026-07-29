@@ -313,6 +313,7 @@ def test_fit_search_adapter_replays_committed_reference_after_registration(
         "fit_search",
         "analysis",
         "services",
+        "gui",
     )
     source = (root / "tools/reference_groups/fit_search.py").read_text(encoding="utf-8")
     assert "tests.support" not in source
@@ -337,6 +338,7 @@ def test_physics_adapter_replays_committed_reference_after_registration(
         "fit_search",
         "analysis",
         "services",
+        "gui",
     )
     source = (root / "tools/reference_groups/physics.py").read_text(encoding="utf-8")
     assert "tests.support" not in source
@@ -361,6 +363,7 @@ def test_fit_compile_adapter_replays_committed_reference_after_registration(
         "fit_search",
         "analysis",
         "services",
+        "gui",
     )
     source = (root / "tools/reference_groups/fit_compile.py").read_text(encoding="utf-8")
     assert "tests.support" not in source
@@ -385,6 +388,7 @@ def test_analysis_adapter_replays_committed_reference_after_registration(
         "fit_search",
         "analysis",
         "services",
+        "gui",
     )
     source = (root / "tools/reference_groups/analysis.py").read_text(encoding="utf-8")
     assert "tests.support" not in source
@@ -555,6 +559,7 @@ def test_model_project_adapter_is_explicit_and_matches_committed_reference(
         "fit_search",
         "analysis",
         "services",
+        "gui",
     )
     source = (root / "tools/reference_groups/model_project.py").read_text(encoding="utf-8")
     assert "tests.support" not in source
@@ -674,6 +679,7 @@ def test_io_adapter_is_explicit_and_matches_committed_reference(
         "fit_search",
         "analysis",
         "services",
+        "gui",
     )
     source = (root / "tools/reference_groups/io.py").read_text(encoding="utf-8")
     assert "tests.support" not in source

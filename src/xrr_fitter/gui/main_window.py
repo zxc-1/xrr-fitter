@@ -1,41 +1,41 @@
 """Main application shell and asynchronous close coordination.
 
 The window composes visible panels while :class:`ProjectDocument` owns the
-immutable project identity. Plot projection is registered synchronously at
+immutable project identity.  Plot projection is registered synchronously at
 that document boundary; ordinary Qt signals run only after a successful
-precommit. Close handling remains asynchronous so active workers never block
+precommit.  Close handling remains asynchronous so active workers never block
 the GUI event loop.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
-
-from PySide6.QtCore import QSignalBlocker, Qt, QTimer
-from PySide6.QtWidgets import QLabel, QMainWindow, QMessageBox, QSplitter, QVBoxLayout, QWidget
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QMainWindow, QMessageBox
 
 import xrr_fitter.api as api
-from xrr_fitter.gui.data.panel import DataPanel
+from xrr_fitter.gui.accessibility import (
+    configure_accessibility,
+    configure_focus_navigation,
+)
 from xrr_fitter.gui.document import ProjectDocument
-from xrr_fitter.gui.parameters.panel import ParametersPanel
-from xrr_fitter.gui.plots.panel import PlotPanel
-from xrr_fitter.gui.project.actions import ProjectActions
-from xrr_fitter.gui.structure.panel import StructurePanel
-
-
-def _column(name: str, label: str) -> QWidget:
-    widget = QWidget()
-    widget.setObjectName(name)
-    layout = QVBoxLayout(widget)
-    heading = QLabel(label)
-    heading.setObjectName(f"{name}Heading")
-    layout.addWidget(heading)
-    layout.addStretch(1)
-    return widget
+from xrr_fitter.gui.export.dialog import ExportWorkflow
+from xrr_fitter.gui.operation_state import (
+    has_exportable_results,
+    operation_controllers,
+    operation_is_running,
+    refresh_operation_state,
+)
+from xrr_fitter.gui.window_layout import install_workflow_actions, install_workspace
+from xrr_fitter.gui.workspace import (
+    WorkspaceView,
+    capture_project,
+    configure_splitters,
+    restore_project,
+)
 
 
 class MainWindow(QMainWindow):
-    """Own the immutable document and stable three-column shell."""
+    """Own a document and the stable three-column desktop workspace."""
 
     def __init__(
         self,
@@ -50,75 +50,89 @@ class MainWindow(QMainWindow):
         self._close_pending = False
         self._resume_user_close = False
         self._force_close_prompt: QMessageBox | None = None
+        self._workspace_released = False
         self._close_cancel_timer = QTimer(self)
         self._close_cancel_timer.setObjectName("closeCancelTimer")
         self._close_cancel_timer.setSingleShot(True)
         self._close_cancel_timer.setInterval(5000)
         self._close_cancel_timer.timeout.connect(self.close_cancel_deadline_reached)
-        self._install_workspace()
-        self._register_plot_projection()
-        self._connect_plot_workflow()
+        install_workspace(self, self.document)
+        self.workspace_view = WorkspaceView.from_root(self)
+        configure_splitters(self.workspace_view)
+        self.export_workflow = ExportWorkflow(
+            self.document,
+            is_running=self._operation_is_running,
+        )
+        install_workflow_actions(self)
+        self._register_project_projections()
+        self._connect_workflows()
+        configure_accessibility(self)
+        configure_focus_navigation(self)
+        self._refresh_operation_state()
         self.setWindowTitle("XRR 全自动拟合")
         self.setMinimumSize(1280, 760)
         if operation_controller is not None:
             self.set_operation_controller(operation_controller)
 
-    def _install_workspace(self) -> None:
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.workspace_splitter = splitter
-        splitter.setObjectName("workspaceSplitter")
-        splitter.setChildrenCollapsible(False)
-        for name, label in (
-            ("projectColumn", "项目与数据"),
-            ("plotColumn", "反射率与 SLD"),
-            ("analysisColumn", "参数与结果"),
-        ):
-            column = _column(name, label)
-            splitter.addWidget(column)
-            if name == "projectColumn":
-                self.project_actions = ProjectActions(self, self.document)
-                self.data_panel = DataPanel(self.document)
-                self.structure_panel = StructurePanel(self.document)
-                for panel in (
-                    self.project_actions,
-                    self.data_panel,
-                    self.structure_panel,
-                ):
-                    column.layout().insertWidget(column.layout().count() - 1, panel)
-            elif name == "plotColumn":
-                self.plot_panel = PlotPanel()
-                column.layout().insertWidget(
-                    column.layout().count() - 1,
-                    self.plot_panel,
-                )
-            elif name == "analysisColumn":
-                self.parameters_panel = ParametersPanel(self.document)
-                column.layout().insertWidget(
-                    column.layout().count() - 1,
-                    self.parameters_panel,
-                )
-        for index in range(splitter.count()):
-            splitter.setCollapsible(index, False)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes(list(self.document.project.ui_state.workspace_splitter_sizes))
-        self.setCentralWidget(splitter)
-
-    def _register_plot_projection(self) -> None:
-        self.document.register_project_projection(self._project_plots)
-        try:
-            self._project_plots(self.document.project)
-        except Exception:
-            self.document.unregister_project_projection(self._project_plots)
-            raise
-
-    def _connect_plot_workflow(self) -> None:
+    def _connect_workflows(self) -> None:
         self.plot_panel.fit_range_requested.connect(self._plot_range_requested)
         self.plot_panel.point_mask_requested.connect(self._plot_point_requested)
         self.plot_panel.view_changed.connect(self._plot_tab_changed)
         self.workspace_splitter.splitterMoved.connect(self._workspace_changed)
+        self.left_splitter.splitterMoved.connect(self._workspace_changed)
+        self.result_panel.candidate_selected.connect(self._project_candidate)
+        self.result_panel.candidate_inspected.connect(self._project_candidate)
+        self.fit_panel.running_changed.connect(self._operation_running_changed)
+        self.result_panel.controller.running_changed.connect(
+            self._operation_running_changed
+        )
+        self.document.project_changed.connect(self._restore_workspace)
+        self.document.project_changed.connect(self._refresh_operation_state)
+
+    @property
+    def close_pending(self) -> bool:
+        return self._close_pending
+
+    @property
+    def close_cancel_timer(self) -> QTimer:
+        return self._close_cancel_timer
+
+    @property
+    def force_close_prompt(self) -> QMessageBox | None:
+        return self._force_close_prompt
+
+    def _register_project_projections(self) -> None:
+        projections = (self._project_plots, self._project_workspace)
+        registered = []
+        try:
+            for projection in projections:
+                self.document.register_project_projection(projection)
+                registered.append(projection)
+                projection(self.document.project)
+        except Exception:
+            for projection in reversed(registered):
+                self.document.unregister_project_projection(projection)
+            raise
 
     def _project_plots(self, project: api.XrrProject) -> None:
         self.plot_panel.project_project(project)
+
+    def _project_workspace(self, project: api.XrrProject) -> None:
+        restore_project(self.workspace_view, project)
+
+    def _project_candidate(self, candidate_id: str) -> None:
+        dataset_id = self.document.active_dataset_id
+        dataset = next(
+            (
+                value
+                for value in self.document.project.datasets
+                if value.dataset_id == dataset_id
+            ),
+            None,
+        )
+        if dataset is None or dataset.last_valid_result is None:
+            raise RuntimeError("candidate projection requires an active fit result")
+        self.plot_panel.set_result(dataset.last_valid_result, candidate_id)
 
     def _plot_range_requested(self, lower: float, upper: float) -> None:
         dataset_id = self.document.active_dataset_id
@@ -133,47 +147,24 @@ class MainWindow(QMainWindow):
         self.data_panel.set_point_enabled(dataset_id, index, False)
 
     def _plot_tab_changed(self, index: int) -> None:
-        if index == self.document.project.ui_state.plot_tab_index:
-            return
-        self._commit_workspace(plot_tab_index=index)
+        if index != self.document.project.ui_state.plot_tab_index:
+            self._capture_workspace()
 
     def _workspace_changed(self, _position: int, _index: int) -> None:
-        self._commit_workspace()
+        self._capture_workspace()
 
-    def _commit_workspace(self, *, plot_tab_index: int | None = None) -> None:
+    def _capture_workspace(self) -> None:
         current = self.document.project
-        state = replace(
-            current.ui_state,
-            workspace_splitter_sizes=tuple(self.workspace_splitter.sizes()),
-            plot_tab_index=(
-                current.ui_state.plot_tab_index
-                if plot_tab_index is None
-                else plot_tab_index
-            ),
-        )
-        updated = api.set_workspace_state(current, state)
-        if updated == current:
+        updated = capture_project(current, self.workspace_view)
+        if updated is current:
             return
         try:
             self.document.replace_project(updated)
         except Exception:
-            blocker = QSignalBlocker(self.workspace_splitter)
-            self.workspace_splitter.setSizes(
-                list(current.ui_state.workspace_splitter_sizes)
-            )
-            del blocker
+            restore_project(self.workspace_view, current)
 
-    @property
-    def close_pending(self) -> bool:
-        return self._close_pending
-
-    @property
-    def close_cancel_timer(self) -> QTimer:
-        return self._close_cancel_timer
-
-    @property
-    def force_close_prompt(self) -> QMessageBox | None:
-        return self._force_close_prompt
+    def _restore_workspace(self, project: api.XrrProject) -> None:
+        restore_project(self.workspace_view, project)
 
     def _require_idle(self, operation: str) -> None:
         if self._operation_is_running():
@@ -200,6 +191,40 @@ class MainWindow(QMainWindow):
         self._require_idle("save a project")
         self.document.save(path)
         return self.document.path
+
+    def start_fit(self) -> bool:
+        if self._operation_is_running():
+            raise RuntimeError("cannot start fit while an operation is running")
+        return self.fit_panel.start_fit()
+
+    def cancel_fit(self) -> None:
+        self.fit_panel.controller.cancel()
+
+    def export_results(self, directory: str | object):
+        manifest = self.export_workflow.export_results(directory)
+        self._refresh_operation_state()
+        return manifest
+
+    def export_results_dialog(self) -> object | None:
+        manifest = self.export_workflow.export_results_dialog(self)
+        self._refresh_operation_state()
+        return manifest
+
+    def export_summary_text(self) -> str:
+        return self.export_workflow.summary_text
+
+    def fit_is_ready(self) -> bool:
+        return self._fit_readiness().ready
+
+    def fit_readiness_text(self) -> str:
+        readiness = self._fit_readiness()
+        return "已就绪" if readiness.ready else readiness.message
+
+    def _fit_readiness(self) -> api.FitReadiness:
+        try:
+            return api.preflight_fit(self.document.project)
+        except (OSError, ValueError) as error:
+            return api.FitReadiness(False, str(error))
 
     def select_active_dataset(self, dataset_id: str | None) -> None:
         self.document.select_active_dataset(dataset_id)
@@ -232,20 +257,33 @@ class MainWindow(QMainWindow):
         if self._operation_controller is not None:
             raise RuntimeError("operation controller is already attached")
         controller.running_changed.connect(self._resume_pending_close)
+        controller.running_changed.connect(self._refresh_operation_state)
         self._operation_controller = controller
-
-    def _operation_controllers(self) -> tuple[object, ...]:
-        return (() if self._operation_controller is None else (self._operation_controller,))
+        self._refresh_operation_state()
 
     def _operation_is_running(self) -> bool:
-        return any(controller.is_running for controller in self._operation_controllers())
+        return operation_is_running(self)
+
+    def _operation_controllers(self) -> tuple[object, ...]:
+        return operation_controllers(self)
+
+    def _operation_running_changed(self, running: bool) -> None:
+        self._refresh_operation_state()
+        self._resume_pending_close(running)
+
+    def _has_exportable_results(self) -> bool:
+        return has_exportable_results(self)
+
+    def _refresh_operation_state(self, *_args) -> None:
+        refresh_operation_state(self)
 
     def _is_user_close(self, event: object) -> bool:
         if self._resume_user_close:
             return True
         if not self.isVisible():
             return False
-        return bool(event.spontaneous())
+        spontaneous = event.spontaneous
+        return bool(spontaneous())
 
     def _confirm_discard_changes(self) -> bool:
         response = QMessageBox.question(
@@ -264,6 +302,15 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         event.accept()
+        self._release_workspace()
+
+    def _release_workspace(self) -> None:
+        if self._workspace_released:
+            return
+        self._workspace_released = True
+        self.document.unregister_project_projection(self._project_plots)
+        self.document.unregister_project_projection(self._project_workspace)
+        self.plot_panel.release_resources()
 
     def closeEvent(self, event: object) -> None:
         if not self._operation_is_running():

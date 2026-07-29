@@ -13,6 +13,8 @@ from typing import Callable, Mapping, Sequence
 
 PYTHON = "{python}"
 REPORT = "{report}"
+ROOT = "{root}"
+ARTIFACT = "{artifact}"
 Runner = Callable[..., object]
 
 
@@ -81,6 +83,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/integration/test_joint_fit_workflow.py",
                 "tests/integration/test_batch_resume.py",
                 "tests/integration/test_export_workflow.py",
+                "tests/integration/test_gui_project_workflow.py",
                 "-q",
             ),
         )
@@ -98,6 +101,20 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/regression/test_recovery_metrics.py",
                 "tests/regression/test_profile_basin_regressions.py",
                 "-q",
+            ),
+        )
+    ),
+    "distribution": Mode(
+        commands=(
+            (
+                PYTHON,
+                "tools/verify_distribution.py",
+                "--repo-root",
+                ROOT,
+                "--report-dir",
+                REPORT,
+                "--artifact-dir",
+                ARTIFACT,
             ),
         )
     ),
@@ -122,10 +139,23 @@ def build_environment(repo_root: str | Path, report_dir: str | Path) -> dict[str
     return environment
 
 
-def _materialize(command: Sequence[str], report_dir: Path) -> tuple[str, ...]:
-    replacements = {PYTHON: sys.executable, REPORT: str(report_dir)}
+def _materialize(
+    command: Sequence[str],
+    report_dir: Path,
+    repo_root: Path,
+    artifact_dir: Path | None,
+) -> tuple[str, ...]:
+    if ARTIFACT in command and artifact_dir is None:
+        raise ValueError("artifact directory is required by this mode")
+    replacements = {
+        PYTHON: sys.executable,
+        REPORT: str(report_dir),
+        ROOT: str(repo_root),
+        ARTIFACT: "" if artifact_dir is None else str(artifact_dir),
+    }
     return tuple(
-        replacements.get(token, token.replace(REPORT, str(report_dir))) for token in command
+        replacements.get(token, token.replace(REPORT, str(report_dir)))
+        for token in command
     )
 
 
@@ -145,18 +175,22 @@ def run_mode(
     *,
     repo_root: str | Path,
     report_dir: str | Path,
+    artifact_dir: str | Path | None = None,
     runner: Runner = subprocess.run,
 ) -> None:
     root = Path(repo_root).resolve()
     report = Path(report_dir).resolve()
+    artifact = None if artifact_dir is None else Path(artifact_dir).resolve()
     report.mkdir(parents=True, exist_ok=True)
     environment = build_environment(root, report)
     hygiene = (sys.executable, "tools/check_hygiene.py")
+    if name == "distribution":
+        hygiene = (*hygiene, "--require-git-clean")
     _invoke(runner, hygiene, root=root, environment=environment)
     failure: BaseException | None = None
     try:
         for command in mode.commands:
-            args = _materialize(command, report)
+            args = _materialize(command, report, root, artifact)
             _invoke(runner, args, root=root, environment=environment)
     except BaseException as error:
         failure = error
@@ -169,16 +203,34 @@ def run_mode(
         raise failure
 
 
-def _run_with_report(name: str, report_dir: Path) -> None:
+def _run_with_report(
+    name: str,
+    report_dir: Path,
+    artifact_dir: Path | None = None,
+) -> None:
     root = Path(__file__).resolve().parents[1]
-    run_mode(name, MODE_REGISTRY[name], repo_root=root, report_dir=report_dir)
+    run_mode(
+        name,
+        MODE_REGISTRY[name],
+        repo_root=root,
+        report_dir=report_dir,
+        artifact_dir=artifact_dir,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=tuple(MODE_REGISTRY))
     parser.add_argument("--report-dir", type=Path)
+    parser.add_argument("--artifact-dir", type=Path)
     args = parser.parse_args(argv)
+    if args.mode == "distribution":
+        if args.report_dir is None or args.artifact_dir is None:
+            parser.error("distribution requires --report-dir and --artifact-dir")
+        _run_with_report(args.mode, args.report_dir, args.artifact_dir)
+        return 0
+    if args.artifact_dir is not None:
+        parser.error("--artifact-dir is only valid with distribution")
     if args.report_dir is not None:
         _run_with_report(args.mode, args.report_dir)
         return 0
