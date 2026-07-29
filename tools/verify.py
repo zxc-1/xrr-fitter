@@ -104,6 +104,12 @@ MODE_REGISTRY: Mapping[str, Mode] = {
             ),
         )
     ),
+    "r22-reference": Mode(
+        commands=(
+            PYTEST_PREFIX
+            + ("tests/acceptance/test_r22_reference_equivalence.py", "-q"),
+        )
+    ),
     "distribution": Mode(
         commands=(
             (

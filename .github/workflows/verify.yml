@@ -226,6 +226,37 @@ jobs:
         "$PYTHON" tools/verify.py regression
 
         '
+  r22-reference:
+    runs-on:
+    - self-hosted
+    - macOS
+    - ARM64
+    - xrr-ci
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Verify r22-reference
+      shell: bash
+      run: 'set -euo pipefail
+
+        python3.12 -c ''import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)''
+
+        python3.12 -m venv "$RUNNER_TEMP/venv"
+
+        PYTHON="$RUNNER_TEMP/venv/bin/python"
+
+        "$PYTHON" -m pip install pip==26.1.2
+
+        "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+
+        "$PYTHON" tools/check_hygiene.py --require-git-clean
+
+        QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py r22-reference --report-dir "$RUNNER_TEMP/r22-reference"
+
+        '
   distribution:
     runs-on:
     - self-hosted
@@ -274,6 +305,7 @@ jobs:
     - integration
     - spawn
     - regression
+    - r22-reference
     - distribution
     if: always()
     runs-on:
@@ -292,6 +324,7 @@ jobs:
         GUI_RESULT: ${{ needs.gui.result }}
         INTEGRATION_RESULT: ${{ needs.integration.result }}
         SPAWN_RESULT: ${{ needs.spawn.result }}
+        R22_REFERENCE_RESULT: ${{ needs.r22-reference.result }}
         DISTRIBUTION_RESULT: ${{ needs.distribution.result }}
       shell: bash
       run: 'set -euo pipefail
@@ -309,6 +342,8 @@ jobs:
         test "$INTEGRATION_RESULT" = success
 
         test "$SPAWN_RESULT" = success
+
+        test "$R22_REFERENCE_RESULT" = success
 
         test "$DISTRIBUTION_RESULT" = success
 

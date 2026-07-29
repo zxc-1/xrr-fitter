@@ -7,7 +7,6 @@ Group adapters are supplied by a closed registry; filesystem discovery is forbid
 
 from __future__ import annotations
 
-import argparse
 import copy
 from dataclasses import dataclass
 import hashlib
@@ -23,6 +22,8 @@ from reference_comparison import compare_value  # noqa: E402
 from reference_groups.registry import GROUP_REGISTRY  # noqa: E402
 from reference_manifest import GROUPS, validate_groups  # noqa: E402
 from reference_provenance import validate_provenance  # noqa: E402
+from r22_reference_cli import run_cli  # noqa: E402
+from r22_reference_gate import bind_oracle, run_all_groups  # noqa: E402
 
 
 MANIFEST_FIELDS = {
@@ -313,7 +314,14 @@ def _validate_group_policies(
         compare_value(reference, reference, entry["comparison_policy"])
 
 
-def self_check(manifest_path: str | Path) -> dict[str, object]:
+def self_check(
+    manifest_path: str | Path,
+    *,
+    collections_root: str | Path | None = None,
+    release_spec: str | Path | None = None,
+) -> dict[str, object]:
+    if (collections_root is None) != (release_spec is None):
+        raise ValueError("collections root and release spec are required together")
     path = Path(manifest_path)
     manifest = _json(path, "reference manifest")
     source_commit = _manifest_identity(manifest)
@@ -326,13 +334,16 @@ def self_check(manifest_path: str | Path) -> dict[str, object]:
     expected_files = {*records, *(str(record["path"]) for record in inputs.values())}
     _tree_paths(root, expected_files)
     _validate_group_policies(root, groups)
-    return {
+    result = {
         "schema": manifest["schema"],
         "source_commit": source_commit,
         "group_count": len(groups),
         "artifact_count": len(records),
         "input_count": len(inputs),
     }
+    if collections_root is not None and release_spec is not None:
+        result.update(bind_oracle(path, collections_root, release_spec))
+    return result
 
 
 def _artifact_value(root: Path, relative: str) -> object:
@@ -385,14 +396,12 @@ def _replay_context(
     )
 
 
-def compare_group(
+def _compare_group(
     manifest_path: str | Path,
     group: str,
-    registry: Mapping[str, Callable[[ReplayContext], object]] | None = None,
+    registry: Mapping[str, Callable[[ReplayContext], object]],
 ) -> dict[str, object]:
-    self_check(manifest_path)
-    selected = GROUP_REGISTRY if registry is None else registry
-    if group not in selected:
+    if group not in registry:
         raise ValueError(f"reference group is not registered: {group}")
     manifest = _json(Path(manifest_path), "reference manifest")
     root = Path(manifest_path).parent
@@ -402,26 +411,55 @@ def compare_group(
         relative: _artifact_value(root, relative)
         for relative in entry["artifacts"]
     }
-    actual = selected[group](_replay_context(root, manifest, group, entry))
+    actual = registry[group](_replay_context(root, manifest, group, entry))
     compare_value(reference, actual, entry.get("comparison_policy", "exact"))
     return {"group": group, "status": "PASS", "artifact_count": len(reference)}
 
 
+def compare_group(
+    manifest_path: str | Path,
+    group: str,
+    registry: Mapping[str, Callable[[ReplayContext], object]] | None = None,
+) -> dict[str, object]:
+    self_check(manifest_path)
+    selected = cast(
+        Mapping[str, Callable[[ReplayContext], object]],
+        GROUP_REGISTRY if registry is None else registry,
+    )
+    return _compare_group(manifest_path, group, selected)
+
+
+def compare_all_groups(
+    manifest_path: str | Path,
+    report_dir: str | Path,
+    *,
+    registry: Mapping[str, Callable[[ReplayContext], object]] | None = None,
+    repo_root: str | Path | None = None,
+) -> dict[str, object]:
+    selected = cast(
+        Mapping[str, Callable[[ReplayContext], object]],
+        GROUP_REGISTRY if registry is None else registry,
+    )
+    repository = Path(__file__).resolve().parents[1] if repo_root is None else Path(repo_root)
+    return run_all_groups(
+        manifest_path,
+        report_dir,
+        group_names=GROUPS,
+        registry=selected,
+        repo_root=repository,
+        self_check=lambda: self_check(manifest_path),
+        compare_group=lambda group: _compare_group(manifest_path, group, selected),
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--self-check", type=Path)
-    parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--group", choices=GROUPS)
-    args = parser.parse_args(argv)
-    if args.self_check is not None:
-        if args.manifest is not None or args.group is not None:
-            parser.error("--self-check cannot be combined with --manifest or --group")
-        print(json.dumps(self_check(args.self_check), sort_keys=True))
-        return 0
-    if args.manifest is None or args.group is None:
-        parser.error("--manifest and --group are required together")
-    print(json.dumps(compare_group(args.manifest, args.group), sort_keys=True))
-    return 0
+    return run_cli(
+        argv,
+        groups=GROUPS,
+        self_check=self_check,
+        compare_group=compare_group,
+        compare_all=compare_all_groups,
+    )
 
 
 if __name__ == "__main__":

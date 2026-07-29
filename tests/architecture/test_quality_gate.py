@@ -21,6 +21,7 @@ STANDARD_MODES = (
     "integration",
     "spawn",
     "regression",
+    "r22-reference",
     "distribution",
 )
 
@@ -90,6 +91,16 @@ def _distribution_job() -> dict[str, object]:
     return job
 
 
+def _r22_reference_job() -> dict[str, object]:
+    job = _standard_job("r22-reference")
+    job["steps"][1]["run"] = _standard_run("r22-reference").replace(
+        '"$PYTHON" tools/verify.py r22-reference',
+        'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py r22-reference '
+        '--report-dir "$RUNNER_TEMP/r22-reference"',
+    )
+    return job
+
+
 def _checkpoint_job() -> dict[str, object]:
     return {
         "needs": list(STANDARD_MODES),
@@ -107,6 +118,7 @@ def _checkpoint_job() -> dict[str, object]:
                     "GUI_RESULT": "${{ needs.gui.result }}",
                     "INTEGRATION_RESULT": "${{ needs.integration.result }}",
                     "SPAWN_RESULT": "${{ needs.spawn.result }}",
+                    "R22_REFERENCE_RESULT": "${{ needs.r22-reference.result }}",
                     "DISTRIBUTION_RESULT": "${{ needs.distribution.result }}",
                 },
                 "shell": "bash",
@@ -119,6 +131,7 @@ def _checkpoint_job() -> dict[str, object]:
                     'test "$GUI_RESULT" = success\n'
                     'test "$INTEGRATION_RESULT" = success\n'
                     'test "$SPAWN_RESULT" = success\n'
+                    'test "$R22_REFERENCE_RESULT" = success\n'
                     'test "$DISTRIBUTION_RESULT" = success\n'
                 ),
             }
@@ -143,6 +156,7 @@ def _expected_workflow() -> dict[str, object]:
             "integration": _standard_job("integration"),
             "spawn": _standard_job("spawn"),
             "regression": _standard_job("regression"),
+            "r22-reference": _r22_reference_job(),
             "distribution": _distribution_job(),
             "checkpoint": _checkpoint_job(),
         },
@@ -181,17 +195,21 @@ def test_checkpoint_step_requires_every_gate() -> None:
         "GUI_RESULT": "${{ needs.gui.result }}",
         "INTEGRATION_RESULT": "${{ needs.integration.result }}",
         "SPAWN_RESULT": "${{ needs.spawn.result }}",
+        "R22_REFERENCE_RESULT": "${{ needs.r22-reference.result }}",
         "DISTRIBUTION_RESULT": "${{ needs.distribution.result }}",
     }
-    commands = step["run"].splitlines()
-    assert 'test "$QUALITY_RESULT" = success' in commands
-    assert 'test "$TOOLS_RESULT" = success' in commands
-    assert 'test "$UNIT_RESULT" = success' in commands
-    assert 'test "$GUI_RESULT" = success' in commands
-    assert 'test "$INTEGRATION_RESULT" = success' in commands
-    assert 'test "$SPAWN_RESULT" = success' in commands
-    assert 'test "$REGRESSION_RESULT" = success' in commands
-    assert 'test "$DISTRIBUTION_RESULT" = success' in commands
+    assert step["run"].splitlines() == [
+        "set -euo pipefail",
+        'test "$QUALITY_RESULT" = success',
+        'test "$TOOLS_RESULT" = success',
+        'test "$UNIT_RESULT" = success',
+        'test "$REGRESSION_RESULT" = success',
+        'test "$GUI_RESULT" = success',
+        'test "$INTEGRATION_RESULT" = success',
+        'test "$SPAWN_RESULT" = success',
+        'test "$R22_REFERENCE_RESULT" = success',
+        'test "$DISTRIBUTION_RESULT" = success',
+    ]
 
 
 def test_concurrency_never_cancels_an_exact_sha_run() -> None:
@@ -237,6 +255,14 @@ def test_gui_job_uses_offscreen_qt_platform() -> None:
     assert 'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py gui' in commands
 
 
+def test_r22_reference_job_uses_offscreen_qt_and_external_report_directory() -> None:
+    commands = _payload()["jobs"]["r22-reference"]["steps"][1]["run"].splitlines()
+    assert (
+        'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py r22-reference '
+        '--report-dir "$RUNNER_TEMP/r22-reference"'
+    ) in commands
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -255,6 +281,7 @@ def test_gui_job_uses_offscreen_qt_platform() -> None:
             {"uses": "actions/cache@" + "a" * 40}
         ),
         lambda payload: payload["jobs"]["tools"].__setitem__("if", "false"),
+        lambda payload: payload["jobs"]["r22-reference"].__setitem__("if", "false"),
     ],
 )
 def test_exact_workflow_contract_rejects_success_bypasses(mutate) -> None:

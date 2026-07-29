@@ -26,6 +26,7 @@ def _registry_names() -> tuple[str, ...]:
         "integration",
         "spawn",
         "regression",
+        "r22-reference",
         "distribution",
     )
 
@@ -91,6 +92,10 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
         module.PYTEST_PREFIX
         + ("tests/integration/test_process_workers.py", "-q"),
     )
+    expected_r22_reference = (
+        module.PYTEST_PREFIX
+        + ("tests/acceptance/test_r22_reference_equivalence.py", "-q"),
+    )
     expected_distribution = (
         (
             module.PYTHON,
@@ -110,6 +115,7 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
     assert module.MODE_REGISTRY["integration"].commands == expected_integration
     assert module.MODE_REGISTRY["spawn"].commands == expected_spawn
     assert module.MODE_REGISTRY["regression"].commands == expected_regression
+    assert module.MODE_REGISTRY["r22-reference"].commands == expected_r22_reference
     assert module.MODE_REGISTRY["distribution"].commands == expected_distribution
 
 
