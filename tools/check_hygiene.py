@@ -9,7 +9,16 @@ import subprocess
 from typing import Iterable, Sequence
 
 
-ALLOWED_DIRS = {".github", "docs", "examples", "src", "tests", "tools", "verification"}
+ALLOWED_DIRS = {
+    ".github",
+    "docs",
+    "examples",
+    "packaging",
+    "src",
+    "tests",
+    "tools",
+    "verification",
+}
 ALLOWED_FILES = {
     ".gitignore",
     "AGENTS.md",
@@ -17,6 +26,7 @@ ALLOWED_FILES = {
     "README.md",
     "pyproject.toml",
     "requirements-macos-arm64-py312.lock",
+    "requirements-windows-x64-py312.lock",
 }
 FORBIDDEN_ROOT_DIRS = {"artifacts", "exports", "output", "reports", "tmp"}
 FORBIDDEN_DIR_NAMES = {".pytest_cache", "__pycache__", "build", "dist", ".venv", "venv"}

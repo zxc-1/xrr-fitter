@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QLineEdit,
+    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QTreeWidget,
@@ -100,6 +101,24 @@ def test_structure_edit_replaces_active_dataset_project_structure(
     assert panel.document.project is updated
     assert panel.structure == structure
     assert events == [("sample", structure)]
+
+
+def test_imported_dataset_can_initialize_default_structure_from_visible_button(
+    qtbot,
+    tmp_path,
+) -> None:
+    panel = _panel(qtbot, tmp_path)
+    button = panel.findChild(QPushButton, "initializeStructureButton")
+    add_layer = panel.findChild(QPushButton, "addLayerButton")
+
+    assert button is not None and button.isVisibleTo(panel)
+    assert add_layer is not None and add_layer.isEnabled() is False
+
+    qtbot.mouseClick(button, Qt.LeftButton)
+
+    assert panel.structure == _bare()
+    assert button.isHidden()
+    assert add_layer.isEnabled() is True
 
 
 def test_structure_edit_failure_rolls_back_project_editor_and_signal(

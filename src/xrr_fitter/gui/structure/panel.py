@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
 
 import xrr_fitter.api as api
 from xrr_fitter.gui.document import ProjectDocument
@@ -21,6 +21,10 @@ class StructurePanel(QWidget):
         super().__init__()
         self.document = document
         self.setObjectName("structurePanel")
+        self.initialize_button = QPushButton("初始化结构")
+        self.initialize_button.setObjectName("initializeStructureButton")
+        self.initialize_button.setAccessibleName("初始化结构")
+        self.initialize_button.clicked.connect(self._initialize_default_structure)
         self.editor = StructureEditor(
             self.set_structure,
             self.accept_current_oxide,
@@ -29,6 +33,7 @@ class StructurePanel(QWidget):
         )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.initialize_button)
         layout.addWidget(self.editor)
         document.project_changed.connect(self._refresh)
         self._refresh()
@@ -64,6 +69,9 @@ class StructurePanel(QWidget):
             api.MaterialSpec(formula, formula, backing_density_g_cm3),
         )
         return self.set_structure(structure)
+
+    def _initialize_default_structure(self) -> None:
+        self.initialize_structure("Si", 2.329)
 
     def add_layer(self, layer: api.LayerSpec) -> None:
         self.editor.add_layer(layer)
@@ -134,12 +142,16 @@ class StructurePanel(QWidget):
     def _refresh(self, *_args) -> None:
         dataset_id = self.active_dataset_id
         if dataset_id is None:
+            self.initialize_button.hide()
             self.editor.clear()
             return
         dataset = self._dataset(self.document.project, dataset_id)
         if dataset.structure is None:
+            self.initialize_button.show()
+            self.initialize_button.setEnabled(True)
             self.editor.clear()
             return
+        self.initialize_button.hide()
         self.editor.load(dataset.structure, dataset.oxide_decisions)
 
     def _dataset(

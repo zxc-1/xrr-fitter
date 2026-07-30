@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTableWidget
 
 import xrr_fitter.api as api
@@ -86,6 +87,27 @@ def test_length_parameters_display_nm_but_emit_angstrom_settings(
     assert displayed[0] == pytest.approx(4.0)
     assert panel.display_unit(name) == "nm"
     assert setting == api.ParameterSetting(name, 45.0, 20.0, 100.0)
+
+
+def test_user_edit_in_parameter_table_commits_display_value_and_lock(
+    qtbot,
+    tmp_path,
+) -> None:
+    panel = _panel(qtbot, tmp_path)
+    table = panel.findChild(QTableWidget, "parameterTable")
+    name = "component.0.thickness_a"
+    row = panel.row_names.index(name)
+
+    table.item(row, 1).setText("4.5")
+    table.item(row, 5).setCheckState(Qt.CheckState.Checked)
+
+    setting = next(
+        value
+        for value in panel.document.project.datasets[0].parameter_settings
+        if value.name == name
+    )
+    assert setting.initial == pytest.approx(45.0)
+    assert setting.locked is True
 
 
 def test_parameter_commit_routes_only_through_set_parameter_settings(

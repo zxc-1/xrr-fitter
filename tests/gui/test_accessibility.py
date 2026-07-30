@@ -336,6 +336,51 @@ def test_parameter_grid_has_specific_accessible_identity_and_tooltip(qtbot) -> N
     assert table.toolTip() == "逐行查看和编辑参数初值、边界、拟合状态与共享关系"
 
 
+def test_parameter_alignment_accessibility_does_not_commit_parameter_settings(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.gui.parameters.panel import ParametersPanel
+
+    module = _accessibility()
+    source = _write_curve(tmp_path / "parameter-accessibility.xy")
+    project = api.add_dataset(
+        api.new_project(),
+        source,
+        api.InstrumentSpec(instrument_id="parameter-accessibility"),
+    )
+    project = api.set_structure(
+        project,
+        "parameter-accessibility",
+        api.StructureSpec(
+            api.MaterialSpec("Air", None, None, 0.0j),
+            (
+                api.LayerSpec(
+                    "film",
+                    api.MaterialSpec("SiO2", "SiO2", 2.20),
+                    40.0,
+                    roughness_a=3.0,
+                ),
+            ),
+            api.MaterialSpec("Si", "Si", 2.329),
+        ),
+    )
+    document = ProjectDocument(project)
+    panel = ParametersPanel(document)
+    qtbot.addWidget(panel)
+    events: list[object] = []
+    panel.settings_changed.connect(
+        lambda dataset_id, settings: events.append((dataset_id, settings))
+    )
+
+    module.configure_accessibility(panel)
+
+    assert document.project is project
+    assert document.project.datasets[0].parameter_settings == ()
+    assert events == []
+
+
 def test_primary_commands_have_precise_accessible_names_and_tooltips(qtbot) -> None:
     from xrr_fitter.gui.fitting.panel import FitPanel
     from xrr_fitter.gui.main_window import MainWindow

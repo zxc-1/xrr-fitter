@@ -104,6 +104,8 @@ class ParameterTable(QTableWidget):
         )
         for column, value in enumerate(values):
             item = QTableWidgetItem(value)
+            if column in (0, 4):
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             if column == 0:
                 item.setData(Qt.ItemDataRole.UserRole, definition.name)
                 item.setToolTip(definition.name)

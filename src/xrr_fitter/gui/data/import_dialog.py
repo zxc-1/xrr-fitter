@@ -211,7 +211,7 @@ class ImportDialog(QDialog):
         self._refresh_geometry_controls()
 
     def _build_buttons(self) -> None:
-        self.mapping_button = QPushButton("列映射…")
+        self.mapping_button = QPushButton("高级列映射…")
         self.mapping_button.setObjectName("columnMappingButton")
         self.mapping_button.clicked.connect(self._edit_column_mapping)
         self.validation_label = QLabel(VALIDATION_TEXT)

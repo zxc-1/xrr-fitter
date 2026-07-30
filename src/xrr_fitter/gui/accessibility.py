@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QApplication,
@@ -49,6 +49,7 @@ ACCESSIBILITY_SPECS = (
     AccessibilitySpec("importFilesButton", "导入文件", "选择一个或多个 XRR 数据文件并确认导入设置"),
     AccessibilitySpec("importFolderButton", "导入文件夹", "选择 XRR 数据文件夹并确认批量导入设置"),
     AccessibilitySpec("datasetTree", "数据集列表", "使用键盘选择活动数据集"),
+    AccessibilitySpec("initializeStructureButton", "初始化结构", "建立 Air、空层栈和 Si 基底"),
     AccessibilitySpec("startFitButton", "开始一键拟合", "运行当前项目的拟合工作流"),
     AccessibilitySpec("cancelFitButton", "取消拟合", "请求取消当前拟合"),
     AccessibilitySpec("forceStopFitButton", "强制停止拟合", "强制终止当前拟合进程"),
@@ -84,7 +85,7 @@ ACCESSIBILITY_SPECS = (
     AccessibilitySpec("beamWidthEditor", "光束宽度", "设置光束宽度，单位 mm"),
     AccessibilitySpec("backgroundModelEditor", "背景模型", "选择拟合背景模型"),
     AccessibilitySpec("resolutionDomainEditor", "分辨率域", "选择 q 或 θ 分辨率域"),
-    AccessibilitySpec("columnMappingButton", "编辑列映射", "配置源文件各数据列的含义"),
+    AccessibilitySpec("columnMappingButton", "高级列映射", "为特殊多列源文件配置各数据列的含义"),
 )
 
 
@@ -98,6 +99,7 @@ FOCUS_ORDER = (
     "importFilesButton",
     "importFolderButton",
     "datasetTree",
+    "initializeStructureButton",
     "structureTree",
     "plotModeView",
     "diagnosticTabs",
@@ -184,6 +186,7 @@ def _configure_parameter_tables(root: QWidget) -> None:
     for table in _named_widgets(root, "parameterTable"):
         if not isinstance(table, QTableWidget):
             continue
+        blocker = QSignalBlocker(table)
         table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         for row in range(table.rowCount()):
             for column in range(1, min(table.columnCount(), 5)):
@@ -192,6 +195,7 @@ def _configure_parameter_tables(root: QWidget) -> None:
                     item.setTextAlignment(
                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
                     )
+        del blocker
 
 
 def configure_accessibility(root: QWidget) -> tuple[QWidget, ...]:

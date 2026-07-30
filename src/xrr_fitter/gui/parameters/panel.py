@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSignalBlocker, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import QCheckBox, QLabel, QTabWidget, QVBoxLayout, QWidget
 
 import xrr_fitter.api as api
@@ -41,6 +41,7 @@ class ParametersPanel(QWidget):
         layout.addWidget(tabs)
         layout.addWidget(self.status_label)
         self.expert_toggle.toggled.connect(self._toggle_expert_mode)
+        self.parameter_table.itemChanged.connect(self._table_setting_changed)
         document.project_changed.connect(self._refresh)
         self._refresh()
 
@@ -139,6 +140,35 @@ class ParametersPanel(QWidget):
 
     def _toggle_expert_mode(self, enabled: bool) -> None:
         self.set_expert_mode(enabled)
+
+    def _table_setting_changed(self, item: object) -> None:
+        if item.column() not in (1, 2, 3, 5):
+            return
+        row = item.row()
+        try:
+            name_item = self.parameter_table.item(row, 0)
+            value_items = tuple(
+                self.parameter_table.item(row, column) for column in (1, 2, 3)
+            )
+            lock_item = self.parameter_table.item(row, 5)
+            if name_item is None or lock_item is None or any(
+                value is None for value in value_items
+            ):
+                raise ValueError("parameter row is incomplete")
+            name = str(name_item.data(Qt.ItemDataRole.UserRole))
+            initial, lower, upper = (
+                float(value.text()) for value in value_items
+            )
+            self.set_display_parameter(
+                name,
+                initial=initial,
+                lower=lower,
+                upper=upper,
+                locked=lock_item.checkState() == Qt.CheckState.Checked,
+            )
+        except (KeyError, ValueError) as error:
+            self._refresh()
+            self.status_label.setText(str(error))
 
     def _refresh(self, *_args) -> None:
         blocker = QSignalBlocker(self.expert_toggle)

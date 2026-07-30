@@ -7,7 +7,16 @@ import subprocess
 import pytest
 
 
-ALLOWED_ROOTS = (".github", "docs", "examples", "src", "tests", "tools", "verification")
+ALLOWED_ROOTS = (
+    ".github",
+    "docs",
+    "examples",
+    "packaging",
+    "src",
+    "tests",
+    "tools",
+    "verification",
+)
 
 
 def _git(root: Path, *args: str) -> None:
@@ -28,6 +37,10 @@ def _repo(tmp_path: Path) -> Path:
     for directory in ALLOWED_ROOTS:
         (root / directory).mkdir()
     (root / "README.md").write_text("ok\n", encoding="utf-8")
+    (root / "requirements-windows-x64-py312.lock").write_text(
+        "pyinstaller==6.21.0\n",
+        encoding="utf-8",
+    )
     _commit(root)
     return root
 
