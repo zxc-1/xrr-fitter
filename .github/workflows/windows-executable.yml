@@ -6,12 +6,10 @@ name: windows-executable
       source_ref:
         description: Annotated release tag or exact source commit to package
         required: true
-        default: R23-final
         type: string
       expected_commit:
         description: Exact 40-character source commit required after checkout
         required: true
-        default: 1c2e49cd2efa5a6c722b60593b4f6560f77a02b2
         type: string
 
 permissions:
@@ -76,6 +74,20 @@ jobs:
           python -m pip install --requirement builder/requirements-windows-x64-py312.lock
           python -m pip install --no-deps --no-build-isolation ./source
           python -m pip check
+          $packageVersion = python -c "import importlib.metadata; print(importlib.metadata.version('xrr-fitter'))"
+          if ($LASTEXITCODE -ne 0) {
+            throw "could not read the installed xrr-fitter package version"
+          }
+          $packageVersion = "$packageVersion".Trim()
+          if (-not $packageVersion) {
+            throw "installed xrr-fitter package version is empty"
+          }
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [System.IO.File]::AppendAllText(
+            $env:GITHUB_ENV,
+            "XRR_PACKAGE_VERSION=$packageVersion`n",
+            $utf8
+          )
 
       - name: Build standalone executable
         shell: pwsh
@@ -91,13 +103,13 @@ jobs:
           $release = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/windows-release"
           Move-Item `
             "$env:RUNNER_TEMP/pyinstaller-dist/xrr-fitter.exe" `
-            "$release/xrr-fitter-0.2.0-windows-x86_64.exe"
+            "$release/xrr-fitter-$env:XRR_PACKAGE_VERSION-windows-x86_64.exe"
 
       - name: Verify executable and smoke-test GUI startup
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $executable = "$env:RUNNER_TEMP/windows-release/xrr-fitter-0.2.0-windows-x86_64.exe"
+          $executable = "$env:RUNNER_TEMP/windows-release/xrr-fitter-$env:XRR_PACKAGE_VERSION-windows-x86_64.exe"
           $file = Get-Item $executable
           if ($file.Length -lt 1MB) {
             throw "standalone executable is unexpectedly small: $($file.Length) bytes"
@@ -130,7 +142,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $release = "$env:RUNNER_TEMP/windows-release"
-          $filename = "xrr-fitter-0.2.0-windows-x86_64.exe"
+          $filename = "xrr-fitter-$env:XRR_PACKAGE_VERSION-windows-x86_64.exe"
           $executable = Get-Item "$release/$filename"
           $hash = (Get-FileHash -Algorithm SHA256 $executable.FullName).Hash.ToLowerInvariant()
           $sourceTree = git -C source rev-parse 'HEAD^{tree}'
@@ -159,7 +171,7 @@ jobs:
           $json = ($manifest | ConvertTo-Json -Depth 4 -Compress) + "`n"
           $utf8 = [System.Text.UTF8Encoding]::new($false)
           [System.IO.File]::WriteAllText(
-            "$release/xrr-fitter-0.2.0-windows-x86_64.json",
+            "$release/xrr-fitter-$env:XRR_PACKAGE_VERSION-windows-x86_64.json",
             $json,
             $utf8
           )
