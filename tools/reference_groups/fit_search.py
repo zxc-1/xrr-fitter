@@ -28,6 +28,7 @@ from xrr_fitter.model.fitting import (
     FitProgress,
     FitSearchResult,
     SearchBudget,
+    candidate_selection_objective,
 )
 from xrr_fitter.model.parameters import ParameterSetting
 from xrr_fitter.fit.problem import compile_fit_problem
@@ -232,12 +233,25 @@ def _analyze(
             parameter_name=decision.parameter_name,
             checkpoint=checkpoint,
         )
-    return analyze_search_result(
+    result = analyze_search_result(
         problem,
         search,
         dataset_id=dataset_id,
-        progress=progress.append,
     )
+    winner = result.best_candidate
+    if winner is None:
+        raise ValueError("fit_search analysis has no winner")
+    progress.append(
+        FitProgress(
+            dataset_id,
+            "uncertainty",
+            1,
+            1,
+            candidate_selection_objective(winner),
+            "uncertainty completed",
+        )
+    )
+    return result
 
 
 def _stage_e_checkpoint_publisher(

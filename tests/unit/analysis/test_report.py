@@ -479,6 +479,56 @@ def _analysis_candidates(problem):
     )
 
 
+def _empty_owned_bootstrap(problem, search) -> BootstrapResult:
+    candidate = search.best_candidate
+    assert candidate is not None
+    names = tuple(variable.name for variable in problem.variables)
+    unsealed = BootstrapResult(
+        names,
+        np.empty((0, len(names))),
+        (),
+        0.0,
+    )
+    return replace(
+        unsealed,
+        candidate_id=candidate.candidate_id,
+        provenance_sha256=bootstrap_provenance_sha256(
+            problem,
+            candidate,
+            unsealed,
+        ),
+    )
+
+
+def _record_profile_report(calls, report, *_args, **kwargs):
+    calls.append("report")
+    kwargs["progress"](1, 1, "component.0.thickness_a")
+    return report
+
+
+def _record_bootstrap(calls, bootstrap_calls, problem, search, *_args, **kwargs):
+    calls.append("bootstrap")
+    bootstrap_calls.append(kwargs)
+    report_progress = kwargs["progress"]
+    report_progress(1, kwargs["sample_count"])
+    report_progress(kwargs["sample_count"], kwargs["sample_count"])
+    return _empty_owned_bootstrap(problem, search)
+
+
+def _record_classification(
+    calls,
+    report,
+    diagnostic,
+    _problem,
+    observed,
+    _report,
+    **_kwargs,
+):
+    calls.append("classify")
+    _assert_classification_inputs(observed, report, diagnostic)
+    return ConfidenceClass.CORRELATED, ("strong_correlation",)
+
+
 def _assert_diagnostic_warning(warnings: tuple[str, ...]) -> None:
     assert any(
         warning.startswith("ideal_reflectivity_above_one:")
@@ -573,6 +623,31 @@ def _assert_classification_inputs(observed, report, diagnostic) -> None:
     assert diagnostic in winner.diagnostics
 
 
+def _assert_bootstrap_invocation(module, problem, bootstrap_calls) -> None:
+    assert len(bootstrap_calls) == 1
+    bootstrap_options = dict(bootstrap_calls[0])
+    assert callable(bootstrap_options.pop("progress"))
+    assert bootstrap_options == {
+        "sample_count": problem.config.budget.bootstrap_samples,
+        "child_seed": module.uncertainty_seed(problem.config),
+        "cancelled": None,
+    }
+
+
+def _assert_analyzed_result(result, report, diagnostic, search) -> None:
+    assert result.uncertainty is report
+    assert result.confidence is ConfidenceClass.CORRELATED
+    assert result.classification_evidence == ("strong_correlation",)
+    assert diagnostic in result.best_candidate.diagnostics
+    assert result.stage_summaries[-1] == FitStageSummary(
+        "uncertainty",
+        ("E-0", "E-1", "E-2", "E-3"),
+        search.best_candidate.objective,
+        0,
+        ("completed",),
+    )
+
+
 def test_fit_dataset_runs_uncertainty_before_classifying_result(monkeypatch) -> None:
     module = _api()
     problem = _problem()
@@ -590,78 +665,92 @@ def test_fit_dataset_runs_uncertainty_before_classifying_result(monkeypatch) -> 
     calls: list[str] = []
     bootstrap_calls: list[dict[str, object]] = []
 
-    def bootstrap(*_args, **kwargs):
-        calls.append("bootstrap")
-        bootstrap_calls.append(kwargs)
-        candidate = search.best_candidate
-        assert candidate is not None
-        names = tuple(variable.name for variable in problem.variables)
-        unsealed = BootstrapResult(
-            names,
-            np.empty((0, len(names))),
-            (),
-            0.0,
-        )
-        return replace(
-            unsealed,
-            candidate_id=candidate.candidate_id,
-            provenance_sha256=bootstrap_provenance_sha256(
-                problem,
-                candidate,
-                unsealed,
-            ),
-        )
-
-    def build(*_args, **_kwargs):
-        calls.append("report")
-        return report
-
-    def classify(_problem, observed, _report, **_kwargs):
-        calls.append("classify")
-        _assert_classification_inputs(observed, report, diagnostic)
-        return ConfidenceClass.CORRELATED, ("strong_correlation",)
-
-    monkeypatch.setattr(module, "bootstrap_problem_local", bootstrap)
-    monkeypatch.setattr(module, "build_uncertainty_report", build)
-    monkeypatch.setattr(module, "classify_result_with_evidence", classify)
+    monkeypatch.setattr(
+        module,
+        "bootstrap_problem_local",
+        partial(_record_bootstrap, calls, bootstrap_calls, problem, search),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_uncertainty_report",
+        partial(_record_profile_report, calls, report),
+    )
+    monkeypatch.setattr(
+        module,
+        "classify_result_with_evidence",
+        partial(_record_classification, calls, report, diagnostic),
+    )
     progress: list[FitProgress] = []
 
     result = module.analyze_search_result(
         problem,
         search,
-        profile_names=(),
+        profile_names=("component.0.thickness_a",),
         dataset_id="curve",
         progress=progress.append,
     )
 
     assert calls == ["bootstrap", "report", "classify"]
-    assert bootstrap_calls == [
-        {
-            "sample_count": problem.config.budget.bootstrap_samples,
-            "child_seed": module.uncertainty_seed(problem.config),
-            "cancelled": None,
-        }
-    ]
-    assert result.uncertainty is report
-    assert result.confidence is ConfidenceClass.CORRELATED
-    assert result.classification_evidence == ("strong_correlation",)
-    assert diagnostic in result.best_candidate.diagnostics
-    assert result.stage_summaries[-1] == FitStageSummary(
-        "uncertainty",
-        ("E-0", "E-1", "E-2", "E-3"),
-        search.best_candidate.objective,
-        0,
-        ("completed",),
-    )
+    _assert_bootstrap_invocation(module, problem, bootstrap_calls)
+    _assert_analyzed_result(result, report, diagnostic, search)
     assert progress == [
         FitProgress(
             "curve",
-            "uncertainty",
+            "bootstrap",
+            0,
+            problem.config.budget.bootstrap_samples,
+            search.best_candidate.objective,
+            f"bootstrap 0/{problem.config.budget.bootstrap_samples}",
+        ),
+        FitProgress(
+            "curve",
+            "bootstrap",
+            1,
+            problem.config.budget.bootstrap_samples,
+            search.best_candidate.objective,
+            f"bootstrap 1/{problem.config.budget.bootstrap_samples}",
+        ),
+        FitProgress(
+            "curve",
+            "bootstrap",
+            problem.config.budget.bootstrap_samples,
+            problem.config.budget.bootstrap_samples,
+            search.best_candidate.objective,
+            f"bootstrap {problem.config.budget.bootstrap_samples}/"
+            f"{problem.config.budget.bootstrap_samples}",
+        ),
+        FitProgress(
+            "curve",
+            "profile",
+            0,
+            1,
+            search.best_candidate.objective,
+            "profile 0/1",
+        ),
+        FitProgress(
+            "curve",
+            "profile",
             1,
             1,
             search.best_candidate.objective,
-            "uncertainty completed",
-        )
+            "profile 1/1: component.0.thickness_a",
+        ),
+        FitProgress(
+            "curve",
+            "finalizing",
+            0,
+            1,
+            search.best_candidate.objective,
+            "finalizing",
+        ),
+        FitProgress(
+            "curve",
+            "finalizing",
+            1,
+            1,
+            search.best_candidate.objective,
+            "completed",
+        ),
     ]
     _assert_diagnostic_warning(result.warnings)
 

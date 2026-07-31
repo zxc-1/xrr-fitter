@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -40,12 +42,18 @@ def _buttons(name: str) -> QDialogButtonBox:
 class LayerDialog(QDialog):
     """Collect one formula-backed layer using nm for visible lengths."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        commit_layer: Callable[[api.LayerSpec], object] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("layerDialog")
         self.setWindowTitle("添加普通层")
         self.setAccessibleName("添加普通层")
         self.setModal(True)
+        self._commit_layer = commit_layer
         self._layer: api.LayerSpec | None = None
         self.name_editor = QLineEdit()
         self.name_editor.setObjectName("layerNameInput")
@@ -85,6 +93,8 @@ class LayerDialog(QDialog):
                 self.thickness_editor.value() * 10.0,
                 roughness_a=self.roughness_editor.value() * 10.0,
             )
+            if self._commit_layer is not None:
+                self._commit_layer(candidate)
         except (TypeError, ValueError) as error:
             self._show_error(error)
             return
@@ -107,12 +117,18 @@ class LayerDialog(QDialog):
 class PeriodicDialog(QDialog):
     """Collect one ordered periodic cell using an explicit layer table."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        commit_block: Callable[[api.PeriodicBlock], object] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("periodicBlockDialog")
         self.setWindowTitle("添加周期块")
         self.setAccessibleName("添加周期块")
         self.setModal(True)
+        self._commit_block = commit_block
         self._block: api.PeriodicBlock | None = None
         self.name_editor = QLineEdit()
         self.name_editor.setObjectName("periodicNameInput")
@@ -152,6 +168,8 @@ class PeriodicDialog(QDialog):
                 layers,
                 self.repeats_editor.value(),
             )
+            if self._commit_block is not None:
+                self._commit_block(candidate)
         except (TypeError, ValueError) as error:
             self.error_label.setText(str(error))
             self.error_label.show()

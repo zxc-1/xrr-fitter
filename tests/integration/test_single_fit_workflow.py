@@ -61,7 +61,17 @@ def _single_fit_snapshot(readiness, result, progress, checkpoints) -> dict[str, 
         "has_best_candidate": best is not None,
         "has_uncertainty": fit_result.uncertainty is not None,
         "has_required_progress": {item.stage for item in progress}
-        >= {"A", "B", "C", "D", "E", "uncertainty"},
+        >= {
+            "A",
+            "B",
+            "C",
+            "D",
+            "E",
+            "basin-recovery",
+            "bootstrap",
+            "profile",
+            "finalizing",
+        },
         "has_checkpoints": bool(checkpoints),
         "checkpoints_populated": all(
             item.datasets[0].checkpoint is not None for item in checkpoints

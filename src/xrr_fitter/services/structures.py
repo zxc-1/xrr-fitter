@@ -160,12 +160,11 @@ def _reconciled_sharing(
     return tuple(retained)
 
 
-def set_structure(
+def _set_dataset_structure(
     project: XrrProject,
     dataset_id: str,
     structure: StructureSpec,
 ) -> XrrProject:
-    """Persist a validated structure and reconcile all dependent declarations."""
     index = dataset_index(project, dataset_id)
     dataset = project.datasets[index]
     validate_structure(structure, dataset.beam)
@@ -196,6 +195,24 @@ def set_structure(
             compatible,
         ),
     )
+
+
+def set_structure(
+    project: XrrProject,
+    dataset_id: str,
+    structure: StructureSpec,
+) -> XrrProject:
+    """Persist one structure, propagating its topology across a joint batch."""
+    dataset_index(project, dataset_id)
+    target_ids = (
+        tuple(dataset.dataset_id for dataset in project.datasets)
+        if project.batch_mode == "joint"
+        else (dataset_id,)
+    )
+    updated = project
+    for target_id in target_ids:
+        updated = _set_dataset_structure(updated, target_id, structure)
+    return updated
 
 
 def _oxide_identity(value: OxideSuggestion | OxideDecision) -> tuple[str, str, str, str]:

@@ -98,6 +98,10 @@ ROOT_EXPORT_ORDER = (
     "batch_summary.xlsx",
     "parameter_trends.png",
 )
+LEGACY_PROGRESS_STAGES = frozenset(("A", "B", "C", "D", "E"))
+ANALYSIS_PROGRESS_STAGES = frozenset(
+    ("basin-recovery", "bootstrap", "profile", "finalizing")
+)
 
 
 def _expected_input(value: object) -> tuple[str, str, int, str]:
@@ -364,7 +368,29 @@ def _fit_workflow(project: XrrProject):
         if candidate is None:
             raise ValueError(f"services fit did not complete: {item.dataset_id}")
         fitted = select_candidate(fitted, item.dataset_id, candidate.candidate_id)
-    return result, fitted, progress, checkpoints
+    return result, fitted, _legacy_progress(progress), checkpoints
+
+
+def _legacy_progress(progress: list[object]) -> list[object]:
+    normalized = []
+    for item in progress:
+        if item.stage in LEGACY_PROGRESS_STAGES:
+            normalized.append(item)
+        elif item.stage not in ANALYSIS_PROGRESS_STAGES:
+            raise ValueError(f"services progress stage drift: {item.stage}")
+        elif (
+            item.stage == "finalizing"
+            and item.completed == item.total
+            and item.dataset_id is not None
+        ):
+            normalized.append(
+                replace(
+                    item,
+                    stage="uncertainty",
+                    message="uncertainty completed",
+                )
+            )
+    return normalized
 
 
 def _invalidation_summary(project: XrrProject) -> dict[str, object]:

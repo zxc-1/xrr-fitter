@@ -13,10 +13,12 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMainWindow, QMessageBox
 
 import xrr_fitter.api as api
+from xrr_fitter.gui import messages
 from xrr_fitter.gui.accessibility import (
     configure_accessibility,
     configure_focus_navigation,
 )
+from xrr_fitter.gui.chrome import install_chrome
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.export.dialog import ExportWorkflow
 from xrr_fitter.gui.operation_state import (
@@ -64,6 +66,7 @@ class MainWindow(QMainWindow):
             is_running=self._operation_is_running,
         )
         install_workflow_actions(self)
+        install_chrome(self)
         self._register_project_projections()
         self._connect_workflows()
         configure_accessibility(self)
@@ -78,6 +81,9 @@ class MainWindow(QMainWindow):
         self.plot_panel.fit_range_requested.connect(self._plot_range_requested)
         self.plot_panel.point_mask_requested.connect(self._plot_point_requested)
         self.plot_panel.view_changed.connect(self._plot_tab_changed)
+        self.plot_panel.import_requested.connect(
+            self.data_panel.import_files_button.click
+        )
         self.workspace_splitter.splitterMoved.connect(self._workspace_changed)
         self.left_splitter.splitterMoved.connect(self._workspace_changed)
         self.result_panel.candidate_selected.connect(self._project_candidate)
@@ -218,7 +224,7 @@ class MainWindow(QMainWindow):
 
     def fit_readiness_text(self) -> str:
         readiness = self._fit_readiness()
-        return "已就绪" if readiness.ready else readiness.message
+        return "已就绪" if readiness.ready else messages.readiness_text(readiness.message)
 
     def _fit_readiness(self) -> api.FitReadiness:
         try:

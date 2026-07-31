@@ -6,14 +6,14 @@ from dataclasses import dataclass
 
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
-    QGridLayout,
+    QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
-    QVBoxLayout,
     QWidget,
 )
 
+from xrr_fitter.gui import theme
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.project import dialogs
 
@@ -78,28 +78,29 @@ class ProjectActions(QWidget):
         self.refresh()
 
     def _build_buttons(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        grid = QGridLayout()
-        for index, spec in enumerate(BUTTON_SPECS):
+        layout.setSpacing(4)
+        for spec in BUTTON_SPECS:
             button = QPushButton(spec.text)
             button.setObjectName(spec.object_name)
             button.setAccessibleName(spec.accessible_name)
             button.setToolTip(spec.tooltip)
+            button.setProperty("commandBar", True)
             button.clicked.connect(
                 lambda _checked=False, name=spec.callback_name: getattr(
                     self._owner,
                     name,
                 )()
             )
-            grid.addWidget(button, index // 2, index % 2)
+            layout.addWidget(button)
             self._buttons[spec.object_name] = button
-        layout.addLayout(grid)
         self.source_status_label = QLabel()
         self.source_status_label.setObjectName("sourceStatusLabel")
         self.source_status_label.setAccessibleName("活动数据源状态")
-        self.source_status_label.setWordWrap(True)
-        layout.addWidget(self.source_status_label)
+
+    def button(self, object_name: str) -> QPushButton:
+        return self._buttons[object_name]
 
     def _build_actions(self) -> None:
         for object_name, text, callback_name, shortcut in ACTION_SPECS:
@@ -122,10 +123,18 @@ class ProjectActions(QWidget):
         self._buttons["reloadSourceButton"].setEnabled(enabled)
         self._buttons["relinkSourceButton"].setEnabled(enabled)
         if dataset_id is None:
-            self.source_status_label.setText("当前没有活动数据集")
+            self._show_source_status("", "", kind="")
             return
         warning = self._document.source_warning(dataset_id)
-        self.source_status_label.setText(warning or f"数据集 {dataset_id} 的源文件校验通过")
+        if warning:
+            self._show_source_status(warning.splitlines()[0], warning, kind="error")
+            return
+        self._show_source_status("源文件校验通过", "", kind="ok")
+
+    def _show_source_status(self, text: str, tooltip: str, *, kind: str) -> None:
+        self.source_status_label.setText(text)
+        self.source_status_label.setToolTip(tooltip)
+        theme.set_status_kind(self.source_status_label, kind)
 
     def _may_replace_project(self) -> bool:
         return not self._document.is_dirty or self._owner._confirm_discard_changes()

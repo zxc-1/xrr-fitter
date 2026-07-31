@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QLabel,
     QLineEdit,
     QPushButton,
     QTableWidget,
@@ -274,6 +275,41 @@ def test_add_layer_dialog_commits_explicit_nm_fields_through_direct_method(qtbot
     assert dialog.layer() == api.LayerSpec("cap", SIO2, 45.0, roughness_a=3.0)
 
 
+def test_add_layer_dialog_keeps_full_stack_error_open_then_commits_correction(
+    qtbot,
+    tmp_path,
+) -> None:
+    from xrr_fitter.gui.structure.dialogs import LayerDialog
+
+    panel = _panel(qtbot, tmp_path)
+    panel.set_structure(_bare())
+    dialog = LayerDialog(panel, commit_layer=panel.add_layer)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.findChild(QLineEdit, "layerNameInput").setText("too-rough")
+    dialog.findChild(QLineEdit, "layerFormulaInput").setText("SiO2")
+    dialog.findChild(QDoubleSpinBox, "layerDensityInput").setValue(2.2)
+    dialog.findChild(QDoubleSpinBox, "layerThicknessInput").setValue(1.0)
+    roughness = dialog.findChild(QDoubleSpinBox, "layerRoughnessInput")
+    roughness.setValue(1.0)
+    buttons = dialog.findChild(QDialogButtonBox, "layerDialogButtons")
+
+    qtbot.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Ok), Qt.LeftButton)
+
+    error = dialog.findChild(QLabel, "layerDialogError")
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    assert dialog.isVisible()
+    assert error is not None and error.isVisible()
+    assert "roughness_a must be below 4.9 A" in error.text()
+    assert panel.structure.components == ()
+
+    roughness.setValue(0.1)
+    qtbot.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Ok), Qt.LeftButton)
+
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert tuple(layer.name for layer in panel.structure.components) == ("too-rough",)
+
+
 def test_add_periodic_dialog_commits_ordered_children_through_direct_method(qtbot) -> None:
     from xrr_fitter.gui.structure.dialogs import PeriodicDialog
 
@@ -294,3 +330,42 @@ def test_add_periodic_dialog_commits_ordered_children_through_direct_method(qtbo
     assert block.name == "Mo/Si"
     assert [layer.name for layer in block.layers] == ["Mo", "Si"]
     assert [layer.thickness_a for layer in block.layers] == [25.0, 40.0]
+
+
+def test_add_periodic_dialog_keeps_full_stack_error_open_then_commits_correction(
+    qtbot,
+    tmp_path,
+) -> None:
+    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+
+    panel = _panel(qtbot, tmp_path)
+    panel.set_structure(_bare())
+    dialog = PeriodicDialog(panel, commit_block=panel.add_periodic_block)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.findChild(QLineEdit, "periodicNameInput").setText("thin repeat")
+    table = dialog.findChild(QTableWidget, "periodicLayerTable")
+    values = (
+        ("first", "SiO2", "2.2", "1", "1"),
+        ("second", "Si", "2.329", "1", "1"),
+    )
+    for row, fields in enumerate(values):
+        for column, value in enumerate(fields):
+            table.setItem(row, column, QTableWidgetItem(value))
+    buttons = dialog.findChild(QDialogButtonBox, "periodicDialogButtons")
+
+    qtbot.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Ok), Qt.LeftButton)
+
+    error = dialog.findChild(QLabel, "periodicDialogError")
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    assert dialog.isVisible()
+    assert error is not None and error.isVisible()
+    assert "roughness_a must be below 4.9 A" in error.text()
+    assert panel.structure.components == ()
+
+    table.item(0, 4).setText("0.1")
+    table.item(1, 4).setText("0.1")
+    qtbot.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Ok), Qt.LeftButton)
+
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert tuple(block.name for block in panel.structure.components) == ("thin repeat",)

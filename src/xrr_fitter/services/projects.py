@@ -18,7 +18,9 @@ from xrr_fitter.io.source import (
 )
 from xrr_fitter.io.xy import read_xy
 from xrr_fitter.model.data import with_fit_mask
+from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.project import (
+    DatasetProject,
     ProjectUiState,
     ProjectValidation,
     ScalePriorState,
@@ -35,7 +37,8 @@ SOURCE_RESTORE_ATTEMPTS = 2
 
 def new_project() -> XrrProject:
     """Create an empty project with a fresh persisted 64-bit seed."""
-    return XrrProject.new((), master_seed=secrets.randbits(64))
+    project = XrrProject.new((), master_seed=secrets.randbits(64))
+    return replace(project, fit_config=FitConfig.fast(project.master_seed))
 
 
 def load_project(path: str | Path) -> XrrProject:
@@ -236,6 +239,46 @@ def _clear_fit_state(dataset):
     )
 
 
+def _joint_structure_template(
+    datasets: tuple[DatasetProject, ...],
+    active_id: str | None,
+) -> DatasetProject | None:
+    active = next(
+        (
+            dataset
+            for dataset in datasets
+            if dataset.dataset_id == active_id and dataset.structure is not None
+        ),
+        None,
+    )
+    if active is not None:
+        return active
+    return next(
+        (dataset for dataset in datasets if dataset.structure is not None),
+        None,
+    )
+
+
+def _fill_missing_joint_structures(
+    datasets: tuple[DatasetProject, ...],
+    active_id: str | None,
+) -> tuple[DatasetProject, ...]:
+    template = _joint_structure_template(datasets, active_id)
+    if template is None:
+        return datasets
+    return tuple(
+        replace(
+            dataset,
+            structure=template.structure,
+            structure_evidence=None,
+            parameter_settings=(),
+        )
+        if dataset.structure is None
+        else dataset
+        for dataset in datasets
+    )
+
+
 def clear_fit_results(
     project: XrrProject,
     dataset_ids: Sequence[str],
@@ -275,9 +318,15 @@ def set_batch_mode(
     if mode == project.batch_mode:
         return project
     datasets = tuple(_clear_fit_state(dataset) for dataset in project.datasets)
-    return replace(
+    if mode == "joint":
+        datasets = _fill_missing_joint_structures(
+            datasets,
+            project.ui_state.active_dataset_id,
+        )
+    updated = replace(
         project,
         batch_mode=mode,
         datasets=datasets,
         ui_state=replace(project.ui_state, selected_candidate_ids=()),
     )
+    return updated

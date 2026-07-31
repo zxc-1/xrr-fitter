@@ -19,6 +19,7 @@ from xrr_fitter.io.project_codec import (
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.analysis import StructureEvidence
 from xrr_fitter.model.instrument import InstrumentSpec
+from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.project import ProjectUiState, ScalePriorState
 from xrr_fitter.services.datasets import add_dataset
 from xrr_fitter.services import projects as project_service
@@ -54,6 +55,12 @@ def test_new_project_is_empty_versioned_and_has_a_persisted_seed() -> None:
         0 <= first.master_seed < 2**64,
         first.master_seed != second.master_seed,
     ) == ((), "independent", True, True, True)
+
+
+def test_new_project_defaults_to_fast_interactive_fit_budget() -> None:
+    value = new_project()
+
+    assert value.fit_config == FitConfig.fast(value.master_seed)
 
 
 def test_save_load_round_trip_preserves_allocated_id_and_custom_display_name(

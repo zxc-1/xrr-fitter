@@ -23,6 +23,7 @@ from xrr_fitter.model.provenance import bootstrap_provenance_sha256
 
 
 BootstrapFit = Callable[[np.random.Generator, int], np.ndarray | None]
+BootstrapProgress = Callable[[int, int], None]
 
 
 def _validated_names(parameter_names: tuple[str, ...]) -> tuple[str, ...]:
@@ -49,6 +50,7 @@ def bootstrap_local(
     *,
     sample_count: int,
     child_seed: int,
+    progress: BootstrapProgress | None = None,
 ) -> BootstrapResult:
     """Aggregate callback fits in index order using one deterministic stream."""
     names = _validated_names(parameter_names)
@@ -60,11 +62,13 @@ def bootstrap_local(
         fitted = fit_sample(rng, sample_index)
         if fitted is None:
             failures += 1
-            continue
-        vector = np.asarray(fitted, dtype=float)
-        if vector.shape != (len(names),) or np.any(~np.isfinite(vector)):
-            raise ValueError("bootstrap fit returned an invalid parameter vector")
-        samples.append(vector)
+        else:
+            vector = np.asarray(fitted, dtype=float)
+            if vector.shape != (len(names),) or np.any(~np.isfinite(vector)):
+                raise ValueError("bootstrap fit returned an invalid parameter vector")
+            samples.append(vector)
+        if progress is not None:
+            progress(sample_index + 1, count)
     matrix = np.vstack(samples) if samples else np.empty((0, len(names)), dtype=float)
     failure_rate = failures / count
     if failure_rate > 0.20 or matrix.shape[0] == 0:
@@ -203,6 +207,7 @@ def bootstrap_problem_local(
     sample_count: int,
     child_seed: int,
     cancelled: Callable[[], bool] | None = None,
+    progress: BootstrapProgress | None = None,
 ) -> BootstrapResult:
     """Bootstrap one accepted candidate and refit every synthetic curve."""
     sorted_indices = _sorted_fit_indices(problem)
@@ -239,5 +244,6 @@ def bootstrap_problem_local(
         names,
         sample_count=sample_count,
         child_seed=child_seed,
+        progress=progress,
     )
     return _owned_bootstrap(problem, candidate, result)

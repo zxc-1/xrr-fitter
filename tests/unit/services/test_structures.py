@@ -20,7 +20,12 @@ from xrr_fitter.model.structure import (
     StructureSpec,
 )
 from xrr_fitter.services.datasets import add_dataset
-from xrr_fitter.services.projects import load_project, new_project, save_project
+from xrr_fitter.services.projects import (
+    load_project,
+    new_project,
+    save_project,
+    set_batch_mode,
+)
 from xrr_fitter.services.structures import (
     OXIDE_TABLE,
     OXIDE_TABLE_VERSION,
@@ -95,6 +100,51 @@ def test_structure_change_reconciles_settings_and_invalidates_derived_state(
     assert updated.datasets[0].last_valid_result is None
     assert updated.datasets[0].checkpoint is None
     assert updated.ui_state.selected_candidate_ids == ()
+
+
+def test_joint_structure_edit_applies_one_topology_to_every_dataset(
+    tmp_path: Path,
+) -> None:
+    project = new_project()
+    for dataset_id in ("first", "second"):
+        project = add_dataset(
+            project,
+            _source(tmp_path / f"{dataset_id}.xy"),
+            InstrumentSpec(instrument_id="joint-structure"),
+        )
+        project = set_structure(project, dataset_id, _bare())
+    project = set_batch_mode(project, "joint")
+    film = LayerSpec("Si3N4", MaterialSpec("Si3N4", "Si3N4", 3.17), 100.0)
+    shared_topology = StructureSpec(AIR, (film,), _bare().backing)
+
+    updated = set_structure(project, "first", shared_topology)
+
+    assert tuple(dataset.structure for dataset in updated.datasets) == (
+        shared_topology,
+        shared_topology,
+    )
+
+
+def test_entering_joint_mode_reuses_the_active_dataset_structure_for_batch(
+    tmp_path: Path,
+) -> None:
+    project = new_project()
+    for dataset_id in ("first", "second"):
+        project = add_dataset(
+            project,
+            _source(tmp_path / f"{dataset_id}.xy"),
+            InstrumentSpec(instrument_id="joint-structure"),
+        )
+    template = simple_structure()
+    project = set_structure(project, "first", template)
+    assert project.datasets[1].structure is None
+
+    updated = set_batch_mode(project, "joint")
+
+    assert tuple(dataset.structure for dataset in updated.datasets) == (
+        template,
+        template,
+    )
 
 
 def test_bare_si_substrate_triggers_sio2_suggestion() -> None:

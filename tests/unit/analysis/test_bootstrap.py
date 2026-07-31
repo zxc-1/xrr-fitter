@@ -4,6 +4,7 @@ from dataclasses import replace
 from importlib import import_module
 
 import numpy as np
+import pytest
 
 from tests.support.model_cases import prepared_data, simple_structure
 from xrr_fitter.evaluation import encode_physical_vector, evaluate_model
@@ -111,6 +112,21 @@ def test_bootstrap_failure_rate_gate_is_strictly_greater_than_twenty_percent() -
 
     assert result.failure_rate == 0.2
     assert len(result.intervals) == 1
+
+
+def test_bootstrap_reports_every_completed_sample_including_failures() -> None:
+    events: list[tuple[int, int]] = []
+
+    result = bootstrap_local(
+        lambda _rng, sample_index: None if sample_index == 1 else np.asarray([0.5]),
+        ("x",),
+        sample_count=3,
+        child_seed=125,
+        progress=lambda completed, total: events.append((completed, total)),
+    )
+
+    assert events == [(1, 3), (2, 3), (3, 3)]
+    assert result.failure_rate == pytest.approx(1.0 / 3.0)
 
 
 def test_residual_bootstrap_block_length_uses_first_zero_crossing_with_clamps() -> None:

@@ -86,6 +86,11 @@ ACCESSIBILITY_SPECS = (
     AccessibilitySpec("backgroundModelEditor", "背景模型", "选择拟合背景模型"),
     AccessibilitySpec("resolutionDomainEditor", "分辨率域", "选择 q 或 θ 分辨率域"),
     AccessibilitySpec("columnMappingButton", "高级列映射", "为特殊多列源文件配置各数据列的含义"),
+    AccessibilitySpec("emptyStateImportButton", "导入数据文件", "选择反射率数据文件并确认导入设置"),
+    AccessibilitySpec("datasetDetails", "活动数据集详情", "显示活动数据集的源文件、光路、仪器与校验摘要"),
+    AccessibilitySpec("fitReadinessStatus", "拟合就绪状态", "显示当前一键拟合的就绪状态"),
+    AccessibilitySpec("activeDatasetStatus", "活动数据集", "显示当前活动数据集名称"),
+    AccessibilitySpec("mainToolbar", "主工具栏", "项目命令、拟合控制与导出入口"),
 )
 
 

@@ -5,8 +5,10 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
+    QFrame,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QVBoxLayout,
@@ -29,33 +31,41 @@ WORKFLOW_ACTION_SPECS = (
 )
 
 
-def _column(name: str, label: str) -> QWidget:
+def _column(name: str) -> QWidget:
     widget = QWidget()
     widget.setObjectName(name)
     layout = QVBoxLayout(widget)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(0)
-    heading = QLabel(label)
-    heading.setObjectName(f"{name}Heading")
-    heading.hide()
-    layout.addWidget(heading)
-    layout.addStretch(0)
+    layout.setContentsMargins(8, 8, 8, 8)
+    layout.setSpacing(8)
     return widget
 
 
+def _section(title: str, name: str, inner: QWidget) -> QFrame:
+    frame = QFrame()
+    frame.setObjectName(name)
+    frame.setProperty("sectionCard", True)
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(10, 8, 10, 10)
+    layout.setSpacing(6)
+    heading = QLabel(title)
+    heading.setObjectName(f"{name}Header")
+    heading.setProperty("sectionHeader", True)
+    layout.addWidget(heading)
+    layout.addWidget(inner)
+    return frame
+
+
 def _install_project_column(window: object, document: object) -> QWidget:
-    project_column = _column("projectColumn", "项目与数据")
-    project_layout = project_column.layout()
+    project_column = _column("projectColumn")
     window.project_actions = ProjectActions(window, document)
     window.data_panel = DataPanel(document)
-    window.data_panel.layout().insertWidget(0, window.project_actions)
     window.structure_panel = StructurePanel(document)
     window.left_splitter = QSplitter(Qt.Orientation.Vertical)
     window.left_splitter.setObjectName("leftSplitter")
     window.left_splitter.addWidget(window.data_panel)
     window.left_splitter.addWidget(window.structure_panel)
     window.left_splitter.setSizes(list(document.project.ui_state.left_splitter_sizes))
-    project_layout.insertWidget(project_layout.count() - 1, window.left_splitter, 1)
+    project_column.layout().addWidget(window.left_splitter, 1)
     project_column.setSizePolicy(
         QSizePolicy.Policy.Ignored,
         QSizePolicy.Policy.Expanding,
@@ -65,15 +75,14 @@ def _install_project_column(window: object, document: object) -> QWidget:
 
 
 def _install_plot_column(window: object) -> QWidget:
-    plot_column = _column("plotColumn", "反射率与 SLD")
+    plot_column = _column("plotColumn")
     window.plot_panel = PlotPanel()
-    plot_layout = plot_column.layout()
-    plot_layout.insertWidget(plot_layout.count() - 1, window.plot_panel)
+    plot_column.layout().addWidget(window.plot_panel, 1)
     return plot_column
 
 
 def _install_analysis_column(window: object, document: object) -> QWidget:
-    analysis_column = _column("analysisColumn", "参数与结果")
+    analysis_column = _column("analysisColumn")
     window.parameters_panel = ParametersPanel(document)
     window.fit_panel = FitPanel(document)
     window.result_panel = ResultsPanel(document)
@@ -82,14 +91,26 @@ def _install_analysis_column(window: object, document: object) -> QWidget:
     window.export_button.setAccessibleName("导出拟合结果")
     window.export_button.setToolTip("将当前项目的拟合结果导出到所选目录")
     window.export_button.clicked.connect(window.export_results_dialog)
-    analysis_layout = analysis_column.layout()
-    for widget in (
-        window.parameters_panel,
-        window.fit_panel,
-        window.result_panel,
-        window.export_button,
-    ):
-        analysis_layout.insertWidget(analysis_layout.count() - 1, widget)
+    content = QWidget()
+    content_layout = QVBoxLayout(content)
+    content_layout.setContentsMargins(0, 0, 4, 0)
+    content_layout.setSpacing(8)
+    sections = (
+        ("参数", "parametersSection", window.parameters_panel),
+        ("拟合", "fitSection", window.fit_panel),
+        ("结果", "resultsSection", window.result_panel),
+    )
+    for title, name, panel in sections:
+        content_layout.addWidget(_section(title, name, panel))
+    content_layout.addStretch(1)
+    scroll = QScrollArea()
+    scroll.setObjectName("analysisScroll")
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setWidget(content)
+    analysis_column.layout().addWidget(scroll, 1)
     analysis_column.setSizePolicy(
         QSizePolicy.Policy.Ignored,
         QSizePolicy.Policy.Expanding,

@@ -11,8 +11,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import numpy as np
-from PySide6.QtCore import QEvent, Signal
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QStackedLayout,
+    QVBoxLayout,
+    QWidget,
+)
 
 import xrr_fitter.api as api
 from xrr_fitter.gui.plots.diagnostics import (
@@ -56,12 +63,48 @@ class _Projection:
     visible_range: tuple[float, float] | None
 
 
+def _empty_state_widget(panel: PlotPanel) -> QWidget:
+    widget = QWidget(panel)
+    widget.setObjectName("plotEmptyState")
+    title = QLabel("尚未导入数据")
+    title.setObjectName("emptyStateTitle")
+    title.setProperty("emptyTitle", True)
+    title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+    body = QLabel(
+        "导入 .xy / .dat / .txt 反射率数据后，这里将显示曲线、SLD 剖面与拟合诊断。"
+    )
+    body.setProperty("mutedText", True)
+    body.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+    body.setWordWrap(True)
+    button = QPushButton("导入数据文件…")
+    button.setObjectName("emptyStateImportButton")
+    button.setProperty("primary", True)
+    button.clicked.connect(panel.import_requested.emit)
+    hint = QLabel("也可以使用菜单「文件 ▸ 导入数据文件…」或快捷键 Ctrl+I")
+    hint.setProperty("mutedText", True)
+    hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+    row = QHBoxLayout()
+    row.addStretch(1)
+    row.addWidget(button)
+    row.addStretch(1)
+    layout = QVBoxLayout(widget)
+    layout.setSpacing(12)
+    layout.addStretch(2)
+    layout.addWidget(title)
+    layout.addWidget(body)
+    layout.addLayout(row)
+    layout.addWidget(hint)
+    layout.addStretch(3)
+    return widget
+
+
 class PlotPanel(QWidget):
     """Render one selected dataset only after a complete drawing preflight."""
 
     fit_range_requested = Signal(float, float)
     point_mask_requested = Signal(int)
     view_changed = Signal(int)
+    import_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -77,10 +120,21 @@ class PlotPanel(QWidget):
         self._released = False
         self.toolbar = PlotInteractionToolbar(self)
         self.tabs, self._views = build_tabs()
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.toolbar)
-        layout.addWidget(self.tabs, 1)
+        content = QWidget(self)
+        content.setObjectName("plotContent")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(6)
+        content_layout.addWidget(self.toolbar)
+        content_layout.addWidget(self.tabs, 1)
+        self._pages = QStackedLayout(self)
+        self._pages.addWidget(_empty_state_widget(self))
+        self._pages.addWidget(content)
+        self._sync_pages()
         self._interactions = PlotInteractionController(self, self.toolbar)
+
+    def _sync_pages(self) -> None:
+        self._pages.setCurrentIndex(0 if self._dataset_id is None else 1)
 
     def tab_titles(self) -> tuple[str, ...]:
         return tuple(self.tabs.tabText(index) for index in range(self.tabs.count()))
@@ -134,6 +188,7 @@ class PlotPanel(QWidget):
         self._dataset_id = dataset_id
         self._result = None
         self._candidate_id = None
+        self._sync_pages()
 
     def select_dataset(self, dataset_id: str) -> None:
         if dataset_id not in self._datasets:
@@ -150,6 +205,7 @@ class PlotPanel(QWidget):
         self._dataset_id = dataset_id
         self._result = None
         self._candidate_id = None
+        self._sync_pages()
 
     def update_mask(self, dataset_id: str, mask: object) -> None:
         if dataset_id not in self._datasets:
@@ -248,6 +304,7 @@ class PlotPanel(QWidget):
         self._dataset_id = prepared.dataset_id
         self._result = prepared.result
         self._candidate_id = prepared.candidate_id
+        self._sync_pages()
         self.apply_workspace(
             expert_mode=project.ui_state.expert_mode,
             tab_index=project.ui_state.plot_tab_index,

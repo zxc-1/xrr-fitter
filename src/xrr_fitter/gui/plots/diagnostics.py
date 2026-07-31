@@ -141,10 +141,22 @@ def apply_figure_font(figure: Figure) -> None:
 
 
 def draw_empty(view: DiagnosticView, title: str, message: str = "暂无可用数据") -> None:
+    # Spine visibility survives Axes.clear(), so only ticks are blanked here;
+    # hiding spines would leave later real draws without an axes frame.
     for axes in view.figure.axes:
         axes.clear()
+        axes.set_xticks(())
+        axes.set_yticks(())
     view.axes.set_title(title)
-    view.axes.text(0.5, 0.5, message, ha="center", va="center", transform=view.axes.transAxes)
+    view.axes.text(
+        0.5,
+        0.5,
+        message,
+        ha="center",
+        va="center",
+        transform=view.axes.transAxes,
+        color="#8A8A8E",
+    )
     apply_figure_font(view.figure)
     view.canvas.draw_idle()
 

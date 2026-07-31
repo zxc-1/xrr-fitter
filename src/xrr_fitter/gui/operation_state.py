@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from xrr_fitter.gui.chrome import refresh_status
+
 
 def operation_controllers(window: object) -> tuple[object, ...]:
     values = (
@@ -45,3 +47,4 @@ def refresh_operation_state(window: object) -> None:
     window.result_panel.setEnabled(not fit_running and not external_running)
     if not running:
         window.fit_panel.start_button.setEnabled(readiness.ready)
+    refresh_status(window, readiness)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
 import xrr_fitter.api as api
 from xrr_fitter.gui.document import ProjectDocument
@@ -21,9 +21,13 @@ class StructurePanel(QWidget):
         super().__init__()
         self.document = document
         self.setObjectName("structurePanel")
+        heading = QLabel("样品结构")
+        heading.setObjectName("structurePanelHeader")
+        heading.setProperty("sectionHeader", True)
         self.initialize_button = QPushButton("初始化结构")
         self.initialize_button.setObjectName("initializeStructureButton")
         self.initialize_button.setAccessibleName("初始化结构")
+        self.initialize_button.setProperty("primary", True)
         self.initialize_button.clicked.connect(self._initialize_default_structure)
         self.editor = StructureEditor(
             self.set_structure,
@@ -33,6 +37,8 @@ class StructurePanel(QWidget):
         )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(heading)
         layout.addWidget(self.initialize_button)
         layout.addWidget(self.editor)
         document.project_changed.connect(self._refresh)

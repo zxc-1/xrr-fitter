@@ -23,6 +23,8 @@ from xrr_fitter.model.project import (
     SourceUpdatePreview,
     XrrProject,
 )
+from xrr_fitter.model.structure import LayerSpec, StructureSpec
+from xrr_fitter.services.materials import initial_structure
 
 
 SERVICE_SEED_TREE_VERSION = 1
@@ -110,6 +112,7 @@ def _from_prepared(
     instrument: InstrumentSpec,
     *,
     source_path: str,
+    structure: StructureSpec | None = None,
 ) -> DatasetProject:
     return DatasetProject(
         dataset_id=dataset_id,
@@ -120,10 +123,46 @@ def _from_prepared(
         column_mapping=data.column_mapping,
         fit_mask=tuple(bool(value) for value in data.fit_mask),
         fit_range_two_theta_deg=_fit_range(data),
-        structure=None,
+        structure=structure,
         instrument=instrument,
         display_name=display_name,
     )
+
+
+def _filename_materials(stem: str) -> tuple[str, tuple[str, ...] | None]:
+    parts = stem.rsplit(maxsplit=1)
+    if len(parts) != 2 or "+" not in parts[1]:
+        return stem, None
+    formulas = tuple(value.strip() for value in parts[1].split("+"))
+    if any(not value for value in formulas):
+        return stem, None
+    return parts[0], formulas
+
+
+def _ordinary_layer_formulas(structure: StructureSpec | None) -> tuple[str, ...] | None:
+    if structure is None or any(
+        not isinstance(component, LayerSpec) or component.material.formula is None
+        for component in structure.components
+    ):
+        return None
+    return tuple(component.material.formula.strip() for component in structure.components)
+
+
+def _filename_structure(
+    project: XrrProject,
+    formulas: tuple[str, ...] | None,
+) -> StructureSpec | None:
+    if formulas is None:
+        return None
+    matching = next(
+        (
+            dataset.structure
+            for dataset in project.datasets
+            if _ordinary_layer_formulas(dataset.structure) == formulas
+        ),
+        None,
+    )
+    return initial_structure(formulas) if matching is None else matching
 
 
 def add_dataset(
@@ -145,6 +184,7 @@ def add_dataset(
         raise TypeError("beam must be a BeamSpec")
     source = Path(source_path)
     stem = source.stem
+    identifier_stem, filename_materials = _filename_materials(stem)
     data = import_data(
         source,
         beam_value,
@@ -152,11 +192,12 @@ def add_dataset(
         column_mapping,
     )
     dataset = _from_prepared(
-        _dataset_id(project, stem),
+        _dataset_id(project, identifier_stem),
         stem if display_name is None else display_name,
         data,
         instrument,
         source_path=str(source_path),
+        structure=_filename_structure(project, filename_materials),
     )
     state = project.ui_state
     if state.active_dataset_id is None:

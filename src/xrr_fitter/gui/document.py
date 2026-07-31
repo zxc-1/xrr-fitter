@@ -10,6 +10,13 @@ from PySide6.QtCore import QObject, Signal
 import xrr_fitter.api as api
 
 
+def _with_active_dataset(project: api.XrrProject) -> api.XrrProject:
+    """Give an opened project a usable selection without marking it dirty."""
+    if project.ui_state.active_dataset_id is None and project.datasets:
+        return api.select_active_dataset(project, project.datasets[0].dataset_id)
+    return project
+
+
 class ProjectDocument(QObject):
     """Own project identity, persistence path, and unsaved-change state."""
 
@@ -131,7 +138,7 @@ class ProjectDocument(QObject):
 
     def open(self, path: str | Path) -> None:
         target = Path(path)
-        project = api.load_project(target)
+        project = _with_active_dataset(api.load_project(target))
         validation = api.inspect_sources(project)
         self._precommit_project(project)
         self._project = project

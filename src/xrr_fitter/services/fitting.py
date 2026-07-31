@@ -24,7 +24,12 @@ from xrr_fitter.fit.parameters import (
 )
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.analysis import FitResult, McmcConfig, StructureEvidence
-from xrr_fitter.model.fitting import FitCheckpoint, FitEvaluationContext, FitProgress
+from xrr_fitter.model.fitting import (
+    FitCheckpoint,
+    FitEvaluationContext,
+    FitProgress,
+    candidate_selection_objective,
+)
 from xrr_fitter.model.operations import FitReadiness, ProjectFitResult
 from xrr_fitter.model.project import DatasetProject, ScalePriorState, XrrProject
 from xrr_fitter.services.datasets import (
@@ -169,14 +174,37 @@ def _search_with_profile_recovery(
     candidate = search.best_candidate
     if candidate is None:
         return search
+    objective = candidate_selection_objective(candidate)
+    if progress is not None:
+        progress(
+            FitProgress(
+                prepared.dataset_id,
+                "basin-recovery",
+                0,
+                1,
+                objective,
+                "checking profile basins",
+            )
+        )
     decision = recover_profile_basin(
         prepared.problem,
         candidate,
         cancelled=cancelled,
     )
     if decision is None:
+        if progress is not None:
+            progress(
+                FitProgress(
+                    prepared.dataset_id,
+                    "basin-recovery",
+                    1,
+                    1,
+                    objective,
+                    "basin recovery completed",
+                )
+            )
         return search
-    return continue_profile_basin(
+    continued = continue_profile_basin(
         prepared.problem,
         search,
         decision.unit_vector,
@@ -184,6 +212,18 @@ def _search_with_profile_recovery(
         cancelled=cancelled,
         checkpoint=checkpoint,
     )
+    if progress is not None:
+        progress(
+            FitProgress(
+                prepared.dataset_id,
+                "basin-recovery",
+                1,
+                1,
+                objective,
+                "basin recovery completed",
+            )
+        )
+    return continued
 
 
 def fit_prepared_dataset(
@@ -342,7 +382,23 @@ def fit_joint_datasets(
         progress=progress,
         checkpoint=checkpoint,
     )
-    return _analyze_joint_searches(problem, searches)
+    best = searches[0].best_candidate if searches else None
+    objective = float("inf") if best is None else candidate_selection_objective(best)
+    if progress is not None:
+        progress(
+            FitProgress(
+                None,
+                "finalizing",
+                0,
+                1,
+                objective,
+                "finalizing joint fit",
+            )
+        )
+    results = _analyze_joint_searches(problem, searches)
+    if progress is not None:
+        progress(FitProgress(None, "finalizing", 1, 1, objective, "completed"))
+    return results
 
 
 def _source_failure(validation) -> str | None:

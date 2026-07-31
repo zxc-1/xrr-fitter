@@ -21,11 +21,11 @@ def _step(name: str) -> dict[str, object]:
     return matches[0]
 
 
-def test_patch_release_version_is_0_2_1() -> None:
+def test_patch_release_version_is_0_2_2() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
         "project"
     ]
-    assert project["version"] == "0.2.1"
+    assert project["version"] == "0.2.2"
 
 
 def test_windows_workflow_requires_explicit_source_identity() -> None:

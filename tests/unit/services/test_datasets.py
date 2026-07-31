@@ -94,6 +94,71 @@ def test_add_dataset_preserves_an_explicit_mixed_kalpha_beam(tmp_path: Path) -> 
     assert updated.datasets[0].beam is beam
 
 
+def test_add_dataset_builds_structure_from_material_suffix_in_source_name(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        (
+            "S300-1_250904-2 Si3N4+Si+Zr",
+            "S300-1_250904-2",
+            ("Si3N4", "Si", "Zr"),
+        ),
+        (
+            "S300-1-260424-2 CrSiC+SiCMo+TaN",
+            "S300-1-260424-2",
+            ("CrSiC", "SiCMo", "TaN"),
+        ),
+    )
+    project = new_project()
+
+    for index, (stem, _dataset_id, _formulas) in enumerate(cases):
+        project = add_dataset(
+            project,
+            _write_curve(tmp_path / f"{stem}.xy", scale=index + 1.0),
+            _instrument(),
+        )
+
+    assert tuple(dataset.dataset_id for dataset in project.datasets) == tuple(
+        case[1] for case in cases
+    )
+    assert tuple(dataset.display_name for dataset in project.datasets) == tuple(
+        case[0] for case in cases
+    )
+    for dataset, (_stem, _dataset_id, formulas) in zip(
+        project.datasets,
+        cases,
+        strict=True,
+    ):
+        assert dataset.structure is not None
+        assert dataset.structure.fronting.name == "Air"
+        assert dataset.structure.backing.formula == "Si"
+        assert tuple(
+            component.material.formula for component in dataset.structure.components
+        ) == formulas
+        assert all(
+            component.material.bulk_density_g_cm3 > 0.0
+            for component in dataset.structure.components
+        )
+
+
+def test_add_dataset_reuses_matching_filename_structure_for_batch(
+    tmp_path: Path,
+) -> None:
+    project = new_project()
+    for index, sample in enumerate(("S300-1", "S300-2")):
+        project = add_dataset(
+            project,
+            _write_curve(
+                tmp_path / f"{sample} Si3N4+Si+Zr.xy",
+                scale=index + 1.0,
+            ),
+            _instrument(),
+        )
+
+    assert project.datasets[0].structure is not None
+    assert project.datasets[1].structure is project.datasets[0].structure
+
+
 def test_fit_mask_change_clears_only_derived_state_and_candidate_selection(
     tmp_path: Path,
 ) -> None:

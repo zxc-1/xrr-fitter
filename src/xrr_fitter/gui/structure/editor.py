@@ -7,7 +7,6 @@ from dataclasses import replace
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -76,6 +75,8 @@ class StructureEditor(QWidget):
         self.tree = QTreeWidget()
         self.tree.setObjectName("structureTree")
         self.tree.setHeaderLabels(TREE_HEADERS)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setUniformRowHeights(True)
         self.tree.currentItemChanged.connect(self._refresh_action_state)
         self.add_layer_button = self._button("添加普通层", "addLayerButton")
         self.add_periodic_button = self._button("添加周期块", "addPeriodicBlockButton")
@@ -86,22 +87,32 @@ class StructureEditor(QWidget):
         self.refuse_button = self._button("忽略建议", "oxideSuggestionRefuseButton")
         self.error_label = QLabel()
         self.error_label.setObjectName("structureValidationError")
+        self.error_label.setProperty("statusKind", "error")
         self.error_label.setWordWrap(True)
         self.error_label.hide()
         self._connect_actions()
-        actions = QHBoxLayout()
-        for button in (
-            self.add_layer_button,
-            self.add_periodic_button,
-            self.remove_button,
-            self.up_button,
-            self.down_button,
-        ):
-            actions.addWidget(button)
+        add_row = QHBoxLayout()
+        add_row.setSpacing(4)
+        add_row.addWidget(self.add_layer_button)
+        add_row.addWidget(self.add_periodic_button)
+        add_row.addStretch(1)
+        edit_row = QHBoxLayout()
+        edit_row.setSpacing(4)
+        edit_row.addWidget(self.remove_button)
+        edit_row.addWidget(self.up_button)
+        edit_row.addWidget(self.down_button)
+        edit_row.addStretch(1)
+        oxide_row = QHBoxLayout()
+        oxide_row.setSpacing(4)
+        oxide_row.addWidget(self.oxide_button)
+        oxide_row.addWidget(self.refuse_button)
+        oxide_row.addStretch(1)
         layout = QVBoxLayout(self)
-        layout.addLayout(actions)
-        layout.addWidget(self.oxide_button)
-        layout.addWidget(self.refuse_button)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addLayout(add_row)
+        layout.addLayout(edit_row)
+        layout.addLayout(oxide_row)
         layout.addWidget(self.tree)
         layout.addWidget(self.error_label)
 
@@ -109,6 +120,7 @@ class StructureEditor(QWidget):
         button = QPushButton(text)
         button.setObjectName(name)
         button.setAccessibleName(text)
+        button.setProperty("commandBar", True)
         return button
 
     def _connect_actions(self) -> None:
@@ -276,11 +288,7 @@ class StructureEditor(QWidget):
             self.move_component(index, index + offset)
 
     def _choose_layer(self) -> None:
-        dialog = LayerDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.add_layer(dialog.layer())
+        LayerDialog(self, commit_layer=self.add_layer).exec()
 
     def _choose_periodic(self) -> None:
-        dialog = PeriodicDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.add_periodic_block(dialog.block())
+        PeriodicDialog(self, commit_block=self.add_periodic_block).exec()

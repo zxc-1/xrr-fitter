@@ -455,6 +455,25 @@ def _workspace_trace(window: object) -> dict[str, object]:
     }
 
 
+def _normalize_workspace_height(window: object, app: object) -> None:
+    # The frozen R22 trace recorded workspace geometry with the vertical
+    # splitter owning the full 760px window height.  The R23 shell now adds
+    # menu, toolbar, and status chrome plus column padding, so the replay
+    # window grows by exactly that fixed overhead and the persisted sizes are
+    # projected again through the production restore path.  This normalizes
+    # presentation only; the semantic restore contract stays unmodified.
+    from xrr_fitter.gui.workspace import restore_project
+
+    for _attempt in range(8):
+        shortfall = 760 - window.left_splitter.height()
+        if shortfall == 0:
+            break
+        window.resize(window.width(), window.height() + shortfall)
+        app.processEvents()
+    restore_project(window.workspace_view, window.document.project)
+    app.processEvents()
+
+
 def _gui_snapshot(
     root: Path,
     fitted: api.XrrProject,
@@ -491,6 +510,7 @@ def _gui_snapshot(
         window.resize(1280, 760)
         window.show()
         app.processEvents()
+        _normalize_workspace_height(window, app)
         trace.append(
             {
                 "action": "open_project",

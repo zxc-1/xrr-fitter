@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QHBoxLayout,
+    QHeaderView,
+    QLabel,
     QMessageBox,
     QPushButton,
     QTreeWidget,
@@ -27,6 +29,8 @@ from xrr_fitter.gui.document import ProjectDocument
 DATA_FILTER = "XRR 数据 (*.xy *.dat *.txt);;所有文件 (*)"
 SUPPORTED_SUFFIXES = {".xy", ".dat", ".txt"}
 TREE_HEADERS = ("数据集", "源文件", "光路", "仪器", "状态", "SHA-256")
+COMPACT_COLUMNS = (0, 4)
+DETAIL_COLUMNS = (1, 2, 3, 5)
 
 
 class DataPanel(QWidget):
@@ -50,10 +54,15 @@ class DataPanel(QWidget):
         self._render_project()
 
     def _build_controls(self) -> None:
+        heading = QLabel("数据集")
+        heading.setObjectName("dataPanelHeader")
+        heading.setProperty("sectionHeader", True)
         self.import_files_button = QPushButton("导入文件")
         self.import_files_button.setObjectName("importFilesButton")
+        self.import_files_button.setProperty("commandBar", True)
         self.import_folder_button = QPushButton("导入文件夹")
         self.import_folder_button.setObjectName("importFolderButton")
+        self.import_folder_button.setProperty("commandBar", True)
         self.import_files_button.clicked.connect(self._import_files)
         self.import_folder_button.clicked.connect(self._import_folder)
         self.import_files_shortcut = self._shortcut("importFilesShortcut", "Ctrl+I")
@@ -68,13 +77,35 @@ class DataPanel(QWidget):
         self.tree.setAccessibleName("数据集列表")
         self.tree.setColumnCount(len(TREE_HEADERS))
         self.tree.setHeaderLabels(TREE_HEADERS)
+        self.tree.setRootIsDecorated(False)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setUniformRowHeights(True)
+        for column in DETAIL_COLUMNS:
+            self.tree.setColumnHidden(column, True)
+        header = self.tree.header()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.tree.currentItemChanged.connect(self._select_tree_item)
-        buttons = QHBoxLayout()
-        buttons.addWidget(self.import_files_button)
-        buttons.addWidget(self.import_folder_button)
+        self.details_label = QLabel()
+        self.details_label.setObjectName("datasetDetails")
+        self.details_label.setProperty("mutedText", True)
+        self.details_label.setWordWrap(True)
+        self.details_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.details_label.hide()
+        top = QHBoxLayout()
+        top.addWidget(heading)
+        top.addStretch(1)
+        top.addWidget(self.import_files_button)
+        top.addWidget(self.import_folder_button)
         layout = QVBoxLayout(self)
-        layout.addLayout(buttons)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addLayout(top)
         layout.addWidget(self.tree)
+        layout.addWidget(self.details_label)
 
     def _shortcut(self, name: str, keys: str) -> QShortcut:
         shortcut = QShortcut(QKeySequence(keys), self)
@@ -229,6 +260,33 @@ class DataPanel(QWidget):
         if active_item is not None:
             self.tree.setCurrentItem(active_item)
         del blocker
+        self._render_details()
+
+    def _render_details(self) -> None:
+        dataset_id = self.active_dataset_id
+        if dataset_id is None or not any(
+            dataset.dataset_id == dataset_id
+            for dataset in self.document.project.datasets
+        ):
+            self.details_label.clear()
+            self.details_label.hide()
+            return
+        dataset = self._dataset(dataset_id)
+        self.details_label.setText(
+            "\n".join(
+                (
+                    f"源文件：{Path(dataset.source_path).name}",
+                    f"光路：{self.beam_text(dataset_id)}",
+                    f"仪器：{self.instrument_text(dataset_id)}",
+                    f"状态：{self.status_text(dataset_id)} · "
+                    f"SHA-256 {dataset.source_sha256[:12]}…",
+                )
+            )
+        )
+        self.details_label.setToolTip(
+            f"{dataset.source_path}\nSHA-256：{dataset.source_sha256}"
+        )
+        self.details_label.show()
 
     def _tree_item(self, dataset: api.DatasetProject) -> QTreeWidgetItem:
         values = (

@@ -179,14 +179,22 @@ def _profiles(
     unit_vector: np.ndarray,
     profile_names: tuple[str, ...],
     cancelled: Callable[[], bool] | None,
+    progress: Callable[[int, int, str], None] | None = None,
 ) -> tuple[object, ...]:
     names = tuple(variable.name for variable in problem.variables)
-    requested = tuple(profile_names)
-    return tuple(
-        build_problem_profile(problem, unit_vector, name, cancelled=cancelled)
-        for name in requested
+    requested = tuple(
+        name
+        for name in profile_names
         if name in names or _validate_derived_profile(problem, name)
     )
+    profiles = []
+    for index, name in enumerate(requested, start=1):
+        profiles.append(
+            build_problem_profile(problem, unit_vector, name, cancelled=cancelled)
+        )
+        if progress is not None:
+            progress(index, len(requested), name)
+    return tuple(profiles)
 
 
 def _validate_derived_profile(problem: object, name: str) -> bool:
@@ -221,6 +229,7 @@ def build_uncertainty_report(
     profile_names: tuple[str, ...] = (),
     bootstrap: BootstrapResult | None = None,
     cancelled: Callable[[], bool] | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
 ) -> UncertaintyReport:
     """Build covariance, profile, bootstrap, and residual evidence."""
     _check_cancelled(cancelled)
@@ -233,7 +242,7 @@ def build_uncertainty_report(
         unit,
         names,
     )
-    profiles = _profiles(problem, unit, profile_names, cancelled)
+    profiles = _profiles(problem, unit, profile_names, cancelled, progress)
     _check_cancelled(cancelled)
     systematic, diagnostics, autocorrelation = _residual_evidence(problem, best)
     intervals = () if bootstrap is None else bootstrap.intervals
@@ -453,13 +462,40 @@ def analyze_search_result(
     best = search_result.best_candidate
     if best is None:
         raise ValueError("uncertainty requires a valid Stage-E winner")
+    best_objective = candidate_selection_objective(best)
+
+    def publish(stage: str, completed: int, total: int, message: str) -> None:
+        if progress is not None:
+            progress(
+                FitProgress(
+                    dataset_id,
+                    stage,
+                    completed,
+                    total,
+                    best_objective,
+                    message,
+                )
+            )
+
     if bootstrap is None:
+        bootstrap_total = problem.config.budget.bootstrap_samples
+        publish("bootstrap", 0, bootstrap_total, f"bootstrap 0/{bootstrap_total}")
+
+        def bootstrap_progress(completed: int, total: int) -> None:
+            publish(
+                "bootstrap",
+                completed,
+                total,
+                f"bootstrap {completed}/{total}",
+            )
+
         bootstrap = bootstrap_problem_local(
             problem,
             best,
-            sample_count=problem.config.budget.bootstrap_samples,
+            sample_count=bootstrap_total,
             child_seed=uncertainty_seed(problem.config),
             cancelled=cancelled,
+            progress=bootstrap_progress,
         )
         _validate_bootstrap_ownership(problem, search_result, bootstrap)
     selected_profiles = _selected_profile_names(
@@ -470,13 +506,21 @@ def analyze_search_result(
         search_result.warnings,
         cancelled,
     )
+    if selected_profiles:
+        publish("profile", 0, len(selected_profiles), f"profile 0/{len(selected_profiles)}")
+
+    def profile_progress(completed: int, total: int, name: str) -> None:
+        publish("profile", completed, total, f"profile {completed}/{total}: {name}")
+
     report = build_uncertainty_report(
         problem,
         candidates,
         profile_names=selected_profiles,
         bootstrap=bootstrap,
         cancelled=cancelled,
+        progress=profile_progress,
     )
+    publish("finalizing", 0, 1, "finalizing")
     enriched = _enrich_search_result(problem, search_result, report)
     candidates = _stage_e_candidates(enriched)
     _check_cancelled(cancelled)
@@ -488,18 +532,8 @@ def analyze_search_result(
     best = enriched.best_candidate
     if best is None:
         raise ValueError("uncertainty requires a valid Stage-E winner")
-    if progress is not None:
-        progress(
-            FitProgress(
-                dataset_id,
-                "uncertainty",
-                1,
-                1,
-                candidate_selection_objective(best),
-                "uncertainty completed",
-            )
-        )
     completed = _append_uncertainty_summary(enriched, candidates)
+    publish("finalizing", 1, 1, "completed")
     return FitResult.from_search(
         completed,
         confidence=confidence,

@@ -53,13 +53,16 @@ def test_fitting_composes_search_profile_recovery_and_analysis_in_order(
 ) -> None:
     value = _project(tmp_path)
     calls: list[object] = []
-    initial_search = SimpleNamespace(best_candidate=object())
+    initial_search = SimpleNamespace(
+        best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None)
+    )
     continued_search = object()
     decision = SimpleNamespace(
         parameter_name="component.0.thickness_a",
         unit_vector=np.array([0.25]),
     )
     analyzed = final_fit_result()
+    progress_events = []
 
     def run_search(request, **kwargs):
         calls.append(("search", request.dataset_id, kwargs["checkpoint"] is not None))
@@ -95,7 +98,11 @@ def test_fitting_composes_search_profile_recovery_and_analysis_in_order(
     monkeypatch.setattr(fitting, "AnalysisRequest", analysis_request)
     monkeypatch.setattr(fitting, "run_analysis", run_analysis)
 
-    result = fitting.fit_project(value, checkpoint_callback=lambda _project: None)
+    result = fitting.fit_project(
+        value,
+        progress_callback=progress_events.append,
+        checkpoint_callback=lambda _project: None,
+    )
 
     assert result.datasets[0].fit_result is analyzed
     assert [call[0] for call in calls] == [
@@ -107,3 +114,57 @@ def test_fitting_composes_search_profile_recovery_and_analysis_in_order(
     ]
     assert calls[2][-1] == decision.parameter_name
     assert calls[3][-1] is continued_search
+    assert [
+        (event.stage, event.completed, event.total, event.message)
+        for event in progress_events
+    ] == [
+        ("basin-recovery", 0, 1, "checking profile basins"),
+        ("basin-recovery", 1, 1, "basin recovery completed"),
+    ]
+
+
+def test_joint_fit_reports_finalizing_after_stage_e(monkeypatch) -> None:
+    prepared = (
+        SimpleNamespace(
+            dataset_id="first",
+            problem=object(),
+            updated_dataset=SimpleNamespace(checkpoint=None),
+        ),
+        SimpleNamespace(
+            dataset_id="second",
+            problem=object(),
+            updated_dataset=SimpleNamespace(checkpoint=None),
+        ),
+    )
+    searches = (
+        SimpleNamespace(
+            best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None)
+        ),
+    )
+    analyzed = (object(), object())
+    monkeypatch.setattr(fitting, "compile_joint_problem", lambda *_args: object())
+    monkeypatch.setattr(fitting, "run_joint_fit", lambda *_args, **_kwargs: searches)
+    monkeypatch.setattr(
+        fitting,
+        "_analyze_joint_searches",
+        lambda _problem, _searches: analyzed,
+    )
+    events = []
+
+    result = fitting.fit_joint_datasets(prepared, (), progress=events.append)
+
+    assert result is analyzed
+    assert [
+        (
+            event.dataset_id,
+            event.stage,
+            event.completed,
+            event.total,
+            event.best_objective,
+            event.message,
+        )
+        for event in events
+    ] == [
+        (None, "finalizing", 0, 1, 0.25, "finalizing joint fit"),
+        (None, "finalizing", 1, 1, 0.25, "completed"),
+    ]

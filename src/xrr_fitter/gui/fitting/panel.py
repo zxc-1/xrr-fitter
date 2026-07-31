@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+from xrr_fitter.gui import messages, theme
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.fitting.controller import FitController
 from xrr_fitter.gui.fitting.progress import ProgressView
@@ -46,8 +47,12 @@ class FitPanel(QWidget):
         self.batch_selector.addItem("独立拟合", "independent")
         self.batch_selector.addItem("联合拟合", "joint")
         self.batch_selector.currentIndexChanged.connect(self._batch_mode_selected)
+        batch_label = QLabel("批量模式")
+        batch_label.setObjectName("batchModeLabel")
+        batch_label.setBuddy(self.batch_selector)
         self.start_button = QPushButton("开始拟合")
         self.start_button.setObjectName("startFitButton")
+        self.start_button.setProperty("primary", True)
         self.cancel_button = QPushButton("取消")
         self.cancel_button.setObjectName("cancelFitButton")
         self.force_button = QPushButton("强制停止")
@@ -62,12 +67,17 @@ class FitPanel(QWidget):
         self.status_label = QLabel()
         self.status_label.setObjectName("fitStatusLabel")
         self.status_label.setWordWrap(True)
+        batch_row = QHBoxLayout()
+        batch_row.addWidget(batch_label)
+        batch_row.addWidget(self.batch_selector, 1)
         buttons = QHBoxLayout()
-        buttons.addWidget(self.start_button)
+        buttons.addWidget(self.start_button, 1)
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.force_button)
         layout = QVBoxLayout(self)
-        layout.addWidget(self.batch_selector)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addLayout(batch_row)
         layout.addLayout(buttons)
         layout.addWidget(self.progress_view)
         layout.addWidget(self.status_label)
@@ -91,7 +101,7 @@ class FitPanel(QWidget):
     def start_fit(self, _checked: bool = False, checkpoint_path=None) -> bool:
         readiness = api.preflight_fit(self.document.project)
         self._readiness = readiness
-        self.status_label.setText(readiness.message)
+        self._show_readiness()
         if not readiness.ready:
             self._refresh_controls()
             return False
@@ -120,17 +130,28 @@ class FitPanel(QWidget):
 
     def _publish_fit_result(self, result: api.ProjectFitResult) -> None:
         self.document.replace_project(result.updated_project)
-        self.status_label.setText("拟合完成")
+        self._show_status("拟合完成", kind="ok")
         self.result_published.emit(result)
 
     def _show_cancelled(self, reason: str) -> None:
-        self.status_label.setText(f"已取消：{reason}")
+        self._show_status(f"已取消：{reason}", kind="warn")
 
     def _show_failure(self, error: api.OperationError) -> None:
-        self.status_label.setText(f"{error.exception_type}: {error.message}")
+        self._show_status(messages.operation_error_text(error), kind="error")
         self.operation_failed.emit(error)
 
+    def _show_status(self, text: str, *, kind: str) -> None:
+        self.status_label.setText(text)
+        theme.set_status_kind(self.status_label, kind)
+
+    def _show_readiness(self) -> None:
+        self._show_status(
+            messages.readiness_text(self._readiness.message),
+            kind="ok" if self._readiness.ready else "warn",
+        )
+
     def _project_running_state(self, running: bool) -> None:
+        self.progress_view.setVisible(running)
         self._refresh_controls(running)
         self.running_changed.emit(running)
 
@@ -140,7 +161,7 @@ class FitPanel(QWidget):
         except (OSError, ValueError) as error:
             self._readiness = api.FitReadiness(False, str(error))
         if not self.is_running:
-            self.status_label.setText(self._readiness.message)
+            self._show_readiness()
         self._sync_batch_selector()
         self._refresh_controls()
 

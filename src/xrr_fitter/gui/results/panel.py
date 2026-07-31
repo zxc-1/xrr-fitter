@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+from xrr_fitter.gui import messages, theme
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.fitting.controller import FitController
 from xrr_fitter.gui.results.candidates import (
@@ -82,6 +83,8 @@ class ResultsPanel(QWidget):
         self.status_label.setObjectName("resultStatus")
         self.status_label.setWordWrap(True)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
         layout.addWidget(confidence_row)
         layout.addWidget(self.candidates)
         layout.addWidget(self.clear_button)
@@ -178,7 +181,7 @@ class ResultsPanel(QWidget):
             config,
         )
         if started:
-            self.status_label.setText("MCMC 已启动")
+            self._show_status("MCMC 已启动", kind="ok")
         else:
             self._mcmc_source_project = None
         return started
@@ -187,13 +190,13 @@ class ResultsPanel(QWidget):
         try:
             self.start_mcmc()
         except (RuntimeError, ValueError) as error:
-            self.status_label.setText(str(error))
+            self._show_status(str(error), kind="error")
 
     def _candidate_requested(self, candidate_id: str) -> None:
         candidate = self._candidate(candidate_id)
         if candidate is None:
-            self.status_label.setText("fit result is no longer current")
             self._refresh()
+            self._show_status("拟合结果已过期，候选列表已刷新", kind="warn")
             return
         try:
             if candidate_is_selectable(candidate):
@@ -204,7 +207,7 @@ class ResultsPanel(QWidget):
                 self._persist_candidate(candidate_id)
         except (KeyError, ValueError) as error:
             self._refresh()
-            self.status_label.setText(str(error))
+            self._show_status(str(error), kind="error")
 
     def _inspect_candidate(self, candidate_id: str) -> None:
         self._require_active_dataset_id()
@@ -240,7 +243,7 @@ class ResultsPanel(QWidget):
         self.uncertainty.set_result(result, visible_id)
         self.mcmc_group.setVisible(self.document.project.ui_state.expert_mode)
         self._configure_mcmc(self._candidate(visible_id))
-        self.status_label.setText(f"{len(result.candidates)} 个候选解")
+        self._show_status(f"{len(result.candidates)} 个候选解", kind="")
 
     def _clear_projection(self, message: str) -> None:
         self._set_confidence("不可用")
@@ -248,7 +251,11 @@ class ResultsPanel(QWidget):
         self.uncertainty.clear_result(message)
         self.mcmc_group.setVisible(self.document.project.ui_state.expert_mode)
         self._configure_mcmc(None)
-        self.status_label.setText(message)
+        self._show_status("", kind="")
+
+    def _show_status(self, text: str, *, kind: str) -> None:
+        self.status_label.setText(text)
+        theme.set_status_kind(self.status_label, kind)
 
     def _set_confidence(self, text: str) -> None:
         marker, color = CONFIDENCE_VISUALS.get(text, ("○", "#666666"))
@@ -295,16 +302,16 @@ class ResultsPanel(QWidget):
             )
             return
         self.document.replace_project(project)
-        self.status_label.setText("MCMC 完成")
+        self._show_status("MCMC 完成", kind="ok")
         self.mcmc_completed.emit(project)
 
     def _show_cancelled(self, reason: str) -> None:
         self._mcmc_source_project = None
-        self.status_label.setText(f"MCMC 已取消：{reason}")
+        self._show_status(f"MCMC 已取消：{reason}", kind="warn")
 
     def _show_failure(self, error: api.OperationError) -> None:
         self._mcmc_source_project = None
-        self.status_label.setText(f"{error.exception_type}: {error.message}")
+        self._show_status(messages.operation_error_text(error), kind="error")
         self.operation_failed.emit(error)
 
     def _operation_stopped(self) -> None:
