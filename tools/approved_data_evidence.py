@@ -63,7 +63,6 @@ def _build_manifest(
     report_content: bytes,
     signoff: DomainSignoff,
     signoff_content: bytes,
-    reference_content: bytes,
     record_contents: Sequence[bytes],
 ) -> ApprovedDataManifest:
     indexes = tuple(_record_index(case, content) for case, content in zip(report.cases, record_contents, strict=True))
@@ -71,7 +70,6 @@ def _build_manifest(
     return ApprovedDataManifest(
         MANIFEST_SCHEMA,
         CANDIDATE_SCHEMA,
-        hashlib.sha256(reference_content).hexdigest(),
         report.workflow_contract_sha256,
         report.environment,
         hashlib.sha256(report_content).hexdigest(),
@@ -123,7 +121,6 @@ def freeze_approved_data(
     candidate_report: str | Path,
     domain_signoff: str | Path,
     approved_data_root: str | Path,
-    r22_reference: str | Path,
     output: str | Path,
 ) -> ApprovedDataManifest:
     report_path = Path(candidate_report)
@@ -138,13 +135,11 @@ def freeze_approved_data(
         raise ValueError("domain signoff candidate report hash drift")
     records = tuple(_record(case, signoff) for case in report.cases)
     record_contents = tuple(canonical_json_bytes(record_value(item)) for item in records)
-    reference_content = _read_regular(Path(r22_reference), "R22 reference")
     manifest = _build_manifest(
         report,
         report_content,
         signoff,
         signoff_content,
-        reference_content,
         record_contents,
     )
     _validate_projection(manifest, records)
@@ -244,10 +239,5 @@ def calculate_approved_data_binding(
 def validate_approved_data(
     evidence_root: str | Path,
     approved_data_root: str | Path,
-    r22_reference: str | Path,
 ) -> ApprovedDataBinding:
-    manifest, _records, _manifest_content, _record_contents = _load_evidence(Path(evidence_root))
-    reference_content = _read_regular(Path(r22_reference), "R22 reference")
-    if hashlib.sha256(reference_content).hexdigest() != manifest.r22_reference_sha256:
-        raise ValueError("R22 reference hash drift")
     return calculate_approved_data_binding(evidence_root, approved_data_root)

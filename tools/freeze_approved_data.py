@@ -60,7 +60,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--candidate-report", type=Path, required=True)
     parser.add_argument("--domain-signoff", type=Path)
     parser.add_argument("--approved-data-root", type=Path, required=True)
-    parser.add_argument("--r22-reference", type=Path, required=True)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check-candidate", action="store_true")
     group.add_argument("--output", type=Path)
@@ -69,7 +68,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = check_candidate(
             args.candidate_report,
             args.approved_data_root,
-            args.r22_reference,
         )
         print(json.dumps({"status": "PASS", "case_count": len(report.cases)}, sort_keys=True))
         return 0
@@ -79,7 +77,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.candidate_report,
         args.domain_signoff,
         args.approved_data_root,
-        args.r22_reference,
         args.output,
     )
     print(json.dumps({"status": "PASS", "case_count": len(manifest.cases)}, sort_keys=True))

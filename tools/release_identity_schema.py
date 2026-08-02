@@ -30,7 +30,6 @@ IDENTITY_FIELDS = {
     "head_tree",
     "release_spec",
     "dependency_lock",
-    "r22_oracle_tree_sha256",
     "test_manifest",
     "approved_data",
     "artifact_manifest",
@@ -121,7 +120,6 @@ def _identity(value: object) -> R23ReleaseIdentity:
         git_oid(data["head_tree"], "head tree"),
         _repo_file(data["release_spec"], "verification/release-spec.json", "release spec"),
         _repo_file(data["dependency_lock"], "requirements-macos-arm64-py312.lock", "dependency lock"),
-        _sha256(data["r22_oracle_tree_sha256"], "R22 oracle tree"),
         _test_binding(data["test_manifest"]),
         _approved_status(data["approved_data"]),
         _external_file(data["artifact_manifest"]),
@@ -143,7 +141,6 @@ def identity_value(value: R23ReleaseIdentity) -> dict[str, object]:
         "head_tree": value.head_tree,
         "release_spec": _file_value(value.release_spec),
         "dependency_lock": _file_value(value.dependency_lock),
-        "r22_oracle_tree_sha256": value.r22_oracle_tree_sha256,
         "test_manifest": {
             "file": _file_value(value.test_manifest.file),
             "source_commit": value.test_manifest.source_commit,

@@ -112,7 +112,6 @@ class ApprovedCaseIndex:
 class ApprovedDataManifest:
     schema: str
     candidate_schema: str
-    r22_reference_sha256: str
     workflow_contract_sha256: str
     environment: CanonicalEnvironment
     candidate_report_sha256: str

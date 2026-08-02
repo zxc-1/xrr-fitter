@@ -119,15 +119,14 @@ def _external_file(path: Path, expected_name: str) -> ExternalFileRecord:
     return ExternalFileRecord(expected_name, len(content), hashlib.sha256(content).hexdigest())
 
 
-def _release_spec(repository: Path, lock: RepoFileRecord) -> tuple[RepoFileRecord, str]:
+def _release_spec(repository: Path, lock: RepoFileRecord) -> RepoFileRecord:
     path = repository / RELEASE_SPEC_PATH
     value, _content = _json_file(path, "release spec")
     if value.get("schema") != "xrr-r23-release-spec-v1":
         raise ValueError("release spec schema drift")
     if value.get("lock_sha256") != lock.sha256:
         raise ValueError("release spec dependency lock hash drift")
-    oracle = _sha256(value.get("r22_oracle_tree_sha256"), "R22 oracle tree")
-    return _repo_file(repository, RELEASE_SPEC_PATH), oracle
+    return _repo_file(repository, RELEASE_SPEC_PATH)
 
 
 def _file_record(value: object, label: str) -> dict[str, object]:
@@ -252,7 +251,7 @@ def calculate_release_identity(
     manifest_path = Path(artifact_manifest).resolve()
     git = clean_head_identity(repository)
     lock = _repo_file(repository, LOCK_PATH)
-    release_spec, oracle = _release_spec(repository, lock)
+    release_spec = _release_spec(repository, lock)
     tests = _test_manifest(repository, lock)
     manifest = _artifact_bundle(artifacts, manifest_path, git.head_commit, git.head_tree)
     return R23ReleaseIdentity(
@@ -262,7 +261,6 @@ def calculate_release_identity(
         git.head_tree,
         release_spec,
         lock,
-        oracle,
         tests,
         ApprovedDataStatus(NOT_RUN),
         _external_file(manifest_path, "artifact-manifest.json"),

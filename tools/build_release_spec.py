@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the canonical release policy from audited package, lock, and R22 inputs.
+"""Build the canonical release policy from audited package and lock inputs.
 
 The output records stable policy rather than a snapshot of the evolving source distribution.
 """
@@ -189,42 +189,6 @@ def _bind_declared(pins: dict[str, Requirement], declared: Sequence[Requirement]
             raise ValueError(f"locked version violates pyproject: {requirement.name}")
 
 
-def _frame(value: bytes) -> bytes:
-    return len(value).to_bytes(8, "big") + value
-
-
-def _oracle_record(path: Path, root: Path) -> tuple[str, int, str] | None:
-    if path.is_symlink():
-        raise ValueError("R22 oracle tree contains a symlink")
-    if path.is_dir():
-        return None
-    if not path.is_file():
-        raise ValueError("R22 oracle tree must contain only regular files and directories")
-    try:
-        content = path.read_bytes()
-    except OSError as error:
-        raise ValueError("unable to read R22 oracle file") from error
-    return (
-        path.relative_to(root).as_posix(),
-        len(content),
-        hashlib.sha256(content).hexdigest(),
-    )
-
-
-def _oracle_tree(root: Path) -> tuple[str, int]:
-    if root.is_symlink() or not root.is_dir():
-        raise ValueError("R22 oracle root must be a regular directory")
-    records = [record for path in root.rglob("*") if (record := _oracle_record(path, root))]
-    records.sort()
-    if not records:
-        raise ValueError("R22 oracle tree is empty")
-    digest = hashlib.sha256()
-    for path, size, sha256 in records:
-        for value in (path.encode("utf-8"), str(size).encode("ascii"), sha256.encode("ascii")):
-            digest.update(_frame(value))
-    return digest.hexdigest(), len(records)
-
-
 def _toml_array(values: Sequence[object]) -> str:
     if not all(isinstance(value, str) for value in values):
         raise ValueError("fixture metadata arrays must contain strings")
@@ -355,7 +319,6 @@ def build_generated_metadata(payload: dict[str, object]) -> tuple[str, ...]:
 def calculate_release_spec(
     pyproject: str | Path,
     lock_file: str | Path,
-    r22_root: str | Path,
 ) -> dict[str, object]:
     payload = _pyproject(Path(pyproject))
     project = payload["project"]
@@ -365,7 +328,6 @@ def calculate_release_spec(
     tests = tuple(project["optional-dependencies"]["test"])
     declared = _parse_requirements((*build["requires"], *runtime, *tests))
     lock_content, _ = _lock(Path(lock_file), declared)
-    oracle_hash, oracle_count = _oracle_tree(Path(r22_root))
     metadata = build_generated_metadata(payload)
     return {
         "schema": SCHEMA,
@@ -377,8 +339,6 @@ def calculate_release_spec(
         "runtime_dependencies": list(runtime),
         "test_dependencies": list(tests),
         "lock_sha256": hashlib.sha256(lock_content).hexdigest(),
-        "r22_oracle_tree_sha256": oracle_hash,
-        "r22_oracle_file_count": oracle_count,
         "wheel_content_policy": {
             "package_root": "xrr_fitter",
             "include_distribution_metadata": True,
@@ -424,10 +384,9 @@ def _atomic_write(path: Path, content: bytes) -> None:
 def write_release_spec(
     pyproject: str | Path,
     lock_file: str | Path,
-    r22_root: str | Path,
     output: str | Path,
 ) -> dict[str, object]:
-    spec = calculate_release_spec(pyproject, lock_file, r22_root)
+    spec = calculate_release_spec(pyproject, lock_file)
     _atomic_write(Path(output), _canonical(spec))
     return spec
 
@@ -436,10 +395,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pyproject", type=Path, required=True)
     parser.add_argument("--lock-file", type=Path, required=True)
-    parser.add_argument("--r22-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
-    write_release_spec(args.pyproject, args.lock_file, args.r22_root, args.output)
+    write_release_spec(args.pyproject, args.lock_file, args.output)
     return 0
 
 

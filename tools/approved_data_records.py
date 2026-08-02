@@ -93,14 +93,12 @@ def _source_tree(cases: Sequence[CandidateCase | ApprovedCaseRecord]) -> str:
 def check_candidate(
     candidate_report: str | Path,
     approved_data_root: str | Path,
-    r22_reference: str | Path,
 ) -> CandidateReport:
     report_path = Path(candidate_report)
     report = parse_candidate_report(_read_regular(report_path, "candidate report"))
     root = Path(approved_data_root)
     for case in report.cases:
         _verify_source(root, case.source)
-    _read_regular(Path(r22_reference), "R22 reference")
     return report
 
 
@@ -242,7 +240,6 @@ def manifest_value(value: ApprovedDataManifest) -> dict[str, object]:
     return {
         "schema": value.schema,
         "candidate_schema": value.candidate_schema,
-        "r22_reference_sha256": value.r22_reference_sha256,
         "workflow_contract_sha256": value.workflow_contract_sha256,
         "environment": _environment_value(value.environment),
         "candidate_report_sha256": value.candidate_report_sha256,
@@ -273,7 +270,6 @@ def _manifest(value: object) -> ApprovedDataManifest:
     names = {
         "schema",
         "candidate_schema",
-        "r22_reference_sha256",
         "workflow_contract_sha256",
         "environment",
         "candidate_report_sha256",
@@ -294,7 +290,6 @@ def _manifest(value: object) -> ApprovedDataManifest:
     return ApprovedDataManifest(
         MANIFEST_SCHEMA,
         CANDIDATE_SCHEMA,
-        _sha256(data["r22_reference_sha256"], "R22 reference"),
         _sha256(data["workflow_contract_sha256"], "workflow contract"),
         _environment(data["environment"]),
         _sha256(data["candidate_report_sha256"], "candidate report"),

@@ -334,7 +334,6 @@ def _approved_binding(root: Path, approved: Path):
     return validate_approved_data(
         evidence,
         approved,
-        root / "verification/r22/reference/manifest.json",
     )
 
 

@@ -76,7 +76,6 @@ def _fixture_repo(tmp_path: Path, distribution_module, *, empty_test_file: bool 
             {
                 "schema": "xrr-r23-release-spec-v1",
                 "lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
-                "r22_oracle_tree_sha256": "8" * 64,
             }
         )
     )
@@ -174,7 +173,6 @@ def test_identity_composes_static_bindings(
 
     assert identity.release_spec.path == "verification/release-spec.json"
     assert identity.dependency_lock.path == "requirements-macos-arm64-py312.lock"
-    assert identity.r22_oracle_tree_sha256 == "8" * 64
     assert identity.test_manifest.file.path == "verification/r23/tests.json"
     assert identity.test_manifest.source_commit != identity.head_commit
     assert identity.approved_data.status == NOT_RUN
@@ -267,7 +265,6 @@ def _replace_nested(value: object, path: tuple[object, ...], replacement: object
         (("dependency_lock", "path"), "wrong.lock"),
         (("dependency_lock", "size"), 0),
         (("dependency_lock", "sha256"), "A" * 64),
-        (("r22_oracle_tree_sha256",), "A" * 64),
         (("test_manifest", "file", "path"), "wrong.json"),
         (("test_manifest", "file", "size"), 0),
         (("test_manifest", "file", "sha256"), "A" * 64),

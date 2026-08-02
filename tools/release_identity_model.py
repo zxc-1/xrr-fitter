@@ -47,7 +47,6 @@ class R23ReleaseIdentity:
     head_tree: str
     release_spec: RepoFileRecord
     dependency_lock: RepoFileRecord
-    r22_oracle_tree_sha256: str
     test_manifest: TestManifestBinding
     approved_data: ApprovedDataStatus
     artifact_manifest: ExternalFileRecord

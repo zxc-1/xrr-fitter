@@ -94,7 +94,7 @@ def _candidate(tmp_path: Path) -> tuple[Path, dict[str, object]]:
     return raw, value
 
 
-def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path, dict[str, object]]:
+def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, object]]:
     raw, candidate = _candidate(tmp_path)
     candidate_path = tmp_path / "candidate.json"
     candidate_path.write_bytes(_canonical(candidate))
@@ -115,27 +115,25 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path, dict[str, obj
     }
     signoff_path = tmp_path / "signoff.json"
     signoff_path.write_bytes(_canonical(signoff))
-    reference = tmp_path / "r22-reference.json"
-    reference.write_bytes(b'{"schema":"frozen-reference"}\n')
     output = tmp_path / "approved-data"
-    return raw, candidate_path, signoff_path, reference, candidate
+    return raw, candidate_path, signoff_path, candidate
 
 
 def _freeze(module, tmp_path: Path):
-    raw, candidate, signoff, reference, _value = _write_inputs(tmp_path)
+    raw, candidate, signoff, _value = _write_inputs(tmp_path)
     output = tmp_path / "approved-data"
-    module.freeze_approved_data(candidate, signoff, raw, reference, output)
-    return raw, candidate, signoff, reference, output
+    module.freeze_approved_data(candidate, signoff, raw, output)
+    return raw, candidate, signoff, output
 
 
 def test_check_candidate_validates_without_writing(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("freeze_approved_data")
-    raw, candidate, _signoff, reference, _value = _write_inputs(tmp_path)
+    raw, candidate, _signoff, _value = _write_inputs(tmp_path)
 
-    checked = module.check_candidate(candidate, raw, reference)
+    checked = module.check_candidate(candidate, raw)
 
     assert tuple(case.case_id for case in checked.cases) == CASE_IDS
-    assert set(tmp_path.iterdir()) == {raw, candidate, _signoff, reference}
+    assert set(tmp_path.iterdir()) == {raw, candidate, _signoff}
 
 
 def test_freeze_atomically_publishes_manifest_and_three_records(
@@ -143,7 +141,7 @@ def test_freeze_atomically_publishes_manifest_and_three_records(
     load_tool_module,
 ) -> None:
     module = load_tool_module("freeze_approved_data")
-    raw, candidate, signoff, reference, output = _freeze(module, tmp_path)
+    raw, candidate, signoff, output = _freeze(module, tmp_path)
 
     assert {path.relative_to(output).as_posix() for path in output.rglob("*") if path.is_file()} == {
         "manifest.json",
@@ -154,7 +152,7 @@ def test_freeze_atomically_publishes_manifest_and_three_records(
     assert binding.candidate_report_sha256 == hashlib.sha256(candidate.read_bytes()).hexdigest()
     assert binding.domain_signoff_sha256 == hashlib.sha256(signoff.read_bytes()).hexdigest()
     assert binding.manifest.path == "verification/approved-data/manifest.json"
-    module.validate_approved_data(output, raw, reference)
+    module.validate_approved_data(output, raw)
 
 
 @pytest.mark.parametrize(
@@ -204,7 +202,7 @@ def test_candidate_rejects_case_path_source_run_and_operation_drift(
     path.write_bytes(_canonical(value))
 
     with pytest.raises(ValueError):
-        module.check_candidate(path, raw, tmp_path / "reference.json")
+        module.check_candidate(path, raw)
 
 
 @pytest.mark.parametrize(
@@ -237,7 +235,7 @@ def test_committed_record_parser_rejects_duplicate_evidence_paths(
     load_tool_module,
 ) -> None:
     module = load_tool_module("freeze_approved_data")
-    _raw, _candidate_path, _signoff, _reference, output = _freeze(module, tmp_path)
+    _raw, _candidate_path, _signoff, output = _freeze(module, tmp_path)
     record = output / "records" / f"{CASE_IDS[0]}.json"
     value = json.loads(record.read_text(encoding="utf-8"))
     value["runs"][0]["plots"][0]["path"] = value["runs"][0]["project"]["path"]
@@ -263,7 +261,7 @@ def test_freeze_rejects_signoff_projection_drift(
     mutation: str,
 ) -> None:
     module = load_tool_module("freeze_approved_data")
-    raw, candidate, signoff, reference, _value = _write_inputs(tmp_path)
+    raw, candidate, signoff, _value = _write_inputs(tmp_path)
     payload = json.loads(signoff.read_text(encoding="utf-8"))
     if mutation in {"reviewer", "role"}:
         payload[mutation] = ""
@@ -282,7 +280,6 @@ def test_freeze_rejects_signoff_projection_drift(
             candidate,
             signoff,
             raw,
-            reference,
             tmp_path / "approved-data",
         )
 
@@ -342,7 +339,7 @@ def test_committed_projection_detects_every_candidate_field_tamper(
     target: str,
 ) -> None:
     module = load_tool_module("freeze_approved_data")
-    raw, _candidate_path, _signoff, reference, output = _freeze(module, tmp_path)
+    raw, _candidate_path, _signoff, output = _freeze(module, tmp_path)
     path = _committed_projection_path(output, target)
     value = json.loads(path.read_text(encoding="utf-8"))
     _tamper_committed_projection(value, target)
@@ -351,7 +348,7 @@ def test_committed_projection_detects_every_candidate_field_tamper(
     with pytest.raises(ValueError):
         module.calculate_approved_data_binding(output, raw)
     with pytest.raises(ValueError):
-        module.validate_approved_data(output, raw, reference)
+        module.validate_approved_data(output, raw)
 
 
 def test_parser_rejects_duplicate_keys_and_noncanonical_json(
@@ -375,23 +372,23 @@ def test_source_drift_symlink_and_existing_output_are_rejected(
     load_tool_module,
 ) -> None:
     module = load_tool_module("freeze_approved_data")
-    raw, candidate, signoff, reference, _value = _write_inputs(tmp_path)
+    raw, candidate, signoff, _value = _write_inputs(tmp_path)
     source = raw / "inputs" / f"{CASE_IDS[0]}.xy"
     source.write_bytes(b"drift")
     with pytest.raises(ValueError):
-        module.freeze_approved_data(candidate, signoff, raw, reference, tmp_path / "out-a")
+        module.freeze_approved_data(candidate, signoff, raw, tmp_path / "out-a")
 
     source.unlink()
     source.symlink_to(raw / "inputs" / f"{CASE_IDS[1]}.xy")
     with pytest.raises(ValueError):
-        module.freeze_approved_data(candidate, signoff, raw, reference, tmp_path / "out-b")
+        module.freeze_approved_data(candidate, signoff, raw, tmp_path / "out-b")
 
     source.unlink()
     source.write_bytes(f"{CASE_IDS[0]}\n".encode())
     output = tmp_path / "out-c"
     output.mkdir()
     with pytest.raises(ValueError, match="exist"):
-        module.freeze_approved_data(candidate, signoff, raw, reference, output)
+        module.freeze_approved_data(candidate, signoff, raw, output)
 
 
 def test_atomic_failure_leaves_no_partial_output(
@@ -400,7 +397,7 @@ def test_atomic_failure_leaves_no_partial_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = load_tool_module("freeze_approved_data")
-    raw, candidate, signoff, reference, _value = _write_inputs(tmp_path)
+    raw, candidate, signoff, _value = _write_inputs(tmp_path)
     output = tmp_path / "approved-data"
     monkeypatch.setattr(
         module.os,
@@ -409,7 +406,7 @@ def test_atomic_failure_leaves_no_partial_output(
     )
 
     with pytest.raises(OSError, match="replace failed"):
-        module.freeze_approved_data(candidate, signoff, raw, reference, output)
+        module.freeze_approved_data(candidate, signoff, raw, output)
 
     assert not output.exists()
     assert not tuple(tmp_path.glob(".approved-data.*"))

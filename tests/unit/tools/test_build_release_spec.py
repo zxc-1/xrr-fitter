@@ -60,35 +60,16 @@ def _lock_text(*lines: str) -> str:
     return "\n".join(sorted(values, key=str.casefold)) + "\n"
 
 
-def _fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+def _fixture(tmp_path: Path) -> tuple[Path, Path]:
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(_pyproject_text(), encoding="utf-8")
     lock = tmp_path / "requirements.lock"
     lock.write_text(_lock_text(), encoding="utf-8")
-    r22 = tmp_path / "r22"
-    r22.mkdir()
-    (r22 / "manifest.json").write_text("{}\n", encoding="utf-8")
-    return pyproject, lock, r22
+    return pyproject, lock
 
 
 def _stub_metadata(monkeypatch: pytest.MonkeyPatch, module: object) -> None:
     monkeypatch.setattr(module, "build_generated_metadata", lambda _payload: GENERATED_METADATA)
-
-
-def _tree_hash(root: Path) -> str:
-    records = []
-    for path in root.rglob("*"):
-        if path.is_file():
-            content = path.read_bytes()
-            records.append(
-                (path.relative_to(root).as_posix(), len(content), hashlib.sha256(content).hexdigest())
-            )
-    digest = hashlib.sha256()
-    for record in sorted(records):
-        for value in (record[0].encode(), str(record[1]).encode(), record[2].encode()):
-            digest.update(len(value).to_bytes(8, "big"))
-            digest.update(value)
-    return digest.hexdigest()
 
 
 def _metadata_archive(tmp_path: Path, members: tuple[str, ...]) -> Path:
@@ -107,9 +88,9 @@ def test_release_spec_binds_exact_metadata_lock_and_content_policy(
 ) -> None:
     module = load_tool_module("build_release_spec")
     _stub_metadata(monkeypatch, module)
-    pyproject, lock, r22 = _fixture(tmp_path)
+    pyproject, lock = _fixture(tmp_path)
 
-    spec = module.calculate_release_spec(pyproject, lock, r22)
+    spec = module.calculate_release_spec(pyproject, lock)
 
     assert spec["schema"] == "xrr-r23-release-spec-v1"
     assert spec["build_system"] == {
@@ -164,11 +145,11 @@ def test_calculation_binds_build_requirements_to_the_lock(
 ) -> None:
     module = load_tool_module("build_release_spec")
     _stub_metadata(monkeypatch, module)
-    pyproject, lock, r22 = _fixture(tmp_path)
+    pyproject, lock = _fixture(tmp_path)
     lock.write_text(_lock_text("numpy==2.1.3", "pytest==8.3.5"), encoding="utf-8")
 
     with pytest.raises(ValueError, match="missing setuptools"):
-        module.calculate_release_spec(pyproject, lock, r22)
+        module.calculate_release_spec(pyproject, lock)
 
 
 @pytest.mark.parametrize(
@@ -189,7 +170,7 @@ def test_pyproject_dependency_and_build_system_drift_is_rejected(
     load_tool_module,
 ) -> None:
     module = load_tool_module("build_release_spec")
-    pyproject, _lock, _r22 = _fixture(tmp_path)
+    pyproject, _lock = _fixture(tmp_path)
     pyproject.write_text(_pyproject_text().replace(old, new), encoding="utf-8")
 
     with pytest.raises(ValueError, match=match):
@@ -246,7 +227,7 @@ def test_lock_drift_and_noncanonical_content_is_rejected(
     load_tool_module,
 ) -> None:
     module = load_tool_module("build_release_spec")
-    pyproject, lock, _r22 = _fixture(tmp_path)
+    pyproject, lock = _fixture(tmp_path)
     lock.write_bytes(content)
     payload = module._pyproject(pyproject)
     declared = module._parse_requirements(
@@ -267,7 +248,7 @@ def test_pyproject_and_lock_read_failures_are_explicit(
     load_tool_module,
 ) -> None:
     module = load_tool_module("build_release_spec")
-    pyproject, lock, _r22 = _fixture(tmp_path)
+    pyproject, lock = _fixture(tmp_path)
     original_text = Path.read_text
     original_bytes = Path.read_bytes
 
@@ -289,67 +270,6 @@ def test_pyproject_and_lock_read_failures_are_explicit(
     monkeypatch.setattr(Path, "read_bytes", denied_bytes)
     with pytest.raises(ValueError, match="read dependency lock"):
         module._lock(lock, ())
-
-
-def test_oracle_hash_covers_every_nested_file_with_length_framing(
-    tmp_path: Path, load_tool_module
-) -> None:
-    module = load_tool_module("build_release_spec")
-    root = tmp_path / "r22"
-    (root / "nested").mkdir(parents=True)
-    (root / "a").write_bytes(b"same")
-    (root / "nested" / "bc").write_bytes(b"different")
-
-    observed_hash, observed_count = module._oracle_tree(root)
-
-    assert observed_count == 2
-    assert observed_hash == _tree_hash(root)
-
-
-def test_oracle_rejects_empty_tree_symlink_and_nonregular_node(
-    tmp_path: Path, load_tool_module
-) -> None:
-    module = load_tool_module("build_release_spec")
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    with pytest.raises(ValueError, match="empty"):
-        module._oracle_tree(empty)
-
-    root = tmp_path / "r22"
-    root.mkdir()
-    target = root / "target"
-    target.write_bytes(b"x")
-    (root / "link").symlink_to(target)
-    with pytest.raises(ValueError, match="symlink"):
-        module._oracle_tree(root)
-    (root / "link").unlink()
-
-    fifo = root / "pipe"
-    os.mkfifo(fifo)
-    with pytest.raises(ValueError, match="regular"):
-        module._oracle_tree(root)
-
-
-def test_oracle_read_failure_is_explicit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    load_tool_module,
-) -> None:
-    module = load_tool_module("build_release_spec")
-    root = tmp_path / "r22"
-    root.mkdir()
-    source = root / "manifest.json"
-    source.write_bytes(b"{}\n")
-    original = Path.read_bytes
-
-    def denied(path: Path) -> bytes:
-        if path == source:
-            raise PermissionError("denied")
-        return original(path)
-
-    monkeypatch.setattr(Path, "read_bytes", denied)
-    with pytest.raises(ValueError, match="read R22 oracle"):
-        module._oracle_tree(root)
 
 
 def test_pinned_fixture_builds_twice_with_exact_metadata_set(load_tool_module) -> None:
@@ -397,15 +317,15 @@ def test_release_spec_output_is_atomic_canonical_and_byte_stable(
 ) -> None:
     module = load_tool_module("build_release_spec")
     _stub_metadata(monkeypatch, module)
-    pyproject, lock, r22 = _fixture(tmp_path)
+    pyproject, lock = _fixture(tmp_path)
     output = tmp_path / "release-spec.json"
     output.write_text('{"stale": true}\n', encoding="utf-8")
 
-    module.write_release_spec(pyproject, lock, r22, output)
+    module.write_release_spec(pyproject, lock, output)
     first = output.read_bytes()
 
     assert first == _canonical(json.loads(first))
-    module.write_release_spec(pyproject, lock, r22, output)
+    module.write_release_spec(pyproject, lock, output)
     assert output.read_bytes() == first
 
 
@@ -418,7 +338,6 @@ def test_committed_release_spec_matches_canonical_recalculation(load_tool_module
     expected = module.calculate_release_spec(
         root / "pyproject.toml",
         root / "requirements-macos-arm64-py312.lock",
-        root / "verification" / "r22",
     )
 
     assert committed == _canonical(expected)
@@ -468,14 +387,14 @@ def test_calculation_failure_preserves_existing_output_without_partial(
 ) -> None:
     module = load_tool_module("build_release_spec")
     _stub_metadata(monkeypatch, module)
-    pyproject, lock, r22 = _fixture(tmp_path)
+    pyproject, lock = _fixture(tmp_path)
     output = tmp_path / "release-spec.json"
     original = b"previous release spec\n"
     output.write_bytes(original)
     lock.write_text("numpy>=2\n", encoding="utf-8")
 
     with pytest.raises(ValueError):
-        module.write_release_spec(pyproject, lock, r22, output)
+        module.write_release_spec(pyproject, lock, output)
 
     assert output.read_bytes() == original
     assert not tuple(tmp_path.glob(f".{output.name}.*.tmp"))
