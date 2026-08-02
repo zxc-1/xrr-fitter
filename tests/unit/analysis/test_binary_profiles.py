@@ -176,7 +176,7 @@ def test_binary_profile_propagates_unsupported_jacobian_layout(
         options["residual_jacobian"](transformed)
         return None
 
-    monkeypatch.setattr(module, "least_squares_residual_jacobian", unsupported)
+    monkeypatch.setattr(module, "least_squares_system", unsupported)
 
     with pytest.raises(ValueError, match="unsupported derivative layout"):
         module.build_binary_profile(

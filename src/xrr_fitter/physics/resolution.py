@@ -16,7 +16,7 @@ def _gauss_rules(orders: tuple[int, ...]) -> dict[int, tuple[np.ndarray, np.ndar
 
 ORDERS = (17, 33, 65)
 RULES = _gauss_rules(ORDERS)
-MAX_QUERY_VALUES = 1024
+MAX_QUERY_VALUES = 4096
 
 
 class GaussHermiteConvergenceWarning(UserWarning):
@@ -97,6 +97,11 @@ def smear_with_widths(
 ) -> np.ndarray:
     flat_samples = samples.ravel()
     flat_widths = widths.ravel()
+    if np.all(flat_widths == 0.0):
+        exact = np.asarray(function(flat_samples), dtype=float)
+        if exact.shape != flat_samples.shape or np.any(~np.isfinite(exact)):
+            raise ValueError("ideal_reflectivity must return finite values with query shape")
+        return np.array(exact, copy=True).reshape(samples.shape)
     result = np.empty_like(flat_samples)
     zero = flat_widths == 0.0
     if np.any(zero):

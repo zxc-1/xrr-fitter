@@ -67,6 +67,26 @@ def test_model_evaluation_recomputes_qz_and_shared_periodic_layers() -> None:
     )
 
 
+def test_dynamic_roughness_decode_does_not_expand_material_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem = compile_fit_problem(
+        prepared_data(size=48),
+        simple_structure(),
+        InstrumentSpec(footprint_mode="none"),
+        replace(FitConfig.fast(master_seed=21), scale_prior_enabled=False),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("dynamic roughness decoding expanded a material stack")
+
+    monkeypatch.setattr(evaluation, "expand_structure", forbidden)
+
+    values = evaluation.values_by_name(problem, np.full(len(problem.variables), 0.5))
+
+    assert values["component.0.roughness_a"] > 0.0
+
+
 def test_shared_solver_primitives_match_the_compiled_objective() -> None:
     problem = compile_fit_problem(
         prepared_data(size=48),
@@ -86,6 +106,49 @@ def test_shared_solver_primitives_match_the_compiled_objective() -> None:
         rel=1e-12,
         abs=1e-14,
     )
+
+
+def test_joint_solver_system_matches_separate_residual_and_jacobian_paths() -> None:
+    problem = compile_fit_problem(
+        prepared_data(size=72),
+        simple_structure(),
+        InstrumentSpec(footprint_mode="none"),
+        replace(FitConfig.fast(master_seed=1801), scale_prior_enabled=False),
+    )
+    unit = np.full(len(problem.variables), 0.55)
+
+    residual, jacobian = evaluation.least_squares_system(problem, unit)
+
+    np.testing.assert_array_equal(
+        residual,
+        evaluation.least_squares_residual(problem, unit),
+    )
+    np.testing.assert_allclose(
+        jacobian,
+        evaluation.least_squares_residual_jacobian(problem, unit),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_cached_solver_callbacks_evaluate_one_parameter_vector_once() -> None:
+    calls: list[np.ndarray] = []
+
+    def system(unit: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        calls.append(np.array(unit, copy=True))
+        return unit + 1.0, np.diag(unit + 2.0)
+
+    residual, jacobian = evaluation.cached_least_squares_callbacks(system)
+    first = np.asarray([0.2, 0.4])
+    second = np.asarray([0.3, 0.5])
+
+    np.testing.assert_array_equal(residual(first), first + 1.0)
+    np.testing.assert_array_equal(jacobian(first.copy()), np.diag(first + 2.0))
+    np.testing.assert_array_equal(residual(second), second + 1.0)
+    np.testing.assert_array_equal(jacobian(second.copy()), np.diag(second + 2.0))
+
+    assert len(calls) == 2
+    np.testing.assert_array_equal(calls, (first, second))
 
 
 def test_shared_problem_log_probability_uses_the_soft_l1_data_likelihood() -> None:

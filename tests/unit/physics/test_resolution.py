@@ -21,6 +21,19 @@ def test_zero_resolution_returns_exact_samples() -> None:
     np.testing.assert_array_equal(gaussian_smear(q, lambda x: np.exp(-x)), np.exp(-q))
 
 
+def test_all_zero_resolution_reuses_validated_samples() -> None:
+    q = np.linspace(0.01, 0.4, 101)
+    observed: list[bool] = []
+
+    def exact(query: np.ndarray) -> np.ndarray:
+        observed.append(np.shares_memory(query, q))
+        return np.exp(-query)
+
+    gaussian_smear(q, exact)
+
+    assert observed == [True]
+
+
 def test_smooth_function_converges_at_first_escalation_level() -> None:
     q = np.linspace(0.05, 0.4, 50)
     actual = gaussian_smear(q, lambda x: x**2, absolute_sigma_a_inv=0.002)
@@ -91,7 +104,8 @@ def test_quadrature_chunks_large_query_grids_without_changing_values() -> None:
         calls.append(query.shape)
         return query**2
     np.testing.assert_allclose(gaussian_smear(q, smooth, absolute_sigma_a_inv=0.002), q**2 + 0.002**2, rtol=2e-13, atol=2e-15)
-    assert max(np.prod(shape) for shape in calls) <= 1024
+    assert len(calls) <= 8
+    assert max(np.prod(shape) for shape in calls) <= 4096
 
 
 def test_theta_domain_smear_leaves_constant_function_unchanged() -> None:

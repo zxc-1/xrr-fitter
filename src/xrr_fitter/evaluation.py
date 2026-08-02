@@ -43,12 +43,21 @@ These optimizer-facing functions accept an evaluator override only for narrow
 unit testing of the boundary. Production callers use the module's primal and
 analytic evaluators directly; no persistent callable collection is stored in a
 problem, request, result, or checkpoint value.
+
+SciPy requests residual and Jacobian through two callbacks, normally at the
+same accepted parameter vector. ``least_squares_system`` obtains both from the
+analytic traversal, whose primal return already contains the modeled values
+needed for the residual. A one-entry callback cache binds that pair to the last
+immutable copy of the unit vector. Trial vectors still trigger fresh physics,
+while the immediately following Jacobian callback reuses only the matching
+pair. The cache belongs to one optimizer invocation and is never global, shared
+between fits, serialized, or used as a fallback for a different vector.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from functools import partial
 from math import isfinite, log
 
@@ -64,9 +73,6 @@ from xrr_fitter.model.parameters import (
     unit_to_physical,
 )
 from xrr_fitter.model.structure import (
-    GradientLayerSpec,
-    LayerSpec,
-    PeriodicBlock,
     SlabStack,
     StructureSpec,
 )
@@ -75,8 +81,14 @@ from xrr_fitter.physics.derivatives import (
     parratt_reflectivity_jacobian,
     smear_with_widths_jacobian,
 )
-from xrr_fitter.physics.materials import material_sld
-from xrr_fitter.physics.reflectivity import instrument_reflectivity
+from xrr_fitter.physics.geometry import (
+    GRADIENT_INTERNAL_INTERFACE,
+    DifferentiableStack,
+    GeometryExpansion as _GeometryExpansion,
+    expand_geometry as _expand_geometry,
+    expand_structure_with_jacobian as _expand_physical_structure_with_jacobian,
+)
+from xrr_fitter.physics.reflectivity import instrument_reflectivity, qz_from_theta_deg
 from xrr_fitter.physics.stack import expand_structure, rebuild_structure
 
 
@@ -259,9 +271,6 @@ def scale_prior_penalty(
     return float(standardized**2 / n)
 
 
-GRADIENT_INTERNAL_INTERFACE = "__gradient_internal_zero__"
-
-
 def _interface_neighbor_indices(
     interface_index: int,
     final_medium: int,
@@ -292,42 +301,6 @@ def _interface_upper(
         return 50.0
     minimum = float(np.min(thickness_a[np.asarray(neighbor_indices, dtype=int)]))
     return float(np.nextafter(0.49 * minimum, 0.0))
-
-
-def _periodic_interface_names(prefix: str, block: PeriodicBlock) -> tuple[str, ...]:
-    """Mirror expanded periodic interfaces back to shared source names.
-
-    The first interface alone may use a block-level top override. Every later
-    cell reuses the same per-layer names so repeated bounds reduce together.
-    """
-    ordinary = tuple(
-        map("layer.{}.roughness_a".format, range(len(block.layers)))
-    )
-    first = ordinary[0] if block.top_roughness_a is None else "top_roughness_a"
-    suffixes = (first, *ordinary[1:], *(ordinary * (block.repeats - 1)))
-    return tuple(map(f"{prefix}.{{}}".format, suffixes))
-
-
-def _expanded_interface_names(structure: StructureSpec) -> tuple[str, ...]:
-    """Return one public source name for every expanded roughness position.
-
-    Gradient-internal microslab interfaces carry an explicit private sentinel:
-    they remain ideal numerical subdivisions and never acquire fit coordinates.
-    The final entry always names the backing interface.
-    """
-    names: list[str] = []
-    for component_index, component in enumerate(structure.components):
-        prefix = f"component.{component_index}"
-        if isinstance(component, GradientLayerSpec):
-            count = int(np.ceil(component.thickness_a / component.microslab_max_a))
-            names.append(f"{prefix}.roughness_a")
-            names.extend((GRADIENT_INTERNAL_INTERFACE,) * (count - 1))
-        elif isinstance(component, LayerSpec):
-            names.append(f"{prefix}.roughness_a")
-        else:
-            names.extend(_periodic_interface_names(prefix, component))
-    names.append("backing.roughness_a")
-    return tuple(names)
 
 
 def _readonly_vector(value: object) -> np.ndarray:
@@ -386,282 +359,16 @@ def _roughness_dynamic_uppers(
         problem.structure,
         nonrough_values | zero_roughness,
     )
-    stack = expand_structure(provisional, problem.data.beam.effective_wavelength_a)
-    names = _expanded_interface_names(provisional)
-    if len(names) != stack.roughness_a.size:
-        raise RuntimeError("expanded interface mapping mismatch")
+    geometry = _expand_geometry(provisional)
     dynamic: dict[str, float] = {}
-    final_medium = stack.thickness_a.size - 1
+    final_medium = geometry.thickness_a.size - 1
     # Repeated source names reduce by minimum, independent of occurrence order.
     # Internal gradient interfaces never receive a public parameter definition.
-    for interface, name in filter(_is_public_interface, enumerate(names)):
+    for interface, name in filter(_is_public_interface, enumerate(geometry.interface_names)):
         neighbors = _interface_neighbor_indices(interface, final_medium)
-        upper = _interface_upper(stack.thickness_a, neighbors)
+        upper = _interface_upper(geometry.thickness_a, neighbors)
         dynamic[name] = min(dynamic.get(name, np.inf), upper)
     return dynamic
-
-
-@dataclass(frozen=True, slots=True)
-class DifferentiableStack:
-    """One expanded stack with aligned unit-coordinate forward tangents.
-
-    Each Jacobian appends the same parameter axis to its corresponding stack
-    array. The value stack remains the authoritative primal representation used
-    by the low-level physics kernels.
-    """
-
-    stack: SlabStack
-    thickness_jacobian: np.ndarray
-    sld_jacobian: np.ndarray
-    roughness_jacobian: np.ndarray
-
-
-def _layer_sld_jacobian(
-    layer: LayerSpec,
-    prefix: str,
-    values: dict[str, float],
-    value_jacobians: dict[str, np.ndarray],
-    wavelength_a: float,
-) -> np.ndarray:
-    """Differentiate formula or explicit-SLD material density scaling.
-
-    Formula SLD varies only through density. An explicit complex override also
-    carries real and imaginary coordinate tangents before density multiplication,
-    preserving the primal material convention at the requested wavelength.
-    """
-    density_name = f"{prefix}.density_scale"
-    density = values[density_name]
-    density_jacobian = value_jacobians[density_name]
-    sld = material_sld(layer.material, density, wavelength_a)
-    # Formula materials expose density only, so SLD/density is the local slope.
-    # Explicit materials also carry complex override coordinates through density.
-    if layer.material.sld_override_a2 is None:
-        return (sld / density) * density_jacobian
-    real_name = f"{prefix}.sld_real_a2"
-    imaginary_name = f"{prefix}.sld_imag_a2"
-    override_jacobian = value_jacobians.get(
-        real_name,
-        np.zeros_like(density_jacobian),
-    ) + 1j * value_jacobians.get(
-        imaginary_name,
-        np.zeros_like(density_jacobian),
-    )
-    return (
-        layer.material.sld_override_a2 * density_jacobian
-        + density * override_jacobian
-    )
-
-
-def _periodic_roughness_name(
-    prefix: str,
-    block: PeriodicBlock,
-    repeat_index: int,
-    layer_index: int,
-) -> str:
-    top_interface = (repeat_index, layer_index, block.top_roughness_a is not None)
-    if top_interface == (0, 0, True):
-        return f"{prefix}.top_roughness_a"
-    return f"{prefix}.layer.{layer_index}.roughness_a"
-
-
-@dataclass(slots=True)
-class _StackJacobianBuilder:
-    """Accumulate expanded slab tangents in primal stack order.
-
-    Fronting and backing media are inserted explicitly, while layer components
-    append their incident interface roughness. The per-expansion SLD cache lets
-    repeated periodic cells share an identical source tangent without leaking
-    state between wavelengths or candidates.
-    """
-
-    parameter_count: int
-    thickness: list[np.ndarray] = field(default_factory=list)
-    sld: list[np.ndarray] = field(default_factory=list)
-    roughness: list[np.ndarray] = field(default_factory=list)
-    sld_cache: dict[str, np.ndarray] = field(default_factory=dict)
-
-    @classmethod
-    def create(cls, parameter_count: int) -> _StackJacobianBuilder:
-        """Start with the semi-infinite fronting medium tangent rows.
-
-        Fronting thickness and SLD are fixed by the compiled model and therefore
-        begin as zero real and complex vectors respectively.
-        """
-        builder = cls(parameter_count)
-        builder.thickness.append(builder.zero_real())
-        builder.sld.append(builder.zero_complex())
-        return builder
-
-    def zero_real(self) -> np.ndarray:
-        return np.zeros(self.parameter_count, dtype=float)
-
-    def zero_complex(self) -> np.ndarray:
-        return np.zeros(self.parameter_count, dtype=np.complex128)
-
-    def append_layer(
-        self,
-        layer: LayerSpec,
-        prefix: str,
-        roughness_name: str,
-        values: dict[str, float],
-        value_jacobians: dict[str, np.ndarray],
-        wavelength_a: float,
-    ) -> None:
-        """Append one finite layer and the roughness of its incident interface.
-
-        The caller supplies the roughness source name separately because the
-        first periodic interface may use a block override while all later cells
-        share their ordinary layer declaration.
-        """
-        self.thickness.append(
-            np.asarray(value_jacobians[f"{prefix}.thickness_a"], dtype=float)
-        )
-        # Cache scope is one builder and therefore one candidate/wavelength pair.
-        # Repeated cells reuse values without sharing mutable state across calls.
-        if prefix not in self.sld_cache:
-            self.sld_cache[prefix] = np.asarray(
-                _layer_sld_jacobian(
-                    layer,
-                    prefix,
-                    values,
-                    value_jacobians,
-                    wavelength_a,
-                ),
-                dtype=np.complex128,
-            )
-        self.sld.append(self.sld_cache[prefix])
-        self.roughness.append(
-            np.asarray(value_jacobians[roughness_name], dtype=float)
-        )
-
-    def append_periodic(
-        self,
-        block: PeriodicBlock,
-        prefix: str,
-        values: dict[str, float],
-        value_jacobians: dict[str, np.ndarray],
-        wavelength_a: float,
-    ) -> None:
-        """Expand repeated cells while retaining their shared tangent sources.
-
-        Flat traversal is equivalent to repeat-major nested loops and preserves
-        exact slab order. It avoids an additional control-flow axis without
-        materializing a potentially large Cartesian product.
-        """
-        layer_count = len(block.layers)
-        for flat_index in range(block.repeats * layer_count):
-            repeat_index, layer_index = divmod(flat_index, layer_count)
-            layer_prefix = f"{prefix}.layer.{layer_index}"
-            self.append_layer(
-                block.layers[layer_index],
-                layer_prefix,
-                _periodic_roughness_name(
-                    prefix,
-                    block,
-                    repeat_index,
-                    layer_index,
-                ),
-                values,
-                value_jacobians,
-                wavelength_a,
-            )
-
-    def append_gradient(
-        self,
-        layer: GradientLayerSpec,
-        prefix: str,
-        value_jacobians: dict[str, np.ndarray],
-    ) -> None:
-        """Differentiate equal-width microslabs and linear complex-SLD centers.
-
-        Total thickness tangent is divided equally across slabs. Only the first
-        incident interface carries declared gradient roughness; internal
-        numerical boundaries retain exact zero tangents.
-        """
-        count = int(np.ceil(layer.thickness_a / layer.microslab_max_a))
-        thickness_jacobian = value_jacobians[f"{prefix}.thickness_a"] / count
-        upper_jacobian = (
-            value_jacobians[f"{prefix}.upper_sld_real_a2"]
-            + 1j * value_jacobians[f"{prefix}.upper_sld_imag_a2"]
-        )
-        lower_jacobian = (
-            value_jacobians[f"{prefix}.lower_sld_real_a2"]
-            + 1j * value_jacobians[f"{prefix}.lower_sld_imag_a2"]
-        )
-        roughness_jacobians = [self.zero_real()] * count
-        roughness_jacobians[0] = value_jacobians[f"{prefix}.roughness_a"].copy()
-        for slab_index in range(count):
-            fraction = (slab_index + 0.5) / count
-            self.thickness.append(thickness_jacobian.copy())
-            self.sld.append(
-                upper_jacobian + fraction * (lower_jacobian - upper_jacobian)
-            )
-            self.roughness.append(roughness_jacobians[slab_index])
-
-    def append_component(
-        self,
-        component: LayerSpec | PeriodicBlock | GradientLayerSpec,
-        prefix: str,
-        values: dict[str, float],
-        value_jacobians: dict[str, np.ndarray],
-        wavelength_a: float,
-    ) -> None:
-        """Dispatch one validated structure component to its concrete expander.
-
-        ``StructureSpec`` validation closes this union to ordinary, periodic,
-        and gradient components, so no fallback component semantics are needed.
-        """
-        if isinstance(component, LayerSpec):
-            self.append_layer(
-                component,
-                prefix,
-                f"{prefix}.roughness_a",
-                values,
-                value_jacobians,
-                wavelength_a,
-            )
-        elif isinstance(component, PeriodicBlock):
-            self.append_periodic(
-                component,
-                prefix,
-                values,
-                value_jacobians,
-                wavelength_a,
-            )
-        else:
-            self.append_gradient(component, prefix, value_jacobians)
-
-    def finish(self, stack: SlabStack) -> DifferentiableStack:
-        """Append backing rows and prove positional alignment with the stack.
-
-        A shape mismatch would attach a derivative to the wrong physical slab
-        or interface. It is rejected before any reflectivity kernel consumes the
-        constructed tangent arrays.
-        """
-        self.thickness.append(self.zero_real())
-        self.sld.append(self.zero_complex())
-        differentiable = DifferentiableStack(
-            stack,
-            np.asarray(self.thickness, dtype=float),
-            np.asarray(self.sld, dtype=np.complex128),
-            np.asarray(self.roughness, dtype=float),
-        )
-        # Every stack axis must gain exactly one trailing free-parameter axis.
-        # A mismatch here would silently differentiate the wrong physical layer.
-        expected = (self.parameter_count,)
-        valid = all(
-            (
-                differentiable.thickness_jacobian.shape
-                == stack.thickness_a.shape + expected,
-                differentiable.sld_jacobian.shape
-                == stack.sld_a2.shape + expected,
-                differentiable.roughness_jacobian.shape
-                == stack.roughness_a.shape + expected,
-            )
-        )
-        if not valid:
-            raise RuntimeError("expanded structure Jacobian mapping mismatch")
-        return differentiable
 
 
 def _expand_structure_with_jacobian(
@@ -670,73 +377,37 @@ def _expand_structure_with_jacobian(
     value_jacobians: dict[str, np.ndarray],
     wavelength_a: float,
 ) -> DifferentiableStack:
-    """Expand one wavelength-specific structure and its aligned tangents.
-
-    The primal stack and builder traverse the same rebuilt component snapshot.
-    This keeps gradient slab counts and periodic topology identical on both
-    value and derivative paths.
-    """
-    rebuilt = rebuild_structure(problem.structure, values)
-    stack = expand_structure(rebuilt, wavelength_a)
-    builder = _StackJacobianBuilder.create(len(problem.variables))
-    for component_index, component in enumerate(rebuilt.components):
-        builder.append_component(
-            component,
-            f"component.{component_index}",
-            values,
-            value_jacobians,
-            wavelength_a,
-        )
-    builder.roughness.append(
-        np.asarray(value_jacobians["backing.roughness_a"], dtype=float)
+    """Adapt the typed evaluation context to the physical stack expander."""
+    return _expand_physical_structure_with_jacobian(
+        problem.structure,
+        values,
+        value_jacobians,
+        wavelength_a,
+        len(problem.variables),
     )
-    return builder.finish(stack)
 
 
-def _zeroed_roughness_jacobians(
-    problem: object,
-    value_jacobians: dict[str, np.ndarray],
-    zero_roughness: dict[str, float],
-) -> dict[str, np.ndarray]:
-    """Copy tangents and neutralize roughness for the provisional geometry.
-
-    Thickness tangents remain active because they define the dynamic cap.
-    Copy-on-write leaves the caller's complete tangent mapping reusable.
-    """
-    provisional = dict(value_jacobians)
-    for name in zero_roughness:
-        provisional[name] = np.zeros(len(problem.variables), dtype=float)
-    return provisional
-
-
-def _roughness_jacobian_context(
+def _roughness_geometry_context(
     problem: object,
     nonrough_values: dict[str, float],
     value_jacobians: dict[str, np.ndarray],
-) -> tuple[DifferentiableStack, tuple[str, ...]]:
-    """Build one zero-roughness expansion aligned with public interface names.
-
-    Effective wavelength matches the primal topology calculation. Positional
-    agreement is verified before any strict upper or tangent is published.
-    """
+) -> _GeometryExpansion:
+    """Build one zero-roughness geometry expansion with thickness tangents."""
     zero_roughness = _zero_roughness_values(problem)
     provisional_values = nonrough_values | zero_roughness
-    provisional = _expand_structure_with_jacobian(
-        problem,
+    provisional = rebuild_structure(
+        problem.structure,
         provisional_values,
-        _zeroed_roughness_jacobians(problem, value_jacobians, zero_roughness),
-        problem.data.beam.effective_wavelength_a,
     )
-    names = _expanded_interface_names(
-        rebuild_structure(problem.structure, provisional_values)
+    return _expand_geometry(
+        provisional,
+        parameter_count=len(problem.variables),
+        value_jacobians=value_jacobians,
     )
-    if len(names) != provisional.stack.roughness_a.size:
-        raise RuntimeError("expanded interface Jacobian mapping mismatch")
-    return provisional, names
 
 
 def _active_upper_tangent(
-    provisional: DifferentiableStack,
+    provisional: _GeometryExpansion,
     neighbors: tuple[int, ...],
     parameter_count: int,
 ) -> tuple[float, np.ndarray]:
@@ -749,7 +420,8 @@ def _active_upper_tangent(
     if not neighbors:
         return 50.0, np.zeros(parameter_count, dtype=float)
     indices = np.asarray(neighbors, dtype=int)
-    thickness = provisional.stack.thickness_a[indices]
+    assert provisional.thickness_jacobian is not None
+    thickness = provisional.thickness_a[indices]
     minimum = float(np.min(thickness))
     active = indices[thickness == minimum]
     # Exact equality intentionally selects the symmetric minimum subgradient.
@@ -801,7 +473,7 @@ def _roughness_dynamic_upper_jacobians(
     coordinate. Locked definitions remain represented so encoding and analytic
     decoding observe the same candidate geometry.
     """
-    provisional, names = _roughness_jacobian_context(
+    provisional = _roughness_geometry_context(
         problem,
         nonrough_values,
         value_jacobians,
@@ -809,8 +481,11 @@ def _roughness_dynamic_upper_jacobians(
     dynamic: dict[str, tuple[float, np.ndarray]] = {}
     tie_counts: dict[str, int] = {}
     parameter_count = len(problem.variables)
-    final_medium = provisional.stack.thickness_a.size - 1
-    for interface, name in filter(_is_public_interface, enumerate(names)):
+    final_medium = provisional.thickness_a.size - 1
+    for interface, name in filter(
+        _is_public_interface,
+        enumerate(provisional.interface_names),
+    ):
         upper, tangent = _active_upper_tangent(
             provisional,
             _interface_neighbor_indices(interface, final_medium),
@@ -1498,9 +1173,9 @@ def _qz_and_jacobian(
     """
     theta_rad = np.deg2rad(theta_deg)
     scale = 4.0 * np.pi / wavelength_a
+    qz = qz_from_theta_deg(theta_deg, wavelength_a)
     # The derivative of sine is evaluated in radians while the source tangent
     # remains expressed per degree, hence the explicit pi/180 factor.
-    qz = scale * np.sin(theta_rad)
     qz_jacobian = (
         scale
         * np.cos(theta_rad)[:, None]
@@ -2016,18 +1691,17 @@ def _masked_optional(
     return None if value is None else value[mask]
 
 
-def evaluate_model_jacobian(
+def _model_residual_jacobian(
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
-) -> np.ndarray:
-    """Return the analytic Jacobian of unweighted fitted log residuals.
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Evaluate fitted residuals and their analytic Jacobian in one traversal.
 
     Values and coordinate tangents are decoded once; this function does not call
     the primal evaluator. Positive-angle rows are differentiated through stack,
     resolution, beam, footprint, scale, and background operations, then inserted
-    into full source order. Only fitted rows are divided by the base-10 log
-    denominator. The final matrix is an owned, read-only
-    ``(fit_count, variable_count)`` array.
+    into full source order. The returned model values supply the residual from the
+    same physical traversal that supplied the Jacobian.
     """
     try:
         values, value_jacobians = values_and_jacobians(problem, unit_vector)
@@ -2091,6 +1765,11 @@ def evaluate_model_jacobian(
     )
     full_jacobian[model_mask] = model_jacobian
     fit_model = full_model[problem.data.fit_mask]
+    residual = log_residuals(
+        fit_model,
+        problem.data.intensity_normalized[problem.data.fit_mask],
+        problem.data.r_floor,
+    )
     # d(log10(model + floor)) = d(model) / ((model + floor) * ln(10)).
     # Observations are constant, so they contribute no residual tangent.
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -2098,13 +1777,32 @@ def evaluate_model_jacobian(
             (fit_model + problem.data.r_floor)[:, None] * np.log(10.0)
         )
     finite_values = np.concatenate(
-        (model.ravel(), model_jacobian.ravel(), fit_model, residual_jacobian.ravel())
+        (
+            model.ravel(),
+            model_jacobian.ravel(),
+            fit_model,
+            residual,
+            residual_jacobian.ravel(),
+        )
     )
     if np.any(~np.isfinite(finite_values)):
         raise FloatingPointError("nonfinite analytic model or residual Jacobian")
+    return (
+        np.array(residual, dtype=float, copy=True),
+        np.array(residual_jacobian, dtype=float, copy=True),
+        float(values["instrument.scale"]),
+    )
+
+
+def evaluate_model_jacobian(
+    problem: FitEvaluationContext,
+    unit_vector: np.ndarray,
+) -> np.ndarray:
+    """Return the analytic Jacobian of unweighted fitted log residuals."""
+    _residual, jacobian, _scale = _model_residual_jacobian(problem, unit_vector)
     # Defensive copying prevents solver or analysis code from mutating a
     # derivative snapshot that may be shared with candidate publication.
-    result = np.array(residual_jacobian, dtype=float, copy=True)
+    result = np.array(jacobian, dtype=float, copy=True)
     result.setflags(write=False)
     return result
 
@@ -2125,13 +1823,17 @@ def _scale_prior_residual(problem: object, evaluation: ModelEvaluation) -> float
     invariants. This boundary therefore does not repair a missing scale value or
     reinterpret nonpositive metadata after optimization has begun.
     """
-    if problem.scale_prior_center is None:
-        return None
     scale = next(
         value.value
         for value in evaluation.parameters
         if value.name == "instrument.scale"
     )
+    return _scale_prior_residual_from_scale(problem, scale)
+
+
+def _scale_prior_residual_from_scale(problem: object, scale: float) -> float | None:
+    if problem.scale_prior_center is None:
+        return None
     return float(
         (np.log10(scale) - np.log10(problem.scale_prior_center))
         / problem.scale_prior_tau_decades
@@ -2232,6 +1934,84 @@ def _empty_residual_jacobian(problem: object) -> np.ndarray:
     )
 
 
+def _expected_derivative_value_error(error: BaseException) -> bool:
+    return isinstance(error, ValueError) and str(error) == (
+        "cannot differentiate nonpositive fitted angle"
+    )
+
+
+def least_squares_system(
+    problem: FitEvaluationContext,
+    unit_vector: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return solver residuals and Jacobian from one analytic model traversal.
+
+    Valid candidates take their residual and derivative from the same modeled
+    reflectivity values. Declared physical constraints retain the fixed residual
+    sentinel and zero data Jacobian. A derivative-only floating-point failure
+    reuses the ordinary residual boundary and disables only the data Jacobian,
+    preserving the established solver failure contract. The optional scale prior
+    remains the final independent row in both arrays.
+
+    Returned arrays are owned so the one-entry SciPy callback cache cannot expose
+    internal analytic workspaces to solver mutation.
+    """
+    unit = _validated_unit(problem, unit_vector)
+    try:
+        residual, jacobian, scale = _model_residual_jacobian(problem, unit)
+    except EvaluationConstraintError:
+        residual = np.full(_least_squares_row_count(problem), 1e6, dtype=float)
+        jacobian = _empty_residual_jacobian(problem)
+        scale = None
+    except (FloatingPointError, ValueError) as error:
+        if isinstance(error, ValueError) and not _expected_derivative_value_error(error):
+            raise
+        residual = least_squares_residual(problem, unit)
+        jacobian = _empty_residual_jacobian(problem)
+        scale = None
+    if problem.scale_prior_center is not None:
+        jacobian = np.vstack((jacobian, _scale_prior_jacobian(problem)))
+        if scale is not None:
+            prior = _scale_prior_residual_from_scale(problem, scale)
+            assert prior is not None
+            residual = np.concatenate((residual, np.asarray([prior])))
+    return (
+        np.array(residual, dtype=float, copy=True),
+        np.array(jacobian, dtype=float, copy=True),
+    )
+
+
+def cached_least_squares_callbacks(
+    system: Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]],
+) -> tuple[Callable[[np.ndarray], np.ndarray], Callable[[np.ndarray], np.ndarray]]:
+    """Memoize the last solver point shared by SciPy's two callbacks.
+
+    The supplied callable remains the sole numerical implementation. This
+    helper controls callback lifetime and equality only; it neither catches
+    evaluation failures nor manufactures residual or Jacobian values.
+    """
+    cached_unit: np.ndarray | None = None
+    cached_values: tuple[np.ndarray, np.ndarray] | None = None
+
+    def evaluate(unit: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        nonlocal cached_unit, cached_values
+        value = np.asarray(unit, dtype=float)
+        if cached_unit is None or not np.array_equal(value, cached_unit):
+            residual, jacobian = system(value)
+            cached_unit = np.array(value, copy=True)
+            cached_values = (
+                np.array(residual, dtype=float, copy=True),
+                np.array(jacobian, dtype=float, copy=True),
+            )
+        assert cached_values is not None
+        return cached_values
+
+    def selected(unit: np.ndarray, index: int) -> np.ndarray:
+        return np.array(evaluate(unit)[index], copy=True)
+
+    return partial(selected, index=0), partial(selected, index=1)
+
+
 def least_squares_residual_jacobian(
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
@@ -2264,10 +2044,7 @@ def least_squares_residual_jacobian(
     try:
         jacobian = np.array(evaluate(problem, unit), dtype=float, copy=True)
     except (EvaluationConstraintError, FloatingPointError, ValueError) as error:
-        expected_value_error = (
-            isinstance(error, ValueError)
-            and str(error) == "cannot differentiate nonpositive fitted angle"
-        )
+        expected_value_error = _expected_derivative_value_error(error)
         if isinstance(error, ValueError) and not expected_value_error:
             raise
         jacobian = _empty_residual_jacobian(problem)

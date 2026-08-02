@@ -106,13 +106,13 @@ def test_local_solver_passes_an_analytic_jacobian_to_scipy(
     api = _api()
     problem = _problem()
     start = np.full(len(problem.variables), 0.55)
-    jacobian_calls = 0
-    original_jacobian = api.evaluate_jacobian
+    system_calls = 0
+    original_system = api.least_squares_system
 
-    def audited_jacobian(problem_value, unit_value):
-        nonlocal jacobian_calls
-        jacobian_calls += 1
-        return original_jacobian(problem_value, unit_value)
+    def audited_system(problem_value, unit_value):
+        nonlocal system_calls
+        system_calls += 1
+        return original_system(problem_value, unit_value)
 
     def fake_least_squares(fun, x0, *, jac, **kwargs):
         del kwargs
@@ -142,13 +142,13 @@ def test_local_solver_passes_an_analytic_jacobian_to_scipy(
             active_mask=np.zeros(x.size, dtype=int),
         )
 
-    monkeypatch.setattr(api, "evaluate_jacobian", audited_jacobian)
+    monkeypatch.setattr(api, "least_squares_system", audited_system)
     monkeypatch.setattr(api, "least_squares", fake_least_squares)
 
     result = api.solve_local(problem, start, max_nfev=5)
 
     assert result.nfev == 1
-    assert jacobian_calls > 0
+    assert system_calls > 0
 
 
 def test_local_solver_scales_trust_region_steps_from_the_analytic_jacobian(

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 
 import numpy as np
 from scipy.optimize import least_squares
 
 from xrr_fitter.evaluation import (
+    cached_least_squares_callbacks,
     least_squares_loss,
     least_squares_residual,
     least_squares_residual_jacobian,
+    least_squares_system,
 )
 from xrr_fitter.fit.objective import evaluate_jacobian, evaluate_vector
 from xrr_fitter.model.fitting import ModelEvaluation
@@ -90,14 +93,17 @@ def solve_local(
         evaluation = evaluate_vector(problem, unit)
         return LocalSearchResult(unit, evaluation, "no_free_parameters", 1)
     start_evaluation = evaluate_vector(problem, unit)
+    system_residual, system_jacobian = cached_least_squares_callbacks(
+        partial(least_squares_system, problem)
+    )
 
     def residual(value: np.ndarray) -> np.ndarray:
         _poll(cancelled)
-        return local_residual(problem, value)
+        return system_residual(value)
 
     def jacobian(value: np.ndarray) -> np.ndarray:
         _poll(cancelled)
-        return local_jacobian(problem, value)
+        return system_jacobian(value)
 
     optimized = least_squares(
         residual,

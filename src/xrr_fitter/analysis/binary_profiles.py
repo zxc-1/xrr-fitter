@@ -4,21 +4,24 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypeVar
 
 import numpy as np
 
 from xrr_fitter.evaluation import (
     EvaluationConstraintError,
+    cached_least_squares_callbacks,
     evaluate_model,
     least_squares_loss,
-    least_squares_residual,
-    least_squares_residual_jacobian,
+    least_squares_system,
     physical_to_unit,
     values_by_name,
 )
-from xrr_fitter.model.analysis import ParameterProfile
 from xrr_fitter.model.fitting import FitEvaluationContext
 from xrr_fitter.model.structure import PeriodicBlock
+
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,10 +256,10 @@ def build_binary_profile(
     unit_vector: np.ndarray,
     name: str,
     *,
-    profile_builder: Callable[..., ParameterProfile],
+    profile_builder: Callable[..., T],
     observer: Callable[[float, float, float], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
-) -> ParameterProfile:
+) -> T:
     specifications = {item.name: item for item in binary_derived_profiles(problem)}
     if name not in specifications:
         raise ValueError(f"unknown binary profile: {name}")
@@ -281,15 +284,12 @@ def build_binary_profile(
             return np.inf
         return evaluation.objective if evaluation.valid else np.inf
 
-    def residual(transformed: np.ndarray) -> np.ndarray:
-        return least_squares_residual(problem, observe(transformed))
-
-    def jacobian(transformed: np.ndarray) -> np.ndarray:
+    def system(transformed: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         original = observe(transformed)
-        return least_squares_residual_jacobian(
-            problem,
-            original,
-        ) @ _coordinate_jacobian(state, transformed)
+        residual, jacobian = least_squares_system(problem, original)
+        return residual, jacobian @ _coordinate_jacobian(state, transformed)
+
+    residual, jacobian = cached_least_squares_callbacks(system)
 
     def reported(transformed: np.ndarray) -> float:
         primary = transformed[specification.first_index]

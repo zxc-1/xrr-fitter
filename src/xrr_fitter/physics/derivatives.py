@@ -9,7 +9,12 @@ import numpy as np
 
 from xrr_fitter.model.structure import PeriodicSpan, SlabStack
 from xrr_fitter.physics.parratt import BRANCH_EPSILON_A2, parratt_reflectivity
-from xrr_fitter.physics.resolution import RULES, gauss_hermite_values, gh_converged
+from xrr_fitter.physics.resolution import (
+    MAX_QUERY_VALUES,
+    RULES,
+    gauss_hermite_values,
+    gh_converged,
+)
 
 
 DifferentiableFunction = Callable[[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]
@@ -34,6 +39,8 @@ def _inputs(
     sld_jacobian: np.ndarray,
     roughness_jacobian: np.ndarray,
 ) -> _Inputs:
+    # Normalize every tangent to a common trailing parameter axis before any
+    # vectorized complex arithmetic begins.
     qz = np.asarray(qz_a_inv, dtype=float)
     if np.any(~np.isfinite(qz)) or np.any(qz < 0.0):
         raise ValueError("qz_a_inv must be finite and nonnegative")
@@ -58,6 +65,8 @@ def _inputs(
 
 
 def _all_kz(stack: SlabStack, inputs: _Inputs) -> ComplexTangent:
+    # The discrete root sign is inherited from the primal branch; its tangent
+    # is flipped only after differentiating the analytic square root.
     qz = inputs.qz.ravel()
     q_tangent = inputs.qz_jacobian.reshape(qz.size, inputs.parameter_count)
     # Pin real radicands before applying the same decaying-root branch as the primal.
@@ -79,6 +88,8 @@ def _all_kz(stack: SlabStack, inputs: _Inputs) -> ComplexTangent:
 
 
 def _all_interfaces(stack: SlabStack, inputs: _Inputs, kz: np.ndarray, kz_tangent: np.ndarray) -> ComplexTangent:
+    # Fresnel, roughness, and exponential terms are differentiated together so
+    # no interface parameter is evaluated through a second primal traversal.
     upper, lower = kz[:, :-1], kz[:, 1:]
     upper_tangent, lower_tangent = kz_tangent[:, :-1], kz_tangent[:, 1:]
     denominator = upper + lower
@@ -107,6 +118,8 @@ def _all_interfaces(stack: SlabStack, inputs: _Inputs, kz: np.ndarray, kz_tangen
 
 
 def _standard_jacobian(stack: SlabStack, inputs: _Inputs) -> tuple[np.ndarray, np.ndarray]:
+    # Keep the backward Parratt recurrence identical to the primal amplitude
+    # path, carrying one quotient-rule tangent alongside each amplitude.
     kz, kz_tangent = _all_kz(stack, inputs)
     reflection, reflection_tangent = _all_interfaces(stack, inputs, kz, kz_tangent)
     amplitude = reflection[:, -1]
@@ -380,11 +393,13 @@ def _quadrature_tangent(
     function: DifferentiableFunction,
     order: int,
 ) -> tuple[np.ndarray, np.ndarray]:
+    # Chunking bounds the temporary query tensor while preserving the exact
+    # node order used by the scalar resolution implementation.
     nodes, weights = RULES[order]
     count = sample_tangent.shape[1]
     values_out = np.empty(samples.size)
     tangent_out = np.empty((samples.size, count))
-    chunk = max(1, 1024 // order)
+    chunk = max(1, MAX_QUERY_VALUES // order)
     for start in range(0, samples.size, chunk):
         stop = min(start + chunk, samples.size)
         query = samples[start:stop, None] + np.sqrt(2.0) * widths[start:stop, None] * nodes
@@ -427,20 +442,27 @@ def _adaptive_tangent(
     function: DifferentiableFunction,
     primal_function: Callable[[np.ndarray], np.ndarray] | None,
 ) -> tuple[np.ndarray, np.ndarray]:
+    # Adaptive order is selected from primal values first; tangent evaluation
+    # then follows that frozen mask without changing convergence decisions.
     if primal_function is None:
         # Without a separate primal callback, reuse differentiable values for selection.
         values_17, _ = _quadrature_tangent(samples, sample_tangent, widths, width_tangent, function, 17)
         values, tangent = _quadrature_tangent(samples, sample_tangent, widths, width_tangent, function, 33)
         needs_65 = ~gh_converged(values_17, values)
     else:
-        # Select the canonical order from primal values before evaluating tangents.
+        # The 33-point tangent pass already returns the canonical primal value.
+        # Reusing it removes a complete duplicate 33-point physics traversal while
+        # retaining the exact 17-to-33 convergence comparison.
         primal_17 = gauss_hermite_values(samples, widths, primal_function, 17)
-        primal_33 = gauss_hermite_values(samples, widths, primal_function, 33)
-        needs_65 = ~gh_converged(primal_17, primal_33)
-        values = np.empty(samples.size)
-        tangent = np.empty_like(sample_tangent)
-        if np.any(~needs_65):
-            values[~needs_65], tangent[~needs_65] = _quadrature_tangent(samples[~needs_65], sample_tangent[~needs_65], widths[~needs_65], width_tangent[~needs_65], function, 33)
+        values, tangent = _quadrature_tangent(
+            samples,
+            sample_tangent,
+            widths,
+            width_tangent,
+            function,
+            33,
+        )
+        needs_65 = ~gh_converged(primal_17, values)
     if np.any(needs_65):
         values[needs_65], tangent[needs_65] = _quadrature_tangent(samples[needs_65], sample_tangent[needs_65], widths[needs_65], width_tangent[needs_65], function, 65)
     return values, tangent
@@ -513,12 +535,21 @@ def smear_with_widths_jacobian(
     primal_function: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Propagate tangents through a primal-selected adaptive convolution."""
+    # Zero-width rows are exact point evaluations and never enter quadrature;
+    # mixed inputs are split once so each row follows one deterministic branch.
     samples, sample_tangent, widths, width_tangent = _smearing_inputs(
         samples,
         sample_jacobian,
         widths,
         width_jacobian,
     )
+    if np.all(widths == 0.0):
+        values, tangent = _validated_function_values(
+            function(samples, sample_tangent),
+            samples.shape,
+            sample_tangent.shape[1],
+        )
+        return np.array(values, copy=True), np.array(tangent, copy=True)
     values = np.empty(samples.size)
     tangent = np.empty_like(sample_tangent)
     zero = widths == 0.0

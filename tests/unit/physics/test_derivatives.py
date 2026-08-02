@@ -92,7 +92,7 @@ def test_analytic_tangent_matches_centered_difference() -> None:
     np.testing.assert_allclose(jacobian[:, 0], finite, rtol=2e-7, atol=2e-10)
 
 
-def test_quadrature_jacobian_uses_primal_order_selection_before_tangent_pass() -> None:
+def test_quadrature_jacobian_reuses_fine_tangent_values_for_order_selection() -> None:
     samples = np.linspace(0.02, 0.4, 80)
     primal_calls, tangent_calls = [], []
     def primal(query):
@@ -104,7 +104,7 @@ def test_quadrature_jacobian_uses_primal_order_selection_before_tangent_pass() -
     values, jacobian = smear_with_widths_jacobian(samples, np.ones((samples.size, 1)), np.full(samples.size, 0.002), np.zeros((samples.size, 1)), tangent, primal_function=primal)
     np.testing.assert_allclose(values, samples**2 + 0.002**2)
     np.testing.assert_allclose(jacobian[:, 0], 2 * samples)
-    assert {shape[1] for shape in primal_calls} == {17, 33}
+    assert {shape[1] for shape in primal_calls} == {17}
     assert {shape[1] for shape in tangent_calls} == {33}
 
 
@@ -140,7 +140,33 @@ def test_quadrature_jacobian_chunks_large_query_grids() -> None:
     )
     np.testing.assert_allclose(values, samples**2 + 0.002**2, rtol=2e-13, atol=2e-15)
     np.testing.assert_allclose(jacobian[:, 0], 2 * samples, rtol=2e-13, atol=2e-15)
-    assert max(np.prod(shape) for shape in calls) <= 1024
+    assert len(calls) <= 8
+    assert max(np.prod(shape) for shape in calls) <= 4096
+
+
+def test_all_zero_width_jacobian_reuses_validated_input_arrays() -> None:
+    samples = np.linspace(0.02, 0.4, 80)
+    sample_jacobian = np.ones((samples.size, 1))
+    observed: list[tuple[bool, bool]] = []
+
+    def exact(query, query_jacobian):
+        observed.append(
+            (
+                np.shares_memory(query, samples),
+                np.shares_memory(query_jacobian, sample_jacobian),
+            )
+        )
+        return query**2, 2 * query[..., None] * query_jacobian
+
+    smear_with_widths_jacobian(
+        samples,
+        sample_jacobian,
+        np.zeros(samples.size),
+        np.zeros_like(sample_jacobian),
+        exact,
+    )
+
+    assert observed == [(True, True)]
 
 
 @pytest.mark.parametrize(

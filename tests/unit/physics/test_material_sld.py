@@ -22,6 +22,29 @@ def test_material_sld_scales_mass_density() -> None:
     np.testing.assert_allclose(material_sld(material, 0.73, 1.5406), 0.73 * base)
 
 
+def test_formula_material_reuses_parsed_formula_across_sld_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import xrr_fitter.physics.materials as materials_module
+
+    material = MaterialSpec("Si", "Si", 2.329)
+    original = materials_module.periodictable.formula
+    calls: list[str] = []
+
+    def counted(formula: str):
+        calls.append(formula)
+        return original(formula)
+
+    monkeypatch.setattr(materials_module.periodictable, "formula", counted)
+    clear_cache = getattr(materials_module, "_parsed_formula", None)
+    if clear_cache is not None:
+        clear_cache.cache_clear()
+    material_sld(material, 1.0, 1.5406)
+    material_sld(material, 0.73, 1.54439)
+
+    assert calls == ["Si"]
+
+
 def test_direct_sld_material_uses_passive_absorption_sign() -> None:
     material = MaterialSpec("custom", None, None, 12e-6 + 0.4e-6j)
     assert material_sld(material, 0.5, 1.5406) == 6e-6 + 0.2e-6j
