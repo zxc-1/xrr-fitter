@@ -36,6 +36,7 @@ def _single_wavelength(
     sigma_theta: float,
     point_sigma: np.ndarray | None,
     callback: Callable[[PhysicsDiagnostic], None] | None,
+    emit_warning: bool,
 ) -> np.ndarray:
     _validate_resolution(domain, relative, absolute, sigma_theta, point_sigma)
     if domain == "theta":
@@ -44,9 +45,18 @@ def _single_wavelength(
             lambda query: parratt_reflectivity(qz_from_theta_deg(query, wavelength), stack),
             sigma_theta,
             callback,
+            emit_warning=emit_warning,
         )
     qz = qz_from_theta_deg(theta, wavelength)
-    return gaussian_smear(qz, lambda query: parratt_reflectivity(query, stack), relative, absolute, point_sigma, callback)
+    return gaussian_smear(
+        qz,
+        lambda query: parratt_reflectivity(query, stack),
+        relative,
+        absolute,
+        point_sigma,
+        callback,
+        emit_warning=emit_warning,
+    )
 
 
 def _validate_scalars(scale: float, background: float, linear: float, amplitude: float, exponent: float) -> None:
@@ -89,6 +99,8 @@ def instrument_reflectivity(
     sigma_q_a_inv: np.ndarray | None = None,
     secondary_sigma_q_a_inv: np.ndarray | None = None,
     diagnostic_callback: Callable[[PhysicsDiagnostic], None] | None = None,
+    *,
+    emit_warning: bool = True,
 ) -> np.ndarray:
     """Apply resolution, beam mixing, scale/footprint, then background."""
     theta = np.asarray(theta_deg, dtype=float)
@@ -99,12 +111,36 @@ def instrument_reflectivity(
     if beam.kind == "monochromatic":
         if secondary_stack is not None or secondary_sigma_q_a_inv is not None:
             raise ValueError("secondary_stack/resolution is invalid for monochromatic beam")
-        smeared = _single_wavelength(theta, primary_stack, beam.wavelength_a, *resolution, sigma_q_a_inv, diagnostic_callback)
+        smeared = _single_wavelength(
+            theta,
+            primary_stack,
+            beam.wavelength_a,
+            *resolution,
+            sigma_q_a_inv,
+            diagnostic_callback,
+            emit_warning,
+        )
     else:
         if secondary_stack is None:
             raise ValueError("secondary_stack is required for mixed_kalpha")
-        primary = _single_wavelength(theta, primary_stack, beam.wavelength_1_a, *resolution, sigma_q_a_inv, diagnostic_callback)
-        secondary = _single_wavelength(theta, secondary_stack, beam.wavelength_2_a, *resolution, secondary_sigma_q_a_inv, diagnostic_callback)
+        primary = _single_wavelength(
+            theta,
+            primary_stack,
+            beam.wavelength_1_a,
+            *resolution,
+            sigma_q_a_inv,
+            diagnostic_callback,
+            emit_warning,
+        )
+        secondary = _single_wavelength(
+            theta,
+            secondary_stack,
+            beam.wavelength_2_a,
+            *resolution,
+            secondary_sigma_q_a_inv,
+            diagnostic_callback,
+            emit_warning,
+        )
         smeared = (primary + beam.intensity_ratio_21 * secondary) / (1.0 + beam.intensity_ratio_21)
     qz = qz_from_theta_deg(theta, beam.effective_wavelength_a)
     sampled_background = _background(qz, background, linear_background_per_a_inv, powerlaw_background_amplitude, powerlaw_background_exponent)

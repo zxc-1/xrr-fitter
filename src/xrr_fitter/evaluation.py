@@ -1007,6 +1007,10 @@ def _modeled_reflectivity(
     adaptive-resolution diagnostic before it joins the candidate evidence.
     """
     callback = partial(_record_physics_diagnostic, diagnostics, model_indices)
+    # Adaptive quadrature diagnostics are already captured structurally by the
+    # callback. Suppressing the repeated warning in the optimizer's inner loop
+    # avoids console I/O for every trial while direct physics callers retain the
+    # public warning behavior.
     return instrument_reflectivity(
         theta[model_mask],
         primary_stack,
@@ -1016,6 +1020,7 @@ def _modeled_reflectivity(
         sigma_q_a_inv=_masked_optional(primary_sigma, model_mask),
         secondary_sigma_q_a_inv=_masked_optional(secondary_sigma, model_mask),
         diagnostic_callback=callback,
+        emit_warning=False,
         **instrument,
     )
 

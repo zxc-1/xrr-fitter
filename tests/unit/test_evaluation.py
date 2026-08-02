@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import replace
 from typing import get_type_hints
 
@@ -15,6 +16,7 @@ from xrr_fitter.model.fitting import FitConfig, FitEvaluationContext
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import ParameterSetting
 from xrr_fitter.model.structure import LayerSpec, PeriodicBlock, StructureSpec
+from xrr_fitter.physics.resolution import GaussHermiteConvergenceWarning
 
 
 def test_model_evaluation_recomputes_qz_and_shared_periodic_layers() -> None:
@@ -105,6 +107,34 @@ def test_shared_solver_primitives_match_the_compiled_objective() -> None:
         evaluate_vector(problem, unit).objective,
         rel=1e-12,
         abs=1e-14,
+    )
+
+
+def test_fit_evaluation_keeps_unconverged_resolution_as_structured_diagnostic() -> None:
+    problem = compile_fit_problem(
+        prepared_data(size=48),
+        simple_structure(),
+        InstrumentSpec(footprint_mode="none"),
+        replace(FitConfig.fast(master_seed=1802), scale_prior_enabled=False),
+    )
+    physical = {
+        definition.name: definition.initial
+        for definition in problem.parameter_definitions
+    }
+    physical["instrument.relative_sigma"] = 0.08
+    unit = encode_physical_vector(problem, physical)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", GaussHermiteConvergenceWarning)
+        result = evaluation.evaluate_model(problem, unit)
+
+    assert result.valid
+    assert not any(
+        item.category is GaussHermiteConvergenceWarning for item in caught
+    )
+    assert any(
+        diagnostic.code == "gauss_hermite_unconverged"
+        for diagnostic in result.diagnostics
     )
 
 

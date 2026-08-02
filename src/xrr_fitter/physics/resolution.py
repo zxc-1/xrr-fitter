@@ -82,9 +82,15 @@ def _adaptive_values(
     return accepted, unresolved
 
 
-def _emit_unconverged(indices: tuple[int, ...], callback: Callable[[PhysicsDiagnostic], None] | None) -> None:
+def _emit_unconverged(
+    indices: tuple[int, ...],
+    callback: Callable[[PhysicsDiagnostic], None] | None,
+    *,
+    emit_warning: bool,
+) -> None:
     message = f"Gauss-Hermite quadrature did not converge at the 65-point ceiling for {len(indices)} point(s)"
-    warnings.warn(message + "; using the 65-point result", GaussHermiteConvergenceWarning, stacklevel=3)
+    if emit_warning:
+        warnings.warn(message + "; using the 65-point result", GaussHermiteConvergenceWarning, stacklevel=3)
     if callback is not None:
         callback(PhysicsDiagnostic("gauss_hermite_unconverged", message, indices))
 
@@ -94,6 +100,8 @@ def smear_with_widths(
     widths: np.ndarray,
     function: Callable[[np.ndarray], np.ndarray],
     diagnostic_callback: Callable[[PhysicsDiagnostic], None] | None = None,
+    *,
+    emit_warning: bool = True,
 ) -> np.ndarray:
     flat_samples = samples.ravel()
     flat_widths = widths.ravel()
@@ -114,7 +122,11 @@ def smear_with_widths(
         result[~zero] = accepted
         if unresolved.size:
             selected = np.flatnonzero(~zero)
-            _emit_unconverged(tuple(int(value) for value in selected[unresolved]), diagnostic_callback)
+            _emit_unconverged(
+                tuple(int(value) for value in selected[unresolved]),
+                diagnostic_callback,
+                emit_warning=emit_warning,
+            )
     return result.reshape(samples.shape)
 
 
@@ -125,6 +137,8 @@ def gaussian_smear(
     absolute_sigma_a_inv: float = 0.0,
     sigma_q_a_inv: np.ndarray | None = None,
     diagnostic_callback: Callable[[PhysicsDiagnostic], None] | None = None,
+    *,
+    emit_warning: bool = True,
 ) -> np.ndarray:
     qz = _nonnegative(qz_a_inv, "qz_a_inv")
     _nonnegative_scalar(relative_sigma, "relative_sigma")
@@ -133,7 +147,13 @@ def gaussian_smear(
     if point_width.shape != qz.shape:
         raise ValueError("sigma_q_a_inv must match qz_a_inv")
     widths = np.sqrt((relative_sigma * qz) ** 2 + absolute_sigma_a_inv**2 + point_width**2)
-    return smear_with_widths(qz, widths, ideal_reflectivity, diagnostic_callback)
+    return smear_with_widths(
+        qz,
+        widths,
+        ideal_reflectivity,
+        diagnostic_callback,
+        emit_warning=emit_warning,
+    )
 
 
 def theta_domain_smear(
@@ -141,7 +161,15 @@ def theta_domain_smear(
     ideal_reflectivity: Callable[[np.ndarray], np.ndarray],
     sigma_theta_deg: float = 0.0,
     diagnostic_callback: Callable[[PhysicsDiagnostic], None] | None = None,
+    *,
+    emit_warning: bool = True,
 ) -> np.ndarray:
     theta = _nonnegative(theta_deg, "theta_deg")
     _nonnegative_scalar(sigma_theta_deg, "sigma_theta_deg")
-    return smear_with_widths(theta, np.full_like(theta, sigma_theta_deg), ideal_reflectivity, diagnostic_callback)
+    return smear_with_widths(
+        theta,
+        np.full_like(theta, sigma_theta_deg),
+        ideal_reflectivity,
+        diagnostic_callback,
+        emit_warning=emit_warning,
+    )

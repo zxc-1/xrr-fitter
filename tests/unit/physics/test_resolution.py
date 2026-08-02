@@ -75,6 +75,21 @@ def test_unconverged_quadrature_reports_structured_point_indices() -> None:
     assert diagnostics[0].point_indices == (0,)
 
 
+def test_unconverged_quadrature_can_suppress_warning_without_losing_diagnostic() -> None:
+    diagnostics = []
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", GaussHermiteConvergenceWarning)
+        gaussian_smear(
+            np.array([0.02, 0.2]),
+            lambda x: np.exp(-4e6 * (x - 0.02137) ** 2),
+            absolute_sigma_a_inv=0.011,
+            diagnostic_callback=diagnostics.append,
+            emit_warning=False,
+        )
+    assert not any(item.category is GaussHermiteConvergenceWarning for item in caught)
+    assert diagnostics[0].code == "gauss_hermite_unconverged"
+
+
 def test_point_resolution_combines_in_quadrature_and_preserves_zero_width_points() -> None:
     q = np.array([0.05, 0.1, 0.2])
     points = np.array([0, 0.002, 0.004])
