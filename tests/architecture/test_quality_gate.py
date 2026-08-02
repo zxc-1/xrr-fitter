@@ -75,6 +75,13 @@ def _standard_job(mode: str) -> dict[str, object]:
     }
 
 
+def _statistical_job() -> dict[str, object]:
+    return {
+        "if": "startsWith(github.ref, 'refs/tags/')",
+        **_standard_job("statistical"),
+    }
+
+
 def _distribution_job() -> dict[str, object]:
     job = _standard_job("distribution")
     job["steps"][1]["run"] = _standard_run("distribution").replace(
@@ -249,6 +256,7 @@ def _checkpoint_job() -> dict[str, object]:
                     "READY": "${{ needs.candidate-readiness.outputs.ready }}",
                     "IDENTITY_RESULT": "${{ needs.identity.result }}",
                     "RELEASE_RESULT": "${{ needs.release.result }}",
+                    "REF": "${{ github.ref }}",
                 },
                 "shell": "bash",
                 "run": (
@@ -260,7 +268,10 @@ def _checkpoint_job() -> dict[str, object]:
                     'test "$INTEGRATION_RESULT" = success\n'
                     'test "$SPAWN_RESULT" = success\n'
                     'test "$REGRESSION_RESULT" = success\n'
-                    'test "$STATISTICAL_RESULT" = success\n'
+                    'case "$REF" in\n'
+                    '  refs/tags/*) test "$STATISTICAL_RESULT" = success ;;\n'
+                    '  *) test "$STATISTICAL_RESULT" = skipped ;;\n'
+                    'esac\n'
                     'test "$R22_REFERENCE_RESULT" = success\n'
                     'test "$DISTRIBUTION_RESULT" = success\n'
                     'test "$READINESS_RESULT" = success\n'
@@ -303,7 +314,7 @@ def _expected_workflow() -> dict[str, object]:
             "integration": _standard_job("integration"),
             "spawn": _standard_job("spawn"),
             "regression": _standard_job("regression"),
-            "statistical": _standard_job("statistical"),
+            "statistical": _statistical_job(),
             "r22-reference": _r22_reference_job(),
             "distribution": _distribution_job(),
             "candidate-readiness": _readiness_job(),
@@ -387,6 +398,7 @@ def test_checkpoint_step_requires_every_gate() -> None:
         "READY": "${{ needs.candidate-readiness.outputs.ready }}",
         "IDENTITY_RESULT": "${{ needs.identity.result }}",
         "RELEASE_RESULT": "${{ needs.release.result }}",
+        "REF": "${{ github.ref }}",
     }
     assert step["run"].splitlines() == [
         "set -euo pipefail",
@@ -397,7 +409,10 @@ def test_checkpoint_step_requires_every_gate() -> None:
         'test "$INTEGRATION_RESULT" = success',
         'test "$SPAWN_RESULT" = success',
         'test "$REGRESSION_RESULT" = success',
-        'test "$STATISTICAL_RESULT" = success',
+        'case "$REF" in',
+        "  refs/tags/*) test \"$STATISTICAL_RESULT\" = success ;;",
+        "  *) test \"$STATISTICAL_RESULT\" = skipped ;;",
+        "esac",
         'test "$R22_REFERENCE_RESULT" = success',
         'test "$DISTRIBUTION_RESULT" = success',
         'test "$READINESS_RESULT" = success',

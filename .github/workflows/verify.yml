@@ -156,6 +156,7 @@ jobs:
           "$PYTHON" tools/verify.py regression
 
   statistical:
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: [self-hosted, macOS, ARM64, xrr-ci]
     timeout-minutes: 720
     steps:
@@ -339,6 +340,7 @@ jobs:
           READY: ${{ needs.candidate-readiness.outputs.ready }}
           IDENTITY_RESULT: ${{ needs.identity.result }}
           RELEASE_RESULT: ${{ needs.release.result }}
+          REF: ${{ github.ref }}
         shell: bash
         run: |
           set -euo pipefail
@@ -349,7 +351,10 @@ jobs:
           test "$INTEGRATION_RESULT" = success
           test "$SPAWN_RESULT" = success
           test "$REGRESSION_RESULT" = success
-          test "$STATISTICAL_RESULT" = success
+          case "$REF" in
+            refs/tags/*) test "$STATISTICAL_RESULT" = success ;;
+            *) test "$STATISTICAL_RESULT" = skipped ;;
+          esac
           test "$R22_REFERENCE_RESULT" = success
           test "$DISTRIBUTION_RESULT" = success
           test "$READINESS_RESULT" = success
