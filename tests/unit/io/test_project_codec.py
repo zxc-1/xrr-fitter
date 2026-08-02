@@ -36,7 +36,7 @@ from xrr_fitter.model.structure import PeriodicSpan, SlabStack
 
 
 ROOT = Path(__file__).resolve().parents[3]
-REFERENCE_INPUTS = ROOT / "verification/r22/reference/xrr_fitter/examples"
+REFERENCE_INPUTS = ROOT / "examples"
 
 
 def _simple_project():

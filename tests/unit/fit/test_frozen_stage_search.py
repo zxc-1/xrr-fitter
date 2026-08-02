@@ -25,7 +25,7 @@ from xrr_fitter.model.parameters import ParameterSetting
 
 def _frozen_single_layer_problem():
     root = Path(__file__).resolve().parents[3]
-    inputs = root / "verification" / "r22" / "reference" / "xrr_fitter" / "examples"
+    inputs = root / "examples"
     project = project_from_bytes((inputs / "single-layer.xrrproj.json").read_bytes())
     dataset = project.datasets[0]
     data = read_xy_bytes(

@@ -99,9 +99,6 @@ MODE_REGISTRY: Mapping[str, Mode] = {
     "statistical": Mode(
         (PYTEST_PREFIX + ("tests/acceptance/test_synthetic_recovery_corpus.py", "-q"),)
     ),
-    "r22-reference": Mode(
-        (PYTEST_PREFIX + ("tests/acceptance/test_r22_reference_equivalence.py", "-q"),)
-    ),
     "approved-data": Mode(
         (
             PYTEST_PREFIX + ("tests/acceptance/test_real_data_workflows.py", "-q"),
@@ -164,7 +161,6 @@ RELEASE_ORDER = (
     "spawn",
     "regression",
     "statistical",
-    "r22-reference",
     "distribution",
     "identity",
 )

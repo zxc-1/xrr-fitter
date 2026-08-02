@@ -20,7 +20,7 @@ from xrr_fitter.model.fitting import FitConfig
 
 
 ROOT = Path(__file__).resolve().parents[3]
-REFERENCE = ROOT / "verification" / "r22" / "reference" / "xrr_fitter" / "examples"
+REFERENCE = ROOT / "examples"
 
 
 def _problem(*, data=None):

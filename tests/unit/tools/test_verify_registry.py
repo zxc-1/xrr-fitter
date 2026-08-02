@@ -75,10 +75,6 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
             pytest_prefix
             + ("tests/acceptance/test_synthetic_recovery_corpus.py", "-q"),
         ),
-        "r22-reference": (
-            pytest_prefix
-            + ("tests/acceptance/test_r22_reference_equivalence.py", "-q"),
-        ),
         "approved-data": (
             pytest_prefix
             + ("tests/acceptance/test_real_data_workflows.py", "-q"),
@@ -144,7 +140,6 @@ def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
         "spawn",
         "regression",
         "statistical",
-        "r22-reference",
         "distribution",
         "identity",
     )

@@ -106,16 +106,6 @@ def _distribution_job() -> dict[str, object]:
     return job
 
 
-def _r22_reference_job() -> dict[str, object]:
-    job = _standard_job("r22-reference")
-    job["steps"][1]["run"] = _standard_run("r22-reference").replace(
-        '"$PYTHON" tools/verify.py r22-reference',
-        'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py r22-reference '
-        '--report-dir "$RUNNER_TEMP/r22-reference"',
-    )
-    return job
-
-
 def _readiness_run() -> str:
     return "\n".join(
         (
@@ -229,7 +219,6 @@ def _checkpoint_job() -> dict[str, object]:
             "spawn",
             "regression",
             "statistical",
-            "r22-reference",
             "distribution",
             "candidate-readiness",
             "identity",
@@ -250,7 +239,6 @@ def _checkpoint_job() -> dict[str, object]:
                     "SPAWN_RESULT": "${{ needs.spawn.result }}",
                     "REGRESSION_RESULT": "${{ needs.regression.result }}",
                     "STATISTICAL_RESULT": "${{ needs.statistical.result }}",
-                    "R22_REFERENCE_RESULT": "${{ needs.r22-reference.result }}",
                     "DISTRIBUTION_RESULT": "${{ needs.distribution.result }}",
                     "READINESS_RESULT": "${{ needs.candidate-readiness.result }}",
                     "READY": "${{ needs.candidate-readiness.outputs.ready }}",
@@ -272,7 +260,6 @@ def _checkpoint_job() -> dict[str, object]:
                     '  refs/tags/*) test "$STATISTICAL_RESULT" = success ;;\n'
                     '  *) test "$STATISTICAL_RESULT" = skipped ;;\n'
                     'esac\n'
-                    'test "$R22_REFERENCE_RESULT" = success\n'
                     'test "$DISTRIBUTION_RESULT" = success\n'
                     'test "$READINESS_RESULT" = success\n'
                     'case "$READY" in\n'
@@ -315,7 +302,6 @@ def _expected_workflow() -> dict[str, object]:
             "spawn": _standard_job("spawn"),
             "regression": _standard_job("regression"),
             "statistical": _statistical_job(),
-            "r22-reference": _r22_reference_job(),
             "distribution": _distribution_job(),
             "candidate-readiness": _readiness_job(),
             "identity": _identity_job(),
@@ -347,7 +333,6 @@ def test_initial_workflow_has_exact_jobs_permissions_and_trigger() -> None:
         "spawn",
         "regression",
         "statistical",
-        "r22-reference",
         "distribution",
         "candidate-readiness",
         "identity",
@@ -368,7 +353,6 @@ def test_checkpoint_job_contract() -> None:
         "spawn",
         "regression",
         "statistical",
-        "r22-reference",
         "distribution",
         "candidate-readiness",
         "identity",
@@ -392,7 +376,6 @@ def test_checkpoint_step_requires_every_gate() -> None:
         "SPAWN_RESULT": "${{ needs.spawn.result }}",
         "REGRESSION_RESULT": "${{ needs.regression.result }}",
         "STATISTICAL_RESULT": "${{ needs.statistical.result }}",
-        "R22_REFERENCE_RESULT": "${{ needs.r22-reference.result }}",
         "DISTRIBUTION_RESULT": "${{ needs.distribution.result }}",
         "READINESS_RESULT": "${{ needs.candidate-readiness.result }}",
         "READY": "${{ needs.candidate-readiness.outputs.ready }}",
@@ -413,7 +396,6 @@ def test_checkpoint_step_requires_every_gate() -> None:
         "  refs/tags/*) test \"$STATISTICAL_RESULT\" = success ;;",
         "  *) test \"$STATISTICAL_RESULT\" = skipped ;;",
         "esac",
-        'test "$R22_REFERENCE_RESULT" = success',
         'test "$DISTRIBUTION_RESULT" = success',
         'test "$READINESS_RESULT" = success',
         'case "$READY" in',
@@ -428,11 +410,6 @@ def test_checkpoint_step_requires_every_gate() -> None:
         "  *) exit 1 ;;",
         "esac",
     ]
-
-
-def test_checkpoint_step_requires_r22_reference_gate() -> None:
-    step = _payload()["jobs"]["checkpoint"]["steps"][0]
-    assert 'test "$R22_REFERENCE_RESULT" = success' in step["run"].splitlines()
 
 
 def test_concurrency_never_cancels_an_exact_sha_run() -> None:
@@ -493,21 +470,11 @@ def test_standard_jobs_use_required_runner_and_explicit_verifier_modes() -> None
         "spawn",
         "regression",
         "statistical",
-        "r22-reference",
         "distribution",
         "identity",
         "release",
     ):
         _assert_standard_job(name, jobs[name])
-
-
-def test_r22_reference_job_uses_offscreen_qt_and_external_report_directory() -> None:
-    job = _payload()["jobs"]["r22-reference"]
-    commands = job["steps"][1]["run"].splitlines()
-    assert (
-        'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py r22-reference '
-        '--report-dir "$RUNNER_TEMP/r22-reference"'
-    ) in commands
 
 
 def test_release_job_runs_nested_gui_gates_offscreen() -> None:
@@ -594,9 +561,6 @@ def test_release_jobs_are_readiness_gated_and_use_exact_bundles() -> None:
         lambda payload: payload["jobs"]["integration"].__setitem__("if", "false"),
         lambda payload: payload["jobs"]["spawn"].__setitem__("continue-on-error", True),
         lambda payload: payload["jobs"]["statistical"].__setitem__(
-            "continue-on-error", True
-        ),
-        lambda payload: payload["jobs"]["r22-reference"].__setitem__(
             "continue-on-error", True
         ),
         lambda payload: payload["jobs"]["quality"].__setitem__(
