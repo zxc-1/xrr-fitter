@@ -114,6 +114,79 @@ class LayerDialog(QDialog):
         return self._layer
 
 
+class BackingDialog(QDialog):
+    """Edit one formula-backed substrate and its connecting roughness."""
+
+    def __init__(
+        self,
+        backing: api.MaterialSpec,
+        roughness_a: float,
+        parent: QWidget | None = None,
+        *,
+        commit_backing: Callable[[api.MaterialSpec, float], object] | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("backingDialog")
+        self.setWindowTitle("编辑基底")
+        self.setAccessibleName("编辑基底")
+        self.setModal(True)
+        self._commit_backing = commit_backing
+        self._backing: api.MaterialSpec | None = None
+        self._roughness_a: float | None = None
+        self.formula_editor = QLineEdit()
+        self.formula_editor.setObjectName("backingFormulaInput")
+        self.formula_editor.setText("" if backing.formula is None else backing.formula)
+        self.density_editor = _number("backingDensityInput", 0.000001, 1.0)
+        if backing.bulk_density_g_cm3 is not None:
+            self.density_editor.setValue(backing.bulk_density_g_cm3)
+        self.roughness_editor = _number(
+            "backingRoughnessInput",
+            0.0,
+            roughness_a / 10.0,
+        )
+        self.error_label = QLabel()
+        self.error_label.setObjectName("backingDialogError")
+        self.error_label.setWordWrap(True)
+        self.error_label.hide()
+        self.buttons = _buttons("backingDialogButtons")
+        self.buttons.accepted.connect(self._accept_fields)
+        self.buttons.rejected.connect(self.reject)
+        self._arrange()
+
+    def _arrange(self) -> None:
+        form = QFormLayout()
+        form.addRow("化学式", self.formula_editor)
+        form.addRow("密度 (g/cm³)", self.density_editor)
+        form.addRow("连接界面粗糙度 (nm)", self.roughness_editor)
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(self.error_label)
+        layout.addWidget(self.buttons)
+
+    def _accept_fields(self) -> None:
+        try:
+            formula = self.formula_editor.text().strip()
+            backing = api.MaterialSpec(formula, formula, self.density_editor.value())
+            roughness_a = self.roughness_editor.value() * 10.0
+            if self._commit_backing is not None:
+                self._commit_backing(backing, roughness_a)
+        except (TypeError, ValueError) as error:
+            self.error_label.setText(str(error))
+            self.error_label.show()
+            if not self.isVisible():
+                self.show()
+            return
+        self._backing = backing
+        self._roughness_a = roughness_a
+        self.error_label.hide()
+        self.accept()
+
+    def backing(self) -> tuple[api.MaterialSpec, float]:
+        if self._backing is None or self._roughness_a is None:
+            raise LookupError("backing has not been confirmed")
+        return self._backing, self._roughness_a
+
+
 class PeriodicDialog(QDialog):
     """Collect one ordered periodic cell using an explicit layer table."""
 

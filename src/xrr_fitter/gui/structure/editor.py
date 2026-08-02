@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
-from xrr_fitter.gui.structure.dialogs import LayerDialog, PeriodicDialog
+from xrr_fitter.gui.structure.dialogs import BackingDialog, LayerDialog, PeriodicDialog
 
 
 CommitStructure = Callable[[api.StructureSpec], object]
@@ -80,6 +80,7 @@ class StructureEditor(QWidget):
         self.tree.currentItemChanged.connect(self._refresh_action_state)
         self.add_layer_button = self._button("添加普通层", "addLayerButton")
         self.add_periodic_button = self._button("添加周期块", "addPeriodicBlockButton")
+        self.edit_backing_button = self._button("编辑基底", "editBackingButton")
         self.remove_button = self._button("删除", "removeComponentButton")
         self.up_button = self._button("上移", "moveComponentUpButton")
         self.down_button = self._button("下移", "moveComponentDownButton")
@@ -95,6 +96,7 @@ class StructureEditor(QWidget):
         add_row.setSpacing(4)
         add_row.addWidget(self.add_layer_button)
         add_row.addWidget(self.add_periodic_button)
+        add_row.addWidget(self.edit_backing_button)
         add_row.addStretch(1)
         edit_row = QHBoxLayout()
         edit_row.setSpacing(4)
@@ -126,6 +128,7 @@ class StructureEditor(QWidget):
     def _connect_actions(self) -> None:
         self.add_layer_button.clicked.connect(self._choose_layer)
         self.add_periodic_button.clicked.connect(self._choose_periodic)
+        self.edit_backing_button.clicked.connect(self._choose_backing)
         self.remove_button.clicked.connect(self._remove_selected)
         self.up_button.clicked.connect(lambda: self._move_selected(-1))
         self.down_button.clicked.connect(lambda: self._move_selected(1))
@@ -155,6 +158,7 @@ class StructureEditor(QWidget):
         for button in (
             self.add_layer_button,
             self.add_periodic_button,
+            self.edit_backing_button,
             self.remove_button,
             self.up_button,
             self.down_button,
@@ -177,6 +181,16 @@ class StructureEditor(QWidget):
         structure = self._require_structure()
         self._commit_structure(
             replace(structure, components=(*structure.components, block))
+        )
+
+    def set_backing(self, backing: api.MaterialSpec, roughness_a: float) -> None:
+        structure = self._require_structure()
+        self._commit_structure(
+            replace(
+                structure,
+                backing=backing,
+                backing_roughness_a=roughness_a,
+            )
         )
 
     def remove_component(self, index: int) -> None:
@@ -216,6 +230,7 @@ class StructureEditor(QWidget):
         self.tree.addTopLevelItem(self._medium_item("基底", structure.backing))
         self.add_layer_button.setEnabled(True)
         self.add_periodic_button.setEnabled(True)
+        self.edit_backing_button.setEnabled(True)
         self._refresh_action_state()
 
     def _medium_item(self, name: str, material: api.MaterialSpec) -> QTreeWidgetItem:
@@ -292,3 +307,12 @@ class StructureEditor(QWidget):
 
     def _choose_periodic(self) -> None:
         PeriodicDialog(self, commit_block=self.add_periodic_block).exec()
+
+    def _choose_backing(self) -> None:
+        structure = self._require_structure()
+        BackingDialog(
+            structure.backing,
+            structure.backing_roughness_a,
+            self,
+            commit_backing=self.set_backing,
+        ).exec()
