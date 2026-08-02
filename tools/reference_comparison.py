@@ -5,6 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import math
 
+from reference_tolerance import (
+    compare_array_tolerance,
+    compare_float_tree_tolerance,
+    compare_normalized_export,
+)
+
 
 def _failure(detail: str) -> None:
     raise ValueError(f"reference comparison failed: {detail}")
@@ -131,6 +137,12 @@ def _structured(reference: object, actual: object, policy: dict[str, object]) ->
         _scalar_tolerance(reference, actual, policy)
     elif kind == "scalar_bounds":
         _scalar_bounds(reference, actual, policy)
+    elif kind == "array_tolerance":
+        compare_array_tolerance(reference, actual, policy, _array_pair)
+    elif kind == "float_tree_tolerance":
+        compare_float_tree_tolerance(reference, actual, policy, _exact)
+    elif kind == "normalized_export":
+        compare_normalized_export(reference, actual, policy, _exact)
     else:
         _failure(f"unknown comparison policy: {kind}")
 
