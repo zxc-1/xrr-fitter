@@ -94,19 +94,19 @@ def test_add_dataset_preserves_an_explicit_mixed_kalpha_beam(tmp_path: Path) -> 
     assert updated.datasets[0].beam is beam
 
 
-def test_add_dataset_builds_structure_from_material_suffix_in_source_name(
+def test_add_dataset_interprets_filename_materials_from_backing_to_surface(
     tmp_path: Path,
 ) -> None:
     cases = (
         (
             "S300-1_250904-2 Si3N4+Si+Zr",
             "S300-1_250904-2",
-            ("Si3N4", "Si", "Zr"),
+            ("Zr", "Si", "Si3N4"),
         ),
         (
             "S300-1-260424-2 CrSiC+SiCMo+TaN",
             "S300-1-260424-2",
-            ("CrSiC", "SiCMo", "TaN"),
+            ("TaN", "SiCMo", "CrSiC"),
         ),
     )
     project = new_project()

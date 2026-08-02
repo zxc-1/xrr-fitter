@@ -133,10 +133,10 @@ def _filename_materials(stem: str) -> tuple[str, tuple[str, ...] | None]:
     parts = stem.rsplit(maxsplit=1)
     if len(parts) != 2 or "+" not in parts[1]:
         return stem, None
-    formulas = tuple(value.strip() for value in parts[1].split("+"))
-    if any(not value for value in formulas):
+    backing_to_surface = tuple(value.strip() for value in parts[1].split("+"))
+    if any(not value for value in backing_to_surface):
         return stem, None
-    return parts[0], formulas
+    return parts[0], tuple(reversed(backing_to_surface))
 
 
 def _ordinary_layer_formulas(structure: StructureSpec | None) -> tuple[str, ...] | None:

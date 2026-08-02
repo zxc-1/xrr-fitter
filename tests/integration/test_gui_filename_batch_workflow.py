@@ -41,9 +41,9 @@ def _filename_batch_inputs(tmp_path: Path) -> tuple[Path, Path]:
             roughness_a=3.0,
         )
         for formula, density in (
-            ("Si3N4", 3.17),
-            ("Si", 2.329),
             ("Zr", 6.52),
+            ("Si", 2.329),
+            ("Si3N4", 3.17),
         )
     )
     return (
@@ -83,7 +83,7 @@ def _import_filename_batch(window) -> None:
             "S300-2_250904-2 Si3N4+Si+Zr",
         ),
         (api.DataColumnMapping(0, 1), api.DataColumnMapping(0, 1)),
-        (("Si3N4", "Si", "Zr"), ("Si3N4", "Si", "Zr")),
+        (("Zr", "Si", "Si3N4"), ("Zr", "Si", "Si3N4")),
         True,
     )
     assert project.datasets[0].structure is project.datasets[1].structure
@@ -140,8 +140,8 @@ def _exercise_recoverable_layer_dialog(window) -> None:
         )
     ]
     assert _component_names(window) == (
-        ("Si3N4", "Si", "Zr", "validation-layer"),
-        ("Si3N4", "Si", "Zr", "validation-layer"),
+        ("Zr", "Si", "Si3N4", "validation-layer"),
+        ("Zr", "Si", "Si3N4", "validation-layer"),
     )
 
     tree = window.findChild(QTreeWidget, "structureTree")
@@ -150,8 +150,8 @@ def _exercise_recoverable_layer_dialog(window) -> None:
     QTest.mouseClick(remove, Qt.MouseButton.LeftButton)
     QApplication.processEvents()
     assert _component_names(window) == (
-        ("Si3N4", "Si", "Zr"),
-        ("Si3N4", "Si", "Zr"),
+        ("Zr", "Si", "Si3N4"),
+        ("Zr", "Si", "Si3N4"),
     )
 
 
