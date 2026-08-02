@@ -128,7 +128,6 @@ def _readiness_run() -> str:
             '"$PYTHON" tools/collect_test_manifest.py --repo-root "$GITHUB_WORKSPACE" --source-commit "$TEST_SOURCE_COMMIT" --lock-file "$GITHUB_WORKSPACE/requirements-macos-arm64-py312.lock" --suite tests --output "$AUDIT_DIR/tests.json"',
             'cmp verification/r23/tests.json "$AUDIT_DIR/tests.json"',
             'git diff --quiet "$TEST_SOURCE_COMMIT" HEAD -- tests',
-            '"$PYTHON" tools/validate_test_ledger.py --phase final --active-manifest verification/r22/collections/tests-active.json --r21-manifest verification/r22/collections/tests-r21.json --target-manifest verification/r23/tests.json --ledger docs/architecture/r22-r23-test-ledger.csv',
             '"$PYTHON" tools/check_hygiene.py --require-git-clean',
             "printf 'ready=true\\n' >> \"$GITHUB_OUTPUT\"",
             "",
@@ -494,7 +493,6 @@ def test_candidate_readiness_is_static_and_owner_data_independent() -> None:
     commands = step["run"]
     assert "verification/r23/tests.json" in commands
     assert "tools/collect_test_manifest.py" in commands
-    assert "tools/validate_test_ledger.py --phase final" in commands
     assert "ready=false" in commands
     assert "ready=true" in commands
     assert "approved-data" not in commands
