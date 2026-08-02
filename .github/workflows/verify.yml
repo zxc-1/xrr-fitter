@@ -3,7 +3,7 @@ name: verify
 "on":
   push:
     branches:
-      - r23-clean-architecture
+      - main
     tags:
       - R23-final
 

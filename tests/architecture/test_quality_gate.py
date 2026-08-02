@@ -297,7 +297,7 @@ def _expected_workflow() -> dict[str, object]:
         "name": "verify",
         "on": {
             "push": {
-                "branches": ["r23-clean-architecture"],
+                "branches": ["main"],
                 "tags": ["R23-final"],
             }
         },
@@ -334,7 +334,7 @@ def test_initial_workflow_has_exact_jobs_permissions_and_trigger() -> None:
     assert payload["permissions"] == {"contents": "read"}
     assert payload["on"] == {
         "push": {
-            "branches": ["r23-clean-architecture"],
+            "branches": ["main"],
             "tags": ["R23-final"],
         }
     }
