@@ -14,6 +14,7 @@ from xrr_fitter.evaluation import (
 from xrr_fitter.fit.candidates import best_candidate_index
 from xrr_fitter.fit.checkpoint import build_checkpoint
 from xrr_fitter.fit.resume import ResumePlan, validate_resume_checkpoint
+from xrr_fitter.fit.tasking import TaskRunner
 from xrr_fitter.fit.stages import (
     StageOutcome,
     compile_coarse_problem,
@@ -169,6 +170,7 @@ def run_fit_search(
     cancelled: Callable[[], bool] | None = None,
     progress: Callable[[FitProgress], None] | None = None,
     checkpoint: Callable[[FitCheckpoint], None] | None = None,
+    task_runner: TaskRunner | None = None,
 ) -> FitSearchResult:
     """Run a fresh search or the exact suffix after a validated checkpoint."""
     if not isinstance(request, FitSearchRequest):
@@ -239,6 +241,7 @@ def run_fit_search(
                 perturbation_counts=counts,
                 progress=progress,
                 cancelled=cancelled,
+                task_runner=task_runner,
             )
         else:
             parents, _counts = local_stage_continuation(_stage_candidates(state, "D"))
@@ -249,6 +252,7 @@ def run_fit_search(
                 seeds[2:],
                 progress=progress,
                 cancelled=cancelled,
+                task_runner=task_runner,
             )
         state = state.append(outcome)
         perturbation_counts = outcome.perturbation_counts
@@ -437,6 +441,7 @@ def continue_profile_basin(
     parameter_name: str,
     cancelled: Callable[[], bool] | None = None,
     checkpoint: Callable[[FitCheckpoint], None] | None = None,
+    task_runner: TaskRunner | None = None,
 ) -> FitSearchResult:
     """Atomically replace Stage-E evidence after verified basin recovery."""
     problem, search_result, parameter_name = _validate_profile_continuation(
@@ -457,6 +462,7 @@ def continue_profile_basin(
         seeds,
         parameter_name=parameter_name,
         cancelled=cancelled,
+        task_runner=task_runner,
     )
     if rebuilt is None:
         return search_result

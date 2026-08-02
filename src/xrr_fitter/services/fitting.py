@@ -1,4 +1,13 @@
-"""Fit, profile-recovery, analysis, and MCMC composition services."""
+"""Fit, profile-recovery, analysis, and MCMC composition services.
+
+Services own runtime resources while fit and analysis remain pure calculation
+domains. One independent dataset normally receives the configured local thread
+budget for its complete search and uncertainty lifetime. Batch orchestration may
+pass a smaller positive share so several datasets can run concurrently without
+multiplying the total physics worker count. That runtime share does not modify
+the compiled problem, seed tree, checkpoint identity, or persisted project
+configuration.
+"""
 
 from __future__ import annotations
 
@@ -38,6 +47,7 @@ from xrr_fitter.services.datasets import (
     mcmc_candidate_seed,
     service_seed_branches,
 )
+from xrr_fitter.services.parallel import OrderedTaskRunner
 from xrr_fitter.services.projects import inspect_sources
 
 
@@ -160,6 +170,7 @@ def _search_with_profile_recovery(
     progress: ProgressCallback | None,
     cancelled: CancellationProbe | None,
     checkpoint: Callable[[FitCheckpoint], None] | None,
+    task_runner: Callable,
 ):
     search = run_fit_search(
         FitSearchRequest(
@@ -170,6 +181,7 @@ def _search_with_profile_recovery(
         cancelled=cancelled,
         progress=progress,
         checkpoint=checkpoint,
+        task_runner=task_runner,
     )
     candidate = search.best_candidate
     if candidate is None:
@@ -211,6 +223,7 @@ def _search_with_profile_recovery(
         parameter_name=decision.parameter_name,
         cancelled=cancelled,
         checkpoint=checkpoint,
+        task_runner=task_runner,
     )
     if progress is not None:
         progress(
@@ -232,19 +245,26 @@ def fit_prepared_dataset(
     progress: ProgressCallback | None = None,
     cancelled: CancellationProbe | None = None,
     checkpoint: Callable[[FitCheckpoint], None] | None = None,
+    local_workers: int | None = None,
 ) -> FitResult:
     """Run one independent search, optional recovery, and final analysis."""
-    search = _search_with_profile_recovery(
-        prepared,
-        progress=progress,
-        cancelled=cancelled,
-        checkpoint=checkpoint,
-    )
-    return run_analysis(
-        AnalysisRequest(prepared.dataset_id, prepared.problem, search),
-        cancelled=cancelled,
-        progress=progress,
-    )
+    workers = prepared.problem.config.local_workers if local_workers is None else local_workers
+    if local_workers is not None and local_workers > prepared.problem.config.local_workers:
+        raise ValueError("local_workers must fit within the configured worker budget")
+    with OrderedTaskRunner(workers) as runner:
+        search = _search_with_profile_recovery(
+            prepared,
+            progress=progress,
+            cancelled=cancelled,
+            checkpoint=checkpoint,
+            task_runner=runner.run,
+        )
+        return run_analysis(
+            AnalysisRequest(prepared.dataset_id, prepared.problem, search),
+            cancelled=cancelled,
+            progress=progress,
+            task_runner=runner.run,
+        )
 
 
 def _joint_checkpoints(

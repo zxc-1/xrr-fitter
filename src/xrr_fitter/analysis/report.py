@@ -24,7 +24,7 @@ from math import isfinite
 
 import numpy as np
 
-from xrr_fitter.analysis.bootstrap import bootstrap_problem_local
+from xrr_fitter.analysis.bootstrap import TaskRunner, bootstrap_problem_local
 from xrr_fitter.analysis.classification import classify_result_with_evidence
 from xrr_fitter.analysis.derivatives import (
     correlation_from_covariance,
@@ -37,7 +37,7 @@ from xrr_fitter.analysis.diagnostics import (
     ordered_fit_residuals,
     residual_autocorrelation_flag,
 )
-from xrr_fitter.analysis.profiles import build_problem_profile, select_profile_names
+from xrr_fitter.analysis.profiles import build_problem_profiles, select_profile_names
 from xrr_fitter.model.analysis import BootstrapResult, FitResult, UncertaintyReport
 from xrr_fitter.model.fitting import (
     FitEvaluationContext,
@@ -57,8 +57,6 @@ WARNING_DIAGNOSTICS = {
     "gauss_hermite_unconverged",
     "ideal_reflectivity_above_one",
 }
-
-
 def _analysis_dataset_id(value: object) -> str | None:
     if value is None:
         return None
@@ -180,6 +178,7 @@ def _profiles(
     profile_names: tuple[str, ...],
     cancelled: Callable[[], bool] | None,
     progress: Callable[[int, int, str], None] | None = None,
+    task_runner: TaskRunner | None = None,
 ) -> tuple[object, ...]:
     names = tuple(variable.name for variable in problem.variables)
     requested = tuple(
@@ -187,14 +186,17 @@ def _profiles(
         for name in profile_names
         if name in names or _validate_derived_profile(problem, name)
     )
-    profiles = []
+    profiles = build_problem_profiles(
+        problem,
+        unit_vector,
+        requested,
+        cancelled=cancelled,
+        task_runner=task_runner,
+    )
     for index, name in enumerate(requested, start=1):
-        profiles.append(
-            build_problem_profile(problem, unit_vector, name, cancelled=cancelled)
-        )
         if progress is not None:
             progress(index, len(requested), name)
-    return tuple(profiles)
+    return profiles
 
 
 def _validate_derived_profile(problem: object, name: str) -> bool:
@@ -230,6 +232,7 @@ def build_uncertainty_report(
     bootstrap: BootstrapResult | None = None,
     cancelled: Callable[[], bool] | None = None,
     progress: Callable[[int, int, str], None] | None = None,
+    task_runner: TaskRunner | None = None,
 ) -> UncertaintyReport:
     """Build covariance, profile, bootstrap, and residual evidence."""
     _check_cancelled(cancelled)
@@ -242,7 +245,14 @@ def build_uncertainty_report(
         unit,
         names,
     )
-    profiles = _profiles(problem, unit, profile_names, cancelled, progress)
+    profiles = _profiles(
+        problem,
+        unit,
+        profile_names,
+        cancelled,
+        progress,
+        task_runner,
+    )
     _check_cancelled(cancelled)
     systematic, diagnostics, autocorrelation = _residual_evidence(problem, best)
     intervals = () if bootstrap is None else bootstrap.intervals
@@ -454,6 +464,7 @@ def analyze_search_result(
     cancelled: Callable[[], bool] | None = None,
     dataset_id: str | None = None,
     progress: Callable[[FitProgress], None] | None = None,
+    task_runner: TaskRunner | None = None,
 ) -> FitResult:
     """Finalize a fitting-only search with deterministic uncertainty evidence."""
     _validate_analysis_members(problem, search_result, bootstrap)
@@ -496,6 +507,7 @@ def analyze_search_result(
             child_seed=uncertainty_seed(problem.config),
             cancelled=cancelled,
             progress=bootstrap_progress,
+            task_runner=task_runner,
         )
         _validate_bootstrap_ownership(problem, search_result, bootstrap)
     selected_profiles = _selected_profile_names(
@@ -519,6 +531,7 @@ def analyze_search_result(
         bootstrap=bootstrap,
         cancelled=cancelled,
         progress=profile_progress,
+        task_runner=task_runner,
     )
     publish("finalizing", 0, 1, "finalizing")
     enriched = _enrich_search_result(problem, search_result, report)
@@ -547,6 +560,7 @@ def run_analysis(
     *,
     cancelled: Callable[[], bool] | None = None,
     progress: Callable[[FitProgress], None] | None = None,
+    task_runner: TaskRunner | None = None,
 ) -> FitResult:
     """Execute one validated worker request without storing runtime callbacks."""
     if not isinstance(request, AnalysisRequest):
@@ -559,4 +573,5 @@ def run_analysis(
         cancelled=cancelled,
         dataset_id=request.dataset_id,
         progress=progress,
+        task_runner=task_runner,
     )

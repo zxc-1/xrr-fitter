@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from threading import Barrier, Event
 from types import SimpleNamespace
 
 import numpy as np
@@ -133,3 +134,65 @@ def test_independent_project_warnings_preserve_dataset_order_and_duplicates(
     result = fitting.fit_project(value)
 
     assert result.warnings == ("first", "second", "first", "second")
+
+
+def test_independent_batch_runs_concurrently_with_one_total_worker_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = _project(tmp_path)
+    value = replace(value, fit_config=replace(value.fit_config, local_workers=4))
+    rendezvous = Barrier(2, timeout=2.0)
+    alpha_finished = Event()
+    allocations: list[tuple[str, int]] = []
+    completion: list[str] = []
+    published: list[tuple[str, str]] = []
+
+    def prepare(project, dataset_id, _seed):
+        index = next(
+            index
+            for index, dataset in enumerate(project.datasets)
+            if dataset.dataset_id == dataset_id
+        )
+        return SimpleNamespace(
+            dataset_id=dataset_id,
+            dataset_index=index,
+            updated_dataset=project.datasets[index],
+        )
+
+    def fit(prepared, *, progress, checkpoint, local_workers, **_options):
+        dataset_id = prepared.dataset_id
+        allocations.append((dataset_id, local_workers))
+        progress(SimpleNamespace(message=f"{dataset_id}:start"))
+        rendezvous.wait()
+        if dataset_id == "alpha":
+            completion.append(dataset_id)
+            alpha_finished.set()
+        else:
+            assert alpha_finished.wait(timeout=2.0)
+            completion.append(dataset_id)
+        checkpoint(None)
+        progress(SimpleNamespace(message=f"{dataset_id}:finish"))
+        return final_fit_result()
+
+    monkeypatch.setattr(fitting, "prepare_dataset_fit", prepare)
+    monkeypatch.setattr(fitting, "fit_prepared_dataset", fit)
+
+    result = fitting.fit_project(
+        value,
+        progress_callback=lambda event: published.append(("progress", event.message)),
+        checkpoint_callback=lambda _project: published.append(("checkpoint", "saved")),
+    )
+
+    assert completion == ["alpha", "zeta"]
+    assert sorted(allocations) == [("alpha", 2), ("zeta", 2)]
+    assert published == [
+        ("progress", "zeta:start"),
+        ("checkpoint", "saved"),
+        ("progress", "zeta:finish"),
+        ("progress", "alpha:start"),
+        ("checkpoint", "saved"),
+        ("progress", "alpha:finish"),
+    ]
+    assert tuple(item.dataset_id for item in result.datasets) == ("zeta", "alpha")
+    assert all(dataset.last_valid_result is not None for dataset in result.updated_project.datasets)

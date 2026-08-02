@@ -26,6 +26,21 @@ which preserves the package dependency direction.
 Cancellation is polled around every optimizer boundary and scan step. No partial
 profile or basin decision is published after interruption. Stable ordering and
 explicit objective deltas make the same profile replayable under frozen seeds.
+
+Uncertainty analysis prepares every requested profile before scheduling work.
+The lower and upper walks are independent because each begins with the center
+nuisance state; all such walks are therefore flattened into one ordered task
+batch. Their results retain explicit unit-grid positions, so completion timing
+cannot alter array order. Refinement and mapping form a second ordered batch,
+allowing expensive threshold probes from different parameters to overlap
+without nesting calls into the shared thread pool. A single-profile caller uses
+the identical plan and merge path serially.
+
+Only service-owned code supplies the task runner. Plans contain process-local
+closures and never enter a request, checkpoint, result, or project value. The
+runner returns values in declaration order, and the final profile tuple follows
+the requested parameter order even when directions or refinements complete in
+the opposite order.
 """
 
 from __future__ import annotations
@@ -37,12 +52,15 @@ from math import isfinite
 import numpy as np
 from scipy.optimize import least_squares, minimize, minimize_scalar
 
+from xrr_fitter.analysis.profile_tasks import (
+    build_problem_profiles as _build_problem_profiles,
+)
 from xrr_fitter.evaluation import (
     EvaluationConstraintError,
+    cached_least_squares_callbacks,
     evaluate_model,
     least_squares_loss,
-    least_squares_residual,
-    least_squares_residual_jacobian,
+    least_squares_system,
     values_by_name,
 )
 from xrr_fitter.model.analysis import ParameterProfile, ProfileBasinDecision
@@ -93,6 +111,17 @@ class _Setup:
     delta: float
     penalty: float
     name: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ProfilePlan:
+    """One validated scan whose two walks can execute independently."""
+
+    callbacks: _Callbacks
+    setup: _Setup
+    residual_loss: object
+    least_squares_max_nfev: int | None
+    seek_basin: bool = False
 
 
 def _profile_center(center_unit: np.ndarray) -> np.ndarray:
@@ -331,37 +360,81 @@ def _profile_point(
     return _trial(setup, fixed, start), best, start
 
 
+def _scan_direction(
+    callbacks: _Callbacks,
+    setup: _Setup,
+    residual_loss: object,
+    max_nfev: int | None,
+    direction: int,
+) -> tuple[tuple[int, ...], np.ndarray, np.ndarray]:
+    """Walk one independent profile direction with its own warm state.
+
+    The descending direction includes the supplied center; the ascending
+    direction begins at the next grid point. Both initialize nuisance coordinates
+    from the center, so neither can inherit a local basin found by the other.
+    Explicit grid indices make later merging independent of task completion.
+    """
+    center_index = int(np.argmin(np.abs(setup.grid - setup.center[setup.index])))
+    indices = tuple(
+        range(center_index, -1, -1)
+        if direction < 0
+        else range(center_index + 1, setup.grid.size)
+    )
+    vectors = np.empty((len(indices), setup.center.size), dtype=float)
+    objectives = np.full(len(indices), np.inf)
+    warm = setup.center[list(setup.nuisance)]
+    for offset, position in enumerate(indices):
+        vector, objective, nuisance = _profile_point(
+            callbacks,
+            setup,
+            float(setup.grid[position]),
+            warm,
+            residual_loss,
+            max_nfev,
+        )
+        vectors[offset], objectives[offset] = vector, objective
+        if isfinite(objective):
+            warm = nuisance
+    return indices, vectors, objectives
+
+
+def _merge_direction_scans(
+    setup: _Setup,
+    scans: tuple[tuple[tuple[int, ...], np.ndarray, np.ndarray], ...],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Restore directional rows to their authoritative unit-grid positions.
+
+    Assignment uses the carried integer positions rather than concatenation.
+    Consequently reversed completion order produces the same warm-path values,
+    objective array, and stable refinement input as the serial scan.
+    """
+    vectors = np.empty((setup.grid.size, setup.center.size), dtype=float)
+    objectives = np.full(setup.grid.size, np.inf)
+    for indices, directional_vectors, directional_objectives in scans:
+        positions = np.asarray(indices, dtype=int)
+        vectors[positions] = directional_vectors
+        objectives[positions] = directional_objectives
+    return vectors, objectives
+
+
 def _scan(
     callbacks: _Callbacks,
     setup: _Setup,
     residual_loss: object,
     max_nfev: int | None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Walk from the center toward both bounds with directional warm starts.
-
-    The center is visited first on the descending pass. Each direction resets to
-    the center nuisance state, preventing the opposite tail from inheriting an
-    unrelated local path.
-    """
-    vectors = np.empty((setup.grid.size, setup.center.size), dtype=float)
-    objectives = np.full(setup.grid.size, np.inf)
-    center_index = int(np.argmin(np.abs(setup.grid - setup.center[setup.index])))
-    directions = (range(center_index, -1, -1), range(center_index + 1, setup.grid.size))
-    for indices in directions:
-        warm = setup.center[list(setup.nuisance)]
-        for position in indices:
-            vector, objective, nuisance = _profile_point(
-                callbacks,
-                setup,
-                float(setup.grid[position]),
-                warm,
-                residual_loss,
-                max_nfev,
-            )
-            vectors[position], objectives[position] = vector, objective
-            if isfinite(objective):
-                warm = nuisance
-    return vectors, objectives
+    """Walk both independent directions and merge them in unit-grid order."""
+    scans = tuple(
+        _scan_direction(
+            callbacks,
+            setup,
+            residual_loss,
+            max_nfev,
+            direction,
+        )
+        for direction in (-1, 1)
+    )
+    return _merge_direction_scans(setup, scans)
 
 
 def _profile_minimum(objectives: np.ndarray) -> float:
@@ -673,32 +746,26 @@ def _closed_sides(setup: _Setup, units: np.ndarray, objectives: np.ndarray) -> t
     )
 
 
-def _profile_scan(
+def _prepare_profile_plan(
     objective: Scalar,
     center_unit: np.ndarray,
     *,
     parameter_index: int,
-    lower: float,
-    upper: float,
-    steps: int,
-    name: str | None,
-    objective_delta: float | None,
-    value_mapper: Scalar | None,
-    gradient: Vector | None,
-    residual: Vector | None,
-    residual_jacobian: Vector | None,
-    residual_loss: object,
-    least_squares_max_nfev: int | None,
-    cancelled: Callable[[], bool] | None,
-    seek_basin: bool,
-) -> tuple[ParameterProfile, np.ndarray, float, float]:
-    """Run the complete scan, refinement, mapping, and closure pipeline.
-
-    ``seek_basin`` enables the deterministic one-dimensional dense fallback used
-    to discover a narrow remote minimum. Returned basin state remains unit-space
-    evidence even when the published profile x-axis uses a physical mapper.
-    Profile arrays are sorted by fixed unit coordinate before final mapping.
-    """
+    lower: float = 0.0,
+    upper: float = 1.0,
+    steps: int = 41,
+    name: str | None = None,
+    objective_delta: float | None = None,
+    value_mapper: Scalar | None = None,
+    gradient: Vector | None = None,
+    residual: Vector | None = None,
+    residual_jacobian: Vector | None = None,
+    residual_loss: object = "linear",
+    least_squares_max_nfev: int | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    seek_basin: bool = False,
+) -> _ProfilePlan:
+    """Validate callbacks and freeze all state needed after task submission."""
     callbacks = _Callbacks(
         objective, value_mapper, gradient, residual, residual_jacobian, cancelled
     )
@@ -712,22 +779,56 @@ def _profile_scan(
         name,
         objective_delta,
     )
-    vectors, objectives = _scan(callbacks, setup, residual_loss, least_squares_max_nfev)
+    return _ProfilePlan(
+        callbacks,
+        setup,
+        residual_loss,
+        least_squares_max_nfev,
+        seek_basin,
+    )
+
+
+def _scan_plan_direction(
+    plan: _ProfilePlan,
+    direction: int,
+) -> tuple[tuple[int, ...], np.ndarray, np.ndarray]:
+    """Adapt one immutable plan to the zero-argument task-runner boundary."""
+    return _scan_direction(
+        plan.callbacks,
+        plan.setup,
+        plan.residual_loss,
+        plan.least_squares_max_nfev,
+        direction,
+    )
+
+
+def _finish_profile_plan(
+    plan: _ProfilePlan,
+    scans: tuple[tuple[tuple[int, ...], np.ndarray, np.ndarray], ...],
+) -> tuple[ParameterProfile, np.ndarray, float, float]:
+    """Refine, map, close, and publish one pair of completed direction scans.
+
+    Refinement remains a single task because threshold probes depend on the
+    merged support envelope. Mapping and closure run only after every retained
+    probe is fixed, so no partial profile can escape on cancellation or failure.
+    """
+    callbacks, setup = plan.callbacks, plan.setup
+    vectors, objectives = _merge_direction_scans(setup, scans)
     value_cache: dict[bytes, float] = {}
     units, vectors, objectives = _refine_transitions(
         callbacks,
         setup,
         vectors,
         objectives,
-        residual_loss,
-        least_squares_max_nfev,
+        plan.residual_loss,
+        plan.least_squares_max_nfev,
         value_cache,
     )
     finite = np.where(np.isfinite(objectives), objectives, np.inf)
     best_index = int(np.argmin(finite))
     best_unit = np.array(vectors[best_index], copy=True)
     best_objective = float(objectives[best_index])
-    if seek_basin:
+    if plan.seek_basin:
         dense = _dense_basin_search(callbacks, setup, best_objective)
         if dense is not None:
             best_unit, best_objective = dense
@@ -743,6 +844,17 @@ def _profile_scan(
     lower_closed, upper_closed = _closed_sides(setup, units, objectives)
     profile = ParameterProfile(setup.name, values, objectives, lower_closed, upper_closed)
     return profile, best_unit, best_objective, setup.delta
+
+
+def _profile_scan(
+    objective: Scalar,
+    center_unit: np.ndarray,
+    **options,
+) -> tuple[ParameterProfile, np.ndarray, float, float]:
+    """Run the complete scan, refinement, mapping, and closure pipeline."""
+    plan = _prepare_profile_plan(objective, center_unit, **options)
+    scans = tuple(_scan_plan_direction(plan, direction) for direction in (-1, 1))
+    return _finish_profile_plan(plan, scans)
 
 
 def profile_parameter(
@@ -924,64 +1036,45 @@ def default_profile_path_merge(
     return True
 
 
+def build_problem_profiles(
+    problem: FitEvaluationContext,
+    unit_vector: np.ndarray,
+    names: tuple[str, ...],
+    *,
+    cancelled: Callable[[], bool] | None = None,
+    task_runner=None,
+) -> tuple[ParameterProfile, ...]:
+    """Build ordered problem profiles through the shared two-phase task graph."""
+    return _build_problem_profiles(
+        problem,
+        unit_vector,
+        names,
+        prepare_plan=_prepare_profile_plan,
+        scan_plan_direction=_scan_plan_direction,
+        finish_plan=_finish_profile_plan,
+        evaluate=evaluate_model,
+        cache_callbacks=cached_least_squares_callbacks,
+        least_squares_system=least_squares_system,
+        least_squares_loss=least_squares_loss,
+        values_by_name=values_by_name,
+        cancelled=cancelled,
+        task_runner=task_runner,
+    )
+
+
 def build_problem_profile(
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
     name: str,
     cancelled: Callable[[], bool] | None = None,
 ) -> ParameterProfile:
-    """Bind a compiled problem to the shared residual and Jacobian profile path.
-
-    Binary-derived names delegate to their dedicated mapper. Ordinary names use
-    the compiled coordinate layout and deterministic budget-dependent grid size.
-
-    The derived mapper receives ``profile_parameter`` explicitly. This keeps the
-    generic scanner as the sole owner of optimization and support-closure rules
-    while preserving a one-way module dependency on binary coordinate mapping.
-    The injected callable is fixed by production code; it is not persisted in an
-    analysis request, result, checkpoint, or worker payload.
-    """
-    from xrr_fitter.analysis.binary_profiles import binary_derived_profiles, build_binary_profile
-
-    derived = {item.name for item in binary_derived_profiles(problem)}
-    if name in derived:
-        return build_binary_profile(
-            problem,
-            unit_vector,
-            name,
-            profile_builder=profile_parameter,
-            cancelled=cancelled,
-        )
-    names = tuple(variable.name for variable in problem.variables)
-    if name not in names:
-        raise ValueError(f"unknown profile parameter: {name}")
-    index = names.index(name)
-
-    def objective(unit: np.ndarray) -> float:
-        try:
-            evaluation = evaluate_model(problem, unit)
-        except EvaluationConstraintError:
-            return np.inf
-        return evaluation.objective if evaluation.valid else np.inf
-
-    maximum = max(
-        problem.config.budget.local_min_nfev,
-        problem.config.budget.local_nfev_per_parameter * max(1, len(problem.variables)),
-    )
-    steps = 11 if problem.config.budget.bootstrap_samples < 100 else 41
-    return profile_parameter(
-        objective,
+    """Bind a compiled problem to the shared residual and Jacobian profile path."""
+    return build_problem_profiles(
+        problem,
         unit_vector,
-        parameter_index=index,
-        name=name,
-        value_mapper=lambda unit: values_by_name(problem, unit)[name],
-        residual=lambda unit: least_squares_residual(problem, unit),
-        residual_jacobian=lambda unit: least_squares_residual_jacobian(problem, unit),
-        residual_loss=least_squares_loss(problem),
-        least_squares_max_nfev=maximum,
-        steps=steps,
+        (name,),
         cancelled=cancelled,
-    )
+    )[0]
 
 
 def _structural_profile_names(names: tuple[str, ...]) -> set[str]:

@@ -421,6 +421,41 @@ def test_build_report_profiles_use_residual_least_squares_path(monkeypatch) -> N
     assert np.isfinite(profile.objectives).any()
 
 
+def test_problem_profile_batch_flattens_all_direction_scans_into_one_task_batch() -> None:
+    module = _api()
+    problem = _problem(
+        "component.0.thickness_a",
+        "component.0.density_scale",
+    )
+    unit = encode_physical_vector(problem, {})
+    names = tuple(variable.name for variable in problem.variables)
+    batch_sizes: list[int] = []
+
+    def run_reversed(tasks):
+        values = tuple(tasks)
+        batch_sizes.append(len(values))
+        results = [None] * len(values)
+        for index in reversed(range(len(values))):
+            results[index] = values[index]()
+        return tuple(results)
+
+    profiles = module.build_problem_profiles(
+        problem,
+        unit,
+        names,
+        task_runner=run_reversed,
+    )
+    expected = tuple(_api().build_problem_profile(problem, unit, name) for name in names)
+
+    assert batch_sizes == [2 * len(names), len(names)]
+    for observed, reference in zip(profiles, expected, strict=True):
+        assert observed.name == reference.name
+        np.testing.assert_array_equal(observed.values, reference.values)
+        np.testing.assert_array_equal(observed.objectives, reference.objectives)
+        assert observed.lower_closed is reference.lower_closed
+        assert observed.upper_closed is reference.upper_closed
+
+
 def test_default_profile_path_detects_barrier_between_coarse_grid_points() -> None:
     class NarrowBarrier:
         def __call__(self, unit: np.ndarray) -> float:

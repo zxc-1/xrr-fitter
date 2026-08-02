@@ -138,6 +138,8 @@ def test_residual_bootstrap_block_length_uses_first_zero_crossing_with_clamps() 
 
 
 def test_problem_bootstrap_is_deterministic_and_reports_physical_parameters() -> None:
+    from xrr_fitter.services.parallel import OrderedTaskRunner
+
     problem = _problem()
     candidate = _candidate(problem)
 
@@ -147,12 +149,14 @@ def test_problem_bootstrap_is_deterministic_and_reports_physical_parameters() ->
         sample_count=4,
         child_seed=9981,
     )
-    second = bootstrap_problem_local(
-        problem,
-        candidate,
-        sample_count=4,
-        child_seed=9981,
-    )
+    with OrderedTaskRunner(2) as runner:
+        second = bootstrap_problem_local(
+            problem,
+            candidate,
+            sample_count=4,
+            child_seed=9981,
+            task_runner=runner.run,
+        )
 
     assert first.parameter_names == tuple(variable.name for variable in problem.variables)
     np.testing.assert_array_equal(first.samples, second.samples)
@@ -162,6 +166,52 @@ def test_problem_bootstrap_is_deterministic_and_reports_physical_parameters() ->
     assert first.candidate_id == candidate.candidate_id
     assert len(first.provenance_sha256) == 64
     assert first.provenance_sha256 == second.provenance_sha256
+
+
+def test_problem_bootstrap_prepares_all_draws_before_ordered_refits(
+    monkeypatch,
+) -> None:
+    module = _api()
+    problem = _problem()
+    candidate = _candidate(problem)
+    original_context = module._synthetic_context
+    contexts = []
+    batches: list[int] = []
+    progress: list[tuple[int, int]] = []
+
+    def synthetic_context(*args):
+        context = original_context(*args)
+        contexts.append(context)
+        return context
+
+    def run_tasks(tasks):
+        values = tuple(tasks)
+        batches.append(len(values))
+        assert len(contexts) == 3
+        completed = [None] * len(values)
+        for index in reversed(range(len(values))):
+            completed[index] = values[index]()
+        return tuple(completed)
+
+    monkeypatch.setattr(module, "_synthetic_context", synthetic_context)
+    monkeypatch.setattr(
+        module,
+        "_local_bootstrap_fit",
+        lambda _problem, start: np.array(start, copy=True),
+    )
+
+    result = module.bootstrap_problem_local(
+        problem,
+        candidate,
+        sample_count=3,
+        child_seed=9982,
+        progress=lambda completed, total: progress.append((completed, total)),
+        task_runner=run_tasks,
+    )
+
+    assert batches == [3]
+    assert progress == [(1, 3), (2, 3), (3, 3)]
+    assert result.samples.shape == (3, len(problem.variables))
 
 
 def test_problem_bootstrap_with_explicit_errors_uses_parametric_draws(

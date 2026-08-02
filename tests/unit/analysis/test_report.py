@@ -500,8 +500,9 @@ def _empty_owned_bootstrap(problem, search) -> BootstrapResult:
     )
 
 
-def _record_profile_report(calls, report, *_args, **kwargs):
+def _record_profile_report(calls, report, report_calls, *_args, **kwargs):
     calls.append("report")
+    report_calls.append(kwargs)
     kwargs["progress"](1, 1, "component.0.thickness_a")
     return report
 
@@ -623,10 +624,16 @@ def _assert_classification_inputs(observed, report, diagnostic) -> None:
     assert diagnostic in winner.diagnostics
 
 
-def _assert_bootstrap_invocation(module, problem, bootstrap_calls) -> None:
+def _assert_bootstrap_invocation(
+    module,
+    problem,
+    bootstrap_calls,
+    task_runner,
+) -> None:
     assert len(bootstrap_calls) == 1
     bootstrap_options = dict(bootstrap_calls[0])
     assert callable(bootstrap_options.pop("progress"))
+    assert bootstrap_options.pop("task_runner") is task_runner
     assert bootstrap_options == {
         "sample_count": problem.config.budget.bootstrap_samples,
         "child_seed": module.uncertainty_seed(problem.config),
@@ -664,6 +671,8 @@ def test_fit_dataset_runs_uncertainty_before_classifying_result(monkeypatch) -> 
     )
     calls: list[str] = []
     bootstrap_calls: list[dict[str, object]] = []
+    report_calls: list[dict[str, object]] = []
+    task_runner = lambda tasks: tuple(task() for task in tasks)
 
     monkeypatch.setattr(
         module,
@@ -673,7 +682,7 @@ def test_fit_dataset_runs_uncertainty_before_classifying_result(monkeypatch) -> 
     monkeypatch.setattr(
         module,
         "build_uncertainty_report",
-        partial(_record_profile_report, calls, report),
+        partial(_record_profile_report, calls, report, report_calls),
     )
     monkeypatch.setattr(
         module,
@@ -688,10 +697,13 @@ def test_fit_dataset_runs_uncertainty_before_classifying_result(monkeypatch) -> 
         profile_names=("component.0.thickness_a",),
         dataset_id="curve",
         progress=progress.append,
+        task_runner=task_runner,
     )
 
     assert calls == ["bootstrap", "report", "classify"]
-    _assert_bootstrap_invocation(module, problem, bootstrap_calls)
+    _assert_bootstrap_invocation(module, problem, bootstrap_calls, task_runner)
+    assert len(report_calls) == 1
+    assert report_calls[0]["task_runner"] is task_runner
     _assert_analyzed_result(result, report, diagnostic, search)
     assert progress == [
         FitProgress(
@@ -753,6 +765,49 @@ def test_fit_dataset_runs_uncertainty_before_classifying_result(monkeypatch) -> 
         ),
     ]
     _assert_diagnostic_warning(result.warnings)
+
+
+def test_profiles_collect_results_and_publish_progress_in_declaration_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _api()
+    problem = _problem()
+    unit = encode_physical_vector(problem, {})
+    requested = tuple(variable.name for variable in problem.variables)
+    completed: list[str] = []
+    progress: list[tuple[int, int, str]] = []
+
+    def build(_problem, _unit, names, **options):
+        assert options["task_runner"] is run_tasks
+        for name in reversed(names):
+            completed.append(name)
+        return tuple(f"profile:{name}" for name in names)
+
+    def run_tasks(tasks):
+        values = tuple(tasks)
+        assert progress == []
+        results = [None] * len(values)
+        for index in reversed(range(len(values))):
+            results[index] = values[index]()
+        return tuple(results)
+
+    monkeypatch.setattr(module, "build_problem_profiles", build)
+
+    profiles = module._profiles(
+        problem,
+        unit,
+        requested,
+        None,
+        lambda index, total, name: progress.append((index, total, name)),
+        task_runner=run_tasks,
+    )
+
+    assert completed == list(reversed(requested))
+    assert profiles == tuple(f"profile:{name}" for name in requested)
+    assert progress == [
+        (index, len(requested), name)
+        for index, name in enumerate(requested, start=1)
+    ]
 
 
 def test_joint_result_uncertainty_uses_global_candidate_parameter_names() -> None:

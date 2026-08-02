@@ -43,6 +43,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import partial
 
 import numpy as np
 
@@ -70,6 +71,7 @@ from xrr_fitter.fit.local_search import SearchCancelled, solve_local
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem, compile_stage_problem
 from xrr_fitter.fit.screening import fringe_count_screen
+from xrr_fitter.fit.tasking import TaskRunner, run_tasks as _run_tasks
 from xrr_fitter.model.fitting import FitCandidate, FitProgress, FitStageSummary
 from xrr_fitter.model.parameters import ParameterSetting
 
@@ -678,6 +680,7 @@ def run_local_stage(
     perturbation_counts: tuple[int, ...] | None = None,
     progress: Callable[[FitProgress], None] | None,
     cancelled: Callable[[], bool] | None,
+    task_runner: TaskRunner | None = None,
 ) -> StageOutcome:
     """Refine each parent and its deterministic bounded perturbations.
 
@@ -701,11 +704,14 @@ def run_local_stage(
         "D": "full-resolution roughness/instrument refinement",
     }.get(stage, f"completed local stage {stage}")
     for index, (parent, count) in enumerate(zip(parents, counts, strict=True)):
+        # A parent remains sequentially dependent, while its declared restarts
+        # form one ordered batch that can safely execute concurrently.
         values = _candidate_values(parent)
         stage_problem = compile_stage_problem(problem, stage, values)
         starts = _local_stage_starts(problem, stage_problem, parent, stage, index, count)
-        for restart, start in enumerate(starts):
-            candidate = _local_stage_candidate(
+        tasks = tuple(
+            partial(
+                _local_stage_candidate,
                 problem,
                 stage_problem,
                 start,
@@ -713,6 +719,9 @@ def run_local_stage(
                 index,
                 cancelled,
             )
+            for restart, start in enumerate(starts)
+        )
+        for candidate in _run_tasks(tasks, task_runner):
             candidates.append(candidate)
             completed += 1
             _emit(
@@ -898,9 +907,13 @@ def _run_stage_e_locals(
     seed_index: int,
     kind: str,
     cancelled: Callable[[], bool] | None,
+    task_runner: TaskRunner | None,
 ) -> list[FitCandidate]:
-    return [
-        _stage_e_local_candidate(
+    # Result positions retain start order so winner selection and nfev totals
+    # are independent of worker completion timing.
+    tasks = tuple(
+        partial(
+            _stage_e_local_candidate,
             problem,
             setup,
             start,
@@ -909,7 +922,8 @@ def _run_stage_e_locals(
             cancelled,
         )
         for index, start in enumerate(starts)
-    ]
+    )
+    return list(_run_tasks(tasks, task_runner))
 
 
 def _stage_e_seed(
@@ -919,6 +933,7 @@ def _stage_e_seed(
     child_seed: int,
     elite: np.ndarray | None,
     cancelled: Callable[[], bool] | None,
+    task_runner: TaskRunner | None,
 ) -> FitCandidate:
     """Run one complete Stage-E global, local, and restart path.
 
@@ -959,6 +974,7 @@ def _stage_e_seed(
         seed_index,
         "local",
         cancelled,
+        task_runner,
     )
     winner_index = best_candidate_index(tuple(attempts))
     if winner_index is None:
@@ -992,6 +1008,7 @@ def _stage_e_seed(
             seed_index,
             "restart",
             cancelled,
+            task_runner,
         )
     )
     winner = best_candidate_index(tuple(attempts))
@@ -1047,6 +1064,7 @@ def _profile_rescue_paths(
     center: np.ndarray,
     child_seeds: tuple[int, ...],
     cancelled: Callable[[], bool] | None,
+    task_runner: TaskRunner | None,
 ) -> tuple[object, ...] | None:
     """Run every distinct rescue start without publishing partial evidence.
 
@@ -1065,15 +1083,31 @@ def _profile_rescue_paths(
         problem.config.budget.local_min_nfev,
         problem.config.budget.local_nfev_per_parameter * (center.size + 1),
     )
-    refined: list[object] = []
-    for start in starts:
-        _poll(cancelled)
-        result = solve_local(problem, start, max_nfev=maximum, cancelled=cancelled)
-        if result is None:
-            return None
-        refined.append(result)
+    tasks = tuple(
+        partial(
+            _solve_profile_rescue_path,
+            problem,
+            start,
+            maximum,
+            cancelled,
+        )
+        for start in starts
+    )
+    refined = _run_tasks(tasks, task_runner)
+    if any(result is None for result in refined):
+        return None
     _poll(cancelled)
-    return tuple(refined)
+    return refined
+
+
+def _solve_profile_rescue_path(
+    problem: object,
+    start: np.ndarray,
+    maximum: int,
+    cancelled: Callable[[], bool] | None,
+):
+    _poll(cancelled)
+    return solve_local(problem, start, max_nfev=maximum, cancelled=cancelled)
 
 
 def _valid_profile_rescue_result(problem: object, result: object) -> bool:
@@ -1142,6 +1176,7 @@ def reconverge_profile_basin(
     *,
     parameter_name: str,
     cancelled: Callable[[], bool] | None = None,
+    task_runner: TaskRunner | None = None,
 ) -> tuple[FitCandidate, ...] | None:
     """Rebuild all four Stage-E paths from one analysis-selected basin.
 
@@ -1163,7 +1198,7 @@ def reconverge_profile_basin(
     )
     if not valid_center:
         return None
-    refined = _profile_rescue_paths(problem, center, seeds, cancelled)
+    refined = _profile_rescue_paths(problem, center, seeds, cancelled, task_runner)
     if refined is None:
         return None
     return _publish_profile_rescue(
@@ -1182,6 +1217,7 @@ def run_stage_e(
     *,
     progress: Callable[[FitProgress], None] | None,
     cancelled: Callable[[], bool] | None,
+    task_runner: TaskRunner | None = None,
 ) -> StageOutcome:
     """Run final named seeds and carry only materially improved elite state.
 
@@ -1189,6 +1225,8 @@ def run_stage_e(
     completion, and the outcome summary preserves seed order regardless of which
     candidate becomes the current best.
     """
+    # Seed paths stay sequential because the next seed may consume the prior
+    # elite; only local attempts within one path are independent.
     setup = _stage_e_setup(problem, parents)
     candidates: list[FitCandidate] = []
     best: FitCandidate | None = None
@@ -1202,6 +1240,7 @@ def run_stage_e(
             seed,
             elite,
             cancelled,
+            task_runner,
         )
         candidates.append(candidate)
         winner = best_candidate_index(tuple(candidates))

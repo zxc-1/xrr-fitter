@@ -31,6 +31,109 @@ def _project(tmp_path: Path):
     return replace(value, fit_config=replace(value.fit_config, scale_prior_enabled=False))
 
 
+class _RecordingTaskRunner:
+    events: list[object] = []
+    instances: list[_RecordingTaskRunner] = []
+
+    def __init__(self, max_workers):
+        self.events.append(("created", max_workers))
+        self.instances.append(self)
+
+    def __enter__(self):
+        self.events.append("entered")
+        return self
+
+    def __exit__(self, *_args):
+        self.events.append("closed")
+
+    def run(self, tasks):
+        return tuple(task() for task in tasks)
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.events = []
+        cls.instances = []
+
+
+class _FittingHarness:
+    def __init__(self, initial_search, decision, continued_search, analyzed):
+        self.calls: list[object] = []
+        self.initial_search = initial_search
+        self.decision = decision
+        self.continued_search = continued_search
+        self.analyzed = analyzed
+
+    def run_search(self, request, **kwargs):
+        self.calls.append(
+            (
+                "search",
+                request.dataset_id,
+                kwargs["checkpoint"] is not None,
+                kwargs["task_runner"].__self__,
+            )
+        )
+        return self.initial_search
+
+    def recover(self, problem, candidate, **_kwargs):
+        self.calls.append(("recover", problem, candidate))
+        return self.decision
+
+    def continue_search(self, problem, search, center, **kwargs):
+        self.calls.append(
+            (
+                "continue",
+                problem,
+                search,
+                tuple(center),
+                kwargs["parameter_name"],
+                kwargs["task_runner"].__self__,
+            )
+        )
+        return self.continued_search
+
+    def analysis_request(self, dataset_id, problem, search):
+        self.calls.append(("analysis-request", dataset_id, problem, search))
+        return "analysis-request"
+
+    def run_analysis(self, request, **kwargs):
+        self.calls.append(("analysis", request, kwargs["task_runner"].__self__))
+        return self.analyzed
+
+
+def _assert_fitting_calls(harness, decision, continued_search) -> None:
+    assert [call[0] for call in harness.calls] == [
+        "search",
+        "recover",
+        "continue",
+        "analysis-request",
+        "analysis",
+    ]
+    assert harness.calls[2][-2] == decision.parameter_name
+    assert harness.calls[3][-1] is continued_search
+
+
+def _assert_shared_task_runner(harness, worker_count: int) -> None:
+    assert _RecordingTaskRunner.events == [
+        ("created", worker_count),
+        "entered",
+        "closed",
+    ]
+    assert len(_RecordingTaskRunner.instances) == 1
+    assert harness.calls[0][-1] is _RecordingTaskRunner.instances[0]
+    assert harness.calls[2][-1] is _RecordingTaskRunner.instances[0]
+    assert harness.calls[4][-1] is _RecordingTaskRunner.instances[0]
+
+
+def _assert_basin_progress(progress_events) -> None:
+    assert [
+        (event.stage, event.completed, event.total, event.message)
+        for event in progress_events
+    ] == [
+        ("basin-recovery", 0, 1, "checking profile basins"),
+        ("basin-recovery", 1, 1, "basin recovery completed"),
+    ]
+
+
 def test_preflight_loads_current_sources_and_compiles_declared_structure(
     tmp_path: Path,
 ) -> None:
@@ -52,7 +155,6 @@ def test_fitting_composes_search_profile_recovery_and_analysis_in_order(
     monkeypatch,
 ) -> None:
     value = _project(tmp_path)
-    calls: list[object] = []
     initial_search = SimpleNamespace(
         best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None)
     )
@@ -63,40 +165,20 @@ def test_fitting_composes_search_profile_recovery_and_analysis_in_order(
     )
     analyzed = final_fit_result()
     progress_events = []
+    harness = _FittingHarness(initial_search, decision, continued_search, analyzed)
+    _RecordingTaskRunner.reset()
 
-    def run_search(request, **kwargs):
-        calls.append(("search", request.dataset_id, kwargs["checkpoint"] is not None))
-        return initial_search
-
-    def recover(problem, candidate, **_kwargs):
-        calls.append(("recover", problem, candidate))
-        return decision
-
-    def continue_search(problem, search, center, **kwargs):
-        calls.append(
-            (
-                "continue",
-                problem,
-                search,
-                tuple(center),
-                kwargs["parameter_name"],
-            )
-        )
-        return continued_search
-
-    def analysis_request(dataset_id, problem, search):
-        calls.append(("analysis-request", dataset_id, problem, search))
-        return "analysis-request"
-
-    def run_analysis(request, **_kwargs):
-        calls.append(("analysis", request))
-        return analyzed
-
-    monkeypatch.setattr(fitting, "run_fit_search", run_search)
-    monkeypatch.setattr(fitting, "recover_profile_basin", recover)
-    monkeypatch.setattr(fitting, "continue_profile_basin", continue_search)
-    monkeypatch.setattr(fitting, "AnalysisRequest", analysis_request)
-    monkeypatch.setattr(fitting, "run_analysis", run_analysis)
+    monkeypatch.setattr(
+        fitting,
+        "OrderedTaskRunner",
+        _RecordingTaskRunner,
+        raising=False,
+    )
+    monkeypatch.setattr(fitting, "run_fit_search", harness.run_search)
+    monkeypatch.setattr(fitting, "recover_profile_basin", harness.recover)
+    monkeypatch.setattr(fitting, "continue_profile_basin", harness.continue_search)
+    monkeypatch.setattr(fitting, "AnalysisRequest", harness.analysis_request)
+    monkeypatch.setattr(fitting, "run_analysis", harness.run_analysis)
 
     result = fitting.fit_project(
         value,
@@ -105,22 +187,9 @@ def test_fitting_composes_search_profile_recovery_and_analysis_in_order(
     )
 
     assert result.datasets[0].fit_result is analyzed
-    assert [call[0] for call in calls] == [
-        "search",
-        "recover",
-        "continue",
-        "analysis-request",
-        "analysis",
-    ]
-    assert calls[2][-1] == decision.parameter_name
-    assert calls[3][-1] is continued_search
-    assert [
-        (event.stage, event.completed, event.total, event.message)
-        for event in progress_events
-    ] == [
-        ("basin-recovery", 0, 1, "checking profile basins"),
-        ("basin-recovery", 1, 1, "basin recovery completed"),
-    ]
+    _assert_fitting_calls(harness, decision, continued_search)
+    _assert_shared_task_runner(harness, value.fit_config.local_workers)
+    _assert_basin_progress(progress_events)
 
 
 def test_joint_fit_reports_finalizing_after_stage_e(monkeypatch) -> None:

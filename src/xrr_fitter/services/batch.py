@@ -3,13 +3,29 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from xrr_fitter.model.analysis import ConfidenceClass, FitResult
 from xrr_fitter.model.fitting import FitProgress
 from xrr_fitter.model.operations import DatasetFitResult, ProjectFitResult
 from xrr_fitter.model.project import ScalePriorState, XrrProject
+from xrr_fitter.services.parallel import OrderedTaskRunner
 from xrr_fitter.services.projects import inspect_sources
+
+
+@dataclass(frozen=True, slots=True)
+class _IndependentPreparation:
+    index: int
+    original: object
+    prepared: object | None = None
+    error: Exception | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _BufferedFit:
+    result: FitResult | None
+    error: Exception | None
+    events: tuple[tuple[str, object], ...]
 
 
 def _clear_dataset(dataset):
@@ -88,6 +104,127 @@ def _cancelled(error: BaseException) -> bool:
     return type(error).__name__ in {"SearchCancelled", "InterruptedError"}
 
 
+def _prepare_independent_rows(
+    project: XrrProject,
+    records: dict[str, object],
+    seeds: dict[str, int],
+    prepare_dataset,
+) -> tuple[_IndependentPreparation, ...]:
+    working = project
+    rows = []
+    for index, original in enumerate(project.datasets):
+        error = _source_error(records, original.dataset_id)
+        prepared = None
+        if error is None:
+            try:
+                prepared = prepare_dataset(
+                    working,
+                    original.dataset_id,
+                    seeds[original.dataset_id],
+                )
+            except Exception as caught:
+                error = caught
+            else:
+                working = _replace_dataset(working, index, prepared.updated_dataset)
+        rows.append(_IndependentPreparation(index, original, prepared, error))
+    return tuple(rows)
+
+
+def _worker_allocations(total_workers: int, count: int) -> tuple[int, ...]:
+    if count == 0:
+        return ()
+    if count >= total_workers:
+        return (1,) * count
+    base, remainder = divmod(total_workers, count)
+    return tuple(base + int(index < remainder) for index in range(count))
+
+
+def _buffered_dataset_fit(
+    prepared,
+    local_workers: int,
+    fit_dataset,
+    cancelled,
+) -> _BufferedFit:
+    events: list[tuple[str, object]] = []
+    try:
+        if cancelled is not None and cancelled():
+            raise InterruptedError("cancelled")
+        result = fit_dataset(
+            prepared,
+            progress=lambda value: events.append(("progress", value)),
+            cancelled=cancelled,
+            checkpoint=lambda value: events.append(("checkpoint", value)),
+            local_workers=local_workers,
+        )
+    except Exception as error:
+        return _BufferedFit(None, error, tuple(events))
+    return _BufferedFit(result, None, tuple(events))
+
+
+def _run_independent_rows(
+    rows: tuple[_IndependentPreparation, ...],
+    total_workers: int,
+    fit_dataset,
+    cancelled,
+) -> dict[int, _BufferedFit]:
+    runnable = tuple(row for row in rows if row.prepared is not None)
+    allocations = _worker_allocations(total_workers, len(runnable))
+    tasks = tuple(
+        lambda row=row, workers=workers: _buffered_dataset_fit(
+            row.prepared,
+            workers,
+            fit_dataset,
+            cancelled,
+        )
+        for row, workers in zip(runnable, allocations, strict=True)
+    )
+    if not tasks:
+        return {}
+    concurrency = min(len(tasks), total_workers)
+    with OrderedTaskRunner(concurrency) as runner:
+        buffered = runner.run(tasks)
+    return {
+        row.index: result
+        for row, result in zip(runnable, buffered, strict=True)
+    }
+
+
+def _replay_buffered_events(
+    working: XrrProject,
+    index: int,
+    events: tuple[tuple[str, object], ...],
+    progress: Callable[[FitProgress], None] | None,
+    checkpoint_callback: Callable[[XrrProject], None] | None,
+) -> XrrProject:
+    for kind, value in events:
+        if kind == "progress":
+            if progress is not None:
+                progress(value)
+            continue
+        dataset = replace(working.datasets[index], checkpoint=value)
+        working = _replace_dataset(working, index, dataset)
+        if checkpoint_callback is not None:
+            checkpoint_callback(working)
+    return working
+
+
+def _commit_success(
+    working: XrrProject,
+    index: int,
+    fit_result: FitResult,
+) -> XrrProject:
+    dataset = working.datasets[index]
+    dataset = replace(
+        dataset,
+        last_valid_result=fit_result,
+        checkpoint=_checkpoint_with_result_diagnostics(
+            dataset.checkpoint,
+            fit_result,
+        ),
+    )
+    return _replace_dataset(working, index, dataset)
+
+
 def _independent_fit(
     project: XrrProject,
     validation,
@@ -100,52 +237,39 @@ def _independent_fit(
 ) -> ProjectFitResult:
     seeds, _joint, _mcmc = seed_branches(project)
     records = _source_records(validation)
+    rows = _prepare_independent_rows(project, records, seeds, prepare_dataset)
+    buffered = _run_independent_rows(
+        rows,
+        project.fit_config.local_workers,
+        fit_dataset,
+        cancelled,
+    )
     working = project
     results: list[DatasetFitResult] = []
     was_cancelled = False
-    for index, original in enumerate(project.datasets):
+    for row in rows:
+        index, original = row.index, row.original
         dataset_id = original.dataset_id
-        source_error = _source_error(records, dataset_id)
-        if source_error is not None:
+        if row.error is not None:
             working = _replace_dataset(working, index, _clear_dataset(working.datasets[index]))
-            results.append(DatasetFitResult(dataset_id, _failure_result(original, source_error)))
-            continue
-        try:
-            prepared = prepare_dataset(working, dataset_id, seeds[dataset_id])
-        except Exception as error:
-            working = _replace_dataset(working, index, _clear_dataset(working.datasets[index]))
-            results.append(DatasetFitResult(dataset_id, _failure_result(original, error)))
-            continue
-        working = _replace_dataset(working, index, prepared.updated_dataset)
-
-        def publish_checkpoint(value, *, dataset_index=index):
-            nonlocal working
-            dataset = replace(working.datasets[dataset_index], checkpoint=value)
-            working = _replace_dataset(working, dataset_index, dataset)
-            if checkpoint_callback is not None:
-                checkpoint_callback(working)
-
-        try:
-            fit_result = fit_dataset(
-                prepared,
-                progress=progress,
-                cancelled=cancelled,
-                checkpoint=publish_checkpoint,
-            )
-        except Exception as error:
-            fit_result = _failure_result(original, error)
-            was_cancelled = _cancelled(error)
+            fit_result = _failure_result(original, row.error)
         else:
-            dataset = working.datasets[index]
-            dataset = replace(
-                dataset,
-                last_valid_result=fit_result,
-                checkpoint=_checkpoint_with_result_diagnostics(
-                    dataset.checkpoint,
-                    fit_result,
-                ),
+            working = _replace_dataset(working, index, row.prepared.updated_dataset)
+            outcome = buffered[index]
+            working = _replay_buffered_events(
+                working,
+                index,
+                outcome.events,
+                progress,
+                checkpoint_callback,
             )
-            working = _replace_dataset(working, index, dataset)
+            if outcome.error is not None:
+                fit_result = _failure_result(original, outcome.error)
+                was_cancelled = _cancelled(outcome.error)
+            else:
+                assert outcome.result is not None
+                fit_result = outcome.result
+                working = _commit_success(working, index, fit_result)
         results.append(DatasetFitResult(dataset_id, fit_result))
         if was_cancelled or (cancelled is not None and cancelled()):
             was_cancelled = True

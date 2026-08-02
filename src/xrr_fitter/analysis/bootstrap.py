@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
+from functools import partial
 from math import isfinite
+from typing import Protocol, TypeVar
 
 import numpy as np
 from scipy.optimize import least_squares
 
 from xrr_fitter.evaluation import (
     EvaluationConstraintError,
+    cached_least_squares_callbacks,
     evaluate_model,
     least_squares_loss,
-    least_squares_residual,
-    least_squares_residual_jacobian,
+    least_squares_system,
     values_by_name,
 )
 from xrr_fitter.model.analysis import BootstrapResult
@@ -24,6 +26,29 @@ from xrr_fitter.model.provenance import bootstrap_provenance_sha256
 
 BootstrapFit = Callable[[np.random.Generator, int], np.ndarray | None]
 BootstrapProgress = Callable[[int, int], None]
+T = TypeVar("T")
+
+
+class TaskRunner(Protocol):
+    def __call__(
+        self,
+        tasks: tuple[Callable[[], T], ...],
+        /,
+    ) -> tuple[T, ...]: ...
+
+
+def _run_tasks(
+    tasks: tuple[Callable[[], T], ...],
+    task_runner: TaskRunner | None,
+) -> tuple[T, ...]:
+    results = (
+        tuple(task() for task in tasks)
+        if task_runner is None
+        else tuple(task_runner(tasks))
+    )
+    if len(results) != len(tasks):
+        raise RuntimeError("task runner returned an unexpected result count")
+    return results
 
 
 def _validated_names(parameter_names: tuple[str, ...]) -> tuple[str, ...]:
@@ -44,6 +69,67 @@ def _validated_sample_count(sample_count: int) -> int:
     return int(sample_count)
 
 
+def _collect_bootstrap_samples(
+    names: tuple[str, ...],
+    fitted_values: Iterable[np.ndarray | None],
+    count: int,
+    progress: BootstrapProgress | None,
+) -> tuple[np.ndarray, int]:
+    """Validate ordered fits and return the successful sample matrix."""
+    samples: list[np.ndarray] = []
+    failures = 0
+    observed = 0
+    for sample_index, fitted in enumerate(fitted_values):
+        if sample_index >= count:
+            raise RuntimeError("bootstrap produced too many fitted samples")
+        observed += 1
+        if fitted is None:
+            failures += 1
+        else:
+            vector = np.asarray(fitted, dtype=float)
+            if vector.shape != (len(names),) or np.any(~np.isfinite(vector)):
+                raise ValueError("bootstrap fit returned an invalid parameter vector")
+            samples.append(vector)
+        if progress is not None:
+            progress(sample_index + 1, count)
+    if observed != count:
+        raise RuntimeError("bootstrap produced an unexpected fitted sample count")
+    matrix = np.vstack(samples) if samples else np.empty((0, len(names)), dtype=float)
+    return matrix, failures
+
+
+def _bootstrap_intervals(
+    names: tuple[str, ...],
+    matrix: np.ndarray,
+    failure_rate: float,
+) -> tuple[tuple[str, float, float], ...]:
+    """Build percentile intervals only when the failure gate is satisfied."""
+    if failure_rate > 0.20 or matrix.shape[0] == 0:
+        return ()
+    lower, upper = np.percentile(matrix, (2.5, 97.5), axis=0)
+    return tuple(
+        (name, float(lower[index]), float(upper[index]))
+        for index, name in enumerate(names)
+    )
+
+
+def _bootstrap_result(
+    names: tuple[str, ...],
+    fitted_values: Iterable[np.ndarray | None],
+    count: int,
+    progress: BootstrapProgress | None,
+) -> BootstrapResult:
+    matrix, failures = _collect_bootstrap_samples(
+        names,
+        fitted_values,
+        count,
+        progress,
+    )
+    failure_rate = failures / count
+    intervals = _bootstrap_intervals(names, matrix, failure_rate)
+    return BootstrapResult(names, matrix, intervals, float(failure_rate))
+
+
 def bootstrap_local(
     fit_sample: BootstrapFit,
     parameter_names: tuple[str, ...],
@@ -56,30 +142,12 @@ def bootstrap_local(
     names = _validated_names(parameter_names)
     count = _validated_sample_count(sample_count)
     rng = np.random.default_rng(child_seed)
-    samples: list[np.ndarray] = []
-    failures = 0
-    for sample_index in range(count):
-        fitted = fit_sample(rng, sample_index)
-        if fitted is None:
-            failures += 1
-        else:
-            vector = np.asarray(fitted, dtype=float)
-            if vector.shape != (len(names),) or np.any(~np.isfinite(vector)):
-                raise ValueError("bootstrap fit returned an invalid parameter vector")
-            samples.append(vector)
-        if progress is not None:
-            progress(sample_index + 1, count)
-    matrix = np.vstack(samples) if samples else np.empty((0, len(names)), dtype=float)
-    failure_rate = failures / count
-    if failure_rate > 0.20 or matrix.shape[0] == 0:
-        intervals: tuple[tuple[str, float, float], ...] = ()
-    else:
-        lower, upper = np.percentile(matrix, (2.5, 97.5), axis=0)
-        intervals = tuple(
-            (name, float(lower[index]), float(upper[index]))
-            for index, name in enumerate(names)
-        )
-    return BootstrapResult(names, matrix, intervals, float(failure_rate))
+
+    def fitted_values():
+        for sample_index in range(count):
+            yield fit_sample(rng, sample_index)
+
+    return _bootstrap_result(names, fitted_values(), count, progress)
 
 
 def _first_nonpositive_lag(centered: np.ndarray, denominator: float) -> int | None:
@@ -176,10 +244,13 @@ def _local_bootstrap_fit(problem: object, start: np.ndarray) -> np.ndarray | Non
     )
     try:
         initial = evaluate_model(problem, start)
+        residual, jacobian = cached_least_squares_callbacks(
+            partial(least_squares_system, problem)
+        )
         optimized = least_squares(
-            lambda value: least_squares_residual(problem, value),
+            residual,
             start,
-            jac=lambda value: least_squares_residual_jacobian(problem, value),
+            jac=jacobian,
             bounds=(0.0, 1.0),
             loss=least_squares_loss(problem),
             max_nfev=maximum,
@@ -200,6 +271,22 @@ def _local_bootstrap_fit(problem: object, start: np.ndarray) -> np.ndarray | Non
     return np.asarray(optimized.x, dtype=float)
 
 
+def _fit_problem_bootstrap_sample(
+    problem: object,
+    candidate: object,
+    names: tuple[str, ...],
+    cancelled: Callable[[], bool] | None,
+) -> np.ndarray | None:
+    if cancelled is not None and cancelled():
+        raise InterruptedError("cancelled")
+    start = np.asarray(candidate.unit_vector, dtype=float)
+    fitted = _local_bootstrap_fit(problem, start)
+    if fitted is None:
+        return None
+    mapped = values_by_name(problem, fitted)
+    return np.asarray([mapped[name] for name in names], dtype=float)
+
+
 def bootstrap_problem_local(
     problem: FitEvaluationContext,
     candidate: object,
@@ -208,17 +295,21 @@ def bootstrap_problem_local(
     child_seed: int,
     cancelled: Callable[[], bool] | None = None,
     progress: BootstrapProgress | None = None,
+    task_runner: TaskRunner | None = None,
 ) -> BootstrapResult:
     """Bootstrap one accepted candidate and refit every synthetic curve."""
     sorted_indices = _sorted_fit_indices(problem)
     names, physical, residuals, model = _candidate_center(
         problem, candidate, sorted_indices
     )
+    names = _validated_names(names)
+    count = _validated_sample_count(sample_count)
     sigma = problem.data.intensity_sigma_normalized
     explicit_sigma = None if sigma is None else np.asarray(sigma, dtype=float)[sorted_indices]
     block_length = residual_block_length(residuals)
-
-    def fit_sample(rng: np.random.Generator, _sample_index: int) -> np.ndarray | None:
+    rng = np.random.default_rng(child_seed)
+    contexts = []
+    for _sample_index in range(count):
         if cancelled is not None and cancelled():
             raise InterruptedError("cancelled")
         if explicit_sigma is not None:
@@ -230,20 +321,19 @@ def bootstrap_problem_local(
                 - problem.data.r_floor
             )
         synthetic_fit = np.clip(synthetic_fit, problem.data.r_floor, np.inf)
-        synthetic_problem = _synthetic_context(problem, sorted_indices, synthetic_fit)
-        start = np.asarray(candidate.unit_vector, dtype=float)
-        fitted = _local_bootstrap_fit(synthetic_problem, start)
-        if fitted is None:
-            return None
-        mapped = values_by_name(synthetic_problem, fitted)
-        return np.asarray([mapped[name] for name in names], dtype=float)
+        contexts.append(_synthetic_context(problem, sorted_indices, synthetic_fit))
 
     del physical
-    result = bootstrap_local(
-        fit_sample,
-        names,
-        sample_count=sample_count,
-        child_seed=child_seed,
-        progress=progress,
+    tasks = tuple(
+        partial(
+            _fit_problem_bootstrap_sample,
+            context,
+            candidate,
+            names,
+            cancelled,
+        )
+        for context in contexts
     )
+    fitted_values = _run_tasks(tasks, task_runner)
+    result = _bootstrap_result(names, fitted_values, count, progress)
     return _owned_bootstrap(problem, candidate, result)
