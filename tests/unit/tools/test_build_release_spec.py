@@ -25,6 +25,7 @@ GENERATED_METADATA = (
 ENTRY_POINT_METADATA = "src/xrr_fitter.egg-info/entry_points.txt"
 INPUT_DIRECTORIES = ("docs", "examples", "src", "tests", "tools", "verification")
 INPUT_FILES = (
+    "LICENSE",
     "MANIFEST.in",
     "README.md",
     "pyproject.toml",
@@ -114,6 +115,7 @@ def test_manifest_matches_the_audited_sdist_input_allowlist() -> None:
         "include README.md",
         "include pyproject.toml",
         "include requirements-macos-arm64-py312.lock",
+        "include LICENSE",
         "graft docs",
         "graft examples",
         "graft src",

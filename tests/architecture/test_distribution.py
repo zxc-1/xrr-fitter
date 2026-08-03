@@ -160,7 +160,7 @@ def _project_identity() -> tuple[str, str]:
 def _wheel_metadata() -> set[str]:
     name, version = _project_identity()
     root = f"{name}-{version}.dist-info"
-    members = {f"{root}/{name}" for name in ("METADATA", "RECORD", "WHEEL", "top_level.txt")}
+    members = {f"{root}/{name}" for name in ("METADATA", "RECORD", "WHEEL", "top_level.txt", "LICENSE")}
     payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     if payload["project"].get("gui-scripts"):
         members.add(f"{root}/entry_points.txt")

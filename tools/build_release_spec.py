@@ -28,6 +28,7 @@ SCHEMA = "xrr-r23-release-spec-v1"
 EXPECTED_BUILD = ("setuptools==75.8.2", "wheel==0.45.1")
 INPUT_DIRECTORIES = ("docs", "examples", "src", "tests", "tools", "verification")
 INPUT_FILES = (
+    "LICENSE",
     "MANIFEST.in",
     "README.md",
     "pyproject.toml",

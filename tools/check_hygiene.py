@@ -26,6 +26,7 @@ ALLOWED_FILES = {
     ".pre-commit-config.yaml",
     "AGENTS.md",
     "CHANGELOG.md",
+    "LICENSE",
     "MANIFEST.in",
     "README.md",
     "pyproject.toml",

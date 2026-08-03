@@ -7,6 +7,8 @@ name = "xrr-fitter"
 version = "0.2.2"
 description = "X-ray reflectivity fitting application"
 readme = "README.md"
+license = {file = "LICENSE"}
+classifiers = ["License :: OSI Approved :: MIT License"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "numpy>=2.0,<3",
