@@ -459,6 +459,7 @@ class UncertaintyReport:
     residual_autocorrelation: bool = False
     mcmc: McmcReport | None = None
     candidate_id: str | None = None
+    bootstrap_performed: bool = True
 
     def __post_init__(self) -> None:
         names = tuple(self.correlation_names)
@@ -478,6 +479,8 @@ class UncertaintyReport:
             raise TypeError("diagnostics must contain PhysicsDiagnostic values")
         if self.candidate_id is not None and not self.candidate_id:
             raise ValueError("candidate_id must be a nonempty string or None")
+        if not isinstance(self.bootstrap_performed, bool):
+            raise TypeError("bootstrap_performed must be bool")
         object.__setattr__(self, "diagnostics", diagnostics)
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:

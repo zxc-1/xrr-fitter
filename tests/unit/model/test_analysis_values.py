@@ -76,6 +76,10 @@ def test_uncertainty_report_rejects_empty_candidate_owner() -> None:
     with pytest.raises(ValueError, match="candidate_id"):
         replace(report, candidate_id="")
 
+    assert report.bootstrap_performed is True
+    with pytest.raises(TypeError, match="bootstrap_performed"):
+        replace(report, bootstrap_performed=1)
+
 
 def test_parameter_profile_preserves_nan_objective_evidence() -> None:
     profile = ParameterProfile(

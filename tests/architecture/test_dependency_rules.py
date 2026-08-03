@@ -110,13 +110,22 @@ PACKAGE_EDGE_EXCEPTIONS = {
 MODEL_ALLOWED = {
     "data": set(),
     "instrument": set(),
+    "automation": {"data", "instrument"},
     "structure": set(),
     "parameters": set(),
     "fitting": {"data", "instrument", "structure", "parameters"},
     "provenance": {"fitting"},
     "analysis": {"data", "parameters", "fitting"},
-    "project": {"data", "instrument", "structure", "parameters", "fitting", "analysis"},
-    "operations": {"fitting", "analysis", "project"},
+    "project": {
+        "automation",
+        "data",
+        "instrument",
+        "structure",
+        "parameters",
+        "fitting",
+        "analysis",
+    },
+    "operations": {"automation", "fitting", "analysis", "project"},
     "export": {"data", "fitting", "analysis", "project", "operations"},
 }
 THIRD_PARTY_ROOTS = {

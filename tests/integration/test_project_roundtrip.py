@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
 import xrr_fitter.api as api
+from xrr_fitter.model.automation import (
+    AutomaticRole,
+    AutomaticStatus,
+    DatasetAutomation,
+    MeasurementPreset,
+)
+from xrr_fitter.model.data import BeamSpec
 
 
 def _source(path: Path, scale: float) -> Path:
@@ -39,6 +47,25 @@ def test_project_roundtrip_preserves_allocated_ids_and_source_identity(
             api.InstrumentSpec(instrument_id=directory),
             display_name=display,
         )
+    automatic = DatasetAutomation(
+        import_batch_id="batch-1",
+        fit_group_id="group-1",
+        role=AutomaticRole.JOINT,
+        status=AutomaticStatus.PASSED,
+        statistics_member=True,
+    )
+    value = replace(
+        value,
+        datasets=tuple(
+            replace(dataset, automation=automatic) for dataset in value.datasets
+        ),
+        measurement_preset=MeasurementPreset(
+            "lab-cu-kalpha",
+            BeamSpec(kind="monochromatic", wavelength_a=1.5406),
+            api.InstrumentSpec(instrument_id="lab", footprint_mode="fit"),
+            0.012,
+        ),
+    )
     target = tmp_path / "project.xrrproj.json"
 
     api.save_project(value, target)

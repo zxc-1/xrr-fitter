@@ -41,6 +41,7 @@ from enum import StrEnum
 from math import isclose, isfinite
 
 from xrr_fitter.model.analysis import FitResult, StructureEvidence
+from xrr_fitter.model.automation import DatasetAutomation, MeasurementPreset
 from xrr_fitter.model.data import BeamSpec, DataColumnMapping
 from xrr_fitter.model.fitting import FitCheckpoint, FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
@@ -48,7 +49,7 @@ from xrr_fitter.model.parameters import ParameterSetting, SharingRule
 from xrr_fitter.model.structure import StructureSpec
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ALGORITHM_VERSION = "xrr-fit-v1"
 
 
@@ -184,6 +185,7 @@ class DatasetProject:
     last_valid_result: FitResult | None = None
     checkpoint: FitCheckpoint | None = None
     display_name: str | None = None
+    automation: DatasetAutomation = DatasetAutomation()
 
     def __post_init__(self) -> None:
         _validate_dataset_header(self)
@@ -214,6 +216,7 @@ class XrrProject:
     datasets: tuple[DatasetProject, ...]
     sharing_rules: tuple[SharingRule, ...] = ()
     ui_state: ProjectUiState = ProjectUiState()
+    measurement_preset: MeasurementPreset | None = None
     base_directory: str | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -448,6 +451,8 @@ def _validate_dataset_attachments(dataset: DatasetProject) -> None:
     _validate_scale_prior(dataset.scale_prior)
     _validate_oxide_decisions(dataset.oxide_decisions)
     _validate_parameter_settings(dataset.parameter_settings)
+    if not isinstance(dataset.automation, DatasetAutomation):
+        raise TypeError("automation must be DatasetAutomation")
     _optional_attachment(dataset.last_valid_result, FitResult, "last_valid_result")
     _optional_attachment(dataset.checkpoint, FitCheckpoint, "checkpoint")
     if dataset.last_valid_result is not None:
@@ -477,6 +482,11 @@ def _validate_project_header(project: XrrProject) -> None:
         raise TypeError("fit_config must be FitConfig")
     if not isinstance(project.ui_state, ProjectUiState):
         raise TypeError("ui_state must be ProjectUiState")
+    _optional_attachment(
+        project.measurement_preset,
+        MeasurementPreset,
+        "measurement_preset",
+    )
 
 
 def _project_dataset_ids(project: XrrProject) -> tuple[str, ...]:

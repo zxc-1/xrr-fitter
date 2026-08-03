@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from xrr_fitter.model.analysis import FitResult
+from xrr_fitter.model.automation import ImportFailure
 from xrr_fitter.model.fitting import FitProgress
 from xrr_fitter.model.project import XrrProject
 
@@ -58,6 +59,29 @@ class ProjectFitResult:
             raise TypeError("cancelled must be bool")
         object.__setattr__(self, "datasets", datasets)
         object.__setattr__(self, "warnings", tuple(self.warnings))
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectImportResult:
+    updated_project: XrrProject
+    import_batch_id: str
+    imported_dataset_ids: tuple[str, ...]
+    failures: tuple[ImportFailure, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.updated_project, XrrProject):
+            raise TypeError("updated_project must be XrrProject")
+        if not self.import_batch_id.strip():
+            raise ValueError("import_batch_id must not be empty")
+        identifiers = tuple(self.imported_dataset_ids)
+        invalid = any(not value for value in identifiers)
+        if len(identifiers) != len(set(identifiers)) or invalid:
+            raise ValueError("imported_dataset_ids must be unique and nonempty")
+        failures = tuple(self.failures)
+        if any(not isinstance(value, ImportFailure) for value in failures):
+            raise TypeError("failures must contain ImportFailure values")
+        object.__setattr__(self, "imported_dataset_ids", identifiers)
+        object.__setattr__(self, "failures", failures)
 
 
 @dataclass(frozen=True, slots=True)
