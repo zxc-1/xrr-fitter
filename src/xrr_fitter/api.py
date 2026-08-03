@@ -8,6 +8,12 @@ from xrr_fitter.model.analysis import (
     StructureEvidence,
     UncertaintyReport,
 )
+from xrr_fitter.model.automation import (
+    ImportBatchPreview,
+    ImportFailure,
+    ImportFilePreview,
+    MeasurementPreset,
+)
 from xrr_fitter.model.data import BeamSpec, DataColumnMapping, PreparedData
 from xrr_fitter.model.export import ExportManifest
 from xrr_fitter.model.fitting import FitConfig, FitProgress
@@ -17,6 +23,7 @@ from xrr_fitter.model.operations import (
     OperationError,
     OperationEvent,
     ProjectFitResult,
+    ProjectImportResult,
 )
 from xrr_fitter.model.parameters import (
     ParameterDefinition,
@@ -45,6 +52,8 @@ from xrr_fitter.model.structure import (
 from xrr_fitter.services.datasets import (
     add_dataset,
     import_data,
+    import_dataset_batch,
+    preview_import_batch,
     preview_source_update,
     remove_dataset,
     set_fit_mask,
@@ -86,7 +95,6 @@ from xrr_fitter.services.workers import (
     start_mcmc_job,
 )
 
-
 __all__ = (
     "BeamSpec",
     "DataColumnMapping",
@@ -97,9 +105,13 @@ __all__ = (
     "FitReadiness",
     "FitResult",
     "GradientLayerSpec",
+    "ImportBatchPreview",
+    "ImportFilePreview",
+    "ImportFailure",
     "InstrumentSpec",
     "LayerSpec",
     "MaterialSpec",
+    "MeasurementPreset",
     "McmcConfig",
     "McmcReport",
     "OperationError",
@@ -114,6 +126,7 @@ __all__ = (
     "PeriodicBlock",
     "PreparedData",
     "ProjectFitResult",
+    "ProjectImportResult",
     "ProjectUiState",
     "ProjectValidation",
     "ScalePriorState",
@@ -133,10 +146,12 @@ __all__ = (
     "export_result",
     "fit_project",
     "import_data",
+    "import_dataset_batch",
     "inspect_sources",
     "load_project",
     "new_project",
     "preflight_fit",
+    "preview_import_batch",
     "preview_source_update",
     "record_oxide_decision",
     "remove_dataset",
