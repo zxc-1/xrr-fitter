@@ -65,6 +65,7 @@ def test_project_and_dataset_serialization_field_order_is_stable() -> None:
         "datasets",
         "sharing_rules",
         "ui_state",
+        "measurement_preset",
         "base_directory",
     ]
     assert [field.name for field in fields(DatasetProject)] == [
@@ -85,6 +86,7 @@ def test_project_and_dataset_serialization_field_order_is_stable() -> None:
         "last_valid_result",
         "checkpoint",
         "display_name",
+        "automation",
     ]
 
 
@@ -105,7 +107,7 @@ def test_project_rejects_unsupported_header_values(field: str, value: object) ->
         replace(current, **{field: value})
 
 
-@pytest.mark.parametrize("schema", [2, 1.0, True])
+@pytest.mark.parametrize("schema", [1, 1.0, True])
 def test_project_rejects_unsupported_or_noninteger_schema_version(schema: object) -> None:
     current = project()
     with pytest.raises(ValueError, match="schema_version"):
