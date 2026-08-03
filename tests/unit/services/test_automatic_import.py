@@ -1,6 +1,8 @@
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+from tests.support.model_cases import dataset_project, final_fit_result, fit_candidate, project
 
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.automation import (
@@ -170,3 +172,30 @@ def test_unexpected_file_error_does_not_block_later_files(
 
     assert result.imported_dataset_ids == ("second",)
     assert result.failures[0].message == "RuntimeError: file-specific failure"
+
+
+def test_import_into_completed_joint_project_invalidates_previous_joint_results(
+    tmp_path: Path,
+) -> None:
+    prior = final_fit_result(replace(fit_candidate(), ranking_objective=1.0))
+    original = replace(
+        project(
+            dataset_project("first", result=prior),
+            dataset_project("second", result=prior),
+        ),
+        batch_mode="joint",
+    )
+    preview = preview_import_batch(
+        (_curve(tmp_path / "third Zr.xy"),),
+        _preset(),
+        import_batch_id="batch-7",
+    )
+
+    result = import_dataset_batch(original, preview)
+
+    assert result.imported_dataset_ids == ("third",)
+    assert result.failures == ()
+    assert all(
+        dataset.last_valid_result is None and dataset.checkpoint is None for dataset in result.updated_project.datasets
+    )
+    assert original.datasets[0].last_valid_result is prior

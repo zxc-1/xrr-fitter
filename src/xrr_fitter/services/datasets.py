@@ -252,6 +252,20 @@ def _automatic_dataset(
     )
 
 
+def _append_imported_dataset(
+    project: XrrProject,
+    dataset: DatasetProject,
+) -> XrrProject:
+    datasets = project.datasets
+    state = project.ui_state
+    if project.batch_mode == "joint":
+        datasets = tuple(_cleared(value, clear_evidence=False) for value in project.datasets)
+        state = replace(state, selected_candidate_ids=())
+    if state.active_dataset_id is None:
+        state = replace(state, active_dataset_id=dataset.dataset_id)
+    return replace(project, datasets=(*datasets, dataset), ui_state=state)
+
+
 def import_dataset_batch(
     project: XrrProject,
     preview: ImportBatchPreview,
@@ -285,14 +299,7 @@ def import_dataset_batch(
                 backing_token,
                 mappings.get(row.source_path),
             )
-            state = updated.ui_state
-            if state.active_dataset_id is None:
-                state = replace(state, active_dataset_id=dataset.dataset_id)
-            updated = replace(
-                updated,
-                datasets=(*updated.datasets, dataset),
-                ui_state=state,
-            )
+            updated = _append_imported_dataset(updated, dataset)
             imported.append(dataset.dataset_id)
         except Exception as error:
             failures.append(_import_failure(row, error))
