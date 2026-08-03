@@ -160,6 +160,24 @@ def test_add_dataset_reuses_matching_filename_structure_for_batch(
     assert project.datasets[1].structure is project.datasets[0].structure
 
 
+def test_add_dataset_reuses_matching_direct_sld_filename_structure_for_batch(
+    tmp_path: Path,
+) -> None:
+    project = new_project()
+    for index, sample in enumerate(("S300-1", "S300-2")):
+        project = add_dataset(
+            project,
+            _write_curve(
+                tmp_path / f"{sample} CrSiC+SiCMo+TaN.xy",
+                scale=index + 1.0,
+            ),
+            _instrument(),
+        )
+
+    assert project.datasets[0].structure is not None
+    assert project.datasets[1].structure is project.datasets[0].structure
+
+
 def test_fit_mask_change_clears_only_derived_state_and_candidate_selection(
     tmp_path: Path,
 ) -> None:

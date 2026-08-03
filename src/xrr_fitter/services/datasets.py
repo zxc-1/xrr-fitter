@@ -141,11 +141,14 @@ def _filename_materials(stem: str) -> tuple[str, tuple[str, ...] | None]:
 
 def _ordinary_layer_formulas(structure: StructureSpec | None) -> tuple[str, ...] | None:
     if structure is None or any(
-        not isinstance(component, LayerSpec) or component.material.formula is None
+        not isinstance(component, LayerSpec)
         for component in structure.components
     ):
         return None
-    return tuple(component.material.formula.strip() for component in structure.components)
+    return tuple(
+        (component.material.formula or component.material.name).strip()
+        for component in structure.components
+    )
 
 
 def _filename_structure(
