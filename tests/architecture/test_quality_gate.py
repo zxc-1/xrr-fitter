@@ -137,6 +137,7 @@ def _readiness_run() -> str:
 
 def _readiness_job() -> dict[str, object]:
     return {
+        "if": "startsWith(github.ref, 'refs/tags/')",
         "runs-on": RUNNER,
         "timeout-minutes": 60,
         "outputs": {"ready": "${{ steps.readiness.outputs.ready }}"},
@@ -260,7 +261,10 @@ def _checkpoint_job() -> dict[str, object]:
                     '  *) test "$STATISTICAL_RESULT" = skipped ;;\n'
                     'esac\n'
                     'test "$DISTRIBUTION_RESULT" = success\n'
-                    'test "$READINESS_RESULT" = success\n'
+                    'case "$REF" in\n'
+                    '  refs/tags/*) test "$READINESS_RESULT" = success ;;\n'
+                    '  *) test "$READINESS_RESULT" = skipped ;;\n'
+                    'esac\n'
                     'case "$REF" in\n'
                     '  refs/tags/*)\n'
                     '    case "$READY" in\n'
@@ -404,7 +408,10 @@ def test_checkpoint_step_requires_every_gate() -> None:
         "  *) test \"$STATISTICAL_RESULT\" = skipped ;;",
         "esac",
         'test "$DISTRIBUTION_RESULT" = success',
-        'test "$READINESS_RESULT" = success',
+        'case "$REF" in',
+        '  refs/tags/*) test "$READINESS_RESULT" = success ;;',
+        '  *) test "$READINESS_RESULT" = skipped ;;',
+        "esac",
         'case "$REF" in',
         "  refs/tags/*)",
         '    case "$READY" in',

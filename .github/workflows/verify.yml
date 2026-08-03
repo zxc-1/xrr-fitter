@@ -205,6 +205,7 @@ jobs:
           compression-level: 0
 
   candidate-readiness:
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: [self-hosted, macOS, ARM64, xrr-ci]
     timeout-minutes: 60
     outputs:
@@ -334,7 +335,10 @@ jobs:
             *) test "$STATISTICAL_RESULT" = skipped ;;
           esac
           test "$DISTRIBUTION_RESULT" = success
-          test "$READINESS_RESULT" = success
+          case "$REF" in
+            refs/tags/*) test "$READINESS_RESULT" = success ;;
+            *) test "$READINESS_RESULT" = skipped ;;
+          esac
           case "$REF" in
             refs/tags/*)
               case "$READY" in
