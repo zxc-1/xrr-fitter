@@ -20,8 +20,11 @@ ALLOWED_DIRS = {
     "verification",
 }
 ALLOWED_FILES = {
+    ".editorconfig",
+    ".gitattributes",
     ".gitignore",
     "AGENTS.md",
+    "CHANGELOG.md",
     "MANIFEST.in",
     "README.md",
     "pyproject.toml",

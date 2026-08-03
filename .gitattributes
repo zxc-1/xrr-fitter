@@ -1,0 +1,12 @@
+# Normalize line endings to LF for all text files on checkout/commit.
+* text=auto eol=lf
+
+# Binary assets — never normalize or diff as text.
+*.png binary
+*.npz binary
+*.xlsx binary
+*.exe binary
+
+# Data and manifests are text but line-ending sensitive; keep LF explicitly.
+*.xy text eol=lf
+*.json text eol=lf
