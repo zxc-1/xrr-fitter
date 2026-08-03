@@ -158,7 +158,7 @@ def _readiness_job() -> dict[str, object]:
 def _identity_job() -> dict[str, object]:
     job = _standard_job("identity")
     job["needs"] = ["candidate-readiness", "distribution"]
-    job["if"] = "needs.candidate-readiness.outputs.ready == 'true'"
+    job["if"] = "startsWith(github.ref, 'refs/tags/') && needs.candidate-readiness.outputs.ready == 'true'"
     job["steps"].insert(
         1,
         {
@@ -184,7 +184,7 @@ def _release_job() -> dict[str, object]:
     job = _standard_job("release")
     job["timeout-minutes"] = 720
     job["needs"] = ["candidate-readiness"]
-    job["if"] = "needs.candidate-readiness.outputs.ready == 'true'"
+    job["if"] = "startsWith(github.ref, 'refs/tags/') && needs.candidate-readiness.outputs.ready == 'true'"
     job["steps"][1]["run"] = _standard_run("release").replace(
         '"$PYTHON" tools/verify.py release',
         'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release '
@@ -261,16 +261,24 @@ def _checkpoint_job() -> dict[str, object]:
                     'esac\n'
                     'test "$DISTRIBUTION_RESULT" = success\n'
                     'test "$READINESS_RESULT" = success\n'
-                    'case "$READY" in\n'
-                    '  true)\n'
-                    '    test "$IDENTITY_RESULT" = success\n'
-                    '    test "$RELEASE_RESULT" = success\n'
+                    'case "$REF" in\n'
+                    '  refs/tags/*)\n'
+                    '    case "$READY" in\n'
+                    '      true)\n'
+                    '        test "$IDENTITY_RESULT" = success\n'
+                    '        test "$RELEASE_RESULT" = success\n'
+                    '        ;;\n'
+                    '      false)\n'
+                    '        test "$IDENTITY_RESULT" = skipped\n'
+                    '        test "$RELEASE_RESULT" = skipped\n'
+                    '        ;;\n'
+                    '      *) exit 1 ;;\n'
+                    '    esac\n'
                     '    ;;\n'
-                    '  false)\n'
+                    '  *)\n'
                     '    test "$IDENTITY_RESULT" = skipped\n'
                     '    test "$RELEASE_RESULT" = skipped\n'
                     '    ;;\n'
-                    '  *) exit 1 ;;\n'
                     'esac\n'
                 ),
             }
@@ -397,16 +405,24 @@ def test_checkpoint_step_requires_every_gate() -> None:
         "esac",
         'test "$DISTRIBUTION_RESULT" = success',
         'test "$READINESS_RESULT" = success',
-        'case "$READY" in',
-        "  true)",
-        '    test "$IDENTITY_RESULT" = success',
-        '    test "$RELEASE_RESULT" = success',
+        'case "$REF" in',
+        "  refs/tags/*)",
+        '    case "$READY" in',
+        "      true)",
+        '        test "$IDENTITY_RESULT" = success',
+        '        test "$RELEASE_RESULT" = success',
+        "        ;;",
+        "      false)",
+        '        test "$IDENTITY_RESULT" = skipped',
+        '        test "$RELEASE_RESULT" = skipped',
+        "        ;;",
+        "      *) exit 1 ;;",
+        "    esac",
         "    ;;",
-        "  false)",
+        "  *)",
         '    test "$IDENTITY_RESULT" = skipped',
         '    test "$RELEASE_RESULT" = skipped',
         "    ;;",
-        "  *) exit 1 ;;",
         "esac",
     ]
 
@@ -505,7 +521,7 @@ def test_release_jobs_are_readiness_gated_and_use_exact_bundles() -> None:
     release = jobs["release"]
     assert identity["needs"] == ["candidate-readiness", "distribution"]
     assert release["needs"] == ["candidate-readiness"]
-    expected_condition = "needs.candidate-readiness.outputs.ready == 'true'"
+    expected_condition = "startsWith(github.ref, 'refs/tags/') && needs.candidate-readiness.outputs.ready == 'true'"
     assert identity["if"] == expected_condition
     assert release["if"] == expected_condition
 

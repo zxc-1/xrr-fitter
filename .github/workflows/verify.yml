@@ -242,7 +242,7 @@ jobs:
 
   identity:
     needs: [candidate-readiness, distribution]
-    if: needs.candidate-readiness.outputs.ready == 'true'
+    if: startsWith(github.ref, 'refs/tags/') && needs.candidate-readiness.outputs.ready == 'true'
     runs-on: [self-hosted, macOS, ARM64, xrr-ci]
     timeout-minutes: 60
     steps:
@@ -269,7 +269,7 @@ jobs:
 
   release:
     needs: [candidate-readiness]
-    if: needs.candidate-readiness.outputs.ready == 'true'
+    if: startsWith(github.ref, 'refs/tags/') && needs.candidate-readiness.outputs.ready == 'true'
     runs-on: [self-hosted, macOS, ARM64, xrr-ci]
     timeout-minutes: 720
     steps:
@@ -335,14 +335,22 @@ jobs:
           esac
           test "$DISTRIBUTION_RESULT" = success
           test "$READINESS_RESULT" = success
-          case "$READY" in
-            true)
-              test "$IDENTITY_RESULT" = success
-              test "$RELEASE_RESULT" = success
+          case "$REF" in
+            refs/tags/*)
+              case "$READY" in
+                true)
+                  test "$IDENTITY_RESULT" = success
+                  test "$RELEASE_RESULT" = success
+                  ;;
+                false)
+                  test "$IDENTITY_RESULT" = skipped
+                  test "$RELEASE_RESULT" = skipped
+                  ;;
+                *) exit 1 ;;
+              esac
               ;;
-            false)
+            *)
               test "$IDENTITY_RESULT" = skipped
               test "$RELEASE_RESULT" = skipped
               ;;
-            *) exit 1 ;;
           esac
