@@ -124,21 +124,22 @@ def test_add_dataset_interprets_filename_materials_from_backing_to_surface(
     assert tuple(dataset.display_name for dataset in project.datasets) == tuple(
         case[0] for case in cases
     )
-    for dataset, (_stem, _dataset_id, formulas) in zip(
-        project.datasets,
-        cases,
-        strict=True,
-    ):
+    for dataset in project.datasets:
         assert dataset.structure is not None
         assert dataset.structure.fronting.name == "Air"
         assert dataset.structure.backing.formula == "Si"
-        assert tuple(
-            component.material.formula for component in dataset.structure.components
-        ) == formulas
-        assert all(
-            component.material.bulk_density_g_cm3 > 0.0
-            for component in dataset.structure.components
-        )
+    first_materials = project.datasets[0].structure.components
+    assert tuple(layer.material.formula for layer in first_materials) == (
+        "Zr",
+        "Si",
+        "Si3N4",
+    )
+    assert all(layer.material.bulk_density_g_cm3 > 0.0 for layer in first_materials)
+    materials = project.datasets[1].structure.components
+    assert tuple(layer.material.formula for layer in materials) == ("TaN", None, None)
+    assert materials[0].material.bulk_density_g_cm3 == 14.30
+    assert all(layer.material.bulk_density_g_cm3 is None for layer in materials[1:])
+    assert all(layer.material.sld_override_a2 is not None for layer in materials[1:])
 
 
 def test_add_dataset_reuses_matching_filename_structure_for_batch(
