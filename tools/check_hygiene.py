@@ -23,6 +23,7 @@ ALLOWED_FILES = {
     ".editorconfig",
     ".gitattributes",
     ".gitignore",
+    ".pre-commit-config.yaml",
     "AGENTS.md",
     "CHANGELOG.md",
     "MANIFEST.in",
@@ -32,7 +33,7 @@ ALLOWED_FILES = {
     "requirements-windows-x64-py312.lock",
 }
 FORBIDDEN_ROOT_DIRS = {"artifacts", "exports", "output", "reports", "tmp"}
-FORBIDDEN_DIR_NAMES = {".pytest_cache", "__pycache__", "build", "dist", ".venv", "venv"}
+FORBIDDEN_DIR_NAMES = {".pytest_cache", ".ruff_cache", "__pycache__", "build", "dist", ".venv", "venv"}
 PARTIAL_PATTERNS = ("*.bak", "*.part", "*.partial", "*.tmp", "*~")
 
 

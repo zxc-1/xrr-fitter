@@ -45,3 +45,23 @@ markers = [
   "visible_gui: requires a visible desktop session",
   "spawn: starts real multiprocessing spawn workers",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tools", "tests"]
+extend-exclude = ["docs", "examples", "verification"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP"]
+# Line length is enforced by the formatter; do not fail lint on legacy long lines
+# while ruff is being adopted incrementally.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**" = ["F403", "F405"]
+
+[tool.ruff.format]
+line-ending = "lf"
+
