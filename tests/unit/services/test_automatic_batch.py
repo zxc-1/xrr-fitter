@@ -14,6 +14,7 @@ from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.fitting import FitCheckpoint
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import ParameterDefinition, ParameterSetting
+from xrr_fitter.model.structure import MaterialSpec
 from xrr_fitter.services import batch
 from xrr_fitter.services.fitting import (
     AutomaticPreparedResult,
@@ -152,6 +153,52 @@ def test_physical_signature_separates_backing_and_beam() -> None:
         for value in (first, different_backing, different_beam)
     }
     assert len(signatures) == 3
+
+
+def test_physical_signature_separates_material_property_variants() -> None:
+    preset = _preset()
+    first = _automatic_dataset("a", ("Zr",))
+    formula_variant = replace(
+        first,
+        structure=replace(
+            first.structure,
+            components=(
+                replace(
+                    first.structure.components[0],
+                    material=replace(
+                        first.structure.components[0].material,
+                        bulk_density_g_cm3=first.structure.components[0].material.bulk_density_g_cm3
+                        + 0.1,
+                    ),
+                ),
+            ),
+        ),
+    )
+    direct_a = MaterialSpec("unknown", None, None, 20e-6 + 0.0j)
+    direct_b = MaterialSpec("unknown", None, None, 21e-6 + 0.0j)
+    direct_first = replace(
+        first,
+        structure=replace(
+            first.structure,
+            components=(replace(first.structure.components[0], material=direct_a),),
+        ),
+    )
+    direct_variant = replace(
+        direct_first,
+        structure=replace(
+            direct_first.structure,
+            components=(replace(direct_first.structure.components[0], material=direct_b),),
+        ),
+    )
+
+    assert batch.automatic_physical_signature(first, preset) != batch.automatic_physical_signature(
+        formula_variant,
+        preset,
+    )
+    assert batch.automatic_physical_signature(direct_first, preset) != batch.automatic_physical_signature(
+        direct_variant,
+        preset,
+    )
 
 
 def test_prefits_share_one_worker_budget_and_publish_in_completion_order(
@@ -341,9 +388,5 @@ def test_completed_prefit_persists_winner_settings_and_checkpoint(monkeypatch) -
         fitted.parameter_definitions,
         updated.parameter_settings,
     )
-    assert updated.checkpoint is not None
-    assert updated.checkpoint.stage == saved_checkpoint.stage
-    assert tuple(candidate.candidate_id for candidate in updated.checkpoint.candidates) == (
-        "candidate-0",
-    )
+    assert updated.checkpoint is None
     assert updated.last_valid_result is fitted

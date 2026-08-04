@@ -88,30 +88,40 @@ def test_completed_callback_observes_finish_order_but_return_stays_input_order()
     assert callback_threads == [caller_thread, caller_thread]
 
 
-def test_parallel_runner_propagates_lowest_index_exception() -> None:
+def test_parallel_runner_rethrows_first_exception_without_late_callbacks() -> None:
     from xrr_fitter.services.parallel import OrderedTaskRunner
 
-    releases = (Event(), Event())
-    failed = (Event(), Event())
+    started = Event()
+    rendezvous = Event()
+    failed = Event()
+    completed: list[tuple[int, str]] = []
 
-    def task(index: int) -> None:
-        assert releases[index].wait(timeout=2.0)
-        failed[index].set()
-        raise RuntimeError(f"failure-{index}")
+    def slow_success() -> str:
+        started.set()
+        assert rendezvous.wait(timeout=2.0)
+        return "late"
 
-    def fail_higher_index_first() -> None:
-        releases[1].set()
-        assert failed[1].wait(timeout=2.0)
-        releases[0].set()
+    def fast_failure() -> str:
+        assert started.wait(timeout=2.0)
+        failed.set()
+        raise RuntimeError("failure-fast")
 
-    controller = Thread(target=fail_higher_index_first)
+    def release_slow() -> None:
+        assert failed.wait(timeout=2.0)
+        rendezvous.set()
+
+    controller = Thread(target=release_slow)
     controller.start()
     with OrderedTaskRunner(2) as runner:
-        with pytest.raises(RuntimeError, match="failure-0"):
-            runner.run((lambda: task(0), lambda: task(1)))
+        with pytest.raises(RuntimeError, match="failure-fast"):
+            runner.run(
+                (slow_success, fast_failure),
+                completed=lambda index, value: completed.append((index, value)),
+            )
     controller.join(timeout=2.0)
 
     assert controller.is_alive() is False
+    assert completed == []
 
 
 def test_parallel_runner_cancel_prevents_queued_task_from_starting() -> None:
@@ -149,5 +159,44 @@ def test_parallel_runner_cancel_prevents_queued_task_from_starting() -> None:
 
     assert worker.is_alive() is False
     assert queued_started.is_set() is False
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], CancelledError)
+
+
+def test_single_worker_cancel_prevents_next_task_from_starting() -> None:
+    from xrr_fitter.services.parallel import OrderedTaskRunner
+
+    first_started = Event()
+    release_first = Event()
+    second_started = Event()
+    outcome: list[BaseException] = []
+
+    def first() -> int:
+        first_started.set()
+        assert release_first.wait(timeout=2.0)
+        return 1
+
+    def second() -> int:
+        second_started.set()
+        return 2
+
+    runner = OrderedTaskRunner(1)
+
+    def invoke() -> None:
+        try:
+            runner.run((first, second))
+        except BaseException as error:
+            outcome.append(error)
+
+    worker = Thread(target=invoke)
+    worker.start()
+    assert first_started.wait(timeout=2.0)
+    runner.cancel()
+    release_first.set()
+    worker.join(timeout=2.0)
+    runner.close()
+
+    assert worker.is_alive() is False
+    assert second_started.is_set() is False
     assert len(outcome) == 1
     assert isinstance(outcome[0], CancelledError)

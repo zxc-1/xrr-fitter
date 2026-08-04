@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from concurrent.futures import Future, ThreadPoolExecutor
-from queue import Queue
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, as_completed
 from threading import Lock
 from typing import TypeVar, cast
 
@@ -76,6 +75,9 @@ class OrderedTaskRunner:
             if self._executor is None:
                 results: list[T] = []
                 for index, task in enumerate(values):
+                    with self._lock:
+                        if self._cancel_requested:
+                            raise CancelledError()
                     value = task()
                     results.append(value)
                     if completed is not None:
@@ -90,31 +92,26 @@ class OrderedTaskRunner:
                     future.cancel()
                 raise
             submitted = tuple(futures)
-            completed_queue: Queue[tuple[int, Future[T]]] = Queue()
             positions = {future: index for index, future in enumerate(submitted)}
-            for future in submitted:
-                future.add_done_callback(
-                    lambda completed_future, queue=completed_queue: queue.put(
-                        (positions[completed_future], completed_future)
-                    )
-                )
             results: list[T | None] = [None] * len(submitted)
-            errors: dict[int, BaseException] = {}
-            for _ in submitted:
-                index, future = completed_queue.get()
+            for future in as_completed(submitted):
+                index = positions[future]
                 try:
                     value = future.result()
-                except BaseException as error:
-                    errors[index] = error
+                except BaseException:
                     for pending in submitted:
                         if pending is not future and not pending.done():
                             pending.cancel()
-                    continue
+                    raise
                 results[index] = value
                 if completed is not None:
-                    completed(index, value)
-            if errors:
-                raise errors[min(errors)]
+                    try:
+                        completed(index, value)
+                    except BaseException:
+                        for pending in submitted:
+                            if pending is not future and not pending.done():
+                                pending.cancel()
+                        raise
             return tuple(cast(T, value) for value in results)
         finally:
             self._finish()

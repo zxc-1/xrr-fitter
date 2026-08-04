@@ -44,10 +44,12 @@ class _AutomaticPreparation:
 
 
 def _material_signature(material) -> tuple[object, ...]:
+    override = material.sld_override_a2
     return (
         material.name,
         material.formula,
-        material.sld_override_a2 is not None,
+        material.bulk_density_g_cm3,
+        None if override is None else (override.real, override.imag),
     )
 
 
@@ -478,13 +480,31 @@ def _commit_automatic_result(
     prepared, fit_result, passed, reason = _automatic_fit_parts(result)
     current = working.datasets[row.index]
     prepared_dataset = prepared.updated_dataset
+    winner_settings = _winner_settings(
+        prepared_dataset.parameter_settings,
+        fit_result,
+    )
     changed_settings = (
         row.prepared is not None
         and prepared_dataset.parameter_settings
         != row.prepared.updated_dataset.parameter_settings
     )
-    checkpoint = prepared_dataset.checkpoint if changed_settings else current.checkpoint
     status = _automatic_status(fit_result, passed, refining)
+    settings_changed = winner_settings != prepared_dataset.parameter_settings
+    if status is AutomaticStatus.FAILED:
+        checkpoint = None
+        last_valid_result = None
+        persisted_settings = prepared_dataset.parameter_settings
+    else:
+        checkpoint = (
+            None
+            if settings_changed
+            else prepared_dataset.checkpoint
+            if changed_settings
+            else current.checkpoint
+        )
+        last_valid_result = fit_result
+        persisted_settings = winner_settings
     automation = replace(
         current.automation,
         status=status,
@@ -494,11 +514,8 @@ def _commit_automatic_result(
     dataset = replace(
         prepared_dataset,
         automation=automation,
-        parameter_settings=_winner_settings(
-            prepared_dataset.parameter_settings,
-            fit_result,
-        ),
-        last_valid_result=fit_result,
+        parameter_settings=persisted_settings,
+        last_valid_result=last_valid_result,
         checkpoint=_checkpoint_with_result_diagnostics(checkpoint, fit_result),
     )
     updated = _replace_dataset(working, row.index, dataset)
