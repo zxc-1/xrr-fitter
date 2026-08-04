@@ -5,7 +5,11 @@ import periodictable
 import pytest
 
 from xrr_fitter.model.structure import MaterialSpec
-from xrr_fitter.physics.materials import material_sld
+from xrr_fitter.physics.materials import CLASSICAL_ELECTRON_RADIUS_A, material_sld
+
+
+def test_classical_electron_radius_uses_angstrom_units() -> None:
+    assert CLASSICAL_ELECTRON_RADIUS_A == 2.8179403262e-5
 
 
 def test_material_sld_preserves_angstrom_inverse_squared_units() -> None:
