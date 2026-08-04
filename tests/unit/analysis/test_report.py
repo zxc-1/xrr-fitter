@@ -866,6 +866,23 @@ def test_joint_result_uncertainty_uses_global_candidate_parameter_names() -> Non
     )
 
 
+def test_joint_ensemble_marks_bootstrap_as_not_performed() -> None:
+    joint = import_module("xrr_fitter.analysis.joint")
+
+    report, _confidence, _evidence = joint.analyze_joint_ensemble(
+        variable_names=("shared",),
+        candidate_ids=("E-0",),
+        unit_vectors=np.asarray(((0.5,),)),
+        physical_values=np.asarray(((1.0,),)),
+        objectives=(1.0,),
+        valid=(True,),
+        diagnostics=((),),
+        thresholds=FitConfig.fast(1701).confidence,
+    )
+
+    assert report.bootstrap_performed is False
+
+
 def test_problem_objective_information_uses_robust_weights_and_scale_prior() -> None:
     derivatives = import_module("xrr_fitter.analysis.derivatives")
     problem = _problem()

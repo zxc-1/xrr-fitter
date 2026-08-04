@@ -5,24 +5,31 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import (
     dataset_project,
     final_fit_result,
     project,
     simple_structure,
 )
+
 from xrr_fitter.io.project_codec import (
     load_project as load_project_payload,
+)
+from xrr_fitter.io.project_codec import (
     save_project as save_project_payload,
 )
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.analysis import StructureEvidence
-from xrr_fitter.model.instrument import InstrumentSpec
+from xrr_fitter.model.automation import (
+    AutomaticRole,
+    AutomaticStatus,
+    DatasetAutomation,
+)
 from xrr_fitter.model.fitting import FitConfig
+from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.project import ProjectUiState, ScalePriorState
-from xrr_fitter.services.datasets import add_dataset
 from xrr_fitter.services import projects as project_service
+from xrr_fitter.services.datasets import add_dataset
 from xrr_fitter.services.projects import (
     clear_fit_results,
     inspect_sources,
@@ -42,6 +49,19 @@ def _source(path: Path) -> Path:
     angles = np.linspace(0.1, 3.2, 32)
     path.write_bytes(xy_bytes(angles, np.geomspace(1.0, 1e-4, angles.size)))
     return path
+
+
+def _fitted_automatic_dataset(dataset_id: str, group_id: str):
+    return replace(
+        dataset_project(dataset_id, result=final_fit_result()),
+        automation=DatasetAutomation(
+            import_batch_id="batch-1",
+            fit_group_id=group_id,
+            role=AutomaticRole.JOINT,
+            status=AutomaticStatus.PASSED,
+            statistics_member=True,
+        ),
+    )
 
 
 def test_new_project_is_empty_versioned_and_has_a_persisted_seed() -> None:
@@ -353,6 +373,153 @@ def test_workspace_mutations_and_independent_result_clearing_preserve_unrelated_
         value.ui_state.active_dataset_id,
         value.ui_state.workspace_splitter_sizes,
     ) == (None, True, (), "second", (1, 2, 3))
+
+
+def test_automatic_result_clear_invalidates_only_its_fit_group() -> None:
+    value = project(
+        _fitted_automatic_dataset("a", "g1"),
+        _fitted_automatic_dataset("b", "g1"),
+        _fitted_automatic_dataset("c", "g2"),
+        _fitted_automatic_dataset("d", "g2"),
+    )
+
+    changed = clear_fit_results(value, ("a",))
+
+    by_id = {dataset.dataset_id: dataset for dataset in changed.datasets}
+    assert by_id["a"].last_valid_result is None
+    assert by_id["b"].last_valid_result is None
+    assert by_id["c"].last_valid_result is not None
+    assert by_id["d"].last_valid_result is not None
+    assert by_id["a"].automation.status is AutomaticStatus.PENDING
+    assert by_id["b"].automation.statistics_member is False
+
+
+def test_single_automatic_result_clear_does_not_clear_unrelated_points() -> None:
+    value = project(
+        replace(
+            _fitted_automatic_dataset("a", "single-a"),
+            automation=replace(
+                _fitted_automatic_dataset("a", "single-a").automation,
+                role=AutomaticRole.SINGLE,
+            ),
+        ),
+        replace(
+            _fitted_automatic_dataset("b", "single-b"),
+            automation=replace(
+                _fitted_automatic_dataset("b", "single-b").automation,
+                role=AutomaticRole.SINGLE,
+            ),
+        ),
+    )
+
+    changed = clear_fit_results(value, ("a",))
+
+    assert changed.datasets[0].last_valid_result is None
+    assert changed.datasets[1].last_valid_result is not None
+
+
+def test_expert_joint_result_clear_still_invalidates_every_dataset() -> None:
+    result = final_fit_result()
+    result = replace(
+        result,
+        candidates=(
+            replace(
+                result.candidates[0],
+                ranking_objective=result.candidates[0].objective,
+            ),
+        ),
+    )
+    value = replace(
+        project(
+            dataset_project("a", result=result),
+            dataset_project("b", result=result),
+        ),
+        batch_mode="joint",
+    )
+
+    changed = clear_fit_results(value, ("a",))
+
+    assert all(dataset.last_valid_result is None for dataset in changed.datasets)
+
+
+def test_expert_joint_clear_ignores_retained_automatic_fit_groups() -> None:
+    result = final_fit_result()
+    result = replace(
+        result,
+        candidates=(
+            replace(
+                result.candidates[0],
+                ranking_objective=result.candidates[0].objective,
+            ),
+        ),
+    )
+    value = replace(
+        project(
+            replace(_fitted_automatic_dataset("a", "g1"), last_valid_result=result),
+            replace(_fitted_automatic_dataset("b", "g1"), last_valid_result=result),
+            replace(_fitted_automatic_dataset("c", "g2"), last_valid_result=result),
+            replace(_fitted_automatic_dataset("d", "g2"), last_valid_result=result),
+        ),
+        batch_mode="joint",
+    )
+
+    changed = clear_fit_results(value, ("a",))
+
+    assert all(dataset.last_valid_result is None for dataset in changed.datasets)
+
+
+def test_source_restore_invalidates_only_the_matching_automatic_fit_group(
+    tmp_path: Path,
+) -> None:
+    value = new_project()
+    for name, scale in (("a", 1.0), ("b", 2.0), ("c", 3.0)):
+        source = _source(tmp_path / f"{name}.xy")
+        if scale != 1.0:
+            source.write_bytes(
+                xy_bytes(
+                    np.linspace(0.1, 3.2, 32),
+                    scale * np.geomspace(1.0, 1e-4, 32),
+                )
+            )
+        value = add_dataset(value, source, InstrumentSpec(instrument_id="restore"))
+    groups = ("g1", "g1", "g2")
+    value = replace(
+        value,
+        datasets=tuple(
+            replace(
+                dataset,
+                last_valid_result=final_fit_result(),
+                automation=replace(
+                    _fitted_automatic_dataset(dataset.dataset_id, group_id).automation,
+                    reason="previous result",
+                ),
+            )
+            for dataset, group_id in zip(value.datasets, groups, strict=True)
+        ),
+    )
+    target = tmp_path / "automatic.xrrproj.json"
+    save_project(value, target)
+    first_source = Path(value.datasets[0].source_path)
+    first_source.write_bytes(first_source.read_bytes() + b"# changed\n")
+
+    loaded = load_project(target)
+
+    by_id = {dataset.dataset_id: dataset for dataset in loaded.datasets}
+    assert by_id["a"].last_valid_result is None
+    assert by_id["b"].last_valid_result is None
+    assert by_id["c"].last_valid_result is not None
+    assert by_id["a"].automation == replace(
+        value.datasets[0].automation,
+        status=AutomaticStatus.PENDING,
+        statistics_member=False,
+        reason=None,
+    )
+    assert by_id["b"].automation == replace(
+        value.datasets[1].automation,
+        status=AutomaticStatus.PENDING,
+        statistics_member=False,
+        reason=None,
+    )
 
 
 def test_batch_mode_change_invalidates_the_complete_result_graph() -> None:

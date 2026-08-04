@@ -2,15 +2,19 @@
 
 XRR Fitter is a desktop application for fitting X-ray reflectivity (XRR)
 measurements to layered thin-film structure models. It provides an interactive
-PySide6 GUI for building structures, running global-then-local optimization,
-and quantifying parameter uncertainty.
+PySide6 GUI with a filename-driven automatic fitting path, plus expert tools for
+building structures, running global-then-local optimization, and quantifying
+parameter uncertainty.
 
 ![XRR Fitter GUI](docs/images/gui-light-1280x760.png)
 
 ## Features
 
-- Interactive structure editor for layers, periodic stacks, gradients, and the
-  substrate backing, with real-time reflectivity and SLD-profile plots.
+- Automatic structure construction and fitting from strict filename layer stacks.
+- Single-point fitting or same-import, same-physics joint refinement with
+  point-local thickness and batch uniformity summaries.
+- Interactive expert structure editor for layers, periodic stacks, gradients,
+  and the substrate backing, with reflectivity and SLD-profile plots.
 - Global screening followed by local least-squares refinement with checkpointed,
   resumable fits.
 - Uncertainty analysis: bootstrap resampling, MCMC sampling, and parameter
@@ -48,6 +52,32 @@ python -m xrr_fitter --help
 
 Sample projects and data live in `examples/` (`single-layer`,
 `mo-si-periodic`).
+
+### Automatic filename workflow
+
+The final space-separated part of each filename stem declares finite film layers
+from the substrate side to the surface side:
+
+```text
+<sample-id> <substrate-side-layer>+...+<surface-side-layer>.xy
+```
+
+For example, `P1 Zr.xy` declares one Zr film. The substrate defaults to Si. A
+stack such as `P1 Si+Zr.xy`, whose substrate-side finite layer is itself Si,
+prompts once per matching structure group for the actual substrate. A Si
+substrate receives a 10 A SiO2 native-oxide layer unless the adjacent layer is
+already exactly SiO2.
+
+Selecting files imports every valid row and starts automatic fitting. A singleton
+physical signature runs as a single fit; multiple datasets from the same import
+batch with the same signature are prefit and jointly refined. Unknown material
+codes use a direct effective-SLD model and report effective SLD/electron density,
+but do not invent a mass density in g/cm3.
+
+The standard result view reports per-point status and statistics membership as
+well as layer and uniformity values. Enable **Expert mode** to use manual
+independent/joint fitting, profile diagnostics, MCMC, and explicit result export;
+automatic fitting itself does not export files.
 
 ## Public API
 

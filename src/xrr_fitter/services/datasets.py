@@ -389,7 +389,39 @@ def _cleared(dataset: DatasetProject, *, clear_evidence: bool) -> DatasetProject
         scale_prior=ScalePriorState(enabled=False),
         last_valid_result=None,
         checkpoint=None,
+        automation=_reset_automatic_state(dataset),
     )
+
+
+def _reset_automatic_state(dataset: DatasetProject) -> DatasetAutomation:
+    state = dataset.automation
+    if state.role is AutomaticRole.MANUAL:
+        return state
+    return replace(
+        state,
+        status=AutomaticStatus.PENDING,
+        statistics_member=False,
+        reason=None,
+    )
+
+
+def _dependent_fit_ids(project: XrrProject, changed_ids: set[str]) -> set[str]:
+    if project.batch_mode == "joint" and changed_ids:
+        return {dataset.dataset_id for dataset in project.datasets}
+    groups = {
+        dataset.automation.fit_group_id
+        for dataset in project.datasets
+        if dataset.dataset_id in changed_ids
+        and dataset.automation.fit_group_id is not None
+    }
+    automatic = {
+        dataset.dataset_id
+        for dataset in project.datasets
+        if dataset.automation.fit_group_id in groups
+    }
+    if automatic:
+        return changed_ids | automatic
+    return changed_ids
 
 
 def _replace_invalidated(
@@ -401,12 +433,18 @@ def _replace_invalidated(
 ) -> XrrProject:
     datasets = list(project.datasets)
     datasets[index] = updated
-    if project.batch_mode == "joint":
-        datasets = [_cleared(dataset, clear_evidence=clear_evidence) for dataset in datasets]
-        selected = ()
-    else:
-        datasets[index] = _cleared(updated, clear_evidence=clear_evidence)
-        selected = tuple(item for item in project.ui_state.selected_candidate_ids if item[0] != updated.dataset_id)
+    affected = _dependent_fit_ids(project, {updated.dataset_id})
+    datasets = [
+        _cleared(dataset, clear_evidence=clear_evidence)
+        if dataset.dataset_id in affected
+        else dataset
+        for dataset in datasets
+    ]
+    selected = tuple(
+        item
+        for item in project.ui_state.selected_candidate_ids
+        if item[0] not in affected
+    )
     return replace(
         project,
         datasets=tuple(datasets),

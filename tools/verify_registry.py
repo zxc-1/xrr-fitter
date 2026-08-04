@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
-
 
 PYTHON = "{python}"
 REPORT = "{report}"
@@ -92,6 +91,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/regression/test_numerical_reference.py",
                 "tests/regression/test_recovery_metrics.py",
                 "tests/regression/test_profile_basin_regressions.py",
+                "tests/regression/test_automatic_recovery.py",
                 "-q",
             ),
         )

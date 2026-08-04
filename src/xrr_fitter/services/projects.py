@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import secrets
 from collections.abc import Sequence
 from dataclasses import replace
-import os
 from pathlib import Path
-import secrets
 from typing import Literal
 
 from xrr_fitter.io.project_codec import load_project as _load_project
@@ -23,14 +23,12 @@ from xrr_fitter.model.project import (
     DatasetProject,
     ProjectUiState,
     ProjectValidation,
-    ScalePriorState,
     SourceStatus,
     XrrProject,
     with_active_dataset,
     with_workspace_state,
 )
-from xrr_fitter.services.datasets import _cleared
-
+from xrr_fitter.services.datasets import _cleared, _dependent_fit_ids
 
 SOURCE_RESTORE_ATTEMPTS = 2
 
@@ -84,9 +82,7 @@ def _affected_source_ids(
         for dataset_id, record in records.items()
         if record.status is not SourceStatus.OK
     }
-    if project.batch_mode == "joint" and invalid:
-        return {dataset.dataset_id for dataset in project.datasets}
-    return invalid
+    return _dependent_fit_ids(project, invalid)
 
 
 def _invalidated_sources(
@@ -230,15 +226,6 @@ def set_workspace_state(project: XrrProject, state: ProjectUiState) -> XrrProjec
     return with_workspace_state(project, state)
 
 
-def _clear_fit_state(dataset):
-    return replace(
-        dataset,
-        scale_prior=ScalePriorState(enabled=False),
-        last_valid_result=None,
-        checkpoint=None,
-    )
-
-
 def _joint_structure_template(
     datasets: tuple[DatasetProject, ...],
     active_id: str | None,
@@ -290,9 +277,11 @@ def clear_fit_results(
     unknown = set(requested) - known
     if unknown:
         raise ValueError(f"unknown dataset_id: {sorted(unknown)[0]}")
-    affected = known if project.batch_mode == "joint" and requested else set(requested)
+    affected = _dependent_fit_ids(project, set(requested))
     datasets = tuple(
-        _clear_fit_state(dataset) if dataset.dataset_id in affected else dataset
+        _cleared(dataset, clear_evidence=False)
+        if dataset.dataset_id in affected
+        else dataset
         for dataset in project.datasets
     )
     selected = tuple(
@@ -317,7 +306,9 @@ def set_batch_mode(
         raise ValueError("joint batch mode requires at least two datasets")
     if mode == project.batch_mode:
         return project
-    datasets = tuple(_clear_fit_state(dataset) for dataset in project.datasets)
+    datasets = tuple(
+        _cleared(dataset, clear_evidence=False) for dataset in project.datasets
+    )
     if mode == "joint":
         datasets = _fill_missing_joint_structures(
             datasets,

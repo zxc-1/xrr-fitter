@@ -162,6 +162,7 @@ def _uncertainty_report(
         diagnostics=() if best_index is None else ensemble.diagnostics[best_index],
         residual_autocorrelation=False,
         candidate_id=None if best_index is None else ensemble.identifiers[best_index],
+        bootstrap_performed=False,
     )
 
 

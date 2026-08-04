@@ -5,11 +5,11 @@ from pathlib import Path
 from time import monotonic
 
 import pytest
-
+from tests.support.automatic_recovery import build_direct_sld_project
 from tests.support.processes.run_analysis_worker import start as start_analysis_worker
 from tests.support.processes.run_fit_worker import collect_events
-import xrr_fitter.api as api
 
+import xrr_fitter.api as api
 
 ROOT = Path(__file__).resolve().parents[2]
 TERMINAL_KINDS = {"fit_result", "mcmc_result", "cancelled", "error"}
@@ -105,6 +105,39 @@ def test_real_spawn_fit_and_mcmc_workers_publish_ordered_terminal_protocol(
     updated = _event(mcmc_events, "mcmc_result").mcmc_result
     assert updated.datasets[0].last_valid_result.uncertainty.mcmc is not None
     mcmc_job.close()
+
+
+@pytest.mark.spawn
+def test_real_spawn_automatic_worker_publishes_partial_checkpoint_before_terminal(
+    tmp_path: Path,
+) -> None:
+    project = build_direct_sld_project(tmp_path / "source")
+    batch_id = project.datasets[0].automation.import_batch_id
+    checkpoint_path = tmp_path / "automatic-checkpoint.xrrproj.json"
+
+    job = api.start_automatic_fit_job(project, batch_id, checkpoint_path)
+    events = collect_events(job)
+
+    _assert_terminal_then_stopped(events, "fit_result")
+    terminal_index = next(
+        index for index, event in enumerate(events) if event.kind == "fit_result"
+    )
+    partial = tuple(
+        event.checkpoint
+        for event in events[:terminal_index]
+        if event.kind == "checkpoint"
+    )
+    assert partial
+    assert any(
+        any(dataset.checkpoint is not None for dataset in snapshot.datasets)
+        for snapshot in partial
+    )
+    result = events[terminal_index].fit_result
+    assert result.mode == "automatic"
+    assert result.updated_project.datasets[0].last_valid_result is not None
+    assert checkpoint_path.is_file()
+    assert job.is_running is False
+    job.close()
 
 
 @pytest.mark.spawn
