@@ -1,6 +1,6 @@
 import numpy as np
-
 from tests.support.model_cases import prepared_data
+
 from xrr_fitter.fit.candidates import build_candidate_pool
 from xrr_fitter.fit.initialization import (
     critical_sld_candidates,
@@ -17,7 +17,6 @@ from xrr_fitter.model.structure import (
     PeriodicBlock,
     StructureSpec,
 )
-
 
 AIR = MaterialSpec("Air", None, None, 0j)
 SI = MaterialSpec("Si", "Si", 2.329)

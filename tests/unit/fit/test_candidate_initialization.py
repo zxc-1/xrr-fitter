@@ -33,7 +33,6 @@ from xrr_fitter.physics.materials import material_sld
 from xrr_fitter.physics.reflectivity import instrument_reflectivity
 from xrr_fitter.physics.stack import expand_structure
 
-
 BEAM = BeamSpec(kind="monochromatic")
 FIT_INSTRUMENT = InstrumentSpec(footprint_mode="fit")
 AIR = MaterialSpec("Air", None, None, 0.0j)

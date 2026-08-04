@@ -22,7 +22,6 @@ from xrr_fitter.model.structure import (
 )
 from xrr_fitter.physics.sld_profile import sld_depth_profile
 
-
 CURVE_MERGE_DECADES = 0.02
 PARAMETER_PRECLUSTER_DISTANCE = 0.25
 
@@ -403,18 +402,24 @@ def build_candidate_pool(
         initial.relative_resolutions,
         initial.footprint_angles_deg,
     )
-    direct_sld_rows = initial.direct_sld_rows or ((),)
-    all_dimensions: tuple[tuple[object, ...], ...] = (
-        geometry,
-        direct_sld_rows,
-        *dimensions,
-    )
     generated_limit = limit - len(protected)
-    combinations = _selected_combinations(all_dimensions, rng, generated_limit)
-    generated = tuple(
-        _make_start(structure, *combination)
-        for combination in combinations
-    )
+    if initial.direct_sld_rows:
+        all_dimensions: tuple[tuple[object, ...], ...] = (
+            geometry,
+            initial.direct_sld_rows,
+            *dimensions,
+        )
+        combinations = _selected_combinations(all_dimensions, rng, generated_limit)
+        generated = tuple(
+            _make_start(structure, *combination) for combination in combinations
+        )
+    else:
+        all_dimensions = (geometry, *dimensions)
+        combinations = _selected_combinations(all_dimensions, rng, generated_limit)
+        generated = tuple(
+            _make_start(structure, combination[0], (), *combination[1:])
+            for combination in combinations
+        )
     return (*protected, *generated[:generated_limit])
 
 

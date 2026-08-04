@@ -223,8 +223,14 @@ def critical_edge_candidates(
     return tuple(float(value) for value in np.sort(low_positions[ranked]))
 
 
-_DIRECT_SLD_ANCHORS = tuple(
-    value * 1e-6 for value in (-20.0, 0.0, 10.0, 20.0, 40.0, 80.0, 120.0)
+DIRECT_SLD_ANCHORS = (
+    -20.0 * 1e-6,
+    0.0 * 1e-6,
+    10.0 * 1e-6,
+    20.0 * 1e-6,
+    40.0 * 1e-6,
+    80.0 * 1e-6,
+    120.0 * 1e-6,
 )
 
 
@@ -239,7 +245,7 @@ def critical_sld_candidates(
         data.qz_a_inv[mask],
         data.intensity_normalized[mask],
     )
-    candidates = set(_DIRECT_SLD_ANCHORS)
+    candidates = set(DIRECT_SLD_ANCHORS)
     if edges:
         estimate = edges[0] ** 2 / (16.0 * np.pi)
         candidates.add(float(np.clip(estimate, -150e-6, 150e-6)))
@@ -277,7 +283,7 @@ def direct_sld_start_rows(
     if not declared:
         return ()
     estimate = next(
-        (value for value in candidates if value not in _DIRECT_SLD_ANCHORS),
+        (value for value in candidates if value not in DIRECT_SLD_ANCHORS),
         candidates[0],
     )
     rows = [
@@ -286,7 +292,7 @@ def direct_sld_start_rows(
     ]
     rows.extend(
         tuple(
-            (name, _DIRECT_SLD_ANCHORS[(rotation + index) % len(_DIRECT_SLD_ANCHORS)])
+            (name, DIRECT_SLD_ANCHORS[(rotation + index) % len(DIRECT_SLD_ANCHORS)])
             for index, (name, _value) in enumerate(declared)
         )
         for rotation in range(6)
