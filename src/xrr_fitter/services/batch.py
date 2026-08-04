@@ -458,9 +458,10 @@ def _automatic_status(
 def _automatic_reason(
     status: AutomaticStatus,
     reason: str | None,
+    role: AutomaticRole,
 ) -> str | None:
     if status is AutomaticStatus.PASSED:
-        return None
+        return reason if role is AutomaticRole.ISOLATED_RETRY else None
     if status is AutomaticStatus.REFINING:
         return reason
     if reason:
@@ -506,10 +507,18 @@ def _commit_automatic_result(
         last_valid_result = fit_result
         persisted_settings = winner_settings
     automation = replace(
-        current.automation,
+        prepared_dataset.automation,
         status=status,
         statistics_member=status is AutomaticStatus.PASSED,
-        reason=_automatic_reason(status, reason),
+        reason=_automatic_reason(
+            status,
+            (
+                prepared_dataset.automation.reason
+                if status is AutomaticStatus.PASSED
+                else reason or prepared_dataset.automation.reason
+            ),
+            prepared_dataset.automation.role,
+        ),
     )
     dataset = replace(
         prepared_dataset,
@@ -694,6 +703,227 @@ def _joint_fit(
     return ProjectFitResult("joint", values, _warnings(values), working)
 
 
+def _publish_automatic_preparation_failures(
+    working: XrrProject,
+    rows: tuple[_AutomaticPreparation, ...],
+    published: dict[int, DatasetFitResult],
+    checkpoint_callback: Callable[[XrrProject], None] | None,
+) -> XrrProject:
+    for row in rows:
+        if row.error is None:
+            continue
+        working, published[row.index] = _commit_automatic_failure(
+            working,
+            row,
+            row.error,
+        )
+        if checkpoint_callback is not None:
+            checkpoint_callback(working)
+    return working
+
+
+def _run_automatic_prefits(
+    working: XrrProject,
+    rows: tuple[_AutomaticPreparation, ...],
+    total_workers: int,
+    published: dict[int, DatasetFitResult],
+    *,
+    fit_dataset,
+    progress_callback: Callable[[FitProgress], None] | None,
+    checkpoint_callback: Callable[[XrrProject], None] | None,
+    cancelled: Callable[[], bool] | None,
+) -> tuple[
+    XrrProject,
+    tuple[_AutomaticPreparation, ...],
+    dict[int, object],
+    bool,
+    Callable[[FitProgress], None] | None,
+]:
+    runnable = tuple(row for row in rows if row.prepared is not None)
+    allocations = _worker_allocations(total_workers, len(runnable))
+    published_progress = progress_callback
+    tasks = tuple(
+        lambda row=row, workers=workers: _buffered_dataset_fit(
+            row.prepared,
+            workers,
+            fit_dataset,
+            cancelled,
+        )
+        for row, workers in zip(runnable, allocations, strict=True)
+    )
+    prefit_results: dict[int, object] = {}
+    was_cancelled = False
+
+    def publish_prefit(position: int, outcome: _BufferedFit) -> None:
+        nonlocal working, was_cancelled
+        row = runnable[position]
+        working = _replay_buffered_events(
+            working,
+            row.index,
+            outcome.events,
+            progress_callback,
+            checkpoint_callback,
+        )
+        if outcome.error is None:
+            assert outcome.result is not None
+            prefit_results[row.index] = outcome.result
+            working, published[row.index] = _commit_automatic_result(
+                working,
+                row,
+                outcome.result,
+                refining=row.group_size > 1,
+            )
+        else:
+            working, published[row.index] = _commit_automatic_failure(
+                working,
+                row,
+                outcome.error,
+            )
+            was_cancelled = was_cancelled or _cancelled(outcome.error)
+        if checkpoint_callback is not None:
+            checkpoint_callback(working)
+
+    if tasks:
+        with OrderedTaskRunner(min(len(tasks), total_workers)) as runner:
+            runner.run(tasks, completed=publish_prefit)
+    return (
+        working,
+        runnable,
+        prefit_results,
+        was_cancelled,
+        published_progress,
+    )
+
+
+def _automatic_joint_groups(
+    runnable: tuple[_AutomaticPreparation, ...],
+    prefit_results: dict[int, object],
+) -> dict[str, tuple[_AutomaticPreparation, ...]]:
+    grouped: dict[str, list[_AutomaticPreparation]] = {}
+    for row in runnable:
+        if row.group_size > 1 and row.index in prefit_results:
+            grouped.setdefault(row.fit_group_id, []).append(row)
+    return {key: tuple(members) for key, members in grouped.items()}
+
+
+def _commit_incomplete_automatic_group(
+    working: XrrProject,
+    row: _AutomaticPreparation,
+    prefit: object,
+) -> tuple[XrrProject, DatasetFitResult]:
+    review = replace(
+        prefit,
+        passed=False,
+        reason="insufficient qualified points for joint refinement",
+    )
+    return _commit_automatic_result(
+        working,
+        row,
+        review,
+        refining=False,
+    )
+
+
+def _automatic_joint_checkpoint_project(
+    working: XrrProject,
+    member_rows: tuple[_AutomaticPreparation, ...],
+    values: object,
+) -> XrrProject:
+    checkpoints = tuple(values)
+    if len(checkpoints) != len(member_rows):
+        raise ValueError("automatic joint checkpoint batch size mismatch")
+    datasets = list(working.datasets)
+    for row, checkpoint in zip(member_rows, checkpoints, strict=True):
+        datasets[row.index] = replace(datasets[row.index], checkpoint=checkpoint)
+    return replace(working, datasets=tuple(datasets))
+
+
+def _commit_automatic_joint_success(
+    working: XrrProject,
+    member_rows: tuple[_AutomaticPreparation, ...],
+    joint_results: tuple[object, ...],
+) -> tuple[XrrProject, dict[int, DatasetFitResult]]:
+    if len(joint_results) != len(member_rows):
+        raise ValueError("automatic joint result batch size mismatch")
+    published = {}
+    for row, result in zip(member_rows, joint_results, strict=True):
+        returned_prepared = _automatic_fit_parts(result)[0]
+        if returned_prepared.dataset_id != row.original.dataset_id:
+            raise ValueError("automatic joint result dataset order mismatch")
+        working, published[row.index] = _commit_automatic_result(
+            working,
+            row,
+            result,
+            refining=False,
+        )
+    return working, published
+
+
+def _fit_automatic_joint_transaction_group(
+    working: XrrProject,
+    fit_group_id: str,
+    member_rows: tuple[_AutomaticPreparation, ...],
+    prefit_results: dict[int, object],
+    *,
+    fit_joint,
+    progress: Callable[[FitProgress], None] | None,
+    checkpoint_callback: Callable[[XrrProject], None] | None,
+    cancelled: Callable[[], bool] | None,
+) -> tuple[XrrProject, dict[int, DatasetFitResult], bool]:
+    if len(member_rows) == 1:
+        row = member_rows[0]
+        working, result = _commit_incomplete_automatic_group(
+            working,
+            row,
+            prefit_results[row.index],
+        )
+        return working, {row.index: result}, False
+    member_prefits = tuple(prefit_results[row.index] for row in member_rows)
+    member_prepared = tuple(
+        _automatic_fit_parts(prefit)[0]
+        for prefit in member_prefits
+    )
+
+    def publish_checkpoints(values) -> None:
+        nonlocal working
+        working = _automatic_joint_checkpoint_project(
+            working,
+            member_rows,
+            values,
+        )
+        if checkpoint_callback is not None:
+            checkpoint_callback(working)
+
+    try:
+        joint_results = tuple(
+            fit_joint(
+                member_prepared,
+                member_prefits,
+                fit_group_id,
+                progress=progress,
+                cancelled=cancelled,
+                checkpoint=publish_checkpoints,
+            )
+        )
+        working, published = _commit_automatic_joint_success(
+            working,
+            member_rows,
+            joint_results,
+        )
+    except Exception as error:
+        published = {}
+        for row in member_rows:
+            working, published[row.index] = _commit_automatic_failure(
+                working,
+                row,
+                error,
+            )
+        was_cancelled = _cancelled(error)
+    else:
+        was_cancelled = False
+    return working, published, was_cancelled
+
+
 def fit_automatic_transaction(
     project: XrrProject,
     import_batch_id: str | None,
@@ -704,8 +934,9 @@ def fit_automatic_transaction(
     seed_branches,
     prepare_dataset,
     fit_dataset,
+    fit_joint,
 ) -> ProjectFitResult:
-    """Route and publish automatic prefits under one project CPU budget."""
+    """Route automatic prefits, joint groups, and isolated final results."""
     indices = _automatic_indices(project, import_batch_id)
     if not indices:
         raise ValueError("no runnable automatic datasets")
@@ -723,66 +954,49 @@ def fit_automatic_transaction(
         prepare_dataset,
     )
     published: dict[int, DatasetFitResult] = {}
-    was_cancelled = False
-
-    for row in rows:
-        if row.error is None:
-            continue
-        working, published[row.index] = _commit_automatic_failure(
-            working,
-            row,
-            row.error,
-        )
-        if checkpoint_callback is not None:
-            checkpoint_callback(working)
-
-    runnable = tuple(row for row in rows if row.prepared is not None)
-    allocations = _worker_allocations(
+    working = _publish_automatic_preparation_failures(
+        working,
+        rows,
+        published,
+        checkpoint_callback,
+    )
+    (
+        working,
+        runnable,
+        prefit_results,
+        was_cancelled,
+        published_progress,
+    ) = _run_automatic_prefits(
+        working,
+        rows,
         project.fit_config.local_workers,
-        len(runnable),
+        published,
+        fit_dataset=fit_dataset,
+        progress_callback=progress_callback,
+        checkpoint_callback=checkpoint_callback,
+        cancelled=cancelled,
     )
-    tasks = tuple(
-        lambda row=row, workers=workers: _buffered_dataset_fit(
-            row.prepared,
-            workers,
-            fit_dataset,
-            cancelled,
-        )
-        for row, workers in zip(runnable, allocations, strict=True)
-    )
-
-    def publish_prefit(position: int, outcome: _BufferedFit) -> None:
-        nonlocal working, was_cancelled
-        row = runnable[position]
-        working = _replay_buffered_events(
-            working,
-            row.index,
-            outcome.events,
-            progress_callback,
-            checkpoint_callback,
-        )
-        if outcome.error is not None:
-            working, published[row.index] = _commit_automatic_failure(
+    grouped = _automatic_joint_groups(runnable, prefit_results)
+    for fit_group_id, member_rows in grouped.items():
+        if was_cancelled or (cancelled is not None and cancelled()):
+            was_cancelled = True
+            break
+        working, group_results, group_cancelled = (
+            _fit_automatic_joint_transaction_group(
                 working,
-                row,
-                outcome.error,
+                fit_group_id,
+                member_rows,
+                prefit_results,
+                fit_joint=fit_joint,
+                progress=published_progress,
+                checkpoint_callback=checkpoint_callback,
+                cancelled=cancelled,
             )
-            was_cancelled = was_cancelled or _cancelled(outcome.error)
-        else:
-            assert outcome.result is not None
-            working, published[row.index] = _commit_automatic_result(
-                working,
-                row,
-                outcome.result,
-                refining=row.group_size > 1,
-            )
+        )
+        published.update(group_results)
+        was_cancelled = was_cancelled or group_cancelled
         if checkpoint_callback is not None:
             checkpoint_callback(working)
-
-    if tasks:
-        concurrency = min(len(tasks), project.fit_config.local_workers)
-        with OrderedTaskRunner(concurrency) as runner:
-            runner.run(tasks, completed=publish_prefit)
 
     values = tuple(published[index] for index in indices)
     return ProjectFitResult(

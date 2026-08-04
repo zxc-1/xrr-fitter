@@ -20,9 +20,6 @@ def _rule_definitions(
     rule: SharingRule,
     by_dataset: dict[str, object],
 ) -> tuple[tuple[object, object], ...]:
-    datasets = tuple(member.dataset_id for member in rule.members)
-    if len(datasets) != len(set(datasets)):
-        raise ValueError("sharing group may contain at most one member per dataset")
     definitions = []
     for member in rule.members:
         if member.dataset_id not in by_dataset:
@@ -113,6 +110,101 @@ def initial_joint_vector(problem: object) -> np.ndarray:
     if np.any(~np.isfinite(global_unit)):
         raise ValueError("joint global layout contains an unbound coordinate")
     return global_unit
+
+
+def validated_joint_initial_vector(
+    problem: object,
+    initial_unit_vector: object | None,
+) -> np.ndarray | None:
+    """Own and validate an optional explicit unit-space joint start."""
+    if initial_unit_vector is None:
+        return None
+    unit = np.array(initial_unit_vector, dtype=float, copy=True)
+    valid = (
+        unit.ndim == 1
+        and unit.shape == (len(problem.global_variables),)
+        and np.all(np.isfinite(unit))
+        and np.all((unit >= 0.0) & (unit <= 1.0))
+    )
+    if not valid:
+        raise ValueError(
+            "joint initial unit vector must match the joint shape, "
+            "finite values, and bounds"
+        )
+    unit.setflags(write=False)
+    return unit
+
+
+def _candidate_local_layout(
+    dataset_id: str,
+    local_problem: object,
+    candidates_by_dataset: object,
+) -> tuple[np.ndarray, dict[str, int]]:
+    try:
+        candidate = candidates_by_dataset[dataset_id]
+    except (KeyError, TypeError) as error:
+        raise ValueError(f"prefit candidate is missing: {dataset_id}") from error
+    if candidate is None or not getattr(candidate, "valid", False):
+        raise ValueError(f"prefit candidate is invalid: {dataset_id}")
+    physical = {
+        parameter.name: parameter.value
+        for parameter in candidate.parameters
+    }
+    indices = {
+        coordinate.name: index
+        for index, coordinate in enumerate(local_problem.variables)
+    }
+    missing = next((name for name in indices if name not in physical), None)
+    if missing is not None:
+        raise ValueError(
+            f"prefit candidate parameter is missing: {dataset_id}/{missing}"
+        )
+    return encode_physical_vector(local_problem, physical), indices
+
+
+def _consensus_value(
+    variable: object,
+    layouts: dict[str, tuple[np.ndarray, dict[str, int]]],
+) -> float:
+    values = tuple(
+        layouts[member.dataset_id][0][
+            layouts[member.dataset_id][1][member.parameter_name]
+        ]
+        for member in variable.members
+    )
+    return float(np.median(values))
+
+
+def consensus_joint_vector(
+    problem: object,
+    candidates_by_dataset: object,
+) -> np.ndarray:
+    """Build a global start from the median of each variable's prefit members."""
+    layouts = {
+        dataset_id: _candidate_local_layout(
+            dataset_id,
+            local_problem,
+            candidates_by_dataset,
+        )
+        for dataset_id, local_problem in zip(
+            problem.dataset_ids,
+            problem.problems,
+            strict=True,
+        )
+    }
+    consensus = np.asarray(
+        [
+            _consensus_value(variable, layouts)
+            for variable in problem.global_variables
+        ],
+        dtype=float,
+    )
+    if np.any(~np.isfinite(consensus)) or np.any(
+        (consensus < 0.0) | (consensus > 1.0)
+    ):
+        raise ValueError("prefit consensus must contain finite values within [0, 1]")
+    consensus.setflags(write=False)
+    return consensus
 
 
 def _candidate_maps(

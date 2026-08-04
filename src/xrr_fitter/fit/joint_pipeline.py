@@ -8,6 +8,10 @@ back by dataset. Resume accepts a batch only when every member describes the
 same joint state and deterministic child-seed prefix.
 Stage-E summaries accumulate only completed seeds, so cancellation cannot expose
 a candidate or checkpoint for an unfinished prefix.
+Fresh automatic refinement may replace the declared Stage-A value with a
+validated prefit consensus. Explicit starts and persisted resume state are
+mutually exclusive, so every run has one authoritative initialization path.
+Both paths preserve the deterministic child-seed lineage.
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ from xrr_fitter.fit.joint_sharing import (
     initial_joint_vector,
     joint_candidate_vectors,
     validate_joint_candidate_alignment,
+    validated_joint_initial_vector,
 )
 from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.fit.pipeline import FitSearchRequest, run_fit_search
@@ -52,14 +57,26 @@ from xrr_fitter.model.provenance import fit_search_provenance_sha256
 class JointFitRequest:
     problem: JointFitProblem
     resume_checkpoints: tuple[FitCheckpoint, ...] | None = None
+    initial_unit_vector: np.ndarray | None = None
 
     def __post_init__(self) -> None:
-        if self.resume_checkpoints is None:
-            return
-        checkpoints = tuple(self.resume_checkpoints)
-        if len(checkpoints) != len(self.problem.dataset_ids):
+        checkpoints = (
+            None if self.resume_checkpoints is None else tuple(self.resume_checkpoints)
+        )
+        if checkpoints is not None and self.initial_unit_vector is not None:
+            raise ValueError("joint resume cannot use an explicit initial unit vector")
+        if checkpoints is not None and len(checkpoints) != len(self.problem.dataset_ids):
             raise ValueError("joint resume requires checkpoints for all datasets")
-        object.__setattr__(self, "resume_checkpoints", checkpoints)
+        if checkpoints is not None:
+            object.__setattr__(self, "resume_checkpoints", checkpoints)
+        object.__setattr__(
+            self,
+            "initial_unit_vector",
+            validated_joint_initial_vector(
+                self.problem,
+                self.initial_unit_vector,
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -546,9 +563,16 @@ def _validate_joint_resume(
     return state, remaining
 
 
-def _fresh_state(problem: JointFitProblem) -> tuple[_JointState, np.ndarray]:
+def _fresh_state(
+    problem: JointFitProblem,
+    initial_unit_vector: np.ndarray | None = None,
+) -> tuple[_JointState, np.ndarray]:
     warnings = tuple(dict.fromkeys(warning for value in problem.problems for warning in value.warnings))
-    initial = initial_joint_vector(problem)
+    initial = (
+        initial_joint_vector(problem)
+        if initial_unit_vector is None
+        else initial_unit_vector
+    )
     evaluation = evaluate_joint_vector(problem, initial)
     solved = _SolvedJoint(initial, evaluation, "declared_initial", 1)
     projected = _project_candidate(problem, solved, "A-0", 0)
@@ -595,7 +619,10 @@ def _initial_joint_run(
     seeds: tuple[int, ...],
 ) -> tuple[_JointState, np.ndarray | None, tuple[str, ...]]:
     if request.resume_checkpoints is None:
-        state, initial = _fresh_state(request.problem)
+        state, initial = _fresh_state(
+            request.problem,
+            request.initial_unit_vector,
+        )
         return state, initial, ("B", "C", "D", "E")
     state, remaining = _validate_joint_resume(request, seeds)
     return state, None, remaining

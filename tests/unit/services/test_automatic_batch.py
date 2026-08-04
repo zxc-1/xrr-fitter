@@ -51,6 +51,7 @@ class RecordingAutomaticFits:
     def __init__(self) -> None:
         self.prefit_dataset_ids: set[str] = set()
         self.checkpoints = []
+        self.joint_groups = []
 
     def seeds(self, value):
         return (
@@ -74,6 +75,11 @@ class RecordingAutomaticFits:
 
     def fit_dataset(self, prepared, **_kwargs):
         return AutomaticPreparedResult(prepared, final_fit_result(), True, None)
+
+    def fit_joint(self, prepared, prefits, fit_group_id, **_kwargs):
+        del fit_group_id
+        self.joint_groups.append(tuple(item.dataset_id for item in prepared))
+        return tuple(prefits)
 
     def checkpoint(self, value) -> None:
         self.checkpoints.append(value)
@@ -118,15 +124,17 @@ def test_mixed_import_batch_routes_singletons_and_matching_points_separately(
         seed_branches=calls.seeds,
         prepare_dataset=calls.prepare,
         fit_dataset=calls.fit_dataset,
+        fit_joint=calls.fit_joint,
     )
 
     assert calls.prefit_dataset_ids == {"a", "b", "c", "d"}
+    assert calls.joint_groups == [("a", "b")]
     assert tuple(item.dataset_id for item in result.datasets) == ("a", "b", "c", "d")
     by_id = {item.dataset_id: item.automation for item in result.updated_project.datasets}
     assert by_id["a"].role is AutomaticRole.JOINT
     assert by_id["b"].fit_group_id == by_id["a"].fit_group_id
-    assert by_id["a"].status is AutomaticStatus.REFINING
-    assert by_id["b"].status is AutomaticStatus.REFINING
+    assert by_id["a"].status is AutomaticStatus.PASSED
+    assert by_id["b"].status is AutomaticStatus.PASSED
     assert by_id["c"].role is AutomaticRole.SINGLE
     assert by_id["c"].status is AutomaticStatus.PASSED
     assert by_id["d"].role is AutomaticRole.SINGLE
@@ -247,6 +255,7 @@ def test_prefits_share_one_worker_budget_and_publish_in_completion_order(
         seed_branches=calls.seeds,
         prepare_dataset=calls.prepare,
         fit_dataset=fit_dataset,
+        fit_joint=calls.fit_joint,
     )
 
     assert sorted(allocations) == [("fast", 2), ("slow", 2)]
@@ -309,6 +318,7 @@ def test_source_and_preparation_failures_are_isolated_and_all_results_publish(
         seed_branches=calls.seeds,
         prepare_dataset=prepare,
         fit_dataset=fit_dataset,
+        fit_joint=calls.fit_joint,
     )
 
     assert tuple(item.dataset_id for item in result.datasets) == (
@@ -378,6 +388,7 @@ def test_completed_prefit_persists_winner_settings_and_checkpoint(monkeypatch) -
         seed_branches=calls.seeds,
         prepare_dataset=calls.prepare,
         fit_dataset=fit_dataset,
+        fit_joint=calls.fit_joint,
     )
 
     updated = result.updated_project.datasets[0]
@@ -390,3 +401,169 @@ def test_completed_prefit_persists_winner_settings_and_checkpoint(monkeypatch) -
     )
     assert updated.checkpoint is None
     assert updated.last_valid_result is fitted
+
+
+def test_joint_group_failure_does_not_replace_successful_singleton(
+    monkeypatch,
+) -> None:
+    value = replace(
+        project(
+            _automatic_dataset("left", ("Zr",)),
+            _automatic_dataset("right", ("Zr",)),
+            _automatic_dataset("single", ("TaN",)),
+        ),
+        measurement_preset=_preset(),
+    )
+    records = tuple(
+        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok"))
+        for item in value.datasets
+    )
+    monkeypatch.setattr(
+        batch,
+        "inspect_sources",
+        lambda _value: SimpleNamespace(valid=True, issues=(), datasets=records),
+    )
+    calls = RecordingAutomaticFits()
+
+    def fail_joint(*_args, **_kwargs):
+        raise RuntimeError("joint refinement failed")
+
+    result = batch.fit_automatic_transaction(
+        value,
+        None,
+        None,
+        calls.checkpoint,
+        None,
+        seed_branches=calls.seeds,
+        prepare_dataset=calls.prepare,
+        fit_dataset=calls.fit_dataset,
+        fit_joint=fail_joint,
+    )
+
+    by_id = {
+        item.dataset_id: item.automation
+        for item in result.updated_project.datasets
+    }
+    assert by_id["left"].status is AutomaticStatus.FAILED
+    assert by_id["right"].status is AutomaticStatus.FAILED
+    assert "joint refinement failed" in by_id["left"].reason
+    assert by_id["single"].status is AutomaticStatus.PASSED
+
+
+def test_passed_isolated_retry_retains_its_auditable_reason(monkeypatch) -> None:
+    value = replace(
+        project(
+            _automatic_dataset("left", ("Zr",)),
+            _automatic_dataset("middle", ("Zr",)),
+            _automatic_dataset("outlier", ("Zr",)),
+        ),
+        measurement_preset=_preset(),
+    )
+    records = tuple(
+        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok"))
+        for item in value.datasets
+    )
+    monkeypatch.setattr(
+        batch,
+        "inspect_sources",
+        lambda _value: SimpleNamespace(valid=True, issues=(), datasets=records),
+    )
+    calls = RecordingAutomaticFits()
+
+    def fit_joint(prepared, prefits, _fit_group_id, **_kwargs):
+        isolated_automation = replace(
+            prepared[2].updated_dataset.automation,
+            role=AutomaticRole.ISOLATED_RETRY,
+            status=AutomaticStatus.REFINING,
+            statistics_member=False,
+            reason="prefit objective outlier",
+        )
+        isolated = SimpleNamespace(
+            dataset_id=prepared[2].dataset_id,
+            dataset_index=prepared[2].dataset_index,
+            updated_dataset=replace(
+                prepared[2].updated_dataset,
+                automation=isolated_automation,
+            ),
+        )
+        return (*prefits[:2], replace(prefits[2], prepared=isolated))
+
+    result = batch.fit_automatic_transaction(
+        value,
+        None,
+        None,
+        calls.checkpoint,
+        None,
+        seed_branches=calls.seeds,
+        prepare_dataset=calls.prepare,
+        fit_dataset=calls.fit_dataset,
+        fit_joint=fit_joint,
+    )
+
+    outlier = result.updated_project.datasets[2].automation
+    assert outlier.role is AutomaticRole.ISOLATED_RETRY
+    assert outlier.status is AutomaticStatus.PASSED
+    assert outlier.statistics_member is True
+    assert outlier.reason == "prefit objective outlier"
+
+
+def test_isolated_review_publishes_the_latest_combined_reason(monkeypatch) -> None:
+    value = replace(
+        project(
+            _automatic_dataset("left", ("Zr",)),
+            _automatic_dataset("right", ("Zr",)),
+        ),
+        measurement_preset=_preset(),
+    )
+    records = tuple(
+        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok"))
+        for item in value.datasets
+    )
+    monkeypatch.setattr(
+        batch,
+        "inspect_sources",
+        lambda _value: SimpleNamespace(valid=True, issues=(), datasets=records),
+    )
+    calls = RecordingAutomaticFits()
+
+    def fit_joint(prepared, prefits, _fit_group_id, **_kwargs):
+        automation = replace(
+            prepared[1].updated_dataset.automation,
+            role=AutomaticRole.ISOLATED_RETRY,
+            status=AutomaticStatus.REFINING,
+            statistics_member=False,
+            reason="prefit objective outlier",
+        )
+        isolated = SimpleNamespace(
+            dataset_id=prepared[1].dataset_id,
+            dataset_index=prepared[1].dataset_index,
+            updated_dataset=replace(
+                prepared[1].updated_dataset,
+                automation=automation,
+            ),
+        )
+        return (
+            prefits[0],
+            AutomaticPreparedResult(
+                isolated,
+                prefits[1].fit_result,
+                False,
+                "prefit objective outlier; systematic residual",
+            ),
+        )
+
+    result = batch.fit_automatic_transaction(
+        value,
+        None,
+        None,
+        calls.checkpoint,
+        None,
+        seed_branches=calls.seeds,
+        prepare_dataset=calls.prepare,
+        fit_dataset=calls.fit_dataset,
+        fit_joint=fit_joint,
+    )
+
+    isolated = result.updated_project.datasets[1].automation
+    assert isolated.status is AutomaticStatus.REVIEW
+    assert isolated.reason == "prefit objective outlier; systematic residual"

@@ -9,15 +9,15 @@ that shared ranking instead of silently reverting to one dataset's objective.
 
 from __future__ import annotations
 
+import pickle
 from dataclasses import fields, replace
 from importlib import import_module
-import pickle
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import dataset_project, prepared_data, project, simple_structure
+
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import (
     FitConfig,
@@ -27,7 +27,6 @@ from xrr_fitter.model.fitting import (
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import ParameterReference, ParameterSetting, SharingRule
 from xrr_fitter.model.project import validate_project
-
 
 SHARED_NAME = "component.0.density_scale"
 
@@ -226,6 +225,80 @@ def _assert_equivalent_results(fresh, resumed) -> None:
             assert left.ranking_objective == right.ranking_objective
             np.testing.assert_array_equal(left.unit_vector, right.unit_vector)
             np.testing.assert_array_equal(left.model_normalized, right.model_normalized)
+
+
+def test_joint_request_uses_prefit_consensus_instead_of_declared_initial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    joint_pipeline = import_module("xrr_fitter.fit.joint_pipeline")
+    joint = _joint_problem()
+    consensus = np.full(len(joint.global_variables), 0.73)
+    observed = []
+    evaluate = joint_pipeline.evaluate_joint_vector
+
+    def capture(problem, unit):
+        observed.append(unit.copy())
+        return evaluate(problem, unit)
+
+    monkeypatch.setattr(joint_pipeline, "evaluate_joint_vector", capture)
+    joint_pipeline.run_joint_fit(
+        joint_pipeline.JointFitRequest(joint, initial_unit_vector=consensus)
+    )
+
+    assert np.array_equal(observed[0], consensus)
+
+
+def test_joint_request_schema_includes_optional_initial_vector() -> None:
+    joint_pipeline = import_module("xrr_fitter.fit.joint_pipeline")
+
+    assert [field.name for field in fields(joint_pipeline.JointFitRequest)] == [
+        "problem",
+        "resume_checkpoints",
+        "initial_unit_vector",
+    ]
+
+
+def test_joint_request_copies_and_freezes_explicit_initial_vector() -> None:
+    joint_pipeline = import_module("xrr_fitter.fit.joint_pipeline")
+    joint = _joint_problem()
+    initial = np.full(len(joint.global_variables), 0.41)
+
+    request = joint_pipeline.JointFitRequest(joint, initial_unit_vector=initial)
+    initial[:] = 0.9
+
+    assert np.all(request.initial_unit_vector == 0.41)
+    assert not request.initial_unit_vector.flags.writeable
+
+
+@pytest.mark.parametrize(
+    "initial",
+    (
+        np.asarray(0.5),
+        np.asarray([np.nan]),
+        np.asarray([-0.1]),
+        np.asarray([1.1]),
+    ),
+)
+def test_joint_request_rejects_invalid_explicit_initial_vector(initial) -> None:
+    joint_pipeline = import_module("xrr_fitter.fit.joint_pipeline")
+    joint = _joint_problem()
+    if initial.ndim == 1 and initial.size == 1:
+        initial = np.resize(initial, len(joint.global_variables))
+
+    with pytest.raises(ValueError, match="initial|shape|finite|bounds"):
+        joint_pipeline.JointFitRequest(joint, initial_unit_vector=initial)
+
+
+def test_joint_request_rejects_explicit_initial_vector_when_resuming() -> None:
+    joint_pipeline = import_module("xrr_fitter.fit.joint_pipeline")
+    joint = _joint_problem()
+
+    with pytest.raises(ValueError, match="resume|initial"):
+        joint_pipeline.JointFitRequest(
+            joint,
+            resume_checkpoints=(object(), object()),
+            initial_unit_vector=np.full(len(joint.global_variables), 0.5),
+        )
 
 
 def _replace_first_checkpoint(checkpoints, **changes):
@@ -442,7 +515,11 @@ def test_joint_request_handler_and_result_tuple_are_pickle_safe() -> None:
     api = import_module("xrr_fitter.fit.joint_pipeline")
     request = api.JointFitRequest(_joint_problem())
 
-    assert [field.name for field in fields(request)] == ["problem", "resume_checkpoints"]
+    assert [field.name for field in fields(request)] == [
+        "problem",
+        "resume_checkpoints",
+        "initial_unit_vector",
+    ]
     restored_request = pickle.loads(pickle.dumps(request))
     assert restored_request.problem.dataset_ids == ("left", "right")
     assert pickle.loads(pickle.dumps(api.run_joint_fit)) is api.run_joint_fit

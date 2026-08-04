@@ -672,6 +672,49 @@ def test_fit_automatically_injects_spawn_safe_service_functions(monkeypatch) -> 
                 "seed_branches": fitting.service_seed_branches,
                 "prepare_dataset": fitting.prepare_dataset_fit,
                 "fit_dataset": fitting.fit_automatic_prepared_dataset,
+                "fit_joint": fitting.fit_automatic_joint_group,
+            },
+        )
+    ]
+
+
+def test_automatic_worker_handler_injects_spawn_safe_service_functions(
+    monkeypatch,
+) -> None:
+    from xrr_fitter.services import batch
+
+    current = project(
+        _automatic_dataset("pending", "batch-1", AutomaticStatus.PENDING)
+    )
+    expected = ProjectFitResult("automatic", (), (), current)
+    observed = []
+
+    def transaction(*args, **kwargs):
+        observed.append((args, kwargs))
+        return expected
+
+    def cancelled() -> bool:
+        return False
+
+    monkeypatch.setattr(batch, "fit_automatic_transaction", transaction)
+
+    result = fitting.automatic_worker_handler(
+        current,
+        "batch-1",
+        None,
+        None,
+        cancelled,
+    )
+
+    assert result is expected
+    assert observed == [
+        (
+            (current, "batch-1", None, None, cancelled),
+            {
+                "seed_branches": fitting.service_seed_branches,
+                "prepare_dataset": fitting.prepare_dataset_fit,
+                "fit_dataset": fitting.fit_automatic_prepared_dataset,
+                "fit_joint": fitting.fit_automatic_joint_group,
             },
         )
     ]
