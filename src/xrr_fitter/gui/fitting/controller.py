@@ -48,6 +48,20 @@ class FitController(QObject):
             lambda: api.start_fit_job(project, checkpoint_path),
         )
 
+    def start_automatic_fit(
+        self,
+        project: api.XrrProject,
+        import_batch_id: str | None = None,
+        checkpoint_path=None,
+    ) -> bool:
+        return self._begin(
+            lambda: api.start_automatic_fit_job(
+                project,
+                import_batch_id,
+                checkpoint_path,
+            ),
+        )
+
     def start_mcmc(
         self,
         project: api.XrrProject,

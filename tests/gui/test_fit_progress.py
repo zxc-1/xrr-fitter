@@ -187,3 +187,56 @@ def test_batch_mode_selector_is_visible_persisted_and_rejects_one_dataset_joint(
     joint = _panel(qtbot, tmp_path / "joint", count=2)
     assert joint.set_batch_mode("joint") is True
     assert joint.document.project.batch_mode == "joint"
+
+
+def test_normal_mode_shows_automatic_primary_control_and_hides_expert_controls(
+    qtbot,
+    tmp_path,
+) -> None:
+    panel = _panel(qtbot, tmp_path)
+    automatic = panel.findChild(QPushButton, "startAutomaticFitButton")
+    expert_start = panel.findChild(QPushButton, "startFitButton")
+    selector = panel.findChild(QComboBox, "batchModeSelector")
+
+    assert automatic.text() == "自动拟合"
+    assert automatic.isVisibleTo(panel) is True
+    assert expert_start.isVisibleTo(panel) is False
+    assert selector.isVisibleTo(panel) is False
+
+    panel.document.replace_project(api.set_expert_mode(panel.document.project, True))
+
+    assert automatic.isVisibleTo(panel) is True
+    assert expert_start.isVisibleTo(panel) is True
+    assert selector.isVisibleTo(panel) is True
+
+
+def test_automatic_fit_uses_automatic_preflight_and_resets_progress(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    panel = _panel(qtbot, tmp_path)
+    project = panel.document.project
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        api,
+        "preflight_automatic_fit",
+        lambda *args: (calls.append(("preflight", *args)), api.FitReadiness(True, "ready"))[1],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        panel.controller,
+        "start_automatic_fit",
+        lambda *args: (calls.append(("start", *args)), True)[1],
+        raising=False,
+    )
+    panel.progress_view.set_progress(
+        api.FitProgress("curve", "E", 1, 1, 0.1, "complete")
+    )
+
+    assert panel.start_automatic_fit("batch-9") is True
+    assert calls == [
+        ("preflight", project, "batch-9"),
+        ("start", project, "batch-9", None),
+    ]
+    assert panel.progress_view.bar.value() == 0

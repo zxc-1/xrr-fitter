@@ -219,12 +219,27 @@ def test_project_and_fit_commands_are_visible_and_accessible_at_minimum_size(qtb
 
     for root, names in (
         (window, ("newProjectButton", "openProjectButton", "saveProjectButton", "saveAsProjectButton")),
-        (fit_panel, ("startFitButton", "cancelFitButton", "forceStopFitButton")),
+        (
+            fit_panel,
+            (
+                "startAutomaticFitButton",
+                "cancelFitButton",
+                "forceStopFitButton",
+            ),
+        ),
     ):
         for name in names:
             button = _named(root, name)
             assert button.isVisible()
             assert button.accessibleName() and button.toolTip()
+
+    expert_start = _named(fit_panel, "startFitButton")
+    assert expert_start.isVisible() is False
+    assert expert_start.accessibleName() and expert_start.toolTip()
+
+    window.document.replace_project(api.set_expert_mode(window.document.project, True))
+
+    assert expert_start.isVisible() is True
 
 
 def test_result_panel_mcmc_controls_have_descriptive_accessible_names(qtbot) -> None:

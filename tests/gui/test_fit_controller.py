@@ -235,3 +235,24 @@ def test_fit_controller_routes_mcmc_start_and_result_through_same_timer(
 
     assert calls == [(project, "curve", "candidate-0", config)]
     assert results == [updated]
+
+
+def test_fit_controller_routes_automatic_start_with_batch_identity(
+    qtbot,
+    monkeypatch,
+) -> None:
+    from xrr_fitter.gui.fitting.controller import FitController
+
+    project = api.new_project()
+    job = _FakeJob()
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        api,
+        "start_automatic_fit_job",
+        lambda *args: (calls.append(args), job)[1],
+        raising=False,
+    )
+    controller = FitController()
+
+    assert controller.start_automatic_fit(project, "batch-9", "checkpoint.json") is True
+    assert calls == [(project, "batch-9", "checkpoint.json")]

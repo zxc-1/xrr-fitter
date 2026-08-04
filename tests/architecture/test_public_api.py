@@ -7,8 +7,14 @@ from pathlib import Path
 import pytest
 
 PUBLIC_NAMES = (
+    "AutomaticDatasetSummary",
+    "AutomaticLayerResult",
+    "AutomaticResultSummary",
+    "AutomaticRole",
+    "AutomaticStatus",
     "BeamSpec",
     "DataColumnMapping",
+    "DatasetAutomation",
     "DatasetProject",
     "ExportManifest",
     "FitConfig",
@@ -21,6 +27,7 @@ PUBLIC_NAMES = (
     "ImportFailure",
     "InstrumentSpec",
     "LayerSpec",
+    "LayerUniformitySummary",
     "MaterialSpec",
     "MeasurementPreset",
     "McmcConfig",
@@ -56,12 +63,14 @@ PUBLIC_NAMES = (
     "describe_parameters",
     "export_result",
     "fit_project",
+    "fit_automatically",
     "import_data",
     "import_dataset_batch",
     "inspect_sources",
     "load_project",
     "new_project",
     "preflight_fit",
+    "preflight_automatic_fit",
     "preview_import_batch",
     "preview_source_update",
     "record_oxide_decision",
@@ -79,8 +88,10 @@ PUBLIC_NAMES = (
     "set_structure",
     "set_workspace_state",
     "start_fit_job",
+    "start_automatic_fit_job",
     "start_mcmc_job",
     "suggest_oxide_layers",
+    "summarize_automatic_results",
     "validate_parameter_settings",
     "validate_sharing_rules",
     "validate_structure",
@@ -118,12 +129,16 @@ SIGNATURES = {
     "validate_sharing_rules": "(project: 'XrrProject', rules: 'Sequence[SharingRule]') -> 'tuple[SharingRule, ...]'",
     "validate_structure": "(structure: 'StructureSpec', beam: 'BeamSpec') -> 'None'",
     "preflight_fit": "(project: 'XrrProject') -> 'FitReadiness'",
+    "preflight_automatic_fit": "(project: 'XrrProject', import_batch_id: 'str | None' = None) -> 'FitReadiness'",
     "preview_import_batch": "(paths: 'Sequence[str | Path]', preset: 'MeasurementPreset', import_batch_id: 'str | None' = None) -> 'ImportBatchPreview'",
     "fit_project": "(project: 'XrrProject', progress_callback: 'ProgressCallback | None' = None, checkpoint_callback: 'CheckpointCallback | None' = None) -> 'ProjectFitResult'",
+    "fit_automatically": "(project: 'XrrProject', import_batch_id: 'str | None' = None, progress_callback: 'ProgressCallback | None' = None, checkpoint_callback: 'CheckpointCallback | None' = None) -> 'ProjectFitResult'",
     "run_mcmc": "(project: 'XrrProject', dataset_id: 'str', candidate_id: 'str', config: 'McmcConfig', progress_callback: 'ProgressCallback | None' = None) -> 'XrrProject'",
     "start_fit_job": "(project: 'XrrProject', checkpoint_path: 'str | Path | None' = None) -> 'OperationJob'",
+    "start_automatic_fit_job": "(project: 'XrrProject', import_batch_id: 'str | None' = None, checkpoint_path: 'str | Path | None' = None) -> 'OperationJob'",
     "start_mcmc_job": "(project: 'XrrProject', dataset_id: 'str', candidate_id: 'str', config: 'McmcConfig') -> 'OperationJob'",
     "export_result": "(result: 'XrrProject | ProjectFitResult', output_dir: 'str | Path') -> 'ExportManifest'",
+    "summarize_automatic_results": "(project: 'XrrProject', import_batch_id: 'str | None' = None) -> 'AutomaticResultSummary'",
 }
 
 
@@ -145,6 +160,13 @@ GUI_USE_CASES = {
     "fit_job": ("start_fit_job",),
     "mcmc": ("run_mcmc", "start_mcmc_job"),
     "export": ("export_result",),
+    "automatic_import": ("preview_import_batch", "import_dataset_batch"),
+    "automatic_fit": (
+        "preflight_automatic_fit",
+        "fit_automatically",
+        "start_automatic_fit_job",
+    ),
+    "automatic_results": ("summarize_automatic_results",),
 }
 
 

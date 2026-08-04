@@ -121,6 +121,7 @@ def restore_project(view: WorkspaceView, project: api.XrrProject) -> None:
 
 
 def configure_splitters(view: WorkspaceView) -> None:
+    _connect_automatic_workflow(view.root)
     workspace = view.workspace_splitter
     workspace.setOrientation(Qt.Orientation.Horizontal)
     workspace.setChildrenCollapsible(False)
@@ -135,3 +136,14 @@ def configure_splitters(view: WorkspaceView) -> None:
     for index in range(left.count()):
         left.setCollapsible(index, False)
         left.setStretchFactor(index, 1)
+
+
+def _connect_automatic_workflow(root: QWidget) -> None:
+    if root.property("automaticWorkflowConnected"):
+        return
+    data_panel = getattr(root, "data_panel", None)
+    fit_panel = getattr(root, "fit_panel", None)
+    if data_panel is None or fit_panel is None:
+        return
+    data_panel.automatic_fit_requested.connect(fit_panel.start_automatic_fit)
+    root.setProperty("automaticWorkflowConnected", True)

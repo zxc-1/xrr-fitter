@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -23,8 +25,8 @@ from PySide6.QtWidgets import (
 import xrr_fitter.api as api
 from xrr_fitter.gui.data.import_dialog import ImportDialog
 from xrr_fitter.gui.data.mask_editor import MaskEditor
+from xrr_fitter.gui.data.substrate_dialog import SubstrateDialog
 from xrr_fitter.gui.document import ProjectDocument
-
 
 DATA_FILTER = "XRR 数据 (*.xy *.dat *.txt);;所有文件 (*)"
 SUPPORTED_SUFFIXES = {".xy", ".dat", ".txt"}
@@ -40,12 +42,14 @@ class DataPanel(QWidget):
     active_dataset_changed = Signal(object)
     mask_changed = Signal(str, tuple)
     instrument_changed = Signal(str, object)
+    automatic_fit_requested = Signal(str)
 
     def __init__(self, document: ProjectDocument) -> None:
         super().__init__()
         self.document = document
         self.setObjectName("dataPanel")
         self.setAccessibleName("数据与掩膜")
+        self._force_preset_dialog = False
         self._build_controls()
         self._mask_editor = MaskEditor(document, self)
         self._mask_editor.mask_changed.connect(self.mask_changed.emit)
@@ -63,8 +67,14 @@ class DataPanel(QWidget):
         self.import_folder_button = QPushButton("导入文件夹")
         self.import_folder_button.setObjectName("importFolderButton")
         self.import_folder_button.setProperty("commandBar", True)
+        self.change_preset_button = QPushButton("更换测量预设")
+        self.change_preset_button.setObjectName("changeMeasurementPresetButton")
+        self.change_preset_button.setProperty("commandBar", True)
+        self.change_preset_button.setAccessibleName("更换测量预设")
+        self.change_preset_button.setToolTip("为后续导入选择新的光路和仪器预设")
         self.import_files_button.clicked.connect(self._import_files)
         self.import_folder_button.clicked.connect(self._import_folder)
+        self.change_preset_button.clicked.connect(self._change_measurement_preset)
         self.import_files_shortcut = self._shortcut("importFilesShortcut", "Ctrl+I")
         self.import_folder_shortcut = self._shortcut(
             "importFolderShortcut",
@@ -95,17 +105,31 @@ class DataPanel(QWidget):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         self.details_label.hide()
+        self.failure_table = QTableWidget(0, 3)
+        self.failure_table.setObjectName("importFailureTable")
+        self.failure_table.setHorizontalHeaderLabels(("文件", "问题", "恢复操作"))
+        self.failure_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.failure_table.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows
+        )
+        self.failure_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.failure_table.horizontalHeader().setStretchLastSection(True)
+        self.failure_table.hide()
         top = QHBoxLayout()
         top.addWidget(heading)
         top.addStretch(1)
         top.addWidget(self.import_files_button)
         top.addWidget(self.import_folder_button)
+        top.addWidget(self.change_preset_button)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
         layout.addLayout(top)
         layout.addWidget(self.tree)
         layout.addWidget(self.details_label)
+        layout.addWidget(self.failure_table)
 
     def _shortcut(self, name: str, keys: str) -> QShortcut:
         shortcut = QShortcut(QKeySequence(keys), self)
@@ -181,6 +205,75 @@ class DataPanel(QWidget):
             column_mapping=column_mapping,
             import_angle_offset_deg=import_angle_offset_deg,
         )
+
+    def import_paths(
+        self,
+        paths,
+        *,
+        preset: api.MeasurementPreset | None = None,
+        column_mapping: api.DataColumnMapping | None = None,
+    ) -> api.ProjectImportResult:
+        sources = tuple(Path(path) for path in paths)
+        if not sources:
+            raise ValueError("data import requires at least one path")
+        selected_preset = self.document.project.measurement_preset if preset is None else preset
+        if selected_preset is None:
+            raise ValueError("automatic import requires a measurement preset")
+        preview = api.preview_import_batch(sources, selected_preset)
+        substrate_choices = self._substrate_choices(preview)
+        mappings = (
+            None
+            if column_mapping is None
+            else {row.source_path: column_mapping for row in preview.files}
+        )
+        before_active = self.active_dataset_id
+        result = api.import_dataset_batch(
+            self.document.project,
+            preview,
+            substrate_choices,
+            mappings,
+        )
+        validation = api.inspect_sources(result.updated_project)
+        self.document.replace_project(
+            result.updated_project,
+            source_validation=validation,
+        )
+        self._render_failures(result.failures)
+        if result.imported_dataset_ids:
+            self.datasets_imported.emit(result.imported_dataset_ids)
+            if self.active_dataset_id != before_active:
+                self.active_dataset_changed.emit(self.active_dataset_id)
+            self.automatic_fit_requested.emit(result.import_batch_id)
+        return result
+
+    def _substrate_choices(
+        self,
+        preview: api.ImportBatchPreview,
+    ) -> dict[str, str]:
+        choices: dict[str, str] = {}
+        for row in preview.files:
+            group_id = row.substrate_group_id
+            if not row.requires_substrate_choice or group_id in choices:
+                continue
+            if group_id is None:
+                raise ValueError("substrate choice requires a structure group")
+            dialog = SubstrateDialog(row.layers_backing_to_surface, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                raise InterruptedError("substrate selection cancelled")
+            choices[group_id] = dialog.substrate_token()
+        return choices
+
+    def _render_failures(self, failures: tuple[api.ImportFailure, ...]) -> None:
+        self.failure_table.setRowCount(len(failures))
+        for row, failure in enumerate(failures):
+            values = (
+                Path(failure.source_path).name,
+                failure.message,
+                failure.recovery_action,
+            )
+            for column, value in enumerate(values):
+                self.failure_table.setItem(row, column, QTableWidgetItem(value))
+        self.failure_table.setVisible(bool(failures))
 
     def set_fit_range(self, dataset_id: str, lower: float, upper: float) -> None:
         self._mask_editor.set_fit_range(dataset_id, lower, upper)
@@ -260,6 +353,9 @@ class DataPanel(QWidget):
         if active_item is not None:
             self.tree.setCurrentItem(active_item)
         del blocker
+        self.change_preset_button.setVisible(
+            self.document.project.ui_state.expert_mode
+        )
         self._render_details()
 
     def _render_details(self) -> None:
@@ -340,25 +436,42 @@ class DataPanel(QWidget):
         if name:
             self._confirm_import((Path(name),), folder=True)
 
+    def _change_measurement_preset(self) -> None:
+        self._force_preset_dialog = True
+        self._import_files()
+
     def _confirm_import(self, paths: tuple[Path, ...], *, folder: bool) -> None:
-        dialog = ImportDialog(paths, folder_mode=folder, parent=self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
         try:
-            if folder:
-                self.add_folder(
-                    paths[0],
-                    beam=dialog.beam_spec(),
-                    instrument=dialog.instrument_spec(),
-                    recursive=dialog.recursive_folder_import(),
-                    column_mapping=dialog.column_mapping(),
+            preset = self.document.project.measurement_preset
+            mapping = None
+            recursive = False
+            if preset is None or self._force_preset_dialog:
+                dialog = ImportDialog(paths, folder_mode=folder, parent=self)
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                instrument = dialog.instrument_spec()
+                preset = api.MeasurementPreset(
+                    instrument.instrument_id or "default-measurement",
+                    dialog.beam_spec(),
+                    instrument,
                 )
-            else:
-                self.add_paths(
-                    paths,
-                    beam=dialog.beam_spec(),
-                    instrument=dialog.instrument_spec(),
-                    column_mapping=dialog.column_mapping(),
-                )
-        except (OSError, ValueError, TypeError) as error:
+                mapping = dialog.column_mapping()
+                recursive = dialog.recursive_folder_import()
+                self._force_preset_dialog = False
+            sources = self._folder_paths(paths[0], recursive) if folder else paths
+            self.import_paths(sources, preset=preset, column_mapping=mapping)
+        except (InterruptedError, OSError, ValueError, TypeError) as error:
             QMessageBox.critical(self, "导入数据失败", f"{type(error).__name__}: {error}")
+
+    def _folder_paths(self, folder: Path, recursive: bool) -> tuple[Path, ...]:
+        entries = folder.rglob("*") if recursive else folder.glob("*")
+        return tuple(
+            sorted(
+                (
+                    path
+                    for path in entries
+                    if path.is_file() and path.suffix.casefold() in SUPPORTED_SUFFIXES
+                ),
+                key=lambda path: path.relative_to(folder).as_posix().casefold(),
+            )
+        )

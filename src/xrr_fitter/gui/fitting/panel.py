@@ -35,6 +35,10 @@ class FitPanel(QWidget):
         self.controller = FitController(self)
         self.progress_view = ProgressView(self)
         self._readiness = api.FitReadiness(False, "尚未检查拟合条件")
+        self._automatic_readiness = api.FitReadiness(
+            False,
+            "尚未检查自动拟合条件",
+        )
         self._build_controls()
         self._connect_controller()
         document.project_changed.connect(self._refresh_readiness)
@@ -47,16 +51,21 @@ class FitPanel(QWidget):
         self.batch_selector.addItem("独立拟合", "independent")
         self.batch_selector.addItem("联合拟合", "joint")
         self.batch_selector.currentIndexChanged.connect(self._batch_mode_selected)
-        batch_label = QLabel("批量模式")
-        batch_label.setObjectName("batchModeLabel")
-        batch_label.setBuddy(self.batch_selector)
+        self.batch_label = QLabel("批量模式")
+        self.batch_label.setObjectName("batchModeLabel")
+        self.batch_label.setBuddy(self.batch_selector)
+        self.automatic_button = QPushButton("自动拟合")
+        self.automatic_button.setObjectName("startAutomaticFitButton")
+        self.automatic_button.setProperty("primary", True)
+        self.automatic_button.setAccessibleName("启动自动拟合")
+        self.automatic_button.setToolTip("运行当前导入批次的自动拟合")
         self.start_button = QPushButton("开始拟合")
         self.start_button.setObjectName("startFitButton")
-        self.start_button.setProperty("primary", True)
         self.cancel_button = QPushButton("取消")
         self.cancel_button.setObjectName("cancelFitButton")
         self.force_button = QPushButton("强制停止")
         self.force_button.setObjectName("forceStopFitButton")
+        self.automatic_button.clicked.connect(self.start_automatic_fit)
         self.start_button.clicked.connect(self.start_fit)
         self.cancel_button.clicked.connect(self.controller.cancel)
         self.force_button.clicked.connect(self.controller.force_stop)
@@ -68,9 +77,10 @@ class FitPanel(QWidget):
         self.status_label.setObjectName("fitStatusLabel")
         self.status_label.setWordWrap(True)
         batch_row = QHBoxLayout()
-        batch_row.addWidget(batch_label)
+        batch_row.addWidget(self.batch_label)
         batch_row.addWidget(self.batch_selector, 1)
         buttons = QHBoxLayout()
+        buttons.addWidget(self.automatic_button, 1)
         buttons.addWidget(self.start_button, 1)
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.force_button)
@@ -108,6 +118,29 @@ class FitPanel(QWidget):
         self.progress_view.reset()
         return self.controller.start_fit(self.document.project, checkpoint_path)
 
+    def start_automatic_fit(
+        self,
+        import_batch_id: str | None = None,
+        checkpoint_path=None,
+    ) -> bool:
+        if isinstance(import_batch_id, bool):
+            import_batch_id = None
+        readiness = api.preflight_automatic_fit(
+            self.document.project,
+            import_batch_id,
+        )
+        self._automatic_readiness = readiness
+        self._show_readiness(readiness)
+        if not readiness.ready:
+            self._refresh_controls()
+            return False
+        self.progress_view.reset()
+        return self.controller.start_automatic_fit(
+            self.document.project,
+            import_batch_id,
+            checkpoint_path,
+        )
+
     def set_batch_mode(self, mode: str) -> bool:
         current = self.document.project
         updated = api.set_batch_mode(current, mode)
@@ -144,10 +177,11 @@ class FitPanel(QWidget):
         self.status_label.setText(text)
         theme.set_status_kind(self.status_label, kind)
 
-    def _show_readiness(self) -> None:
+    def _show_readiness(self, readiness: api.FitReadiness | None = None) -> None:
+        value = self._readiness if readiness is None else readiness
         self._show_status(
-            messages.readiness_text(self._readiness.message),
-            kind="ok" if self._readiness.ready else "warn",
+            messages.readiness_text(value.message),
+            kind="ok" if value.ready else "warn",
         )
 
     def _project_running_state(self, running: bool) -> None:
@@ -158,12 +192,28 @@ class FitPanel(QWidget):
     def _refresh_readiness(self, *_args) -> None:
         try:
             self._readiness = api.preflight_fit(self.document.project)
+            self._automatic_readiness = api.preflight_automatic_fit(
+                self.document.project
+            )
         except (OSError, ValueError) as error:
             self._readiness = api.FitReadiness(False, str(error))
+            self._automatic_readiness = api.FitReadiness(False, str(error))
         if not self.is_running:
-            self._show_readiness()
+            readiness = (
+                self._readiness
+                if self.document.project.ui_state.expert_mode
+                else self._automatic_readiness
+            )
+            self._show_readiness(readiness)
         self._sync_batch_selector()
+        self._sync_mode_visibility()
         self._refresh_controls()
+
+    def _sync_mode_visibility(self) -> None:
+        expert = self.document.project.ui_state.expert_mode
+        self.batch_label.setVisible(expert)
+        self.batch_selector.setVisible(expert)
+        self.start_button.setVisible(expert)
 
     def _sync_batch_selector(self) -> None:
         blocker = QSignalBlocker(self.batch_selector)
@@ -174,6 +224,9 @@ class FitPanel(QWidget):
     def _refresh_controls(self, running: bool | None = None) -> None:
         active = self.is_running if running is None else running
         self.start_button.setEnabled(self._readiness.ready and not active)
+        self.automatic_button.setEnabled(
+            self._automatic_readiness.ready and not active
+        )
         self.cancel_button.setEnabled(active)
         self.force_button.setEnabled(active)
         self.batch_selector.setEnabled(not active)

@@ -9,9 +9,16 @@ from xrr_fitter.model.analysis import (
     UncertaintyReport,
 )
 from xrr_fitter.model.automation import (
+    AutomaticDatasetSummary,
+    AutomaticLayerResult,
+    AutomaticResultSummary,
+    AutomaticRole,
+    AutomaticStatus,
+    DatasetAutomation,
     ImportBatchPreview,
     ImportFailure,
     ImportFilePreview,
+    LayerUniformitySummary,
     MeasurementPreset,
 )
 from xrr_fitter.model.data import BeamSpec, DataColumnMapping, PreparedData
@@ -60,7 +67,13 @@ from xrr_fitter.services.datasets import (
     set_instrument,
 )
 from xrr_fitter.services.exports import export_result
-from xrr_fitter.services.fitting import fit_project, preflight_fit, run_mcmc
+from xrr_fitter.services.fitting import (
+    fit_automatically,
+    fit_project,
+    preflight_automatic_fit,
+    preflight_fit,
+    run_mcmc,
+)
 from xrr_fitter.services.parameters import (
     accept_source_update,
     describe_parameters,
@@ -81,6 +94,7 @@ from xrr_fitter.services.projects import (
     set_expert_mode,
     set_workspace_state,
 )
+from xrr_fitter.services.results import summarize_automatic_results
 from xrr_fitter.services.structures import (
     accept_oxide_suggestion,
     analyze_structure,
@@ -91,13 +105,20 @@ from xrr_fitter.services.structures import (
 )
 from xrr_fitter.services.workers import (
     OperationJob,
+    start_automatic_fit_job,
     start_fit_job,
     start_mcmc_job,
 )
 
 __all__ = (
+    "AutomaticDatasetSummary",
+    "AutomaticLayerResult",
+    "AutomaticResultSummary",
+    "AutomaticRole",
+    "AutomaticStatus",
     "BeamSpec",
     "DataColumnMapping",
+    "DatasetAutomation",
     "DatasetProject",
     "ExportManifest",
     "FitConfig",
@@ -110,6 +131,7 @@ __all__ = (
     "ImportFailure",
     "InstrumentSpec",
     "LayerSpec",
+    "LayerUniformitySummary",
     "MaterialSpec",
     "MeasurementPreset",
     "McmcConfig",
@@ -145,12 +167,14 @@ __all__ = (
     "describe_parameters",
     "export_result",
     "fit_project",
+    "fit_automatically",
     "import_data",
     "import_dataset_batch",
     "inspect_sources",
     "load_project",
     "new_project",
     "preflight_fit",
+    "preflight_automatic_fit",
     "preview_import_batch",
     "preview_source_update",
     "record_oxide_decision",
@@ -168,8 +192,10 @@ __all__ = (
     "set_structure",
     "set_workspace_state",
     "start_fit_job",
+    "start_automatic_fit_job",
     "start_mcmc_job",
     "suggest_oxide_layers",
+    "summarize_automatic_results",
     "validate_parameter_settings",
     "validate_sharing_rules",
     "validate_structure",
