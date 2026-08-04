@@ -681,8 +681,18 @@ def test_isolated_retry_exception_returns_an_unpublishable_failure(
 
 @pytest.mark.parametrize(
     "error",
-    (InterruptedError("cancelled"), SearchCancelled("cancelled")),
-    ids=("interrupted", "search-cancelled"),
+    (
+        InterruptedError("cancelled"),
+        SearchCancelled("cancelled"),
+        type("WrappedInterrupted", (InterruptedError,), {})("cancelled"),
+        type("WrappedSearchCancelled", (SearchCancelled,), {})("cancelled"),
+    ),
+    ids=(
+        "interrupted",
+        "search-cancelled",
+        "interrupted-subclass",
+        "search-cancelled-subclass",
+    ),
 )
 def test_isolated_retry_propagates_cancellation(
     monkeypatch,

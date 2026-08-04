@@ -5,6 +5,13 @@ from __future__ import annotations
 import numpy as np
 
 from xrr_fitter.evaluation import encode_physical_vector
+from xrr_fitter.fit.joint_roughness import (
+    SHARED_ROUGHNESS_TRANSFORM,
+    apply_consensus_roughness,
+    apply_shared_roughness,
+    initialize_shared_roughness,
+    rebuild_candidate_roughness,
+)
 from xrr_fitter.model.parameters import ParameterReference, SharingRule
 
 
@@ -80,8 +87,7 @@ def validate_sharing_rules(
     return owner
 
 
-def scatter_joint_vector(problem: object, global_unit: np.ndarray) -> tuple[np.ndarray, ...]:
-    """Copy one global unit vector into every dataset-local coordinate layout."""
+def _validated_global_unit(problem: object, global_unit: np.ndarray) -> np.ndarray:
     unit = np.asarray(global_unit, dtype=float)
     valid = (
         unit.ndim == 1
@@ -91,11 +97,24 @@ def scatter_joint_vector(problem: object, global_unit: np.ndarray) -> tuple[np.n
     )
     if not valid:
         raise ValueError("global unit vector must match the joint shape, finite values, and bounds")
+    return unit
+
+
+def _raw_scatter(problem: object, unit: np.ndarray) -> list[np.ndarray]:
     local = []
     for scatter in problem.scatter_maps:
         vector = np.array(unit[np.asarray(scatter, dtype=int)], dtype=float, copy=True)
-        vector.setflags(write=False)
         local.append(vector)
+    return local
+
+
+def scatter_joint_vector(problem: object, global_unit: np.ndarray) -> tuple[np.ndarray, ...]:
+    """Project global coordinates, preserving shared roughness in angstroms."""
+    unit = _validated_global_unit(problem, global_unit)
+    local = _raw_scatter(problem, unit)
+    apply_shared_roughness(problem, unit, local)
+    for vector in local:
+        vector.setflags(write=False)
     return tuple(local)
 
 
@@ -109,6 +128,8 @@ def initial_joint_vector(problem: object) -> np.ndarray:
                 global_unit[global_index] = local[local_index]
     if np.any(~np.isfinite(global_unit)):
         raise ValueError("joint global layout contains an unbound coordinate")
+    local = _raw_scatter(problem, global_unit)
+    initialize_shared_roughness(problem, global_unit, local)
     return global_unit
 
 
@@ -139,7 +160,7 @@ def _candidate_local_layout(
     dataset_id: str,
     local_problem: object,
     candidates_by_dataset: object,
-) -> tuple[np.ndarray, dict[str, int]]:
+) -> tuple[np.ndarray, dict[str, int], dict[str, float]]:
     try:
         candidate = candidates_by_dataset[dataset_id]
     except (KeyError, TypeError) as error:
@@ -159,12 +180,12 @@ def _candidate_local_layout(
         raise ValueError(
             f"prefit candidate parameter is missing: {dataset_id}/{missing}"
         )
-    return encode_physical_vector(local_problem, physical), indices
+    return encode_physical_vector(local_problem, physical), indices, physical
 
 
 def _consensus_value(
     variable: object,
-    layouts: dict[str, tuple[np.ndarray, dict[str, int]]],
+    layouts: dict[str, tuple[np.ndarray, dict[str, int], dict[str, float]]],
 ) -> float:
     values = tuple(
         layouts[member.dataset_id][0][
@@ -199,6 +220,16 @@ def consensus_joint_vector(
         ],
         dtype=float,
     )
+    local = _raw_scatter(problem, consensus)
+    apply_consensus_roughness(
+        problem,
+        consensus,
+        local,
+        {
+            dataset_id: physical
+            for dataset_id, (_unit, _indices, physical) in layouts.items()
+        },
+    )
     if np.any(~np.isfinite(consensus)) or np.any(
         (consensus < 0.0) | (consensus > 1.0)
     ):
@@ -221,10 +252,28 @@ def _joint_candidate_vector(
     candidates_by_id: tuple[dict[str, object], ...],
     candidate_id: str,
 ) -> np.ndarray:
+    local_units = [
+        np.asarray(candidates[candidate_id].unit_vector, dtype=float)
+        for candidates in candidates_by_id
+    ]
+    global_unit = _nonrough_candidate_vector(problem, local_units)
+    rebuild_candidate_roughness(problem, global_unit, local_units)
+    if np.any(~np.isfinite(global_unit)):
+        raise ValueError("joint candidate global projection is incomplete")
+    return global_unit
+
+
+def _nonrough_candidate_vector(
+    problem: object,
+    local_units: list[np.ndarray],
+) -> np.ndarray:
     global_unit = np.full(len(problem.global_variables), np.nan, dtype=float)
     for dataset_index, scatter in enumerate(problem.scatter_maps):
-        local = candidates_by_id[dataset_index][candidate_id].unit_vector
+        local = local_units[dataset_index]
         for local_index, global_index in enumerate(scatter):
+            variable = problem.global_variables[global_index]
+            if variable.transform == SHARED_ROUGHNESS_TRANSFORM:
+                continue
             value = local[local_index]
             if np.isnan(global_unit[global_index]):
                 global_unit[global_index] = value

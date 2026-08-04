@@ -76,7 +76,6 @@ from xrr_fitter.model.structure import (
     SlabStack,
     StructureSpec,
 )
-from xrr_fitter.physics.parratt import parratt_reflectivity
 from xrr_fitter.physics.derivatives import (
     parratt_reflectivity_jacobian,
     smear_with_widths_jacobian,
@@ -84,10 +83,17 @@ from xrr_fitter.physics.derivatives import (
 from xrr_fitter.physics.geometry import (
     GRADIENT_INTERNAL_INTERFACE,
     DifferentiableStack,
+)
+from xrr_fitter.physics.geometry import (
     GeometryExpansion as _GeometryExpansion,
+)
+from xrr_fitter.physics.geometry import (
     expand_geometry as _expand_geometry,
+)
+from xrr_fitter.physics.geometry import (
     expand_structure_with_jacobian as _expand_physical_structure_with_jacobian,
 )
+from xrr_fitter.physics.parratt import parratt_reflectivity
 from xrr_fitter.physics.reflectivity import instrument_reflectivity, qz_from_theta_deg
 from xrr_fitter.physics.stack import expand_structure, rebuild_structure
 
@@ -660,6 +666,22 @@ def values_by_name(
             dynamic_upper=dynamic[definition.name],
         )
     return values
+
+
+def roughness_dynamic_uppers(
+    problem: FitEvaluationContext,
+    unit_vector: np.ndarray,
+) -> dict[str, float]:
+    """Return geometry-dependent roughness caps for one local unit vector."""
+    unit = _validated_unit(problem, unit_vector)
+    values = _declared_values(problem)
+    _decode_nonrough_values(
+        problem,
+        unit,
+        values,
+        continuous_only=False,
+    )
+    return _roughness_dynamic_uppers(problem, values)
 
 
 def _physical_parameter_pair(

@@ -33,6 +33,7 @@ from xrr_fitter.fit.joint_sharing import (
     consensus_joint_vector,
     joint_candidate_vectors,
 )
+from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.parameters import (
     apply_parameter_settings,
@@ -1433,9 +1434,9 @@ def _isolated_retry_result(
             cancelled=cancelled,
             checkpoint=None,
         )
+    except (SearchCancelled, InterruptedError):
+        raise
     except Exception as error:
-        if type(error).__name__ in {"SearchCancelled", "InterruptedError"}:
-            raise
         reason = (
             f"{isolation_reason}; isolated retry failed: "
             f"{type(error).__name__}: {error}"

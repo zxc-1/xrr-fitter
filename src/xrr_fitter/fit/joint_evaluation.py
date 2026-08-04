@@ -8,6 +8,7 @@ from math import isfinite
 
 import numpy as np
 
+from xrr_fitter.fit.joint_roughness import SHARED_ROUGHNESS_TRANSFORM
 from xrr_fitter.fit.joint_sharing import scatter_joint_vector
 from xrr_fitter.fit.local_search import local_jacobian
 from xrr_fitter.fit.objective import evaluate_vector
@@ -155,15 +156,55 @@ def evaluate_joint_jacobian(problem: object, global_unit: np.ndarray) -> np.ndar
     local_units = scatter_joint_vector(problem, global_unit)
     rows = []
     width = len(problem.global_variables)
-    for local_problem, unit, scatter in zip(
+    physical_roughness = any(
+        variable.transform == SHARED_ROUGHNESS_TRANSFORM
+        for variable in problem.global_variables
+    )
+    scatter_jacobians = (
+        _joint_scatter_jacobians(problem, global_unit)
+        if physical_roughness
+        else None
+    )
+    for dataset_index, (local_problem, unit, scatter) in enumerate(zip(
         problem.problems,
         local_units,
         problem.scatter_maps,
         strict=True,
-    ):
+    )):
         local = local_jacobian(local_problem, unit)
+        if scatter_jacobians is not None:
+            rows.append(local @ scatter_jacobians[dataset_index])
+            continue
         block = np.zeros((local.shape[0], width), dtype=float)
         for local_index, global_index in enumerate(scatter):
             block[:, global_index] += local[:, local_index]
         rows.append(block)
     return _readonly(np.vstack(rows))
+
+
+def _joint_scatter_jacobians(
+    problem: object,
+    global_unit: np.ndarray,
+) -> tuple[np.ndarray, ...]:
+    unit = np.asarray(global_unit, dtype=float)
+    width = unit.size
+    jacobians = [
+        np.zeros((len(local_problem.variables), width), dtype=float)
+        for local_problem in problem.problems
+    ]
+    step = 1e-6
+    for global_index in range(width):
+        lower = max(0.0, unit[global_index] - step)
+        upper = min(1.0, unit[global_index] + step)
+        plus = unit.copy()
+        minus = unit.copy()
+        plus[global_index] = upper
+        minus[global_index] = lower
+        plus_local = scatter_joint_vector(problem, plus)
+        minus_local = scatter_joint_vector(problem, minus)
+        scale = upper - lower
+        for dataset_index, (high, low) in enumerate(
+            zip(plus_local, minus_local, strict=True)
+        ):
+            jacobians[dataset_index][:, global_index] = (high - low) / scale
+    return tuple(jacobians)
