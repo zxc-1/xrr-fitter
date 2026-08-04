@@ -44,12 +44,10 @@ class _AutomaticPreparation:
 
 
 def _material_signature(material) -> tuple[object, ...]:
-    override = material.sld_override_a2
     return (
         material.name,
         material.formula,
-        material.bulk_density_g_cm3,
-        None if override is None else (override.real, override.imag),
+        material.sld_override_a2 is not None,
     )
 
 

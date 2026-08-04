@@ -165,10 +165,10 @@ def test_physical_signature_separates_backing_and_beam() -> None:
     assert len(signatures) == 3
 
 
-def test_physical_signature_separates_material_property_variants() -> None:
+def test_physical_signature_ignores_non_identity_material_properties() -> None:
     preset = _preset()
     first = _automatic_dataset("a", ("Zr",))
-    formula_variant = replace(
+    density_variant = replace(
         first,
         structure=replace(
             first.structure,
@@ -181,6 +181,7 @@ def test_physical_signature_separates_material_property_variants() -> None:
                         + 0.1,
                     ),
                 ),
+                *first.structure.components[1:],
             ),
         ),
     )
@@ -201,14 +202,40 @@ def test_physical_signature_separates_material_property_variants() -> None:
         ),
     )
 
-    assert batch.automatic_physical_signature(first, preset) != batch.automatic_physical_signature(
-        formula_variant,
+    assert batch.automatic_physical_signature(first, preset) == batch.automatic_physical_signature(
+        density_variant,
         preset,
     )
-    assert batch.automatic_physical_signature(direct_first, preset) != batch.automatic_physical_signature(
+    assert batch.automatic_physical_signature(direct_first, preset) == batch.automatic_physical_signature(
         direct_variant,
         preset,
     )
+
+
+def test_physical_signature_separates_material_formula_identity() -> None:
+    preset = _preset()
+    first = _automatic_dataset("a", ("Zr",))
+    formula_variant = replace(
+        first,
+        structure=replace(
+            first.structure,
+            components=(
+                replace(
+                    first.structure.components[0],
+                    material=replace(
+                        first.structure.components[0].material,
+                        formula="ZrO2",
+                    ),
+                ),
+                *first.structure.components[1:],
+            ),
+        ),
+    )
+
+    assert batch.automatic_physical_signature(
+        first,
+        preset,
+    ) != batch.automatic_physical_signature(formula_variant, preset)
 
 
 def test_prefits_share_one_worker_budget_and_publish_in_completion_order(
