@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import CancelledError
-from threading import Event, Thread
+from threading import Event, Thread, get_ident
 
 import pytest
 
@@ -54,6 +54,38 @@ def test_parallel_runner_returns_results_in_input_order() -> None:
     assert controller.is_alive() is False
     assert completed == [2, 1, 0]
     assert result == (0, 10, 20)
+
+
+def test_completed_callback_observes_finish_order_but_return_stays_input_order() -> None:
+    from xrr_fitter.services.parallel import OrderedTaskRunner
+
+    release_slow = Event()
+    completed: list[tuple[int, str]] = []
+    callback_threads: list[int] = []
+    caller_thread = get_ident()
+
+    def slow() -> str:
+        assert release_slow.wait(timeout=2.0)
+        return "slow"
+
+    def fast() -> str:
+        return "fast"
+
+    def observe(index: int, value: str) -> None:
+        callback_threads.append(get_ident())
+        completed.append((index, value))
+        if index == 1:
+            release_slow.set()
+
+    with OrderedTaskRunner(2) as runner:
+        values = runner.run(
+            (slow, fast),
+            completed=observe,
+        )
+
+    assert values == ("slow", "fast")
+    assert completed == [(1, "fast"), (0, "slow")]
+    assert callback_threads == [caller_thread, caller_thread]
 
 
 def test_parallel_runner_propagates_lowest_index_exception() -> None:

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from queue import Queue
 from threading import Lock
-from typing import TypeVar
-
+from typing import TypeVar, cast
 
 T = TypeVar("T")
 
@@ -60,33 +60,27 @@ class OrderedTaskRunner:
         if cancel_requested:
             future.cancel()
 
-    @staticmethod
-    def _cancel_after(futures: tuple[Future[T], ...], index: int) -> None:
-        for future in futures[index + 1 :]:
-            future.cancel()
-
-    def _cancel_on_failure(
+    def run(
         self,
-        futures: tuple[Future[T], ...],
-        index: int,
-        completed: Future[T],
-    ) -> None:
-        try:
-            failed = completed.exception() is not None
-        except CancelledError:
-            failed = False
-        if failed:
-            self._cancel_after(futures, index)
-
-    def run(self, tasks: Iterable[Callable[[], T]]) -> tuple[T, ...]:
-        """Execute one batch, selecting results and failures by input index."""
+        tasks: Iterable[Callable[[], T]],
+        completed: Callable[[int, T], None] | None = None,
+    ) -> tuple[T, ...]:
+        """Execute a batch and publish successful results in finish order."""
         values = tuple(tasks)
         if any(not callable(task) for task in values):
             raise TypeError("ordered tasks must be callable")
+        if completed is not None and not callable(completed):
+            raise TypeError("completed callback must be callable")
         self._begin()
         try:
             if self._executor is None:
-                return tuple(task() for task in values)
+                results: list[T] = []
+                for index, task in enumerate(values):
+                    value = task()
+                    results.append(value)
+                    if completed is not None:
+                        completed(index, value)
+                return tuple(results)
             futures: list[Future[T]] = []
             try:
                 for task in values:
@@ -96,15 +90,32 @@ class OrderedTaskRunner:
                     future.cancel()
                 raise
             submitted = tuple(futures)
-            for index, future in enumerate(submitted):
+            completed_queue: Queue[tuple[int, Future[T]]] = Queue()
+            positions = {future: index for index, future in enumerate(submitted)}
+            for future in submitted:
                 future.add_done_callback(
-                    lambda completed, index=index: self._cancel_on_failure(
-                        submitted,
-                        index,
-                        completed,
+                    lambda completed_future, queue=completed_queue: queue.put(
+                        (positions[completed_future], completed_future)
                     )
                 )
-            return tuple(future.result() for future in submitted)
+            results: list[T | None] = [None] * len(submitted)
+            errors: dict[int, BaseException] = {}
+            for _ in submitted:
+                index, future = completed_queue.get()
+                try:
+                    value = future.result()
+                except BaseException as error:
+                    errors[index] = error
+                    for pending in submitted:
+                        if pending is not future and not pending.done():
+                            pending.cancel()
+                    continue
+                results[index] = value
+                if completed is not None:
+                    completed(index, value)
+            if errors:
+                raise errors[min(errors)]
+            return tuple(cast(T, value) for value in results)
         finally:
             self._finish()
 

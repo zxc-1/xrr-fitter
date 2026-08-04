@@ -10,6 +10,7 @@ from tests.support.model_cases import (
     dataset_project,
     final_fit_result,
     prepared_data,
+    project,
     simple_structure,
 )
 
@@ -18,8 +19,16 @@ from xrr_fitter.fit.candidates import candidate_from_evaluation
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.io.xy import xy_bytes
+from xrr_fitter.model.automation import (
+    AutomaticRole,
+    AutomaticStatus,
+    DatasetAutomation,
+    MeasurementPreset,
+)
+from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.fitting import FitConfig, FitSearchResult, FitStageSummary
 from xrr_fitter.model.instrument import InstrumentSpec
+from xrr_fitter.model.operations import FitReadiness, ProjectFitResult
 from xrr_fitter.model.provenance import fit_search_provenance_sha256
 from xrr_fitter.model.structure import MaterialSpec
 from xrr_fitter.services import fitting
@@ -576,4 +585,93 @@ def test_joint_fit_reports_finalizing_after_stage_e(monkeypatch) -> None:
     ] == [
         (None, "finalizing", 0, 1, 0.25, "finalizing joint fit"),
         (None, "finalizing", 1, 1, 0.25, "completed"),
+    ]
+
+
+def _automatic_dataset(
+    dataset_id: str,
+    import_batch_id: str,
+    status: AutomaticStatus,
+):
+    reason = "quality review" if status is AutomaticStatus.REVIEW else None
+    return replace(
+        dataset_project(dataset_id),
+        automation=DatasetAutomation(
+            import_batch_id=import_batch_id,
+            role=AutomaticRole.UNROUTED,
+            status=status,
+            reason=reason,
+        ),
+    )
+
+
+def test_automatic_dataset_ids_select_only_runnable_statuses_and_batch() -> None:
+    value = project(
+        _automatic_dataset("pending", "batch-1", AutomaticStatus.PENDING),
+        _automatic_dataset("refining", "batch-1", AutomaticStatus.REFINING),
+        _automatic_dataset("review", "batch-2", AutomaticStatus.REVIEW),
+        _automatic_dataset("passed", "batch-1", AutomaticStatus.PASSED),
+        dataset_project("manual"),
+    )
+
+    assert fitting._automatic_dataset_ids(value, None) == (
+        "pending",
+        "refining",
+        "review",
+    )
+    assert fitting._automatic_dataset_ids(value, "batch-1") == (
+        "pending",
+        "refining",
+    )
+
+
+def test_fit_automatically_injects_spawn_safe_service_functions(monkeypatch) -> None:
+    from xrr_fitter.services import batch
+
+    current = replace(
+        project(_automatic_dataset("pending", "batch-1", AutomaticStatus.PENDING)),
+        measurement_preset=MeasurementPreset(
+            "lab",
+            BeamSpec("monochromatic"),
+            InstrumentSpec(instrument_id="lab"),
+        ),
+    )
+    expected = ProjectFitResult("automatic", (), (), current)
+    observed = []
+
+    def progress(_value) -> None:
+        return None
+
+    def checkpoint(_value) -> None:
+        return None
+
+    monkeypatch.setattr(
+        fitting,
+        "preflight_automatic_fit",
+        lambda *_args, **_kwargs: FitReadiness(True, "ready"),
+    )
+
+    def transaction(*args, **kwargs):
+        observed.append((args, kwargs))
+        return expected
+
+    monkeypatch.setattr(batch, "fit_automatic_transaction", transaction)
+
+    result = fitting.fit_automatically(
+        current,
+        "batch-1",
+        progress_callback=progress,
+        checkpoint_callback=checkpoint,
+    )
+
+    assert result is expected
+    assert observed == [
+        (
+            (current, "batch-1", progress, checkpoint, None),
+            {
+                "seed_branches": fitting.service_seed_branches,
+                "prepare_dataset": fitting.prepare_dataset_fit,
+                "fit_dataset": fitting.fit_automatic_prepared_dataset,
+            },
+        )
     ]

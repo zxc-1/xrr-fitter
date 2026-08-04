@@ -50,8 +50,8 @@ class ProjectFitResult:
     cancelled: bool = False
 
     def __post_init__(self) -> None:
-        if self.mode not in {"independent", "joint"}:
-            raise ValueError("mode must be independent or joint")
+        if self.mode not in {"independent", "joint", "automatic"}:
+            raise ValueError("mode must be independent, joint, or automatic")
         datasets = _dataset_results(self.datasets)
         if not isinstance(self.updated_project, XrrProject):
             raise TypeError("updated_project must be XrrProject")

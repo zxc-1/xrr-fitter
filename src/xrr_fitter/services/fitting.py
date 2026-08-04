@@ -40,6 +40,7 @@ from xrr_fitter.fit.pipeline import (
 )
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.analysis import FitResult, McmcConfig, StructureEvidence
+from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
 from xrr_fitter.model.fitting import (
     FitCheckpoint,
     FitEvaluationContext,
@@ -900,6 +901,77 @@ def preflight_fit(project: XrrProject) -> FitReadiness:
     except Exception as error:
         return FitReadiness(False, str(error) or type(error).__name__)
     return FitReadiness(True, "ready")
+
+
+_AUTOMATIC_RUNNABLE = frozenset(
+    {AutomaticStatus.PENDING, AutomaticStatus.REFINING, AutomaticStatus.REVIEW}
+)
+
+
+def _automatic_dataset_ids(
+    project: XrrProject,
+    import_batch_id: str | None,
+) -> tuple[str, ...]:
+    return tuple(
+        dataset.dataset_id
+        for dataset in project.datasets
+        if dataset.automation.role is not AutomaticRole.MANUAL
+        and dataset.automation.status in _AUTOMATIC_RUNNABLE
+        and (
+            import_batch_id is None
+            or dataset.automation.import_batch_id == import_batch_id
+        )
+    )
+
+
+def preflight_automatic_fit(
+    project: XrrProject,
+    import_batch_id: str | None = None,
+) -> FitReadiness:
+    """Validate only runnable automatic datasets without mutating state."""
+    if project.measurement_preset is None:
+        return FitReadiness(False, "automatic fit requires a measurement preset")
+    dataset_ids = _automatic_dataset_ids(project, import_batch_id)
+    if not dataset_ids:
+        return FitReadiness(False, "no runnable automatic datasets")
+    try:
+        records = {
+            record.dataset_id: record
+            for record in inspect_sources(project).datasets
+        }
+        seeds, _joint_seed, _mcmc_seed = service_seed_branches(project)
+        for dataset_id in dataset_ids:
+            record = records[dataset_id]
+            if record.status.value != "ok":
+                return FitReadiness(False, record.message)
+            prepare_dataset_fit(project, dataset_id, seeds[dataset_id])
+    except Exception as error:
+        return FitReadiness(False, str(error) or type(error).__name__)
+    return FitReadiness(True, "ready")
+
+
+def fit_automatically(
+    project: XrrProject,
+    import_batch_id: str | None = None,
+    progress_callback: ProgressCallback | None = None,
+    checkpoint_callback: CheckpointCallback | None = None,
+) -> ProjectFitResult:
+    """Run the persisted automatic route through the batch transaction."""
+    readiness = preflight_automatic_fit(project, import_batch_id)
+    if not readiness.ready:
+        raise ValueError(readiness.message)
+    from xrr_fitter.services.batch import fit_automatic_transaction
+
+    return fit_automatic_transaction(
+        project,
+        import_batch_id,
+        progress_callback,
+        checkpoint_callback,
+        None,
+        seed_branches=service_seed_branches,
+        prepare_dataset=prepare_dataset_fit,
+        fit_dataset=fit_automatic_prepared_dataset,
+    )
 
 
 def fit_project(
