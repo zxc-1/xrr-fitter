@@ -185,7 +185,9 @@ def _checkpoint_with_result_diagnostics(checkpoint, result: FitResult):
 
 
 def _cancelled(error: BaseException) -> bool:
-    return type(error).__name__ in {"SearchCancelled", "InterruptedError"}
+    return isinstance(error, InterruptedError) or bool(
+        getattr(type(error), "_xrr_cooperative_cancellation", False)
+    )
 
 
 def _prepare_independent_rows(
@@ -883,6 +885,7 @@ def _fit_automatic_joint_transaction_group(
         _automatic_fit_parts(prefit)[0]
         for prefit in member_prefits
     )
+    group_baseline = working
 
     def publish_checkpoints(values) -> None:
         nonlocal working
@@ -911,6 +914,8 @@ def _fit_automatic_joint_transaction_group(
             joint_results,
         )
     except Exception as error:
+        if _cancelled(error):
+            return group_baseline, {}, True
         published = {}
         for row in member_rows:
             working, published[row.index] = _commit_automatic_failure(

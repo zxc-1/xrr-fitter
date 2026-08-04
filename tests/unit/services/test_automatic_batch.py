@@ -2,8 +2,10 @@ from dataclasses import replace
 from threading import Event
 from types import SimpleNamespace
 
+import pytest
 from tests.support.model_cases import dataset_project, final_fit_result, project
 
+from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.model.automation import (
     AutomaticRole,
     AutomaticStatus,
@@ -448,6 +450,66 @@ def test_joint_group_failure_does_not_replace_successful_singleton(
     assert by_id["right"].status is AutomaticStatus.FAILED
     assert "joint refinement failed" in by_id["left"].reason
     assert by_id["single"].status is AutomaticStatus.PASSED
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    (
+        type("WrappedInterrupted", (InterruptedError,), {}),
+        type("WrappedSearchCancelled", (SearchCancelled,), {}),
+    ),
+    ids=("interrupted-subclass", "search-cancelled-subclass"),
+)
+def test_joint_cancellation_subclass_stops_later_groups_without_failure(
+    monkeypatch,
+    error_type: type[Exception],
+) -> None:
+    value = replace(
+        project(
+            _automatic_dataset("first-left", ("Zr",)),
+            _automatic_dataset("first-right", ("Zr",)),
+            _automatic_dataset("later-left", ("TaN",)),
+            _automatic_dataset("later-right", ("TaN",)),
+        ),
+        measurement_preset=_preset(),
+    )
+    records = tuple(
+        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok"))
+        for item in value.datasets
+    )
+    monkeypatch.setattr(
+        batch,
+        "inspect_sources",
+        lambda _value: SimpleNamespace(valid=True, issues=(), datasets=records),
+    )
+    calls = RecordingAutomaticFits()
+    joint_groups = []
+
+    def fit_joint(prepared, *_args, **_kwargs):
+        group = tuple(item.dataset_id for item in prepared)
+        joint_groups.append(group)
+        if group == ("first-left", "first-right"):
+            raise error_type("cancelled")
+        raise AssertionError("later joint group ran after cancellation")
+
+    result = batch.fit_automatic_transaction(
+        value,
+        None,
+        None,
+        calls.checkpoint,
+        None,
+        seed_branches=calls.seeds,
+        prepare_dataset=calls.prepare,
+        fit_dataset=calls.fit_dataset,
+        fit_joint=fit_joint,
+    )
+
+    assert result.cancelled is True
+    assert joint_groups == [("first-left", "first-right")]
+    assert all(
+        dataset.automation.status is AutomaticStatus.REFINING
+        for dataset in result.updated_project.datasets
+    )
 
 
 def test_passed_isolated_retry_retains_its_auditable_reason(monkeypatch) -> None:
