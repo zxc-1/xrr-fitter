@@ -14,22 +14,29 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from xrr_fitter.analysis.mcmc import run_problem_mcmc
+from xrr_fitter.analysis.automatic import assess_automatic_quality
 from xrr_fitter.analysis.joint import analyze_joint_ensemble
+from xrr_fitter.analysis.mcmc import run_problem_mcmc
 from xrr_fitter.analysis.profiles import recover_profile_basin
 from xrr_fitter.analysis.report import AnalysisRequest, run_analysis
+from xrr_fitter.fit.automatic import (
+    candidate_from_physical_values,
+    refit_from_physical_values,
+)
+from xrr_fitter.fit.candidates import best_candidate_index, candidate_from_evaluation
 from xrr_fitter.fit.initialization import structure_evidence
 from xrr_fitter.fit.joint_pipeline import JointFitRequest, run_joint_fit
 from xrr_fitter.fit.joint_problem import compile_joint_problem
 from xrr_fitter.fit.joint_sharing import joint_candidate_vectors
+from xrr_fitter.fit.objective import evaluate_vector
+from xrr_fitter.fit.parameters import (
+    apply_parameter_settings,
+    default_parameter_definitions,
+)
 from xrr_fitter.fit.pipeline import (
     FitSearchRequest,
     continue_profile_basin,
     run_fit_search,
-)
-from xrr_fitter.fit.parameters import (
-    apply_parameter_settings,
-    default_parameter_definitions,
 )
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.analysis import FitResult, McmcConfig, StructureEvidence
@@ -37,19 +44,22 @@ from xrr_fitter.model.fitting import (
     FitCheckpoint,
     FitEvaluationContext,
     FitProgress,
+    FitSearchResult,
+    FitStageSummary,
     candidate_selection_objective,
 )
 from xrr_fitter.model.operations import FitReadiness, ProjectFitResult
+from xrr_fitter.model.parameters import ParameterSetting
 from xrr_fitter.model.project import DatasetProject, ScalePriorState, XrrProject
+from xrr_fitter.model.provenance import fit_search_provenance_sha256
 from xrr_fitter.services.datasets import (
-    SERVICE_SEED_TREE_VERSION,
+    SERVICE_SEED_TREE_VERSION,  # noqa: F401 - preserved service compatibility export
     _prepared_current,
     mcmc_candidate_seed,
     service_seed_branches,
 )
 from xrr_fitter.services.parallel import OrderedTaskRunner
 from xrr_fitter.services.projects import inspect_sources
-
 
 ProgressCallback = Callable[[FitProgress], None]
 CheckpointCallback = Callable[[XrrProject], None]
@@ -64,6 +74,26 @@ class PreparedDatasetFit:
     dataset_index: int
     updated_dataset: DatasetProject
     problem: FitEvaluationContext
+
+
+@dataclass(frozen=True, slots=True)
+class AutomaticPreparedResult:
+    """Automatic fit output plus the quality gate that owns publication."""
+
+    prepared: PreparedDatasetFit
+    fit_result: FitResult
+    passed: bool
+    reason: str | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fit_result, FitResult):
+            raise TypeError("fit_result must be FitResult")
+        if not isinstance(self.passed, bool):
+            raise TypeError("passed must be bool")
+        if self.passed and self.reason is not None:
+            raise ValueError("passed result must not have a reason")
+        if not self.passed and not self.reason:
+            raise ValueError("failed quality decision requires a reason")
 
 
 def _scale_prior(problem: FitEvaluationContext) -> ScalePriorState:
@@ -265,6 +295,412 @@ def fit_prepared_dataset(
             progress=progress,
             task_runner=runner.run,
         )
+
+
+def _automatic_fast_analysis(
+    prepared: PreparedDatasetFit,
+    search: FitSearchResult,
+    *,
+    progress: ProgressCallback | None,
+    cancelled: CancellationProbe | None,
+    task_runner: Callable,
+) -> FitResult:
+    return run_analysis(
+        AnalysisRequest(
+            prepared.dataset_id,
+            prepared.problem,
+            search,
+            profile_names=(),
+            bootstrap_enabled=False,
+        ),
+        cancelled=cancelled,
+        progress=progress,
+        task_runner=task_runner,
+    )
+
+
+def _automatic_absorption_problem(
+    problem: FitEvaluationContext,
+    names: tuple[str, ...],
+    values: dict[str, float],
+) -> FitEvaluationContext:
+    released = frozenset(names)
+    settings = tuple(
+        (
+            ParameterSetting(
+                definition.name,
+                values.get(definition.name, definition.initial),
+                definition.lower,
+                definition.upper,
+                locked=False,
+            )
+            if definition.name in released
+            else ParameterSetting(
+                definition.name,
+                values.get(definition.name, definition.initial),
+                values.get(definition.name, definition.initial),
+                values.get(definition.name, definition.initial),
+                locked=True,
+            )
+        )
+        for definition in problem.parameter_definitions
+    )
+    return compile_fit_problem(
+        problem.data,
+        problem.structure,
+        problem.instrument,
+        problem.config,
+        settings,
+    )
+
+
+def _fixed_absorption_problem(
+    problem: FitEvaluationContext,
+    names: tuple[str, ...],
+    values: dict[str, float],
+) -> FitEvaluationContext:
+    fixed = frozenset(names)
+    settings = tuple(
+        ParameterSetting(
+            definition.name,
+            values[definition.name]
+            if definition.name in fixed
+            else definition.initial,
+            definition.lower,
+            definition.upper,
+            locked=True if definition.name in fixed else definition.locked,
+        )
+        for definition in problem.parameter_definitions
+    )
+    return compile_fit_problem(
+        problem.data,
+        problem.structure,
+        problem.instrument,
+        problem.config,
+        settings,
+    )
+
+
+def _fixed_absorption_settings(
+    prepared: PreparedDatasetFit,
+    problem: FitEvaluationContext,
+    names: tuple[str, ...],
+    values: dict[str, float],
+) -> tuple[ParameterSetting, ...]:
+    fixed = frozenset(names)
+    definitions = {
+        definition.name: definition for definition in problem.parameter_definitions
+    }
+    existing = {setting.name for setting in prepared.updated_dataset.parameter_settings}
+
+    def updated(setting: ParameterSetting) -> ParameterSetting:
+        if setting.name not in fixed:
+            return setting
+        definition = definitions[setting.name]
+        return ParameterSetting(
+            setting.name,
+            values[setting.name],
+            definition.lower,
+            definition.upper,
+            locked=True,
+        )
+
+    retained = tuple(updated(setting) for setting in prepared.updated_dataset.parameter_settings)
+    appended = tuple(
+        ParameterSetting(
+            definition.name,
+            values[definition.name],
+            definition.lower,
+            definition.upper,
+            locked=True,
+        )
+        for definition in problem.parameter_definitions
+        if definition.name in fixed and definition.name not in existing
+    )
+    return (*retained, *appended)
+
+
+def _candidate_for_problem(
+    problem: FitEvaluationContext,
+    candidate,
+    unit,
+    *,
+    stop_reason: str | None = None,
+    nfev: int | None = None,
+):
+    evaluation = evaluate_vector(problem, unit)
+    replacement = candidate_from_evaluation(
+        problem,
+        unit,
+        evaluation,
+        candidate_id=candidate.candidate_id,
+        seed_index=candidate.seed_index,
+        stop_reason=candidate.stop_reason if stop_reason is None else stop_reason,
+        nfev=candidate.nfev if nfev is None else nfev,
+    )
+    if candidate.ranking_objective is None:
+        return replacement
+    prior_cost = candidate.ranking_objective - candidate.objective
+    return replace(
+        replacement,
+        ranking_objective=replacement.objective + prior_cost,
+    )
+
+
+def _updated_stage_e_summaries(
+    search: FitSearchResult,
+    candidates: tuple[object, ...],
+) -> tuple[FitStageSummary, ...]:
+    stage_index = next(
+        (
+            index
+            for index in range(len(search.stage_summaries) - 1, -1, -1)
+            if search.stage_summaries[index].stage in {"E", "stage-e"}
+        ),
+        None,
+    )
+    if stage_index is None:
+        return search.stage_summaries
+    original = search.stage_summaries[stage_index]
+    by_id = {candidate.candidate_id: candidate for candidate in candidates}
+    scoped = tuple(by_id[candidate_id] for candidate_id in original.candidate_ids)
+    selectable = best_candidate_index(candidates, eligible_ids=original.candidate_ids)
+    best_objective = (
+        float("inf")
+        if selectable is None
+        else candidate_selection_objective(candidates[selectable])
+    )
+    replacement = FitStageSummary(
+        original.stage,
+        original.candidate_ids,
+        best_objective,
+        sum(candidate.nfev for candidate in scoped),
+        tuple(candidate.stop_reason for candidate in scoped),
+    )
+    return tuple(
+        replacement if index == stage_index else summary
+        for index, summary in enumerate(search.stage_summaries)
+    )
+
+
+def _automatic_absorption_search(
+    prepared: PreparedDatasetFit,
+    search: FitSearchResult,
+    names: tuple[str, ...],
+    *,
+    cancelled: CancellationProbe | None,
+) -> tuple[PreparedDatasetFit, FitSearchResult]:
+    problem = prepared.problem
+    baseline = search.best_candidate
+    if baseline is None or not names:
+        return prepared, search
+    baseline_values = {value.name: value.value for value in baseline.parameters}
+    definitions = {definition.name: definition for definition in problem.parameter_definitions}
+    active = tuple(name for name in names if name in definitions)
+    if not active:
+        return prepared, search
+    trial_problem = _automatic_absorption_problem(problem, active, baseline_values)
+    starts = tuple(
+        {name: baseline_values[name]}
+        for name in active
+    ) + tuple(
+        {name: min(2e-6, definitions[name].upper)}
+        for name in active
+    )
+    trial = refit_from_physical_values(
+        trial_problem,
+        starts,
+        max_nfev=problem.config.budget.local_min_nfev,
+        cancelled=cancelled,
+    )
+    winner = trial.best_candidate
+    if winner is None or not winner.valid:
+        return prepared, search
+    gain = baseline.objective - winner.objective
+    thresholds = problem.config.confidence
+    required = max(
+        abs(baseline.objective) * thresholds.equivalent_cost_fraction,
+        thresholds.equivalent_cost_floor,
+    )
+    if not (winner.valid and gain > required):
+        return prepared, search
+    winner_values = {value.name: value.value for value in winner.parameters}
+    accepted_problem = _fixed_absorption_problem(problem, active, winner_values)
+    replacement = candidate_from_physical_values(
+        accepted_problem,
+        winner_values,
+        baseline,
+        stop_reason=winner.stop_reason,
+        nfev=baseline.nfev + winner.nfev,
+    )
+    if not replacement.valid:
+        return prepared, search
+    candidates = tuple(
+        replacement
+        if candidate.candidate_id == baseline.candidate_id
+        else _candidate_for_problem(
+            accepted_problem,
+            candidate,
+            candidate.unit_vector,
+        )
+        for candidate in search.candidates
+    )
+    eligible_ids = next(
+        (
+            summary.candidate_ids
+            for summary in reversed(search.stage_summaries)
+            if summary.stage in {"E", "stage-e"}
+        ),
+        None,
+    )
+    best_index = best_candidate_index(candidates, eligible_ids=eligible_ids)
+    result = FitSearchResult(
+        parameter_definitions=accepted_problem.parameter_definitions,
+        candidates=candidates,
+        best_index=best_index,
+        warnings=search.warnings,
+        child_seeds=search.child_seeds,
+        stage_summaries=_updated_stage_e_summaries(search, candidates),
+        region_labels=search.region_labels,
+        region_weights=search.region_weights,
+    )
+    result = replace(
+        result,
+        provenance_sha256=fit_search_provenance_sha256(accepted_problem, result),
+    )
+    updated_dataset = replace(
+        prepared.updated_dataset,
+        parameter_settings=_fixed_absorption_settings(
+            prepared,
+            accepted_problem,
+            active,
+            winner_values,
+        ),
+        scale_prior=_scale_prior(accepted_problem),
+        last_valid_result=None,
+        checkpoint=None,
+    )
+    return replace(
+        prepared,
+        updated_dataset=updated_dataset,
+        problem=accepted_problem,
+    ), result
+
+
+def _automatic_profile_recovery(
+    prepared: PreparedDatasetFit,
+    search: FitSearchResult,
+    *,
+    progress: ProgressCallback | None,
+    cancelled: CancellationProbe | None,
+    checkpoint: Callable[[FitCheckpoint], None] | None,
+    task_runner: Callable,
+) -> FitSearchResult:
+    candidate = search.best_candidate
+    if candidate is None:
+        return search
+    decision = recover_profile_basin(
+        prepared.problem,
+        candidate,
+        cancelled=cancelled,
+    )
+    if decision is None:
+        return search
+    return continue_profile_basin(
+        prepared.problem,
+        search,
+        decision.unit_vector,
+        parameter_name=decision.parameter_name,
+        cancelled=cancelled,
+        checkpoint=checkpoint,
+        task_runner=task_runner,
+    )
+
+
+def fit_automatic_prepared_dataset(
+    prepared: PreparedDatasetFit,
+    *,
+    progress: ProgressCallback | None = None,
+    cancelled: CancellationProbe | None = None,
+    checkpoint: Callable[[FitCheckpoint], None] | None = None,
+    local_workers: int | None = None,
+) -> AutomaticPreparedResult:
+    """Run the bounded automatic search, quality gates, and final report."""
+    workers = prepared.problem.config.local_workers if local_workers is None else local_workers
+    if local_workers is not None and local_workers > prepared.problem.config.local_workers:
+        raise ValueError("local_workers must fit within the configured worker budget")
+    with OrderedTaskRunner(workers) as runner:
+        search = run_fit_search(
+            FitSearchRequest(
+                prepared.dataset_id,
+                prepared.problem,
+                prepared.updated_dataset.checkpoint,
+            ),
+            cancelled=cancelled,
+            progress=progress,
+            checkpoint=checkpoint,
+            task_runner=runner.run,
+        )
+        fast_result = _automatic_fast_analysis(
+            prepared,
+            search,
+            progress=progress,
+            cancelled=cancelled,
+            task_runner=runner.run,
+        )
+        decision = assess_automatic_quality(prepared.problem, fast_result)
+        if decision.search_upgrade:
+            search = _automatic_profile_recovery(
+                prepared,
+                search,
+                progress=progress,
+                cancelled=cancelled,
+                checkpoint=checkpoint,
+                task_runner=runner.run,
+            )
+            fast_result = _automatic_fast_analysis(
+                prepared,
+                search,
+                progress=progress,
+                cancelled=cancelled,
+                task_runner=runner.run,
+            )
+            decision = assess_automatic_quality(prepared.problem, fast_result)
+        if decision.absorption_names:
+            updated_prepared, updated = _automatic_absorption_search(
+                prepared,
+                search,
+                decision.absorption_names,
+                cancelled=cancelled,
+            )
+            if updated is not search:
+                prepared = updated_prepared
+                search = updated
+                fast_result = _automatic_fast_analysis(
+                    prepared,
+                    search,
+                    progress=progress,
+                    cancelled=cancelled,
+                    task_runner=runner.run,
+                )
+                decision = assess_automatic_quality(prepared.problem, fast_result)
+        final_result = run_analysis(
+            AnalysisRequest(
+                prepared.dataset_id,
+                prepared.problem,
+                search,
+                profile_names=decision.profile_names,
+                bootstrap_enabled=False,
+            ),
+            cancelled=cancelled,
+            progress=progress,
+            task_runner=runner.run,
+        )
+        final_decision = assess_automatic_quality(prepared.problem, final_result)
+        reason = None if final_decision.passed else "; ".join(final_decision.reasons)
+        if not final_decision.passed and not reason:
+            reason = "automatic quality review required"
+        return AutomaticPreparedResult(prepared, final_result, final_decision.passed, reason)
 
 
 def _joint_checkpoints(

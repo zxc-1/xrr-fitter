@@ -12,18 +12,17 @@ ranking is exercised by the real joint pipeline in its focused test module.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from dataclasses import fields
+import pickle
+from dataclasses import dataclass, fields, replace
 from functools import partial
 from importlib import import_module
-import pickle
 from types import SimpleNamespace
 from typing import get_type_hints
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data, simple_structure
+
 from xrr_fitter.evaluation import encode_physical_vector, evaluate_model
 from xrr_fitter.fit.candidates import candidate_from_evaluation
 from xrr_fitter.fit.objective import evaluate_vector
@@ -240,6 +239,7 @@ def _assert_analysis_pickle_contract(api, request, restored) -> None:
         "search_result",
         "profile_names",
         "bootstrap",
+        "bootstrap_enabled",
     )
     assert restored.dataset_id == "curve"
     assert restored.problem.data.qz_a_inv.flags.writeable is False
@@ -289,6 +289,41 @@ def test_analysis_request_and_handler_are_pickle_safe_worker_values(
     )
 
     _assert_analysis_handler_call(observed, restored, result, sentinel)
+
+
+def test_analysis_can_skip_bootstrap_and_profile_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _api()
+    problem = _problem()
+    search = _search_result(
+        problem,
+        tuple(_candidate(problem, f"E-{index}") for index in range(4)),
+    )
+
+    monkeypatch.setattr(
+        module,
+        "bootstrap_problem_local",
+        lambda *_args, **_kwargs: pytest.fail("automatic analysis ran bootstrap"),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_problem_profiles",
+        lambda *_args, **_kwargs: pytest.fail("automatic analysis built profiles"),
+    )
+
+    request = module.AnalysisRequest(
+        "curve",
+        problem,
+        search,
+        profile_names=(),
+        bootstrap_enabled=False,
+    )
+    result = module.run_analysis(request)
+
+    assert result.uncertainty is not None
+    assert result.uncertainty.bootstrap_performed is False
+    assert result.uncertainty.profiles == ()
 
 
 @pytest.mark.parametrize("drift", ["structure", "data"], ids=["structure", "data"])
@@ -672,7 +707,9 @@ def test_fit_dataset_runs_uncertainty_before_classifying_result(monkeypatch) -> 
     calls: list[str] = []
     bootstrap_calls: list[dict[str, object]] = []
     report_calls: list[dict[str, object]] = []
-    task_runner = lambda tasks: tuple(task() for task in tasks)
+
+    def task_runner(tasks):
+        return tuple(task() for task in tasks)
 
     monkeypatch.setattr(
         module,

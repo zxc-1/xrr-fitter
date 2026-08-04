@@ -51,7 +51,6 @@ from xrr_fitter.model.provenance import (
     fit_search_provenance_sha256,
 )
 
-
 UNCERTAINTY_SEED_DOMAIN = 0x554E434552544149
 WARNING_DIAGNOSTICS = {
     "gauss_hermite_unconverged",
@@ -98,12 +97,15 @@ class AnalysisRequest:
     search_result: FitSearchResult
     profile_names: tuple[str, ...] | None = None
     bootstrap: BootstrapResult | None = None
+    bootstrap_enabled: bool = True
 
     def __post_init__(self) -> None:
         dataset_id = _analysis_dataset_id(self.dataset_id)
         names = _analysis_profile_names(self.profile_names)
         _validate_analysis_members(self.problem, self.search_result, self.bootstrap)
         _validate_analysis_ownership(self.problem, self.search_result, self.bootstrap)
+        if not isinstance(self.bootstrap_enabled, bool):
+            raise TypeError("bootstrap_enabled must be bool")
         object.__setattr__(self, "dataset_id", dataset_id)
         object.__setattr__(self, "profile_names", names)
 
@@ -114,6 +116,7 @@ class AnalysisRequest:
             self.search_result,
             self.profile_names,
             self.bootstrap,
+            self.bootstrap_enabled,
         )
 
 
@@ -186,6 +189,8 @@ def _profiles(
         for name in profile_names
         if name in names or _validate_derived_profile(problem, name)
     )
+    if not requested:
+        return ()
     profiles = build_problem_profiles(
         problem,
         unit_vector,
@@ -269,6 +274,7 @@ def build_uncertainty_report(
         diagnostics=diagnostics,
         residual_autocorrelation=autocorrelation,
         candidate_id=_candidate_id(values, best),
+        bootstrap_performed=bootstrap is not None,
     )
 
 
@@ -461,6 +467,7 @@ def analyze_search_result(
     *,
     profile_names: tuple[str, ...] | None = None,
     bootstrap: BootstrapResult | None = None,
+    bootstrap_enabled: bool = True,
     cancelled: Callable[[], bool] | None = None,
     dataset_id: str | None = None,
     progress: Callable[[FitProgress], None] | None = None,
@@ -488,7 +495,7 @@ def analyze_search_result(
                 )
             )
 
-    if bootstrap is None:
+    if bootstrap is None and bootstrap_enabled:
         bootstrap_total = problem.config.budget.bootstrap_samples
         publish("bootstrap", 0, bootstrap_total, f"bootstrap 0/{bootstrap_total}")
 
@@ -570,6 +577,7 @@ def run_analysis(
         request.search_result,
         profile_names=request.profile_names,
         bootstrap=request.bootstrap,
+        bootstrap_enabled=request.bootstrap_enabled,
         cancelled=cancelled,
         dataset_id=request.dataset_id,
         progress=progress,
