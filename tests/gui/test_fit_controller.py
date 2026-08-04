@@ -334,3 +334,68 @@ def test_fit_controller_progress_frames_survive_across_durable_events(
     controller.poll_now()
 
     assert ordered == [("A", 2), "checkpoint", ("B", 2)]
+
+
+def test_poll_backs_off_after_consecutive_empty_polls(qtbot, monkeypatch) -> None:
+    """Idle silence must widen the poll interval to stop 40Hz busy-polling."""
+    from xrr_fitter.gui.fitting.controller import FitController
+
+    job = _FakeJob()
+    monkeypatch.setattr(api, "start_fit_job", lambda *_args, **_kwargs: job)
+    controller = FitController(
+        poll_interval_ms=25,
+        idle_poll_interval_ms=200,
+        backoff_after_empty_polls=3,
+    )
+    controller.start_fit(api.new_project())
+
+    assert controller.timer.interval() == 25
+    controller.poll_now()
+    controller.poll_now()
+    assert controller.timer.interval() == 25  # threshold not yet reached
+    controller.poll_now()
+    assert controller.timer.interval() == 200  # third empty poll trips backoff
+
+
+def test_poll_restores_fast_interval_on_event(qtbot, monkeypatch) -> None:
+    """A single real event must snap polling back to the responsive interval."""
+    from xrr_fitter.gui.fitting.controller import FitController
+
+    job = _FakeJob((), (), (), (_progress(0, 1),))
+    monkeypatch.setattr(api, "start_fit_job", lambda *_args, **_kwargs: job)
+    controller = FitController(
+        poll_interval_ms=25,
+        idle_poll_interval_ms=200,
+        backoff_after_empty_polls=3,
+    )
+    controller.start_fit(api.new_project())
+
+    controller.poll_now()
+    controller.poll_now()
+    controller.poll_now()
+    assert controller.timer.interval() == 200  # backed off during silence
+    controller.poll_now()  # carries a progress event
+    assert controller.timer.interval() == 25  # snapped back to fast polling
+
+
+def test_poll_stays_fast_while_events_flow(qtbot, monkeypatch) -> None:
+    """Continuous progress must never trip the idle backoff."""
+    from xrr_fitter.gui.fitting.controller import FitController
+
+    job = _FakeJob(
+        (_progress(0, 1),),
+        (_progress(1, 2),),
+        (_progress(2, 3),),
+        (_progress(3, 4),),
+    )
+    monkeypatch.setattr(api, "start_fit_job", lambda *_args, **_kwargs: job)
+    controller = FitController(
+        poll_interval_ms=25,
+        idle_poll_interval_ms=200,
+        backoff_after_empty_polls=3,
+    )
+    controller.start_fit(api.new_project())
+
+    for _ in range(4):
+        controller.poll_now()
+        assert controller.timer.interval() == 25
