@@ -3,12 +3,45 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QLabel, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtGui import QBrush, QColor
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QLabel,
+    QMenu,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 import xrr_fitter.api as api
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.parameters.sharing import SharingEditor
 from xrr_fitter.gui.parameters.table import ParameterTable
+
+
+# Editable numeric columns in the parameter table: initial, lower, upper.
+VALUE_COLUMNS = (1, 2, 3)
+
+# Wash of the error color behind a cell whose entered bound is self-inconsistent.
+INVALID_CELL_BRUSH = QBrush(QColor(179, 38, 30, 48))
+
+
+def bounds_problem(initial: float, lower: float, upper: float) -> str | None:
+    """Name the first self-inconsistency in an entered bound triple.
+
+    This is a display-space sanity check that runs the instant a cell is
+    edited, so the user sees why a value is rejected without waiting for the
+    fit preflight. The public API stays the sole authority on whether a
+    consistent triple is scientifically admissible; this only catches the
+    ordering mistakes that are wrong on their face.
+    """
+    if lower > upper:
+        return "下限不能大于上限"
+    if initial < lower:
+        return "初值不能小于下限"
+    if initial > upper:
+        return "初值不能大于上限"
+    return None
 
 
 class ParametersPanel(QWidget):
@@ -45,6 +78,12 @@ class ParametersPanel(QWidget):
         layout.addWidget(self.status_label)
         self.expert_toggle.toggled.connect(self._toggle_expert_mode)
         self.parameter_table.itemChanged.connect(self._table_setting_changed)
+        self.parameter_table.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.parameter_table.customContextMenuRequested.connect(
+            self._show_row_context_menu
+        )
         document.project_changed.connect(self._refresh)
         self._refresh()
 
@@ -129,6 +168,32 @@ class ParametersPanel(QWidget):
         self.expert_mode_changed.emit(enabled)
         return True
 
+    def reset_parameter(self, name: str) -> bool:
+        """Drop a parameter's persisted setting so it falls back to its default.
+
+        The declared default lives in ``describe_parameters`` and is derived
+        from the structure; removing the user's override lets that default
+        reassert itself without the user having to remember the original number.
+        """
+        self._definition(name)
+        dataset_id = self._require_active_dataset_id()
+        dataset = self._dataset(dataset_id)
+        retained = tuple(
+            value for value in dataset.parameter_settings if value.name != name
+        )
+        if len(retained) == len(dataset.parameter_settings):
+            return False
+        current = self.document.project
+        updated = api.set_parameter_settings(current, dataset_id, retained)
+        if updated is current:
+            return False
+        self.document.replace_project(updated)
+        self.settings_changed.emit(
+            dataset_id,
+            self._dataset(dataset_id).parameter_settings,
+        )
+        return True
+
     def apply_sharing_rules(self, rules) -> bool:
         return self.sharing_editor.apply_rules(rules)
 
@@ -144,34 +209,81 @@ class ParametersPanel(QWidget):
     def _toggle_expert_mode(self, enabled: bool) -> None:
         self.set_expert_mode(enabled)
 
+    def _show_row_context_menu(self, position: object) -> None:
+        item = self.parameter_table.itemAt(position)
+        if item is None:
+            return
+        name_item = self.parameter_table.item(item.row(), 0)
+        if name_item is None:
+            return
+        name = str(name_item.data(Qt.ItemDataRole.UserRole))
+        menu = QMenu(self.parameter_table)
+        reset = menu.addAction("恢复默认值")
+        reset.setObjectName("resetParameterAction")
+        chosen = menu.exec(self.parameter_table.viewport().mapToGlobal(position))
+        if chosen is reset:
+            self._reset_parameter_row(name)
+
+    def _reset_parameter_row(self, name: str) -> None:
+        try:
+            if self.reset_parameter(name):
+                self.status_label.setText(f"{name} 已恢复默认值")
+        except (KeyError, ValueError) as error:
+            self._refresh()
+            self.status_label.setText(str(error))
+
     def _table_setting_changed(self, item: object) -> None:
         if item.column() not in (1, 2, 3, 5):
             return
         row = item.row()
         try:
-            name_item = self.parameter_table.item(row, 0)
-            value_items = tuple(
-                self.parameter_table.item(row, column) for column in (1, 2, 3)
-            )
-            lock_item = self.parameter_table.item(row, 5)
-            if name_item is None or lock_item is None or any(
-                value is None for value in value_items
-            ):
-                raise ValueError("parameter row is incomplete")
-            name = str(name_item.data(Qt.ItemDataRole.UserRole))
-            initial, lower, upper = (
-                float(value.text()) for value in value_items
-            )
+            name, values, locked = self._read_row(row)
+        except (KeyError, ValueError) as error:
+            self._refresh()
+            self.status_label.setText(str(error))
+            return
+        problem = bounds_problem(*values)
+        if problem is not None:
+            # Keep the user's entry on screen and point at the offending bound
+            # instead of silently reverting the whole row on a fixable typo.
+            self._mark_row_invalid(row, problem)
+            return
+        # Boundary is consistent; submit normally. The resulting project_changed
+        # signal triggers _refresh() which rebuilds the table, clearing any stale
+        # red highlights from earlier edits automatically.
+        try:
             self.set_display_parameter(
                 name,
-                initial=initial,
-                lower=lower,
-                upper=upper,
-                locked=lock_item.checkState() == Qt.CheckState.Checked,
+                initial=values[0],
+                lower=values[1],
+                upper=values[2],
+                locked=locked,
             )
         except (KeyError, ValueError) as error:
             self._refresh()
             self.status_label.setText(str(error))
+
+    def _read_row(self, row: int) -> tuple[str, tuple[float, float, float], bool]:
+        name_item = self.parameter_table.item(row, 0)
+        value_items = tuple(
+            self.parameter_table.item(row, column) for column in VALUE_COLUMNS
+        )
+        lock_item = self.parameter_table.item(row, 5)
+        if name_item is None or lock_item is None or any(
+            value is None for value in value_items
+        ):
+            raise ValueError("parameter row is incomplete")
+        name = str(name_item.data(Qt.ItemDataRole.UserRole))
+        initial, lower, upper = (float(value.text()) for value in value_items)
+        return name, (initial, lower, upper), lock_item.checkState() == Qt.CheckState.Checked
+
+    def _mark_row_invalid(self, row: int, problem: str) -> None:
+        for column in VALUE_COLUMNS:
+            cell = self.parameter_table.item(row, column)
+            if cell is not None:
+                cell.setBackground(INVALID_CELL_BRUSH)
+                cell.setToolTip(problem)
+        self.status_label.setText(problem)
 
     def _refresh(self, *_args) -> None:
         blocker = QSignalBlocker(self.expert_toggle)
