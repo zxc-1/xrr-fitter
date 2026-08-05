@@ -559,3 +559,45 @@ def test_data_panel_renders_precise_source_status_with_marker(qtbot, tmp_path) -
     status_column = 4
     assert "⛔" in item.text(status_column)
     assert "源文件缺失" in item.text(status_column)
+
+
+def test_data_panel_shows_fit_status_per_dataset(qtbot) -> None:
+    # Multi-dataset work needs an at-a-glance answer to "which curves are done,
+    # and how trustworthy is each result?" without opening every dataset. The
+    # tree therefore carries a fit column: unfitted datasets read "未拟合", and
+    # fitted ones surface the persisted confidence label plus a glyph.
+    from dataclasses import replace
+
+    from tests.support.model_cases import (
+        dataset_project,
+        final_fit_result,
+        fit_candidate,
+        project,
+    )
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.model.analysis import ConfidenceClass
+
+    trusted = replace(
+        final_fit_result(fit_candidate("candidate-a", 0.2)),
+        confidence=ConfidenceClass.TRUSTED,
+    )
+    fitted = dataset_project("fitted", result=trusted)
+    pending = dataset_project("pending", result=None)
+    value = replace(project(fitted, pending), base_directory="/private/tmp")
+    panel = _panel(qtbot, ProjectDocument(value))
+
+    assert panel.fit_status_text("pending") == "未拟合"
+    assert panel.fit_status_text("fitted") == "可信"
+    assert panel.fit_status_marker("fitted") == "●"
+    assert panel.fit_status_marker("pending") == ""
+
+    tree = panel.tree
+    fit_column = 6
+    assert tree.headerItem().text(fit_column) == "拟合"
+    rows = {
+        tree.topLevelItem(row).data(0, Qt.ItemDataRole.UserRole): tree.topLevelItem(row)
+        for row in range(tree.topLevelItemCount())
+    }
+    assert "可信" in rows["fitted"].text(fit_column)
+    assert "●" in rows["fitted"].text(fit_column)
+    assert "未拟合" in rows["pending"].text(fit_column)

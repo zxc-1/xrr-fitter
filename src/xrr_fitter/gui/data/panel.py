@@ -37,8 +37,8 @@ from xrr_fitter.gui.document import ProjectDocument
 
 DATA_FILTER = "XRR 数据 (*.xy *.dat *.txt);;所有文件 (*)"
 SUPPORTED_SUFFIXES = {".xy", ".dat", ".txt"}
-TREE_HEADERS = ("数据集", "源文件", "光路", "仪器", "状态", "SHA-256")
-COMPACT_COLUMNS = (0, 4)
+TREE_HEADERS = ("数据集", "源文件", "光路", "仪器", "状态", "SHA-256", "拟合")
+COMPACT_COLUMNS = (0, 4, 6)
 DETAIL_COLUMNS = (1, 2, 3, 5)
 
 # Precise, glanceable rendering of each source-validation status. The marker
@@ -49,6 +49,16 @@ SOURCE_STATUS_VISUALS = {
     "missing": ("⛔", "源文件缺失"),
     "unreadable": ("⚠", "源文件无法读取"),
     "hash_mismatch": ("⚠", "源文件内容已改变"),
+}
+
+# Glyph per persisted confidence class, so a dataset row states not just that a
+# fit exists but how far to trust it. The glyphs mirror the results panel badge
+# (defined locally to keep the data panel from importing the results module).
+FIT_STATUS_VISUALS = {
+    "可信": "●",
+    "可用但相关": "◆",
+    "多解": "▲",
+    "不可信": "■",
 }
 
 
@@ -112,6 +122,7 @@ class DataPanel(QWidget):
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         self.tree.currentItemChanged.connect(self._select_tree_item)
         self.details_label = QLabel()
         self.details_label.setObjectName("datasetDetails")
@@ -323,6 +334,31 @@ class DataPanel(QWidget):
         code = self._source_status_code(dataset_id)
         return SOURCE_STATUS_VISUALS.get(code, ("", ""))[0]
 
+    def fit_status_text(self, dataset_id: str) -> str:
+        """Name the dataset's fit outcome: unfitted, or its confidence label."""
+        result = self._dataset(dataset_id).last_valid_result
+        return "未拟合" if result is None else str(result.confidence.value)
+
+    def fit_status_marker(self, dataset_id: str) -> str:
+        """Return the confidence glyph, or empty when the dataset is unfitted."""
+        result = self._dataset(dataset_id).last_valid_result
+        if result is None:
+            return ""
+        return FIT_STATUS_VISUALS.get(str(result.confidence.value), "")
+
+    def _fit_status_tooltip(self, dataset_id: str) -> str:
+        """Summarise the fit outcome so the compact cell can stay short."""
+        result = self._dataset(dataset_id).last_valid_result
+        if result is None:
+            return "尚未拟合该数据集"
+        best = result.best_candidate
+        parts = [f"可信度：{result.confidence.value}", f"候选解 {len(result.candidates)} 个"]
+        if best is not None:
+            parts.append(f"最优目标值 J={best.objective:g}")
+        if result.warnings:
+            parts.append(f"告警 {len(result.warnings)} 条")
+        return " · ".join(parts)
+
     def sha256_text(self, dataset_id: str) -> str:
         return self._dataset(dataset_id).source_sha256
 
@@ -412,6 +448,9 @@ class DataPanel(QWidget):
         marker = self.status_marker(dataset.dataset_id)
         status = self.status_text(dataset.dataset_id)
         status_cell = f"{marker} {status}" if marker else status
+        fit_marker = self.fit_status_marker(dataset.dataset_id)
+        fit_status = self.fit_status_text(dataset.dataset_id)
+        fit_cell = f"{fit_marker} {fit_status}" if fit_marker else fit_status
         values = (
             dataset.display_name or dataset.dataset_id,
             Path(dataset.source_path).name,
@@ -419,6 +458,7 @@ class DataPanel(QWidget):
             self.instrument_text(dataset.dataset_id),
             status_cell,
             dataset.source_sha256[:12],
+            fit_cell,
         )
         item = QTreeWidgetItem(values)
         item.setData(0, Qt.ItemDataRole.UserRole, dataset.dataset_id)
@@ -427,6 +467,7 @@ class DataPanel(QWidget):
         item.setToolTip(3, values[3])
         item.setToolTip(4, self._status_tooltip(dataset.dataset_id, status))
         item.setToolTip(5, dataset.source_sha256)
+        item.setToolTip(6, self._fit_status_tooltip(dataset.dataset_id))
         return item
 
     def _status_tooltip(self, dataset_id: str, status: str) -> str:
