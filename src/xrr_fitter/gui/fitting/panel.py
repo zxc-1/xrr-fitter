@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -29,10 +31,24 @@ class FitPanel(QWidget):
     operation_failed = Signal(object)
     preview_available = Signal(object, object)
 
-    def __init__(self, document: ProjectDocument) -> None:
+    # Minimum wall-clock gap between forwarded preview curves. A local search
+    # can emit previews many times per second; repainting every one makes the
+    # canvas flicker without adding information, so intermediate frames are
+    # dropped and only the newest survivor of each window is drawn.
+    PREVIEW_MIN_INTERVAL_S = 0.2
+
+    def __init__(
+        self,
+        document: ProjectDocument,
+        *,
+        clock: object = time.monotonic,
+    ) -> None:
         super().__init__()
         self.document = document
         self.setObjectName("fitPanel")
+        self._clock = clock
+        self._preview_last_emit: float | None = None
+        self._checkpoint_saved = False
         self.controller = FitController(self)
         self.progress_view = ProgressView(self)
         self._readiness = api.FitReadiness(False, "尚未检查拟合条件")
@@ -68,12 +84,12 @@ class FitPanel(QWidget):
         self.force_button.setObjectName("forceStopFitButton")
         self.automatic_button.clicked.connect(self.start_automatic_fit)
         self.start_button.clicked.connect(self.start_fit)
-        self.cancel_button.clicked.connect(self.controller.cancel)
+        self.cancel_button.clicked.connect(self._request_cancel)
         self.force_button.clicked.connect(self.controller.force_stop)
         self.cancel_shortcut = QShortcut(QKeySequence("Escape"), self)
         self.cancel_shortcut.setObjectName("cancelFitShortcut")
         self.cancel_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.cancel_shortcut.activated.connect(self.controller.cancel)
+        self.cancel_shortcut.activated.connect(self._request_cancel)
         self.status_label = QLabel()
         self.status_label.setObjectName("fitStatusLabel")
         self.status_label.setWordWrap(True)
@@ -104,11 +120,16 @@ class FitPanel(QWidget):
         self.controller.failed.connect(self._show_failure)
 
     def _project_preview(self, progress: api.FitProgress) -> None:
-        """Republish only the progress values that carry a preview curve."""
+        """Forward preview curves at a bounded rate to avoid canvas flicker."""
         qz = progress.preview_qz_a_inv
         model = progress.preview_model_normalized
         if qz is None or model is None:
             return
+        now = self._clock()
+        last = self._preview_last_emit
+        if last is not None and now - last < self.PREVIEW_MIN_INTERVAL_S:
+            return
+        self._preview_last_emit = now
         self.preview_available.emit(qz, model)
 
     @property
@@ -125,8 +146,22 @@ class FitPanel(QWidget):
         if not readiness.ready:
             self._refresh_controls()
             return False
+        self._preview_last_emit = None
+        self._checkpoint_saved = False
         self.progress_view.reset()
         return self.controller.start_fit(self.document.project, checkpoint_path)
+
+    def _request_cancel(self) -> None:
+        """Give immediate feedback, then ask the worker to stop gracefully.
+
+        The worker cannot abandon the seed it is mid-evaluation on, so a cancel
+        request has visible latency. Announcing it on the progress view keeps the
+        button press from feeling ignored while the current seed winds down.
+        """
+        if not self.is_running:
+            return
+        self.progress_view.mark_cancelling()
+        self.controller.cancel()
 
     def start_automatic_fit(
         self,
@@ -159,6 +194,19 @@ class FitPanel(QWidget):
         self.document.replace_project(updated)
         return True
 
+    def has_resumable_checkpoint(self) -> bool:
+        """Report whether any dataset holds a checkpoint the fit will resume.
+
+        Resume is implicit: a fit reads each dataset's stored checkpoint and
+        continues from it. That is invisible in the UI, so the start button
+        would silently pick up hours-old partial work. Detecting the checkpoint
+        lets the panel relabel the action and say so before the user commits.
+        """
+        return any(
+            dataset.checkpoint is not None
+            for dataset in self.document.project.datasets
+        )
+
     def _batch_mode_selected(self, _index: int) -> None:
         mode = str(self.batch_selector.currentData())
         try:
@@ -168,6 +216,7 @@ class FitPanel(QWidget):
             self._sync_batch_selector()
 
     def _publish_checkpoint(self, project: api.XrrProject) -> None:
+        self._checkpoint_saved = True
         self.document.replace_project(project)
         self.checkpoint_published.emit(project)
 
@@ -177,7 +226,14 @@ class FitPanel(QWidget):
         self.result_published.emit(result)
 
     def _show_cancelled(self, reason: str) -> None:
-        self._show_status(f"已取消：{reason}", kind="warn")
+        # A bare "已取消" leaves the user unsure whether the interrupted work
+        # survived; naming the checkpoint state tells them if a resume is
+        # possible instead of making them guess.
+        if self._checkpoint_saved:
+            hint = "，已保存检查点，可从中恢复"
+        else:
+            hint = "，本次未产生检查点"
+        self._show_status(f"已取消：{reason}{hint}", kind="warn")
 
     def _show_failure(self, error: api.OperationError) -> None:
         self._show_status(messages.operation_error_text(error), kind="error")
@@ -195,6 +251,10 @@ class FitPanel(QWidget):
         )
 
     def _project_running_state(self, running: bool) -> None:
+        if not running:
+            # The worker is done, so stop the live clock; the last rendered
+            # elapsed/remaining values stay put instead of ticking on forever.
+            self.progress_view.freeze()
         self.progress_view.setVisible(running)
         self._refresh_controls(running)
         self.running_changed.emit(running)
@@ -240,3 +300,13 @@ class FitPanel(QWidget):
         self.cancel_button.setEnabled(active)
         self.force_button.setEnabled(active)
         self.batch_selector.setEnabled(not active)
+        self._refresh_start_label()
+
+    def _refresh_start_label(self) -> None:
+        """Relabel the start action when a resume from checkpoint is pending."""
+        if self.has_resumable_checkpoint():
+            self.start_button.setText("继续拟合")
+            self.start_button.setToolTip("检测到检查点，将从上次进度继续拟合")
+        else:
+            self.start_button.setText("开始拟合")
+            self.start_button.setToolTip("")
