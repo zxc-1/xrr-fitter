@@ -49,3 +49,33 @@ def test_standard_mode_hides_sld_and_expert_mode_restores_it(qtbot) -> None:
 
     panel.set_expert_mode(True)
     assert panel.tabs.isTabVisible(sld_index) is True
+
+def test_number_key_shortcuts_follow_visible_position_in_expert_mode(qtbot) -> None:
+    panel = _panel(qtbot, data=prepared_data(size=4))
+    panel.set_expert_mode(True)
+
+    assert panel.select_visible_view(4) is True
+    assert panel.current_view_key() == "sld"
+
+def test_number_key_shortcuts_skip_hidden_tabs_in_standard_mode(qtbot) -> None:
+    panel = _panel(qtbot, data=prepared_data(size=4))
+    panel.set_expert_mode(False)
+
+    assert panel.select_visible_view(4) is True
+    assert panel.current_view_key() == "candidates"
+
+def test_number_key_shortcuts_reject_out_of_range_ordinal(qtbot) -> None:
+    panel = _panel(qtbot, data=prepared_data(size=4))
+    before = panel.current_view_key()
+
+    assert panel.select_visible_view(20) is False
+    assert panel.current_view_key() == before
+
+def test_view_shortcuts_register_alt_1_through_8(qtbot) -> None:
+    from PySide6.QtGui import QKeySequence
+
+    panel = _panel(qtbot, data=prepared_data(size=4))
+    keys = [shortcut.key() for shortcut in panel.view_shortcuts]
+
+    assert keys[0] == QKeySequence("Alt+1")
+    assert keys[7] == QKeySequence("Alt+8")
