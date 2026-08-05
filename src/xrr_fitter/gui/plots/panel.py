@@ -364,6 +364,17 @@ class PlotPanel(QWidget):
             raise KeyError(f"unknown candidate: {candidate_id}")
         return matches[0]
 
+    def _comparison_candidates(self, projection: _Projection) -> tuple[object, ...]:
+        """Return the other candidates whose SLD profiles overlay the selected one."""
+        result = projection.result
+        if result is None or projection.candidate_id is None:
+            return ()
+        return tuple(
+            candidate
+            for candidate in result.candidates
+            if candidate.candidate_id != projection.candidate_id
+        )
+
     def _current_projection(self, **changes: object) -> _Projection:
         values = {
             "data": None if self._dataset_id is None else self._active_data(),
@@ -451,7 +462,7 @@ class PlotPanel(QWidget):
             draw_log(views["log"], data, candidate)
             draw_qz4(views["qz4"], data, candidate)
             draw_residual(views["residual"], candidate)
-            draw_sld(views["sld"], candidate)
+            draw_sld(views["sld"], candidate, self._comparison_candidates(projection))
             self._draw_range(views, projection.visible_range)
         draw_candidate_comparison(views["candidates"], projection.result, projection.candidate_id)
         draw_uncertainty(views["uncertainty"], projection.result, projection.candidate_id)

@@ -112,6 +112,31 @@ def test_plot_panel_draws_qz4_weighted_residual_and_sld_from_candidate_arrays(
     np.testing.assert_allclose(sld_lines[0].get_ydata(), candidate.sld_profile_a2.real)
     np.testing.assert_allclose(sld_lines[1].get_ydata(), candidate.sld_profile_a2.imag)
 
+def test_plot_panel_sld_overlays_other_candidate_real_profiles_faintly(qtbot) -> None:
+    data = prepared_data(size=4)
+    other = _candidate(
+        data,
+        "candidate-b",
+        objective=0.3,
+        sld_depth_a=np.array([0.0, 30.0, 70.0]),
+        sld_profile_a2=np.array([0.0 + 0.0j, 3e-5 + 0.0j, 1e-6 + 0.0j]),
+    )
+    result = final_fit_result(_candidate(data), other)
+    panel = _panel(qtbot, data=data, result=result)
+
+    lines = panel.view("sld").axes.lines
+    by_label = {line.get_label(): line for line in lines}
+    selected_real = by_label["SLD 实部"]
+    selected_imag = by_label["SLD 虚部"]
+    overlay = by_label["candidate-b 实部"]
+    # The selected candidate stays fully opaque; comparison profiles sit behind
+    # it at reduced alpha so the active structure reads first.
+    assert selected_real.get_alpha() in (None, 1.0)
+    assert selected_imag.get_alpha() in (None, 1.0)
+    assert overlay.get_alpha() is not None and overlay.get_alpha() < 1.0
+    np.testing.assert_allclose(overlay.get_xdata(), other.sld_depth_a / 10.0)
+    np.testing.assert_allclose(overlay.get_ydata(), other.sld_profile_a2.real)
+
 def test_plot_panel_hides_uncertainty_owned_by_another_candidate(qtbot) -> None:
     data = prepared_data(size=4)
     result = replace(_result(data), uncertainty=_uncertainty("candidate-b"))

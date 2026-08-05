@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from math import isfinite
+
 import numpy as np
 
 from xrr_fitter.gui.plots.diagnostics import (
@@ -16,7 +18,31 @@ def _finish(view: DiagnosticView) -> None:
     view.canvas.draw_idle()
 
 
-def draw_sld(view: DiagnosticView, candidate: object | None) -> None:
+def _candidate_is_valid_for_comparison(candidate: object) -> bool:
+    """Filter inspection-only candidates from the comparison overlay."""
+    ranking = getattr(candidate, "ranking_objective", None)
+    return bool(
+        getattr(candidate, "valid", False)
+        and getattr(candidate, "stop_reason", "") != "early_eliminated"
+        and isfinite(float(getattr(candidate, "objective", float("inf"))))
+        and (ranking is None or isfinite(float(ranking)))
+    )
+
+
+def draw_sld(
+    view: DiagnosticView,
+    candidate: object | None,
+    others: tuple[object, ...] = (),
+) -> None:
+    """Draw the selected candidate's SLD with comparison overlays from others.
+
+    The reflectivity comparison tab already overlays all candidates so users can
+    judge which model best matches the data. This extends that comparison to the
+    SLD depth profiles: the selected candidate's real and imaginary parts stay
+    prominent at full opacity, while other valid candidates' real parts appear as
+    faint overlays behind them. This lets users compare structural interpretations
+    side-by-side without switching between rows.
+    """
     if candidate is None:
         draw_empty(view, "SLD 深度剖面", "暂无当前候选")
         return
@@ -24,6 +50,21 @@ def draw_sld(view: DiagnosticView, candidate: object | None) -> None:
     profile = np.asarray(candidate.sld_profile_a2, dtype=complex)
     axes = view.axes
     axes.clear()
+    # Draw comparison overlays first so the selected candidate's curves sit on top
+    selected_id = candidate.candidate_id
+    for other in others:
+        if other.candidate_id == selected_id or not _candidate_is_valid_for_comparison(other):
+            continue
+        other_depth = np.asarray(other.sld_depth_a, dtype=float) / 10.0
+        other_profile = np.asarray(other.sld_profile_a2, dtype=complex)
+        axes.plot(
+            other_depth,
+            other_profile.real,
+            linewidth=0.8,
+            alpha=0.35,
+            label=f"{other.candidate_id} 实部",
+        )
+    # Draw the selected candidate's real/imag at full opacity on top
     axes.plot(depth_nm, profile.real, label="SLD 实部")
     axes.plot(depth_nm, profile.imag, "--", label="SLD 虚部")
     axes.set(title="SLD 深度剖面", xlabel="深度 (nm)", ylabel="SLD (Å⁻²)")
