@@ -270,6 +270,36 @@ class PlotPanel(QWidget):
     def visible_range(self) -> tuple[float, float] | None:
         return self._visible_range
 
+    def zoom_to_range(self) -> bool:
+        """Focus the angle-domain views on the active fit range.
+
+        The fit range is often a small window of a wide scan, so keeping the
+        full sweep on screen buries the region the user is actually judging.
+        This clamps the raw and log x-axes to the highlighted range; it is a
+        pure view operation that leaves the committed projection untouched, so
+        the next redraw restores the full sweep on its own.
+        """
+        visible = self._visible_range
+        if visible is None or self._released or self._dataset_id is None:
+            return False
+        for key in ("raw", "log"):
+            view = self._views[key]
+            view.axes.set_xlim(*visible)
+            view.canvas.draw_idle()
+        return True
+
+    def reset_zoom(self) -> bool:
+        """Return the angle-domain views to their data-driven autoscale."""
+        if self._released or self._dataset_id is None:
+            return False
+        for key in ("raw", "log"):
+            view = self._views[key]
+            view.axes.autoscale(enable=True, axis="x")
+            view.axes.relim()
+            view.axes.autoscale_view(scalex=True, scaley=False)
+            view.canvas.draw_idle()
+        return True
+
     def cancel_interaction(self) -> None:
         self._interactions.cancel()
 

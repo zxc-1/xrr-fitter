@@ -339,3 +339,51 @@ def test_main_window_projects_parameter_expert_mode_to_sld_visibility(
     assert window.plot_panel.tabs.isTabVisible(sld_index) is False
     window.parameters_panel.set_expert_mode(True)
     assert window.plot_panel.tabs.isTabVisible(sld_index) is True
+
+
+def test_plot_panel_zoom_to_range_focuses_angle_views_on_visible_region(qtbot) -> None:
+    panel = _panel(qtbot, data=prepared_data(size=4))
+    panel.show_range(0.8, 1.2)
+
+    assert panel.zoom_to_range() is True
+
+    raw_xlim = panel.view("raw").axes.get_xlim()
+    log_xlim = panel.view("log").axes.get_xlim()
+    assert raw_xlim == (0.8, 1.2)
+    assert log_xlim == (0.8, 1.2)
+
+
+def test_plot_panel_zoom_to_range_without_range_is_noop(qtbot) -> None:
+    panel = _panel(qtbot, data=prepared_data(size=4))
+
+    # No fit range has been selected, so there is nothing to focus on.
+    assert panel.zoom_to_range() is False
+
+
+def test_plot_panel_reset_zoom_restores_autoscale(qtbot) -> None:
+    panel = _panel(qtbot, data=prepared_data(size=4))
+    panel.show_range(0.8, 1.2)
+    panel.zoom_to_range()
+
+    assert panel.reset_zoom() is True
+
+    # Autoscale makes xlim span the full data extent again.
+    raw_xlim = panel.view("raw").axes.get_xlim()
+    assert raw_xlim[0] < 0.8 and raw_xlim[1] > 1.2
+
+
+def test_plot_toolbar_zoom_button_focuses_views_and_reset_restores(qtbot) -> None:
+    from PySide6.QtWidgets import QToolButton
+    panel = _panel(qtbot, data=prepared_data(size=4))
+    panel.show_range(0.8, 1.2)
+    zoom = panel.toolbar.findChild(QToolButton, "plotZoomToRange")
+    reset = panel.toolbar.findChild(QToolButton, "plotResetZoom")
+
+    zoom.click()
+    assert panel.view("raw").axes.get_xlim() == (0.8, 1.2)
+    # Zooming is an action, not a mode: the active mode is left untouched.
+    assert panel.interaction_mode() == "view"
+
+    reset.click()
+    restored = panel.view("raw").axes.get_xlim()
+    assert restored[0] < 0.8 and restored[1] > 1.2
