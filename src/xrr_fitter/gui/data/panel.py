@@ -411,6 +411,11 @@ class DataPanel(QWidget):
             if dataset.dataset_id == self.active_dataset_id:
                 active_item = item
         if active_item is not None:
+            # The selection highlight dims when the tree loses focus, so bold the
+            # active row's name to keep it identifiable no matter where focus went.
+            font = active_item.font(0)
+            font.setBold(True)
+            active_item.setFont(0, font)
             self.tree.setCurrentItem(active_item)
         del blocker
         self.change_preset_button.setVisible(

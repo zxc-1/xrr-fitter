@@ -601,3 +601,29 @@ def test_data_panel_shows_fit_status_per_dataset(qtbot) -> None:
     assert "可信" in rows["fitted"].text(fit_column)
     assert "●" in rows["fitted"].text(fit_column)
     assert "未拟合" in rows["pending"].text(fit_column)
+
+
+def test_active_dataset_row_stays_emphasised_when_tree_loses_focus(qtbot) -> None:
+    # Qt's selection highlight fades when the tree loses focus, so after clicking
+    # into the plot or parameters the user can no longer tell which dataset is
+    # active. A bold name persists regardless of focus, keeping the active row
+    # identifiable at a glance across the whole workspace.
+    from dataclasses import replace
+
+    from tests.support.model_cases import dataset_project, project
+    from xrr_fitter.gui.document import ProjectDocument
+
+    first = dataset_project("first")
+    second = dataset_project("second")
+    value = replace(project(first, second), base_directory="/private/tmp")
+    document = ProjectDocument(value)
+    document.select_active_dataset("second")
+    panel = _panel(qtbot, document)
+
+    tree = panel.tree
+    rows = {
+        tree.topLevelItem(row).data(0, Qt.ItemDataRole.UserRole): tree.topLevelItem(row)
+        for row in range(tree.topLevelItemCount())
+    }
+    assert rows["second"].font(0).bold()
+    assert not rows["first"].font(0).bold()
