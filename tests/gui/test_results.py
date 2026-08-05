@@ -614,3 +614,50 @@ def test_automatic_status_labels_are_exact(status, label) -> None:
     from xrr_fitter.gui.results.automatic import automatic_status_text
 
     assert automatic_status_text(status) == label
+
+
+def test_confidence_badge_tooltip_explains_classification_reasons(qtbot) -> None:
+    # A downgraded result carries machine-readable reasons; the badge must
+    # surface their Chinese translation on hover so "why" is answered in place.
+    result = replace(
+        _two_candidate_result(),
+        confidence=type(_two_candidate_result().confidence).CORRELATED,
+        classification_evidence=("strong_correlation", "boundary_hit"),
+    )
+    panel = _panel(qtbot, _project_with_result(result))
+
+    tooltip = panel.confidence_label.toolTip()
+    assert "参数强相关" in tooltip
+    assert "参数触及边界" in tooltip
+    # The accessible description carries the same reasons for screen readers.
+    description = panel.confidence_marker.accessibleDescription()
+    assert "可用但相关" in description
+    assert "参数强相关" in description
+
+
+def test_mcmc_recommend_button_restores_standard_config_after_hand_edits(qtbot) -> None:
+    from PySide6.QtWidgets import QPushButton
+    panel = _panel(qtbot, _project_with_result(_two_candidate_result(), expert=True))
+    group = panel.mcmc_group
+    recommended = api.McmcConfig.standard(17)  # candidate-a has 17 free params
+
+    # The user hand-edits away from the recommended walkers count.
+    group.walkers.setValue(recommended.walkers + 4)
+    assert group.config().walkers != recommended.walkers
+
+    # Reselecting the same candidate would short-circuit; the button does not.
+    button = group.findChild(QPushButton, "mcmcRecommendButton")
+    button.click()
+
+    assert group.config() == recommended
+
+
+def test_mcmc_recommend_button_disabled_while_running(qtbot) -> None:
+    panel = _panel(qtbot, _project_with_result(_two_candidate_result(), expert=True))
+    group = panel.mcmc_group
+
+    group.set_operation_state(running=True, ready=False)
+    assert group.recommend_button.isEnabled() is False
+
+    group.set_operation_state(running=False, ready=True)
+    assert group.recommend_button.isEnabled() is True
