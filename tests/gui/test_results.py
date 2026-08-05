@@ -169,6 +169,28 @@ def test_invalid_candidate_is_inspected_without_persisting_selection(qtbot) -> N
     assert panel.document.project.ui_state.selected_candidate_ids == ()
 
 
+def test_arrow_key_navigation_inspects_next_candidate(qtbot) -> None:
+    # Moving the selection with the keyboard must reach the same inspection path
+    # as a mouse click, so a keyboard-only user can walk candidates and watch the
+    # evidence panel follow. The list advertises this affordance so it is
+    # discoverable rather than a hidden Qt default.
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    panel = _panel(qtbot, _project_with_result(_two_candidate_result()))
+    inspected: list[str] = []
+    panel.candidates.candidate_requested.connect(inspected.append)
+    panel.candidates.setCurrentRow(0)
+    panel.candidates.setFocus()
+    inspected.clear()
+
+    QTest.keyClick(panel.candidates, Qt.Key.Key_Down)
+
+    assert panel.selected_candidate_id() == "candidate-b"
+    assert inspected == ["candidate-b"]
+    assert "方向键" in panel.candidates.accessibleDescription()
+
+
 @pytest.mark.parametrize("confirmed", (False, True))
 def test_archived_candidate_requires_confirmation_before_persisting(
     qtbot,
