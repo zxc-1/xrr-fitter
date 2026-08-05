@@ -530,3 +530,32 @@ def test_import_shortcuts_do_not_conflict_with_project_open(qtbot) -> None:
     assert folder.key() == QKeySequence("Ctrl+Shift+I")
     assert files.context() == Qt.ShortcutContext.WidgetWithChildrenShortcut
     assert files.key() != QKeySequence(QKeySequence.StandardKey.Open)
+
+
+def test_data_panel_renders_precise_source_status_with_marker(qtbot, tmp_path) -> None:
+    panel = _panel(qtbot)
+    source = _write_curve(tmp_path / "original.xy")
+    panel.add_paths(
+        (source,),
+        beam=api.BeamSpec("monochromatic"),
+        instrument=_instrument(),
+    )
+    dataset_id = panel.dataset_ids[0]
+    tree = panel.tree
+
+    # A healthy source renders with no marker and a positive status label.
+    assert panel.status_text(dataset_id) == "可拟合"
+    assert panel.status_marker(dataset_id) == ""
+
+    # Removing the source file makes the status specific and glanceable: the
+    # marker ("⛔") flags attention and the label names the exact failure.
+    source.unlink()
+    panel.document.refresh_sources()
+
+    assert panel.status_text(dataset_id) == "源文件缺失"
+    assert panel.status_marker(dataset_id) == "⛔"
+    # The tree cell must combine marker + label so both appear in the list.
+    item = tree.topLevelItem(0)
+    status_column = 4
+    assert "⛔" in item.text(status_column)
+    assert "源文件缺失" in item.text(status_column)

@@ -41,6 +41,16 @@ TREE_HEADERS = ("数据集", "源文件", "光路", "仪器", "状态", "SHA-256
 COMPACT_COLUMNS = (0, 4)
 DETAIL_COLUMNS = (1, 2, 3, 5)
 
+# Precise, glanceable rendering of each source-validation status. The marker
+# turns a buried "源文件异常" into an at-a-glance signal, and the label names
+# the exact failure so the fix is obvious without opening the detail pane.
+SOURCE_STATUS_VISUALS = {
+    "ok": ("", "源文件正常"),
+    "missing": ("⛔", "源文件缺失"),
+    "unreadable": ("⚠", "源文件无法读取"),
+    "hash_mismatch": ("⚠", "源文件内容已改变"),
+}
+
 
 class DataPanel(QWidget):
     """Render project datasets and commit data mutations transactionally."""
@@ -295,14 +305,23 @@ class DataPanel(QWidget):
         self.document.replace_project(updated)
         self.instrument_changed.emit(dataset_id, instrument)
 
-    def status_text(self, dataset_id: str) -> str:
-        dataset = self._dataset(dataset_id)
+    def _source_status_code(self, dataset_id: str) -> str:
         try:
-            if self.document.source_status(dataset_id) != "ok":
-                return "源文件异常"
+            return self.document.source_status(dataset_id)
         except KeyError:
-            pass
+            return "ok"
+
+    def status_text(self, dataset_id: str) -> str:
+        code = self._source_status_code(dataset_id)
+        if code != "ok":
+            return SOURCE_STATUS_VISUALS.get(code, ("", "源文件异常"))[1]
+        dataset = self._dataset(dataset_id)
         return "可拟合" if sum(dataset.fit_mask) >= 30 else "数据点不足"
+
+    def status_marker(self, dataset_id: str) -> str:
+        """Return the glanceable marker glyph for the dataset's source status."""
+        code = self._source_status_code(dataset_id)
+        return SOURCE_STATUS_VISUALS.get(code, ("", ""))[0]
 
     def sha256_text(self, dataset_id: str) -> str:
         return self._dataset(dataset_id).source_sha256
@@ -390,12 +409,15 @@ class DataPanel(QWidget):
         self.details_label.show()
 
     def _tree_item(self, dataset: api.DatasetProject) -> QTreeWidgetItem:
+        marker = self.status_marker(dataset.dataset_id)
+        status = self.status_text(dataset.dataset_id)
+        status_cell = f"{marker} {status}" if marker else status
         values = (
             dataset.display_name or dataset.dataset_id,
             Path(dataset.source_path).name,
             self.beam_text(dataset.dataset_id),
             self.instrument_text(dataset.dataset_id),
-            self.status_text(dataset.dataset_id),
+            status_cell,
             dataset.source_sha256[:12],
         )
         item = QTreeWidgetItem(values)
@@ -403,9 +425,16 @@ class DataPanel(QWidget):
         item.setToolTip(1, dataset.source_path)
         item.setToolTip(2, values[2])
         item.setToolTip(3, values[3])
-        item.setToolTip(4, values[4])
+        item.setToolTip(4, self._status_tooltip(dataset.dataset_id, status))
         item.setToolTip(5, dataset.source_sha256)
         return item
+
+    def _status_tooltip(self, dataset_id: str, status: str) -> str:
+        """Explain an abnormal source status inline; SHA detail lives here too."""
+        if self._source_status_code(dataset_id) == "ok":
+            return status
+        warning = self.document.source_warning(dataset_id)
+        return warning or status
 
     def _select_tree_item(
         self,
