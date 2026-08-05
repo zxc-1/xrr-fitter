@@ -627,3 +627,26 @@ def test_active_dataset_row_stays_emphasised_when_tree_loses_focus(qtbot) -> Non
     }
     assert rows["second"].font(0).bold()
     assert not rows["first"].font(0).bold()
+
+
+def test_data_panel_summarises_dataset_overview(qtbot, tmp_path) -> None:
+    # After a batch import the tree can hold many rows; a one-line aggregate
+    # answers "how many are ready and how many need a look" without scanning
+    # every row. The count reuses the same per-row fittability judgement.
+    panel = _panel(qtbot)
+    assert panel.import_summary_text() == ""
+
+    first = _write_curve(tmp_path / "first.xy")
+    second = _write_curve(tmp_path / "second.xy")
+    panel.add_paths(
+        (first, second),
+        beam=api.BeamSpec("monochromatic"),
+        instrument=_instrument(),
+    )
+    assert panel.import_summary_text() == "共 2 个数据集 · 全部可拟合"
+    assert not panel.summary_label.isHidden()
+
+    # A source problem is surfaced in the aggregate, not only in one buried row.
+    first.unlink()
+    panel.document.refresh_sources()
+    assert panel.import_summary_text() == "共 2 个数据集 · 可拟合 1 · 需注意 1"

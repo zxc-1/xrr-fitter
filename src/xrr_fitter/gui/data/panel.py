@@ -150,10 +150,15 @@ class DataPanel(QWidget):
         top.addWidget(self.import_files_button)
         top.addWidget(self.import_folder_button)
         top.addWidget(self.change_preset_button)
+        self.summary_label = QLabel()
+        self.summary_label.setObjectName("datasetSummary")
+        self.summary_label.setProperty("mutedText", True)
+        self.summary_label.hide()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
         layout.addLayout(top)
+        layout.addWidget(self.summary_label)
         layout.addWidget(self.tree)
         layout.addWidget(self.details_label)
         layout.addWidget(self.failure_table)
@@ -334,6 +339,25 @@ class DataPanel(QWidget):
         code = self._source_status_code(dataset_id)
         return SOURCE_STATUS_VISUALS.get(code, ("", ""))[0]
 
+    def import_summary_text(self) -> str:
+        """Aggregate the datasets into a one-line readiness overview.
+
+        A batch import can produce many rows; this collapses them into "how many
+        are ready and how many need attention" so the user need not scan every
+        row. Fittability reuses the per-row judgement so the two never disagree.
+        """
+        datasets = self.document.project.datasets
+        total = len(datasets)
+        if total == 0:
+            return ""
+        fittable = sum(
+            1 for dataset in datasets if self.status_text(dataset.dataset_id) == "可拟合"
+        )
+        attention = total - fittable
+        if attention == 0:
+            return f"共 {total} 个数据集 · 全部可拟合"
+        return f"共 {total} 个数据集 · 可拟合 {fittable} · 需注意 {attention}"
+
     def fit_status_text(self, dataset_id: str) -> str:
         """Name the dataset's fit outcome: unfitted, or its confidence label."""
         result = self._dataset(dataset_id).last_valid_result
@@ -421,6 +445,9 @@ class DataPanel(QWidget):
         self.change_preset_button.setVisible(
             self.document.project.ui_state.expert_mode
         )
+        summary = self.import_summary_text()
+        self.summary_label.setText(summary)
+        self.summary_label.setVisible(bool(summary))
         self._render_details()
 
     def _render_details(self) -> None:
