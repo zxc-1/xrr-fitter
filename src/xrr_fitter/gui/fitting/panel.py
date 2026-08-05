@@ -149,6 +149,7 @@ class FitPanel(QWidget):
         self._preview_last_emit = None
         self._checkpoint_saved = False
         self.progress_view.reset()
+        self.progress_view.set_joint_layout(self._joint_layout())
         return self.controller.start_fit(self.document.project, checkpoint_path)
 
     def _request_cancel(self) -> None:
@@ -185,6 +186,17 @@ class FitPanel(QWidget):
             import_batch_id,
             checkpoint_path,
         )
+
+    def _joint_layout(self) -> object | None:
+        """Describe the joint layout so progress frames name their members.
+
+        A joint run's progress carries no single owning dataset, so without this
+        the view can only say "联合拟合". The layout is a cheap read of persisted
+        fields; an independent project has none, so the banner stays hidden.
+        """
+        if self.document.project.batch_mode != "joint":
+            return None
+        return api.describe_joint_layout(self.document.project)
 
     def set_batch_mode(self, mode: str) -> bool:
         current = self.document.project
