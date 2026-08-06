@@ -15,7 +15,7 @@ concurrency:
 jobs:
   standard:
     name: Verify ${{ matrix.mode }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -52,7 +52,7 @@ jobs:
   checkpoint:
     needs: [standard]
     if: always()
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 10
     steps:
       - name: Require all PR gates

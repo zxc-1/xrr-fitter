@@ -31,9 +31,9 @@ def test_pr_workflow_cancels_superseded_runs_for_the_same_pr() -> None:
 def test_pr_workflow_uses_non_self_hosted_runner() -> None:
     jobs = _payload()["jobs"]
     standard = jobs["standard"]
-    assert standard["runs-on"] == "macos-14"
+    assert standard["runs-on"] == "macos-15"
     assert "self-hosted" not in str(standard["runs-on"])
-    assert jobs["checkpoint"]["runs-on"] == "macos-14"
+    assert jobs["checkpoint"]["runs-on"] == "macos-15"
 
 
 def test_pr_workflow_runs_only_standard_modes() -> None:
