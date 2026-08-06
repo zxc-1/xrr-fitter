@@ -187,7 +187,7 @@ def test_ambiguous_substrate_is_requested_once_per_structure_group(
     assert len(panel.document.project.datasets) == 2
 
 
-def test_successful_automatic_import_emits_batch_request(
+def test_successful_automatic_import_keeps_dataset_pending(
     qtbot,
     tmp_path,
 ) -> None:
@@ -197,13 +197,14 @@ def test_successful_automatic_import_emits_batch_request(
 
     project = replace(api.new_project(), measurement_preset=_saved_preset())
     panel = _panel(qtbot, ProjectDocument(project))
-    requested: list[str] = []
-    panel.automatic_fit_requested.connect(requested.append)
 
     result = panel.import_paths((_write_curve(tmp_path / "P1 Zr.xy"),))
 
-    assert requested == [result.import_batch_id]
+    dataset = panel.document.project.datasets[0]
     assert result.imported_dataset_ids == ("P1",)
+    assert dataset.automation.import_batch_id == result.import_batch_id
+    assert dataset.automation.status.value == "pending"
+    assert dataset.last_valid_result is None
     assert panel.document.project.batch_mode == "independent"
 
 

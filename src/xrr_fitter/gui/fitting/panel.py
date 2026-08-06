@@ -59,7 +59,7 @@ class FitPanel(QWidget):
         self.automatic_button.setObjectName("startAutomaticFitButton")
         self.automatic_button.setProperty("primary", True)
         self.automatic_button.setAccessibleName("启动自动拟合")
-        self.automatic_button.setToolTip("运行当前导入批次的自动拟合")
+        self.automatic_button.setToolTip("运行项目中所有待拟合的自动数据集")
         self.start_button = QPushButton("开始拟合")
         self.start_button.setObjectName("startFitButton")
         self.cancel_button = QPushButton("取消")

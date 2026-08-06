@@ -72,7 +72,7 @@ class FakeJob:
         pass
 
 
-def test_partial_import_starts_worker_keeps_failure_recovery_and_publishes_curve(
+def test_partial_import_waits_for_manual_fit_keeps_failure_recovery_and_publishes_curve(
     qtbot,
     tmp_path,
     monkeypatch,
@@ -100,12 +100,29 @@ def test_partial_import_starts_worker_keeps_failure_recovery_and_publishes_curve
     bad = _write_curve(tmp_path / "bad-name.xy")
 
     result = window.data_panel.import_paths((valid, bad))
+
+    dataset = window.document.project.datasets[0]
+    assert (
+        starts,
+        dataset.automation.status.value,
+        dataset.last_valid_result,
+        window.fit_panel.automatic_button.isEnabled(),
+    ) == ([], "pending", None, True)
+
+    window.fit_panel.automatic_button.click()
+
+    assert (
+        len(starts),
+        starts[0][0] is result.updated_project,
+        starts[0][1],
+    ) == (1, True, None)
+
     window.fit_panel.controller.poll_now()
 
-    assert len(starts) == 1
-    assert starts[0][1] == result.import_batch_id
-    assert window.document.project.datasets[0].last_valid_result is not None
     failures = window.data_panel.findChild(QTableWidget, "importFailureTable")
-    assert failures.rowCount() == 1
-    assert failures.item(0, 0).text() == "bad-name.xy"
-    assert failures.item(0, 2).text()
+    assert (
+        window.document.project.datasets[0].last_valid_result is not None,
+        failures.rowCount(),
+        failures.item(0, 0).text(),
+        bool(failures.item(0, 2).text()),
+    ) == (True, 1, "bad-name.xy", True)

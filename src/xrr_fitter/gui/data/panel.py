@@ -49,7 +49,6 @@ class DataPanel(QWidget):
     active_dataset_changed = Signal(object)
     mask_changed = Signal(str, tuple)
     instrument_changed = Signal(str, object)
-    automatic_fit_requested = Signal(str)
 
     def __init__(self, document: ProjectDocument) -> None:
         super().__init__()
@@ -250,7 +249,6 @@ class DataPanel(QWidget):
             self.datasets_imported.emit(result.imported_dataset_ids)
             if self.active_dataset_id != before_active:
                 self.active_dataset_changed.emit(self.active_dataset_id)
-            self.automatic_fit_requested.emit(result.import_batch_id)
         return result
 
     def _substrate_choices(
