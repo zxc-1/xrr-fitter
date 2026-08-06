@@ -9,6 +9,8 @@ from tests.support.model_cases import dataset_project, prepared_data
 
 from xrr_fitter.evaluation import encode_physical_vector
 from xrr_fitter.fit.candidates import candidate_from_evaluation
+from xrr_fitter.fit.joint_pipeline import JointFitRequest
+from xrr_fitter.fit.joint_problem import compile_joint_problem
 from xrr_fitter.fit.joint_sharing import consensus_joint_vector
 from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.fit.objective import evaluate_vector
@@ -23,6 +25,7 @@ from xrr_fitter.model.fitting import FitConfig, FitSearchResult
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import ParameterReference, ParameterSetting
 from xrr_fitter.services import fitting
+from xrr_fitter.services.fitting_phases import joint_execution, sharing
 from xrr_fitter.services.materials import automatic_structure
 
 FIT_GROUP_ID = "fit-group-17"
@@ -35,6 +38,7 @@ def _prepared(
     dataset_index: int,
     *,
     released_imag: tuple[int, ...] = DIRECT_INDICES,
+    free_imag: tuple[int, ...] = (),
 ) -> fitting.PreparedDatasetFit:
     structure, automatic_settings = automatic_structure(LAYERS, "sapphire")
     settings = (
@@ -45,7 +49,7 @@ def _prepared(
                 1e-6,
                 0.0,
                 20e-6,
-                locked=True,
+                locked=index not in free_imag,
             )
             for index in released_imag
         ),
@@ -154,28 +158,92 @@ def _prefit(
     )
 
 
-def _stub_passing_local_analysis(monkeypatch) -> None:
-    monkeypatch.setattr(
-        fitting,
-        "AnalysisRequest",
-        lambda dataset_id, problem, search_result, **kwargs: SimpleNamespace(
-            dataset_id=dataset_id,
-            problem=problem,
-            search_result=search_result,
-            **kwargs,
-        ),
+def _analysis_request(dataset_id, problem, search_result, **kwargs):
+    return SimpleNamespace(
+        dataset_id=dataset_id,
+        problem=problem,
+        search_result=search_result,
+        **kwargs,
     )
-    monkeypatch.setattr(
-        fitting,
-        "run_analysis",
-        lambda *_args, **_kwargs: SimpleNamespace(uncertainty=None),
+
+
+def _passing_local_analysis(*_args, **_kwargs):
+    return SimpleNamespace(uncertainty=None)
+
+
+def _passing_quality(*_args):
+    return SimpleNamespace(passed=True, reasons=())
+
+
+def _unexpected_capability(*_args, **_kwargs):
+    raise AssertionError("unexpected fitting capability call")
+
+
+def _stub_joint_searches(request, **_kwargs):
+    return tuple(object() for _item in request.problem.dataset_ids)
+
+
+def _constant_joint_analysis(results):
+    return lambda _problem, _searches: results
+
+
+def _raising_retry(error: Exception):
+    def retry(*_args, **_kwargs):
+        raise error
+
+    return retry
+
+
+def _fit_joint_group(
+    prepared,
+    prefits,
+    *,
+    run_joint_fit=_unexpected_capability,
+    run_analysis=_passing_local_analysis,
+    assess_automatic_quality=_passing_quality,
+    analyze_joint_searches=_unexpected_capability,
+    fit_automatic_prepared_dataset=_unexpected_capability,
+    checkpoint=None,
+):
+    return joint_execution.fit_automatic_joint_group(
+        prepared,
+        prefits,
+        FIT_GROUP_ID,
+        checkpoint=checkpoint,
+        compile_fit_problem=compile_fit_problem,
+        compile_joint_problem=compile_joint_problem,
+        consensus_joint_vector=consensus_joint_vector,
+        joint_fit_request=JointFitRequest,
+        run_joint_fit=run_joint_fit,
+        analysis_request=_analysis_request,
+        run_analysis=run_analysis,
+        assess_automatic_quality=assess_automatic_quality,
+        analyze_joint_searches=analyze_joint_searches,
+        fit_automatic_prepared_dataset=fit_automatic_prepared_dataset,
+        cancellation_exceptions=(SearchCancelled, InterruptedError),
     )
+
+
+def _objective_outlier_group():
+    prepared = tuple(
+        _prepared(dataset_id, index, released_imag=())
+        for index, dataset_id in enumerate(("left", "middle", "outlier"))
+    )
+    prefits = tuple(
+        _prefit(item, objective)
+        for item, objective in zip(prepared, (1.0, 1.1, 100.0), strict=True)
+    )
+    joint_results = (
+        _fit_result(prepared[0], 0.8, density_scale=0.77),
+        _fit_result(prepared[1], 0.9, density_scale=0.77),
+    )
+    return prepared, prefits, joint_results
 
 
 def test_automatic_sharing_groups_material_occurrences_and_selected_roughness() -> None:
     prepared = (_prepared("left", 0), _prepared("right", 1))
 
-    rules = fitting.automatic_sharing_rules(
+    rules = sharing.automatic_sharing_rules(
         prepared,
         FIT_GROUP_ID,
         share_roughness=True,
@@ -188,31 +256,39 @@ def test_automatic_sharing_groups_material_occurrences_and_selected_roughness() 
         for rule in rules
         if "roughness_a:component.0" in rule.sharing_key
     )
-    assert density.members == (
-        ParameterReference("left", "component.0.density_scale"),
-        ParameterReference("left", "component.1.density_scale"),
-        ParameterReference("right", "component.0.density_scale"),
-        ParameterReference("right", "component.1.density_scale"),
-    )
-    assert real_sld.members == (
-        ParameterReference("left", "component.2.sld_real_a2"),
-        ParameterReference("left", "component.3.sld_real_a2"),
-        ParameterReference("right", "component.2.sld_real_a2"),
-        ParameterReference("right", "component.3.sld_real_a2"),
-    )
-    assert first_roughness.members == (
-        ParameterReference("left", "component.0.roughness_a"),
-        ParameterReference("right", "component.0.roughness_a"),
-    )
-    assert all(FIT_GROUP_ID in rule.sharing_key for rule in rules)
-    assert not any(
-        member.parameter_name.endswith("thickness_a")
-        or member.parameter_name.startswith("instrument.")
-        for rule in rules
-        for member in rule.members
+    assert (
+        density.members,
+        real_sld.members,
+        first_roughness.members,
+        all(FIT_GROUP_ID in rule.sharing_key for rule in rules),
+        not any(
+            member.parameter_name.endswith("thickness_a")
+            or member.parameter_name.startswith("instrument.")
+            for rule in rules
+            for member in rule.members
+        ),
+    ) == (
+        (
+            ParameterReference("left", "component.0.density_scale"),
+            ParameterReference("left", "component.1.density_scale"),
+            ParameterReference("right", "component.0.density_scale"),
+            ParameterReference("right", "component.1.density_scale"),
+        ),
+        (
+            ParameterReference("left", "component.2.sld_real_a2"),
+            ParameterReference("left", "component.3.sld_real_a2"),
+            ParameterReference("right", "component.2.sld_real_a2"),
+            ParameterReference("right", "component.3.sld_real_a2"),
+        ),
+        (
+            ParameterReference("left", "component.0.roughness_a"),
+            ParameterReference("right", "component.0.roughness_a"),
+        ),
+        True,
+        True,
     )
 
-    material_only = fitting.automatic_sharing_rules(
+    material_only = sharing.automatic_sharing_rules(
         prepared,
         FIT_GROUP_ID,
         share_roughness=False,
@@ -225,18 +301,21 @@ def test_automatic_sharing_groups_material_occurrences_and_selected_roughness() 
 
 
 def test_absorption_sharing_requires_release_evidence_for_every_occurrence() -> None:
-    complete = (_prepared("left", 0), _prepared("right", 1))
+    complete = (
+        _prepared("left", 0, free_imag=DIRECT_INDICES),
+        _prepared("right", 1, free_imag=DIRECT_INDICES),
+    )
     incomplete = (
-        _prepared("left", 0),
-        _prepared("right", 1, released_imag=(2,)),
+        _prepared("left", 0, free_imag=DIRECT_INDICES),
+        _prepared("right", 1, released_imag=(2,), free_imag=(2,)),
     )
 
-    complete_rules = fitting.automatic_sharing_rules(
+    complete_rules = sharing.automatic_sharing_rules(
         complete,
         FIT_GROUP_ID,
         share_roughness=False,
     )
-    incomplete_rules = fitting.automatic_sharing_rules(
+    incomplete_rules = sharing.automatic_sharing_rules(
         incomplete,
         FIT_GROUP_ID,
         share_roughness=False,
@@ -249,6 +328,12 @@ def test_absorption_sharing_requires_release_evidence_for_every_occurrence() -> 
         ParameterReference("right", "component.2.sld_imag_a2"),
         ParameterReference("right", "component.3.sld_imag_a2"),
     )
+    joint = compile_joint_problem(
+        tuple(item.dataset_id for item in complete),
+        tuple(item.problem for item in complete),
+        complete_rules,
+    )
+    assert joint.global_variables
     assert not any(
         member.parameter_name.endswith("sld_imag_a2")
         for rule in incomplete_rules
@@ -256,9 +341,39 @@ def test_absorption_sharing_requires_release_evidence_for_every_occurrence() -> 
     )
 
 
-def test_joint_conflict_releases_roughness_once_and_restarts_from_projection(
-    monkeypatch,
-) -> None:
+def test_absorption_sharing_unlocks_evidence_released_coordinates_for_joint_fit() -> None:
+    prepared = (_prepared("left", 0), _prepared("right", 1))
+
+    rules = sharing.automatic_sharing_rules(
+        prepared,
+        FIT_GROUP_ID,
+        share_roughness=False,
+    )
+
+    imag_sld = _rule_with_suffix(rules, "sld_imag_a2")
+    prefits = tuple(_prefit(item, 1.0) for item in prepared)
+    unlocked = joint_execution._unlocked_joint_prepared(
+        prepared,
+        prefits,
+        rules,
+        compile_fit_problem=compile_fit_problem,
+    )
+    joint = compile_joint_problem(
+        tuple(item.dataset_id for item in unlocked),
+        tuple(item.problem for item in unlocked),
+        rules,
+    )
+
+    assert imag_sld.members == (
+        ParameterReference("left", "component.2.sld_imag_a2"),
+        ParameterReference("left", "component.3.sld_imag_a2"),
+        ParameterReference("right", "component.2.sld_imag_a2"),
+        ParameterReference("right", "component.3.sld_imag_a2"),
+    )
+    assert joint.global_variables
+
+
+def test_joint_conflict_releases_roughness_once_and_restarts_from_projection() -> None:
     prepared = (
         _prepared("left", 0, released_imag=()),
         _prepared("right", 1, released_imag=()),
@@ -284,19 +399,11 @@ def test_joint_conflict_releases_roughness_once_and_restarts_from_projection(
     def analyze(_problem, _searches):
         return first_joint if len(requests) == 1 else second_joint
 
-    monkeypatch.setattr(fitting, "run_joint_fit", run_joint)
-    monkeypatch.setattr(fitting, "_analyze_joint_searches", analyze)
-    _stub_passing_local_analysis(monkeypatch)
-    monkeypatch.setattr(
-        fitting,
-        "assess_automatic_quality",
-        lambda *_args: SimpleNamespace(passed=True, reasons=()),
-    )
-
-    results = fitting.fit_automatic_joint_group(
+    results = _fit_joint_group(
         prepared,
         prefits,
-        FIT_GROUP_ID,
+        run_joint_fit=run_joint,
+        analyze_joint_searches=analyze,
     )
 
     assert len(requests) == 2
@@ -324,9 +431,7 @@ def test_joint_conflict_releases_roughness_once_and_restarts_from_projection(
     assert all(item.passed for item in results)
 
 
-def test_joint_projection_uses_dataset_local_quality_for_release_and_status(
-    monkeypatch,
-) -> None:
+def test_joint_projection_uses_dataset_local_quality_for_release_and_status() -> None:
     prepared = (
         _prepared("left", 0, released_imag=()),
         _prepared("right", 1, released_imag=()),
@@ -394,35 +499,15 @@ def test_joint_projection_uses_dataset_local_quality_for_release_and_status(
             ),
         )
     )
-    monkeypatch.setattr(fitting, "run_joint_fit", run_joint)
-    monkeypatch.setattr(
-        fitting,
-        "_analyze_joint_searches",
-        lambda _problem, _searches: (
-            first_global if joint_calls == 1 else second_global
-        ),
-    )
-    monkeypatch.setattr(
-        fitting,
-        "AnalysisRequest",
-        lambda dataset_id, problem, search_result, **kwargs: SimpleNamespace(
-            dataset_id=dataset_id,
-            problem=problem,
-            search_result=search_result,
-            **kwargs,
-        ),
-    )
-    monkeypatch.setattr(fitting, "run_analysis", run_analysis)
-    monkeypatch.setattr(
-        fitting,
-        "assess_automatic_quality",
-        lambda *_args: next(decisions),
-    )
-
-    results = fitting.fit_automatic_joint_group(
+    results = _fit_joint_group(
         prepared,
         prefits,
-        FIT_GROUP_ID,
+        run_joint_fit=run_joint,
+        run_analysis=run_analysis,
+        assess_automatic_quality=lambda *_args: next(decisions),
+        analyze_joint_searches=lambda _problem, _searches: (
+            first_global if joint_calls == 1 else second_global
+        ),
     )
 
     assert len(requests) == 2
@@ -440,41 +525,9 @@ def test_joint_projection_uses_dataset_local_quality_for_release_and_status(
     assert results[1].reason == "systematic residual"
 
 
-def test_objective_outlier_retries_with_joint_material_values_locked(
-    monkeypatch,
-) -> None:
-    prepared = tuple(
-        _prepared(dataset_id, index, released_imag=())
-        for index, dataset_id in enumerate(("left", "middle", "outlier"))
-    )
-    prefits = tuple(
-        _prefit(item, objective)
-        for item, objective in zip(prepared, (1.0, 1.1, 100.0), strict=True)
-    )
-    joint_results = (
-        _fit_result(prepared[0], 0.8, density_scale=0.77),
-        _fit_result(prepared[1], 0.9, density_scale=0.77),
-    )
+def test_objective_outlier_retries_with_joint_material_values_locked() -> None:
+    prepared, prefits, joint_results = _objective_outlier_group()
     retried = []
-
-    monkeypatch.setattr(
-        fitting,
-        "run_joint_fit",
-        lambda request, **_kwargs: tuple(
-            object() for _item in request.problem.dataset_ids
-        ),
-    )
-    monkeypatch.setattr(
-        fitting,
-        "_analyze_joint_searches",
-        lambda _problem, _searches: joint_results,
-    )
-    _stub_passing_local_analysis(monkeypatch)
-    monkeypatch.setattr(
-        fitting,
-        "assess_automatic_quality",
-        lambda *_args: SimpleNamespace(passed=True, reasons=()),
-    )
 
     def retry(item, **_kwargs):
         retried.append(item)
@@ -485,85 +538,66 @@ def test_objective_outlier_retries_with_joint_material_values_locked(
             None,
         )
 
-    monkeypatch.setattr(fitting, "fit_automatic_prepared_dataset", retry)
-
-    results = fitting.fit_automatic_joint_group(
+    results = _fit_joint_group(
         prepared,
         prefits,
-        FIT_GROUP_ID,
+        run_joint_fit=_stub_joint_searches,
+        analyze_joint_searches=_constant_joint_analysis(joint_results),
+        fit_automatic_prepared_dataset=retry,
     )
 
-    assert [item.dataset_id for item in retried] == ["outlier"]
+    assert tuple(item.dataset_id for item in retried) == ("outlier",)
     retry_settings = {
-        setting.name: setting for setting in retried[0].updated_dataset.parameter_settings
+        setting.name: setting
+        for setting in retried[0].updated_dataset.parameter_settings
     }
-    for name in (
-        "component.0.density_scale",
-        "component.1.density_scale",
-    ):
-        assert retry_settings[name].initial == 0.77
-        assert retry_settings[name].locked is True
+    assert tuple(
+        (retry_settings[name].initial, retry_settings[name].locked)
+        for name in (
+            "component.0.density_scale",
+            "component.1.density_scale",
+        )
+    ) == ((0.77, True), (0.77, True))
     automation = retried[0].updated_dataset.automation
-    assert automation.role is AutomaticRole.ISOLATED_RETRY
-    assert automation.status is AutomaticStatus.REFINING
-    assert automation.statistics_member is False
-    assert "objective outlier" in automation.reason
-    assert tuple(item.prepared.dataset_id for item in results) == (
-        "left",
-        "middle",
-        "outlier",
+    assert (
+        automation.role,
+        automation.status,
+        automation.statistics_member,
+        "objective outlier" in automation.reason,
+        tuple(item.prepared.dataset_id for item in results),
+        results[2].passed,
+    ) == (
+        AutomaticRole.ISOLATED_RETRY,
+        AutomaticStatus.REFINING,
+        False,
+        True,
+        ("left", "middle", "outlier"),
+        True,
     )
-    assert results[2].passed is True
 
 
-def test_isolated_group_expands_qualified_joint_checkpoints_to_input_order(
-    monkeypatch,
-) -> None:
-    prepared = tuple(
-        _prepared(dataset_id, index, released_imag=())
-        for index, dataset_id in enumerate(("left", "middle", "outlier"))
-    )
-    prefits = tuple(
-        _prefit(item, objective)
-        for item, objective in zip(prepared, (1.0, 1.1, 100.0), strict=True)
-    )
-    joint_results = (
-        _fit_result(prepared[0], 0.8, density_scale=0.77),
-        _fit_result(prepared[1], 0.9, density_scale=0.77),
-    )
+def test_isolated_group_expands_qualified_joint_checkpoints_to_input_order() -> None:
+    prepared, prefits, joint_results = _objective_outlier_group()
     published = []
 
     def run_joint(request, *, checkpoint, **_kwargs):
         checkpoint(("left-checkpoint", "middle-checkpoint"))
         return tuple(object() for _item in request.problem.dataset_ids)
 
-    monkeypatch.setattr(fitting, "run_joint_fit", run_joint)
-    monkeypatch.setattr(
-        fitting,
-        "_analyze_joint_searches",
-        lambda _problem, _searches: joint_results,
-    )
-    _stub_passing_local_analysis(monkeypatch)
-    monkeypatch.setattr(
-        fitting,
-        "assess_automatic_quality",
-        lambda *_args: SimpleNamespace(passed=True, reasons=()),
-    )
-    monkeypatch.setattr(
-        fitting,
-        "fit_automatic_prepared_dataset",
-        lambda item, **_kwargs: fitting.AutomaticPreparedResult(
+    def retry(item, **_kwargs):
+        return fitting.AutomaticPreparedResult(
             item,
             _fit_result(item, 0.7),
             True,
             None,
-        ),
-    )
+        )
 
-    fitting.fit_automatic_joint_group(
+    _fit_joint_group(
         prepared,
         prefits,
-        FIT_GROUP_ID,
+        run_joint_fit=run_joint,
+        analyze_joint_searches=_constant_joint_analysis(joint_results),
+        fit_automatic_prepared_dataset=retry,
         checkpoint=published.append,
     )
 
@@ -572,54 +606,23 @@ def test_isolated_group_expands_qualified_joint_checkpoints_to_input_order(
     ]
 
 
-def test_isolated_retry_review_combines_isolation_and_quality_reasons(
-    monkeypatch,
-) -> None:
-    prepared = tuple(
-        _prepared(dataset_id, index, released_imag=())
-        for index, dataset_id in enumerate(("left", "middle", "outlier"))
-    )
-    prefits = tuple(
-        _prefit(item, objective)
-        for item, objective in zip(prepared, (1.0, 1.1, 100.0), strict=True)
-    )
-    joint_results = (
-        _fit_result(prepared[0], 0.8, density_scale=0.77),
-        _fit_result(prepared[1], 0.9, density_scale=0.77),
-    )
-    monkeypatch.setattr(
-        fitting,
-        "run_joint_fit",
-        lambda request, **_kwargs: tuple(
-            object() for _item in request.problem.dataset_ids
-        ),
-    )
-    monkeypatch.setattr(
-        fitting,
-        "_analyze_joint_searches",
-        lambda _problem, _searches: joint_results,
-    )
-    _stub_passing_local_analysis(monkeypatch)
-    monkeypatch.setattr(
-        fitting,
-        "assess_automatic_quality",
-        lambda *_args: SimpleNamespace(passed=True, reasons=()),
-    )
-    monkeypatch.setattr(
-        fitting,
-        "fit_automatic_prepared_dataset",
-        lambda item, **_kwargs: fitting.AutomaticPreparedResult(
+def test_isolated_retry_review_combines_isolation_and_quality_reasons() -> None:
+    prepared, prefits, joint_results = _objective_outlier_group()
+
+    def retry(item, **_kwargs):
+        return fitting.AutomaticPreparedResult(
             item,
             _fit_result(item, 0.7),
             False,
             "systematic residual",
-        ),
-    )
+        )
 
-    results = fitting.fit_automatic_joint_group(
+    results = _fit_joint_group(
         prepared,
         prefits,
-        FIT_GROUP_ID,
+        run_joint_fit=_stub_joint_searches,
+        analyze_joint_searches=_constant_joint_analysis(joint_results),
+        fit_automatic_prepared_dataset=retry,
     )
 
     assert results[2].passed is False
@@ -627,51 +630,17 @@ def test_isolated_retry_review_combines_isolation_and_quality_reasons(
     assert "systematic residual" in results[2].reason
 
 
-def test_isolated_retry_exception_returns_an_unpublishable_failure(
-    monkeypatch,
-) -> None:
-    prepared = tuple(
-        _prepared(dataset_id, index, released_imag=())
-        for index, dataset_id in enumerate(("left", "middle", "outlier"))
-    )
-    prefits = tuple(
-        _prefit(item, objective)
-        for item, objective in zip(prepared, (1.0, 1.1, 100.0), strict=True)
-    )
-    joint_results = (
-        _fit_result(prepared[0], 0.8, density_scale=0.77),
-        _fit_result(prepared[1], 0.9, density_scale=0.77),
-    )
-    monkeypatch.setattr(
-        fitting,
-        "run_joint_fit",
-        lambda request, **_kwargs: tuple(
-            object() for _item in request.problem.dataset_ids
-        ),
-    )
-    monkeypatch.setattr(
-        fitting,
-        "_analyze_joint_searches",
-        lambda _problem, _searches: joint_results,
-    )
-    _stub_passing_local_analysis(monkeypatch)
-    monkeypatch.setattr(
-        fitting,
-        "assess_automatic_quality",
-        lambda *_args: SimpleNamespace(passed=True, reasons=()),
-    )
-    monkeypatch.setattr(
-        fitting,
-        "fit_automatic_prepared_dataset",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("isolated solver failed")
-        ),
-    )
+def test_isolated_retry_exception_returns_an_unpublishable_failure() -> None:
+    prepared, prefits, joint_results = _objective_outlier_group()
 
-    results = fitting.fit_automatic_joint_group(
+    results = _fit_joint_group(
         prepared,
         prefits,
-        FIT_GROUP_ID,
+        run_joint_fit=_stub_joint_searches,
+        analyze_joint_searches=_constant_joint_analysis(joint_results),
+        fit_automatic_prepared_dataset=_raising_retry(
+            RuntimeError("isolated solver failed")
+        ),
     )
 
     assert results[2].fit_result.best_candidate is None
@@ -695,56 +664,21 @@ def test_isolated_retry_exception_returns_an_unpublishable_failure(
     ),
 )
 def test_isolated_retry_propagates_cancellation(
-    monkeypatch,
     error: Exception,
 ) -> None:
-    prepared = tuple(
-        _prepared(dataset_id, index, released_imag=())
-        for index, dataset_id in enumerate(("left", "middle", "outlier"))
-    )
-    prefits = tuple(
-        _prefit(item, objective)
-        for item, objective in zip(prepared, (1.0, 1.1, 100.0), strict=True)
-    )
-    joint_results = (
-        _fit_result(prepared[0], 0.8, density_scale=0.77),
-        _fit_result(prepared[1], 0.9, density_scale=0.77),
-    )
-    monkeypatch.setattr(
-        fitting,
-        "run_joint_fit",
-        lambda request, **_kwargs: tuple(
-            object() for _item in request.problem.dataset_ids
-        ),
-    )
-    monkeypatch.setattr(
-        fitting,
-        "_analyze_joint_searches",
-        lambda _problem, _searches: joint_results,
-    )
-    _stub_passing_local_analysis(monkeypatch)
-    monkeypatch.setattr(
-        fitting,
-        "assess_automatic_quality",
-        lambda *_args: SimpleNamespace(passed=True, reasons=()),
-    )
-    monkeypatch.setattr(
-        fitting,
-        "fit_automatic_prepared_dataset",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
-    )
+    prepared, prefits, joint_results = _objective_outlier_group()
 
     with pytest.raises(type(error), match="cancelled"):
-        fitting.fit_automatic_joint_group(
+        _fit_joint_group(
             prepared,
             prefits,
-            FIT_GROUP_ID,
+            run_joint_fit=_stub_joint_searches,
+            analyze_joint_searches=_constant_joint_analysis(joint_results),
+            fit_automatic_prepared_dataset=_raising_retry(error),
         )
 
 
-def test_insufficient_qualified_points_keep_prefits_for_review_without_joint(
-    monkeypatch,
-) -> None:
+def test_insufficient_qualified_points_keep_prefits_for_review_without_joint() -> None:
     prepared = (
         _prepared("qualified", 0, released_imag=()),
         _prepared("quality-failure", 1, released_imag=()),
@@ -758,25 +692,9 @@ def test_insufficient_qualified_points_keep_prefits_for_review_without_joint(
             reason="systematic residual",
         ),
     )
-    monkeypatch.setattr(
-        fitting,
-        "run_joint_fit",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("insufficient group started joint fitting")
-        ),
-    )
-    monkeypatch.setattr(
-        fitting,
-        "fit_automatic_prepared_dataset",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("insufficient group started isolated retry")
-        ),
-    )
-
-    results = fitting.fit_automatic_joint_group(
+    results = _fit_joint_group(
         prepared,
         prefits,
-        FIT_GROUP_ID,
     )
 
     assert all(not item.passed for item in results)

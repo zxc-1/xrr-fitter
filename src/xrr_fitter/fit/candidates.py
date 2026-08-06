@@ -1,4 +1,25 @@
-"""Deterministic candidate construction, deduplication, and publication."""
+"""Deterministic candidate construction, deduplication, and publication.
+
+Candidate starts are immutable, sorted physical-parameter mappings tagged with
+a feature family. The declared structure is always the protected first start;
+direct-SLD hypotheses overlay that baseline before the remaining geometry,
+material, interface, and instrument dimensions are sampled under one cap.
+Every stochastic choice uses the caller-owned generator.
+
+Selection has two distinct identity tests. Normalized parameter distance first
+partitions nearby starts to bound comparison work, while reflectivity-curve
+distance merges both local duplicates and remote physical degeneracies. Stable
+sorting and minimum-cost representatives make ties reproducible.
+
+Published candidates expand fit-only residuals back to source-row arrays,
+using NaN outside the fit mask, and attach a read-only SLD profile when stack
+expansion succeeded. Ranking uses the explicit joint objective when present;
+otherwise it uses the local objective and excludes invalid or eliminated rows.
+
+Stage-B archiving preserves evidence rather than deleting weak candidates. It
+marks archived rows as eliminated and redistributes their unused perturbation
+budget deterministically across the candidates that remain active.
+"""
 
 from __future__ import annotations
 
@@ -28,6 +49,13 @@ PARAMETER_PRECLUSTER_DISTANCE = 0.25
 
 @dataclass(frozen=True, slots=True)
 class CandidateStart:
+    """One reproducible physical start before unit-space compilation.
+
+    Sorted name/value pairs provide immutable identity for deduplication and
+    dictionary lookup. ``feature_key`` retains the originating hypothesis so
+    coarse selection can protect one representative from each family.
+    """
+
     values: tuple[tuple[str, float], ...]
     feature_key: str
 
@@ -37,6 +65,12 @@ class CandidateStart:
 
 @dataclass(frozen=True, slots=True)
 class StageBArchive:
+    """Active and eliminated Stage-B evidence plus reassigned search work.
+
+    Perturbation counts align positionally with ``active``; archived candidates
+    remain publishable evidence but cannot participate in winner selection.
+    """
+
     active: tuple[FitCandidate, ...]
     archived: tuple[FitCandidate, ...]
     perturbation_counts: tuple[int, ...]

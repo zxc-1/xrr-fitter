@@ -62,6 +62,22 @@ def _with_automatic_results(project, groups: tuple[str, ...]):
     )
 
 
+def _filename_structure_snapshot(dataset) -> tuple[object, ...]:
+    structure = dataset.structure
+    assert structure is not None
+    materials = tuple(layer.material for layer in structure.components)
+    return (
+        dataset.dataset_id,
+        dataset.display_name,
+        structure.fronting.name,
+        structure.backing.formula,
+        tuple(material.formula for material in materials),
+        materials[0].bulk_density_g_cm3,
+        tuple(material.bulk_density_g_cm3 is not None for material in materials),
+        tuple(material.sld_override_a2 is not None for material in materials),
+    )
+
+
 def test_add_dataset_uses_source_stem_namespace_and_lowest_available_suffix(
     tmp_path: Path,
 ) -> None:
@@ -145,28 +161,28 @@ def test_add_dataset_interprets_filename_materials_from_backing_to_surface(
             _instrument(),
         )
 
-    assert tuple(dataset.dataset_id for dataset in project.datasets) == tuple(
-        case[1] for case in cases
+    assert tuple(_filename_structure_snapshot(dataset) for dataset in project.datasets) == (
+        (
+            cases[0][1],
+            cases[0][0],
+            "Air",
+            "Si",
+            ("Zr", "Si", "Si3N4"),
+            6.52,
+            (True, True, True),
+            (False, False, False),
+        ),
+        (
+            cases[1][1],
+            cases[1][0],
+            "Air",
+            "Si",
+            ("TaN", None, None),
+            14.30,
+            (True, False, False),
+            (False, True, True),
+        ),
     )
-    assert tuple(dataset.display_name for dataset in project.datasets) == tuple(
-        case[0] for case in cases
-    )
-    for dataset in project.datasets:
-        assert dataset.structure is not None
-        assert dataset.structure.fronting.name == "Air"
-        assert dataset.structure.backing.formula == "Si"
-    first_materials = project.datasets[0].structure.components
-    assert tuple(layer.material.formula for layer in first_materials) == (
-        "Zr",
-        "Si",
-        "Si3N4",
-    )
-    assert all(layer.material.bulk_density_g_cm3 > 0.0 for layer in first_materials)
-    materials = project.datasets[1].structure.components
-    assert tuple(layer.material.formula for layer in materials) == ("TaN", None, None)
-    assert materials[0].material.bulk_density_g_cm3 == 14.30
-    assert all(layer.material.bulk_density_g_cm3 is None for layer in materials[1:])
-    assert all(layer.material.sld_override_a2 is not None for layer in materials[1:])
 
 
 def test_add_dataset_reuses_matching_filename_structure_for_batch(
@@ -367,6 +383,33 @@ def test_automatic_source_acceptance_clears_the_matching_fit_group(
         statistics_member=False,
         reason=None,
     )
+
+
+def test_automatic_invalidation_preserves_manual_dataset_with_matching_group_id(
+    tmp_path: Path,
+) -> None:
+    value = new_project()
+    for name, scale in (("auto", 1.0), ("manual", 2.0)):
+        value = add_dataset(
+            value,
+            _write_curve(tmp_path / f"{name}.xy", scale=scale),
+            _instrument(),
+        )
+    value = _with_automatic_results(value, ("shared", "shared"))
+    manual = replace(
+        value.datasets[1],
+        automation=DatasetAutomation(fit_group_id="shared"),
+    )
+    value = replace(value, datasets=(value.datasets[0], manual))
+
+    changed = set_instrument(
+        value,
+        "auto",
+        replace(value.datasets[0].instrument, background_kind="linear"),
+    )
+
+    assert changed.datasets[0].last_valid_result is None
+    assert changed.datasets[1] is manual
 
 
 def test_automatic_structure_change_clears_the_matching_fit_group(

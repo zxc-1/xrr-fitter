@@ -170,12 +170,13 @@ if not validation.valid:
     project = api.accept_source_update(project, preview)
 ```
 
-- 自动 dataset 具有非空 `fit_group_id` 时，只清理变更 dataset 及共享该组 ID 的
-  datasets；同一项目中的其他自动组不受影响。组内自动状态回到 `PENDING`，但保留
-  `import_batch_id`、`fit_group_id` 和路由角色。
-- 没有自动组身份时，`independent` 模式只清理受影响 dataset 的
+- `independent` 模式下，自动 dataset 具有非空 `fit_group_id` 时，只清理变更
+  dataset 及共享该组 ID 的 datasets；同一项目中的其他自动组不受影响。组内自动
+  状态回到 `PENDING`，但保留 `import_batch_id`、`fit_group_id` 和路由角色。
+- `independent` 模式中没有自动组身份时，只清理受影响 dataset 的
   `structure_evidence`、已解析 scale prior、`last_valid_result`、checkpoint 和
-  candidate selection；expert `joint` 模式仍清理所有 datasets 的共享派生状态。
+  candidate selection。Expert `batch_mode="joint"` 始终清理所有 datasets 的共享
+  派生状态，即使这些 rows 仍带有自动组身份。
 - structure、mask、instrument、parameter 和 sharing 修改必须调用对应的
   `api.set_*` operation；这些 operation 在同一 immutable transaction 中处理失效。
 - `accept_source_update()` 会再次核对 preview 对应的路径和字节。preview 之后发生
@@ -621,9 +622,9 @@ xrr-fitter
   `save_project()` 原子保存，再发布事件。保存过的兼容 checkpoint 会按 stage、
   candidate graph、seed ledger、data hash、structure、instrument、parameters 和
   config 校验后恢复，身份不匹配会明确拒绝。
-- source、mask、structure、instrument 或参数变化会让对应自动组失效：只清理变更
-  dataset 及共享其非空 `fit_group_id` 的成员，保留其他自动组。Expert joint 项目在
-  没有自动组身份时仍沿用全项目失效规则。
+- `independent` 自动项目中的 source、mask、structure、instrument 或参数变化只让
+  对应自动组失效：清理变更 dataset 及共享其非空 `fit_group_id` 的成员，保留其他
+  自动组。Expert `batch_mode="joint"` 项目始终沿用全项目失效规则。
 
 ### 13.3 Source hash 警告
 

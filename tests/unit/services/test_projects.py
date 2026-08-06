@@ -1,3 +1,9 @@
+"""Immutable project lifecycle, source restoration, and result invalidation contracts.
+
+Automatic fit groups invalidate together while unrelated groups remain usable;
+expert joint mode continues to invalidate the complete result graph.
+"""
+
 from __future__ import annotations
 
 from dataclasses import replace

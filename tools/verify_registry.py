@@ -79,6 +79,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/integration/test_batch_resume.py",
                 "tests/integration/test_export_workflow.py",
                 "tests/integration/test_gui_project_workflow.py",
+                "tests/integration/test_gui_automatic_workflow.py",
                 "-q",
             ),
         )

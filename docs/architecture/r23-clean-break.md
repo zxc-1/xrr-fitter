@@ -576,7 +576,8 @@ generic utility bag。
 - `structures.py`：结构编辑、氧化物建议和结构证据。
 - `parameters.py`：参数验证、共享验证和协调。
 - `projects.py`：新建/打开/保存、数据源检查和项目级转换。
-- `fitting.py`：单数据集搜索与分析组合。
+- `fitting.py`：单数据集、自动与联合搜索及分析的唯一组合根。
+- `fitting_phases/`：只接收具体 callable 的低复杂度拟合编排 capability，不直接导入 `fit` 或 `analysis`。
 - `batch.py`：已声明的独立/联合调度和项目发布。
 - `exports.py`：导出编排。
 - `workers.py`：拟合和分析处理器共用的进程创建、spawn 上下文、队列、取消、进度、请求/结果封装、`OperationJob` 以及 `start_fit_job`/`start_mcmc_job` 的唯一负责人。
@@ -591,8 +592,8 @@ declaration；同一 base directory 的普通保存逐字节保留原 declaratio
 移除项。
 
 `services.fitting` 是唯一组合拟合与分析的模块。`fit` 和 `analysis` 绝不相互导入，包括局部导入或 `TYPE_CHECKING` 导入。
-module-level allowlist 进一步强制：只有 `services.fitting` 可同时导入
-`fit` 和 `analysis`；`services.batch` 只通过 `services.fitting` 组合分析，不直接
+module-level allowlist 进一步强制：只有 `services.fitting` 可导入
+`fit` 和 `analysis`；低复杂度 phase capability 通过显式 callable 接收求解和分析边界；`services.batch` 只通过 `services.fitting` 组合分析，不直接
 导入 `analysis`；`services.workers` 只启动 `services.fitting` 提供的顶层
 pickle-safe handler，不直接导入 `fit`/`analysis`；其他 services 都不导入这两包。
 

@@ -25,6 +25,35 @@ class AutomaticStatus(StrEnum):
     FAILED = "failed"
 
 
+def _validate_automation_types(value: DatasetAutomation) -> None:
+    if not isinstance(value.role, AutomaticRole):
+        raise TypeError("role must be AutomaticRole")
+    if not isinstance(value.status, AutomaticStatus):
+        raise TypeError("status must be AutomaticStatus")
+    if not isinstance(value.statistics_member, bool):
+        raise TypeError("statistics_member must be bool")
+
+
+def _validate_automation_route(value: DatasetAutomation) -> None:
+    routed = value.role not in {AutomaticRole.MANUAL, AutomaticRole.UNROUTED}
+    if routed and not value.fit_group_id:
+        raise ValueError("routed automatic role requires fit_group_id")
+    automatic = value.role is not AutomaticRole.MANUAL
+    if automatic and not value.import_batch_id:
+        raise ValueError("automatic role requires import_batch_id")
+
+
+def _validate_automation_status(value: DatasetAutomation) -> None:
+    requires_reason = value.status in {
+        AutomaticStatus.REVIEW,
+        AutomaticStatus.FAILED,
+    }
+    if requires_reason and not value.reason:
+        raise ValueError("review or failed status requires reason")
+    if value.statistics_member and value.status is not AutomaticStatus.PASSED:
+        raise ValueError("statistics_member requires passed status")
+
+
 @dataclass(frozen=True, slots=True)
 class MeasurementPreset:
     preset_id: str
@@ -53,26 +82,9 @@ class DatasetAutomation:
     reason: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.role, AutomaticRole):
-            raise TypeError("role must be AutomaticRole")
-        if not isinstance(self.status, AutomaticStatus):
-            raise TypeError("status must be AutomaticStatus")
-        if not isinstance(self.statistics_member, bool):
-            raise TypeError("statistics_member must be bool")
-        routed = self.role not in {AutomaticRole.MANUAL, AutomaticRole.UNROUTED}
-        if routed and not self.fit_group_id:
-            raise ValueError("routed automatic role requires fit_group_id")
-        automatic = self.role is not AutomaticRole.MANUAL
-        if automatic and not self.import_batch_id:
-            raise ValueError("automatic role requires import_batch_id")
-        requires_reason = self.status in {
-            AutomaticStatus.REVIEW,
-            AutomaticStatus.FAILED,
-        }
-        if requires_reason and not self.reason:
-            raise ValueError("review or failed status requires reason")
-        if self.statistics_member and self.status is not AutomaticStatus.PASSED:
-            raise ValueError("statistics_member requires passed status")
+        _validate_automation_types(self)
+        _validate_automation_route(self)
+        _validate_automation_status(self)
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,6 +14,12 @@ These tests deliberately exercise direct methods and Qt signal paths.  The
 former prove API routing and pre-publication failure atomicity, while the latter
 prove that invalid user input cannot escape through the event-loop exception
 handler.
+
+Automatic result tables add a second ownership boundary. Point roles, quality
+status, fitted layer values, and population uniformity must come from the same
+completed import batch. The assertions intentionally inspect both table models
+and public API calls so presentation changes cannot silently weaken persistence
+rules or attach statistics to excluded points.
 """
 
 from __future__ import annotations
@@ -88,6 +94,11 @@ def _mcmc_report(**changes):
 
 
 def _project_with_result(result=None, *, selected: str | None = None, expert=False):
+    """Build result state only through supported immutable API transitions.
+
+    Candidate selection and expert mode remain optional so each panel test can
+    declare the exact persisted ownership state it intends to render.
+    """
     value = project(dataset_project(result=result))
     value = replace(value, base_directory="/private/tmp")
     value = api.select_active_dataset(value, "curve")

@@ -5,6 +5,15 @@ ranking, atomic checkpoint batches, resume validation, pickle handoff, and batch
 dispatch. Candidate-local objectives remain distinct from the persisted global
 ranking objective. A real analysis pass verifies that uncertainty history keeps
 that shared ranking instead of silently reverting to one dataset's objective.
+
+The automatic path adds prefit projection, selective parameter sharing, and
+roughness-release retries. Checkpoints represent one global attempt even though
+the immutable project stores a projection per dataset. Tests keep this identity
+visible across fresh runs, resume, cancellation, and result publication so work
+cannot be duplicated or assigned to the wrong point.
+
+All numerical fixtures are deliberately bounded and deterministic. Assertions
+focus on lineage and ownership instead of optimizer wall time.
 """
 
 from __future__ import annotations

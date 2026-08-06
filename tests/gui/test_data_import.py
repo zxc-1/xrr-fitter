@@ -1,3 +1,9 @@
+"""Qt data-import contracts for public API routing and explicit instrument input.
+
+The suite keeps dialog validation, filename material parsing, active selection,
+and immutable project adoption observable at the panel boundary.
+"""
+
 from __future__ import annotations
 
 from math import asin, degrees
@@ -105,6 +111,49 @@ def test_first_automatic_import_persists_measurement_configuration(
     assert preset.preset_id == "first-use-lab"
     assert preset.instrument.instrument_id == "first-use-lab"
     assert preset.beam == api.BeamSpec("monochromatic", wavelength_a=1.5406)
+
+
+@pytest.mark.parametrize("select_source", (False, True))
+def test_cancelled_measurement_preset_change_does_not_affect_next_import(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+    select_source: bool,
+) -> None:
+    """Keep a cancelled replacement request local to one UI action.
+
+    The empty selection covers cancelling the native file chooser. Selecting a
+    source and rejecting ``ImportDialog`` covers cancellation after the source is
+    known. Neither path may force the next ordinary import back through the full
+    measurement dialog.
+    """
+    from dataclasses import replace
+
+    from xrr_fitter.gui.data.import_dialog import ImportDialog
+    from xrr_fitter.gui.document import ProjectDocument
+
+    panel = _panel(
+        qtbot,
+        ProjectDocument(
+            replace(api.new_project(), measurement_preset=_saved_preset())
+        ),
+    )
+    source = _write_curve(tmp_path / "P1 Zr.xy")
+    selected = [str(source)] if select_source else []
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileNames",
+        lambda *_args, **_kwargs: (selected, ""),
+    )
+    monkeypatch.setattr(
+        ImportDialog,
+        "exec",
+        lambda _dialog: QDialog.DialogCode.Rejected,
+    )
+
+    panel._change_measurement_preset()
+
+    assert panel._force_preset_dialog is False
 
 
 def test_ambiguous_substrate_is_requested_once_per_structure_group(

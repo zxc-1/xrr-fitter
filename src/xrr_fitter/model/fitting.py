@@ -63,6 +63,7 @@ from xrr_fitter.model.parameters import (
     ParameterDefinition,
     ParameterValue,
 )
+from xrr_fitter.model.progress import FitProgress
 from xrr_fitter.model.structure import SlabStack, StructureSpec
 
 
@@ -383,29 +384,6 @@ class FitEvaluationContext:
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         values = tuple(getattr(self, field) for field in self.__dataclass_fields__)
         return type(self), values
-
-
-@dataclass(frozen=True, slots=True)
-class FitProgress:
-    """Serializable monotonic progress for one dataset and fitting stage."""
-
-    dataset_id: str | None
-    stage: str
-    completed: int
-    total: int
-    best_objective: float
-    message: str
-
-    def __post_init__(self) -> None:
-        if self.dataset_id is not None:
-            _nonempty(self.dataset_id, "dataset_id")
-        _nonempty(self.stage, "stage")
-        _positive_integer(self.completed, "completed", allow_zero=True)
-        _positive_integer(self.total, "total", allow_zero=True)
-        if self.completed > self.total:
-            raise ValueError("completed must not exceed total")
-        if np.isnan(self.best_objective):
-            raise ValueError("best_objective must not be NaN")
 
 
 @dataclass(frozen=True, slots=True)

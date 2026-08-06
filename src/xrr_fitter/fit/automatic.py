@@ -24,14 +24,18 @@ def _bounded_nfev(problem: object, max_nfev: int) -> int:
     return max(1, min(max_nfev, configured))
 
 
-def _physical_start(problem: object, start: object) -> dict[str, float]:
+def _start_mapping(start: object) -> dict[object, object]:
+    """Copy a mapping-like start while preserving the public error contract."""
     if isinstance(start, Mapping):
-        values = dict(start)
-    else:
-        try:
-            values = dict(start)
-        except (TypeError, ValueError) as error:
-            raise TypeError("automatic starts must be physical mappings") from error
+        return dict(start)
+    try:
+        return dict(start)
+    except (TypeError, ValueError) as error:
+        raise TypeError("automatic starts must be physical mappings") from error
+
+
+def _validate_start_mapping(problem: object, values: dict[object, object]) -> None:
+    """Reject unknown, non-string, or nonfinite physical start entries."""
     names = {definition.name for definition in problem.parameter_definitions}
     unknown = sorted(set(values) - names)
     if unknown:
@@ -40,6 +44,11 @@ def _physical_start(problem: object, start: object) -> dict[str, float]:
         raise TypeError("automatic start parameter names must be strings")
     if any(not isfinite(float(value)) for value in values.values()):
         raise ValueError("automatic start values must be finite")
+
+
+def _physical_start(problem: object, start: object) -> dict[str, float]:
+    values = _start_mapping(start)
+    _validate_start_mapping(problem, values)
     return {name: float(value) for name, value in values.items()}
 
 

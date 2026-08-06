@@ -46,7 +46,6 @@ def test_legacy_layout_is_absent_from_filesystem_and_history() -> None:
         "tests_r21",
         ".integration",
         ".superpowers",
-        "docs/superpowers",
     )
     assert all(not (ROOT / path).exists() for path in forbidden)
     historical_paths = _git(

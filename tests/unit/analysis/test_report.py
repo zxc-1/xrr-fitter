@@ -8,6 +8,11 @@ pickle round trips, and deterministic winner identity.
 Report tests cover covariance/profile selection, diagnostic enrichment,
 classification order, progress, and uncertainty stage publication. Joint
 ranking is exercised by the real joint pipeline in its focused test module.
+
+Automatic fits deliberately disable bootstrap on their clean fast path while
+retaining bounded profile recovery for ambiguous evidence. The report contract
+therefore records whether work actually ran, rather than inferring it from
+default field values.
 """
 
 from __future__ import annotations

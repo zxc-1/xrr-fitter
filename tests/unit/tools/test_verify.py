@@ -90,6 +90,7 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
             "tests/integration/test_batch_resume.py",
             "tests/integration/test_export_workflow.py",
             "tests/integration/test_gui_project_workflow.py",
+            "tests/integration/test_gui_automatic_workflow.py",
             "-q",
         ),
     )

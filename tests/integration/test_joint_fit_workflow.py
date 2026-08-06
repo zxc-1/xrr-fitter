@@ -178,6 +178,34 @@ def _candidate_parameter(result, name: str) -> float:
     return next(parameter.value for parameter in candidate.parameters if parameter.name == name)
 
 
+def _dataset_ids(items) -> tuple[str, ...]:
+    return tuple(item.dataset_id for item in items)
+
+
+def _published_candidates(items) -> tuple[bool, ...]:
+    return tuple(item.fit_result.best_candidate is not None for item in items)
+
+
+def _automation_roles(items) -> set[AutomaticRole]:
+    return {item.automation.role for item in items}
+
+
+def _published_results(items) -> tuple[bool, ...]:
+    return tuple(item.last_valid_result is not None for item in items)
+
+
+def _joint_checkpoint_widths(checkpoints) -> set[int]:
+    widths = set()
+    for project in checkpoints:
+        values = tuple(dataset.checkpoint for dataset in project.datasets)
+        if not values or any(value is None for value in values):
+            continue
+        fingerprints = {value.joint_layout_fingerprint for value in values}
+        if len(fingerprints) == 1 and next(iter(fingerprints)):
+            widths.add(len(values))
+    return widths
+
+
 def _aligned_fit_snapshot(left, right) -> dict[str, object]:
     uncertainty = left.uncertainty
     return {
@@ -202,12 +230,9 @@ def _joint_transaction_snapshot(result, progress, checkpoints) -> dict[str, obje
     return {
         "mode": result.mode,
         "cancelled": result.cancelled,
-        "dataset_order": tuple(item.dataset_id for item in result.datasets),
+        "dataset_order": _dataset_ids(result.datasets),
         "aligned_fit": _aligned_fit_snapshot(left, right),
-        "published_results": tuple(
-            dataset.last_valid_result is not None
-            for dataset in result.updated_project.datasets
-        ),
+        "published_results": _published_results(result.updated_project.datasets),
         "has_checkpoints": bool(checkpoints),
         "checkpoint_stage_widths": {
             len({dataset.checkpoint.stage for dataset in checkpoint.datasets})
@@ -273,31 +298,13 @@ def test_automatic_joint_workflow_refines_matching_points_with_shared_material(
     left, right = result.datasets
     final_datasets = result.updated_project.datasets
     density_name = "component.0.density_scale"
-    assert tuple(item.dataset_id for item in result.datasets) == ("left", "right")
-    assert all(item.fit_result.best_candidate is not None for item in result.datasets)
+    assert _dataset_ids(result.datasets) == ("left", "right")
+    assert _published_candidates(result.datasets) == (True, True)
     assert _candidate_parameter(left.fit_result, density_name) == _candidate_parameter(
         right.fit_result,
         density_name,
     )
-    assert {dataset.automation.role for dataset in final_datasets} == {
-        AutomaticRole.JOINT
-    }
-    assert all(dataset.last_valid_result is not None for dataset in final_datasets)
+    assert _automation_roles(final_datasets) == {AutomaticRole.JOINT}
+    assert _published_results(final_datasets) == (True, True)
     assert checkpoints
-    joint_checkpoint_widths = {
-        len(project.datasets)
-        for project in checkpoints
-        if all(
-            dataset.checkpoint is not None
-            and dataset.checkpoint.joint_layout_fingerprint
-            for dataset in project.datasets
-        )
-        and len(
-            {
-                dataset.checkpoint.joint_layout_fingerprint
-                for dataset in project.datasets
-            }
-        )
-        == 1
-    }
-    assert joint_checkpoint_widths == {2}
+    assert _joint_checkpoint_widths(checkpoints) == {2}

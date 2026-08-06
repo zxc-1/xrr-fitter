@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from importlib import import_module
+
 import numpy as np
 import pytest
 
@@ -78,6 +80,82 @@ def test_parratt_jacobian_supports_zero_parameters() -> None:
         assert jacobian.shape == (q.size, 0)
 
 
+def test_parratt_jacobian_evaluates_only_active_tangent_columns(monkeypatch) -> None:
+    module = import_module("xrr_fitter.physics.derivatives")
+    stack = SlabStack(
+        [0, 28, 42, 28, 42, 0],
+        [
+            0j,
+            55e-6 + 1.4e-6j,
+            20e-6 + 0.2e-6j,
+            55e-6 + 1.4e-6j,
+            20e-6 + 0.2e-6j,
+            24e-6 + 0.3e-6j,
+        ],
+        [2.5, 4, 3, 4, 5],
+        (PeriodicSpan(1, 2, 2),),
+    )
+    q = np.linspace(0.01, 0.3, 80)
+    q_jacobian = np.zeros((q.size, 4))
+    q_jacobian[:, 0] = 0.4
+    thickness_jacobian = np.zeros((6, 4))
+    thickness_jacobian[[1, 3], 2] = 1.0
+    sld_jacobian = np.zeros((6, 4), complex)
+    roughness_jacobian = np.zeros((5, 4))
+    observed_counts: list[int] = []
+    original = module._periodic_jacobian
+
+    def audited(stack_value, inputs):
+        observed_counts.append(inputs.parameter_count)
+        return original(stack_value, inputs)
+
+    monkeypatch.setattr(module, "_periodic_jacobian", audited)
+    primal, jacobian = module.parratt_reflectivity_jacobian(
+        q,
+        stack,
+        q_jacobian,
+        thickness_jacobian,
+        sld_jacobian,
+        roughness_jacobian,
+    )
+
+    assert observed_counts == [2]
+    assert primal.shape == q.shape
+    assert jacobian.shape == (q.size, 4)
+    np.testing.assert_array_equal(jacobian[:, (1, 3)], 0.0)
+
+
+def test_periodic_tangents_reuse_identical_expanded_optics() -> None:
+    module = import_module("xrr_fitter.physics.derivatives")
+    stack = SlabStack(
+        [0, 28, 42, 28, 42, 0],
+        [
+            0j,
+            55e-6 + 1.4e-6j,
+            20e-6 + 0.2e-6j,
+            55e-6 + 1.4e-6j,
+            20e-6 + 0.2e-6j,
+            24e-6 + 0.3e-6j,
+        ],
+        [2.5, 4, 3, 4, 5],
+        (PeriodicSpan(1, 2, 2),),
+    )
+    q = np.linspace(0.01, 0.3, 80)
+    tangents = _tangents(stack, q)
+    inputs = module._inputs(q, stack, *tangents)
+    optics = module._PeriodicTangents(stack, inputs)
+
+    first_kz = optics.kz_at(1)
+    repeated_kz = optics.kz_at(3)
+    first_interface = optics.interface_at(1)
+    repeated_interface = optics.interface_at(3)
+
+    assert repeated_kz[0] is first_kz[0]
+    assert repeated_kz[1] is first_kz[1]
+    assert repeated_interface[0] is first_interface[0]
+    assert repeated_interface[1] is first_interface[1]
+
+
 def test_analytic_tangent_matches_centered_difference() -> None:
     from xrr_fitter.physics.parratt import parratt_reflectivity
     q = np.linspace(0.01, 0.3, 80)
@@ -90,6 +168,47 @@ def test_analytic_tangent_matches_centered_difference() -> None:
     finite = (parratt_reflectivity(q, plus) - parratt_reflectivity(q, minus)) / (2 * eps)
     np.testing.assert_allclose(primal, parratt_reflectivity(q, stack), rtol=1e-13)
     np.testing.assert_allclose(jacobian[:, 0], finite, rtol=2e-7, atol=2e-10)
+
+
+def test_compose_batches_periodic_tangent_product_rule(monkeypatch) -> None:
+    module = import_module("xrr_fitter.physics.derivatives")
+    rng = np.random.default_rng(20240607)
+
+    def complex_values(*shape: int) -> np.ndarray:
+        return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+    left = complex_values(20, 2, 2)
+    right = complex_values(20, 2, 2)
+    left_tangent = complex_values(20, 2, 2, 6)
+    right_tangent = complex_values(20, 2, 2, 6)
+    expected_matrix = np.empty_like(left)
+    expected_tangent = np.empty_like(left_tangent)
+    for row in range(2):
+        for column in range(2):
+            expected_matrix[:, row, column] = (
+                left[:, row, 0] * right[:, 0, column]
+                + left[:, row, 1] * right[:, 1, column]
+            )
+            expected_tangent[:, row, column] = (
+                left_tangent[:, row, 0] * right[:, 0, column, None]
+                + left[:, row, 0, None] * right_tangent[:, 0, column]
+                + left_tangent[:, row, 1] * right[:, 1, column, None]
+                + left[:, row, 1, None] * right_tangent[:, 1, column]
+            )
+    expected = module._normalize(expected_matrix, expected_tangent)
+    calls: list[str] = []
+    original_einsum = np.einsum
+
+    def audited_einsum(subscripts, *operands, **kwargs):
+        calls.append(subscripts)
+        return original_einsum(subscripts, *operands, **kwargs)
+
+    monkeypatch.setattr(np, "einsum", audited_einsum)
+    actual = module._compose(left, left_tangent, right, right_tangent)
+
+    assert calls == ["qijp,qjk->qikp", "qij,qjkp->qikp"]
+    np.testing.assert_allclose(actual[0], expected[0], rtol=1e-14, atol=1e-16)
+    np.testing.assert_allclose(actual[1], expected[1], rtol=1e-14, atol=1e-16)
 
 
 def test_quadrature_jacobian_reuses_fine_tangent_values_for_order_selection() -> None:

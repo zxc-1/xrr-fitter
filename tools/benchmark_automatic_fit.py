@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
@@ -17,10 +16,56 @@ from time import monotonic
 
 import xrr_fitter.api as api
 
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
+
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "examples" / "single-layer.xy"
-TRUTH_THICKNESS_A = 173.0
 MASTER_SEED = 1701
+
+
+def _validate_run_identity(
+    case_id: str,
+    repeat_index: int,
+    elapsed_seconds: float,
+) -> None:
+    if not case_id or repeat_index < 0:
+        raise ValueError("case_id and repeat_index must identify one run")
+    if not isfinite(elapsed_seconds) or elapsed_seconds < 0.0:
+        raise ValueError("elapsed_seconds must be finite and nonnegative")
+
+
+def _validated_stages(
+    stage_nfev: tuple[tuple[str, int], ...],
+    total_nfev: int,
+) -> tuple[tuple[str, int], ...]:
+    stages = tuple(stage_nfev)
+    if len({name for name, _count in stages}) != len(stages):
+        raise ValueError("stage_nfev names must be unique")
+    if any(not name or count < 0 for name, count in stages):
+        raise ValueError("stage_nfev values must be named and nonnegative")
+    if total_nfev != sum(count for _name, count in stages):
+        raise ValueError("total_nfev must equal the stage_nfev sum")
+    return stages
+
+
+def _validate_analysis_counts(bootstrap_count: int, profile_count: int) -> None:
+    if bootstrap_count < 0 or profile_count < 0:
+        raise ValueError("analysis work counts must be nonnegative")
+
+
+def _validated_dataset_metrics(
+    statuses: tuple[tuple[str, str], ...],
+    recovery_errors: tuple[tuple[str, float | None], ...],
+) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, float | None], ...]]:
+    status_values = tuple(statuses)
+    error_values = tuple(recovery_errors)
+    status_ids = tuple(dataset_id for dataset_id, _status in status_values)
+    error_ids = tuple(dataset_id for dataset_id, _error in error_values)
+    if not status_values or len(set(status_ids)) != len(status_ids):
+        raise ValueError("statuses must identify unique datasets")
+    if error_ids != status_ids:
+        raise ValueError("recovery_errors must align with statuses")
+    return status_values, error_values
 
 
 def _positive_integer(value: str) -> int:
@@ -54,27 +99,17 @@ class BenchmarkRun:
     recovery_errors: tuple[tuple[str, float | None], ...]
 
     def __post_init__(self) -> None:
-        if not self.case_id or self.repeat_index < 0:
-            raise ValueError("case_id and repeat_index must identify one run")
-        if not isfinite(self.elapsed_seconds) or self.elapsed_seconds < 0.0:
-            raise ValueError("elapsed_seconds must be finite and nonnegative")
-        stages = tuple(self.stage_nfev)
-        if len({name for name, _count in stages}) != len(stages):
-            raise ValueError("stage_nfev names must be unique")
-        if any(not name or count < 0 for name, count in stages):
-            raise ValueError("stage_nfev values must be named and nonnegative")
-        if self.total_nfev != sum(count for _name, count in stages):
-            raise ValueError("total_nfev must equal the stage_nfev sum")
-        if self.bootstrap_count < 0 or self.profile_count < 0:
-            raise ValueError("analysis work counts must be nonnegative")
-        statuses = tuple(self.statuses)
-        errors = tuple(self.recovery_errors)
-        status_ids = tuple(dataset_id for dataset_id, _status in statuses)
-        error_ids = tuple(dataset_id for dataset_id, _error in errors)
-        if not statuses or len(set(status_ids)) != len(status_ids):
-            raise ValueError("statuses must identify unique datasets")
-        if error_ids != status_ids:
-            raise ValueError("recovery_errors must align with statuses")
+        _validate_run_identity(
+            self.case_id,
+            self.repeat_index,
+            self.elapsed_seconds,
+        )
+        stages = _validated_stages(self.stage_nfev, self.total_nfev)
+        _validate_analysis_counts(self.bootstrap_count, self.profile_count)
+        statuses, errors = _validated_dataset_metrics(
+            self.statuses,
+            self.recovery_errors,
+        )
         object.__setattr__(self, "stage_nfev", stages)
         object.__setattr__(self, "statuses", statuses)
         object.__setattr__(self, "recovery_errors", errors)
@@ -114,100 +149,6 @@ def canonical_json(report: dict[str, object]) -> str:
     return json.dumps(report, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
 
-def _copy_sources(
-    root: Path,
-    count: int,
-    token: str,
-) -> tuple[Path, ...]:
-    paths = []
-    for index in range(1, count + 1):
-        path = root / f"P{index} {token}.xy"
-        shutil.copyfile(SOURCE, path)
-        paths.append(path)
-    return tuple(paths)
-
-
-def _project(paths: tuple[Path, ...], case_id: str) -> tuple[api.XrrProject, str]:
-    preset = api.MeasurementPreset(
-        "automatic-benchmark",
-        api.BeamSpec("monochromatic", wavelength_a=1.5406),
-        api.InstrumentSpec(instrument_id="automatic-benchmark", footprint_mode="none"),
-    )
-    project = api.new_project()
-    project = replace(project, fit_config=api.FitConfig.fast(MASTER_SEED))
-    batch_id = f"automatic-benchmark-{case_id}"
-    preview = api.preview_import_batch(paths, preset, batch_id)
-    imported = api.import_dataset_batch(project, preview)
-    if imported.failures or len(imported.imported_dataset_ids) != len(paths):
-        raise RuntimeError(f"benchmark source import failed: {imported.failures}")
-    return imported.updated_project, batch_id
-
-
-def _thickness_error(
-    dataset: api.DatasetProject,
-    truth_thickness_a: float = TRUTH_THICKNESS_A,
-) -> float | None:
-    result = dataset.last_valid_result
-    candidate = None if result is None else result.best_candidate
-    if candidate is None:
-        return None
-    value = next(
-        (
-            parameter.value
-            for parameter in candidate.parameters
-            if parameter.name == "component.0.thickness_a"
-        ),
-        None,
-    )
-    return (
-        None
-        if value is None
-        else abs(value - truth_thickness_a) / truth_thickness_a
-    )
-
-
-def _benchmark_case(
-    root: Path,
-    case_id: str,
-    repeat_index: int,
-    *,
-    count: int,
-    token: str,
-) -> BenchmarkRun:
-    paths = _copy_sources(root, count, token)
-    project, batch_id = _project(paths, case_id)
-    ledger = _recovery_support().AutomaticWorkLedger()
-    started = monotonic()
-    result = api.fit_automatically(
-        project,
-        batch_id,
-        checkpoint_callback=ledger.observe,
-    )
-    elapsed = monotonic() - started
-    updated = result.updated_project
-    ledger.observe(updated)
-    stages, bootstrap, profiles = ledger.metrics()
-    statuses = tuple(
-        (dataset.dataset_id, dataset.automation.status.value)
-        for dataset in updated.datasets
-    )
-    errors = tuple(
-        (dataset.dataset_id, _thickness_error(dataset))
-        for dataset in updated.datasets
-    )
-    return BenchmarkRun(
-        case_id,
-        repeat_index,
-        elapsed,
-        stages,
-        sum(count for _stage, count in stages),
-        bootstrap,
-        profiles,
-        statuses,
-        errors,
-    )
-
-
 def _recovery_support():
     root = str(ROOT)
     if root not in sys.path:
@@ -215,6 +156,22 @@ def _recovery_support():
     from tests.support import automatic_recovery
 
     return automatic_recovery
+
+
+def _benchmark_fixture(root: Path, case_id: str, count: int):
+    recovery = _recovery_support()
+    fixture = (
+        recovery.build_direct_sld_fixture(root)
+        if count == 1
+        else recovery.build_shared_local_fixture(root)
+    )
+    project = replace(fixture.project, datasets=fixture.project.datasets[:count])
+    return replace(
+        fixture,
+        case_id=case_id,
+        project=project,
+        targets=fixture.targets[:count],
+    )
 
 
 def _adaptive_cases():
@@ -317,13 +274,11 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
             case_id = "single" if count == 1 else f"batch-{count}"
             case_root = root / f"{repeat_index}-{case_id}"
             case_root.mkdir()
+            fixture = _benchmark_fixture(case_root, case_id, count)
             runs.append(
-                _benchmark_case(
-                    case_root,
-                    case_id,
+                _benchmark_recovery_case(
+                    fixture,
                     repeat_index,
-                    count=count,
-                    token="SiO2",
                 )
             )
     return build_report(mode, batch_size, args.repeat, tuple(runs))

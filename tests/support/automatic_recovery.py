@@ -1,4 +1,9 @@
-"""Deterministic, bounded automatic-fit recovery fixtures."""
+"""Deterministic, bounded automatic-fit recovery fixtures.
+
+Builders stop before fitting so benchmarks time only the public fit call. Run
+helpers share one callback-driven work ledger that preserves prefits, joint
+attempts, isolated retries, and analysis work without counting projections twice.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +26,7 @@ AIR = api.MaterialSpec("Air", None, None, 0.0j)
 SILICON = api.MaterialSpec("Si", "Si", 2.329)
 SILICA = api.MaterialSpec("SiO2", "SiO2", 2.20)
 ZIRCONIUM = api.MaterialSpec("Zr", "Zr", 6.52)
+MOLYBDENUM = api.MaterialSpec("Mo", "Mo", 10.28)
 DIRECT_SLD = api.MaterialSpec("CrSiC", None, None, 24e-6 + 0.0j)
 
 FreeSettings = Mapping[str, tuple[float, float, float]]
@@ -243,9 +249,11 @@ def _write_curve(
     noise_decades: float,
     systematic_decades: float = 0.0,
     point_count: int = 140,
+    theta_min_deg: float = 0.04,
+    theta_max_deg: float = 3.2,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    theta_deg = np.linspace(0.04, 3.2, point_count)
+    theta_deg = np.linspace(theta_min_deg, theta_max_deg, point_count)
     intensity = instrument_reflectivity(
         theta_deg,
         expand_structure(structure, BEAM.wavelength_a),
@@ -397,6 +405,46 @@ def run_direct_sld_recovery(root: Path) -> RecoveryRun:
     return _completed_run(fixture.case_id, fixture.project, fixture.import_batch_id)
 
 
+def build_ambiguous_low_angle_fixture(root: Path) -> RecoveryFixture:
+    path = _write_curve(
+        root / "A1 Mo.xy",
+        _structure(MOLYBDENUM, 220.0, roughness_a=5.0),
+        seed=16000,
+        noise_decades=0.01,
+        point_count=300,
+        theta_min_deg=0.03,
+        theta_max_deg=0.22,
+    )
+    batch_id = "automatic-recovery-ambiguous-low-angle"
+    project = _configure(
+        _import_project((path,), batch_id),
+        {
+            "component.0.thickness_a": (180.0, 80.0, 320.0),
+            "component.0.roughness_a": (4.0, 0.0, 20.0),
+        },
+        workers=1,
+    )
+    return RecoveryFixture(
+        "ambiguous-low-angle",
+        project,
+        batch_id,
+        (
+            RecoveryTarget(
+                "A1",
+                (
+                    ("component.0.thickness_a", 220.0),
+                    ("component.0.roughness_a", 5.0),
+                ),
+            ),
+        ),
+    )
+
+
+def run_ambiguous_low_angle_recovery(root: Path) -> RecoveryRun:
+    fixture = build_ambiguous_low_angle_fixture(root)
+    return _completed_run(fixture.case_id, fixture.project, fixture.import_batch_id)
+
+
 def build_shared_local_fixture(root: Path) -> RecoveryFixture:
     thicknesses = (90.0, 100.0, 110.0, 120.0)
     paths = tuple(
@@ -437,6 +485,27 @@ def build_shared_local_fixture(root: Path) -> RecoveryFixture:
 def run_shared_local_recovery(root: Path) -> RecoveryRun:
     fixture = build_shared_local_fixture(root)
     return _completed_run(fixture.case_id, fixture.project, fixture.import_batch_id)
+
+
+def build_two_point_joint_project(root: Path) -> api.XrrProject:
+    thicknesses = (90.0, 110.0)
+    paths = tuple(
+        _write_curve(
+            root / f"J{index} Zr.xy",
+            _structure(ZIRCONIUM, thickness, density_scale=0.93),
+            seed=300 + index,
+            noise_decades=0.01,
+        )
+        for index, thickness in enumerate(thicknesses, 1)
+    )
+    return _configure(
+        _import_project(paths, "automatic-recovery-joint-spawn"),
+        {
+            "component.0.thickness_a": (100.0, 60.0, 150.0),
+            "component.0.density_scale": (0.90, 0.70, 1.10),
+        },
+        workers=len(paths),
+    )
 
 
 def build_isolated_outlier_fixture(root: Path) -> RecoveryFixture:

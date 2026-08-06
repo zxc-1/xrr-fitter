@@ -81,17 +81,80 @@ def test_work_signature_requires_consistent_stage_total(load_tool_module) -> Non
         )
 
 
-def test_benchmark_project_fixes_project_and_fit_seeds(
+@pytest.mark.parametrize("count", (1, 2, 3, 4))
+def test_bounded_benchmark_fixture_fixes_seeds_and_search_budget(
     load_tool_module,
     tmp_path,
+    count,
 ) -> None:
     module = load_tool_module("benchmark_automatic_fit")
-    paths = module._copy_sources(tmp_path, 1, "SiO2")
 
-    project, _batch_id = module._project(paths, "deterministic")
+    fixture = module._benchmark_fixture(tmp_path, "deterministic", count)
+    project = fixture.project
 
+    assert len(project.datasets) == count
+    assert len(fixture.targets) == count
     assert project.master_seed == module.MASTER_SEED
     assert project.fit_config.master_seed == module.MASTER_SEED
+    assert project.fit_config.budget.short_de_maxiter == 0
+    assert project.fit_config.budget.full_de_maxiter == 0
+
+
+@pytest.mark.parametrize(
+    ("arguments", "count", "case_id"),
+    (
+        (("--single",), 1, "single"),
+        (("--batch-size", "2"), 2, "batch-2"),
+        (("--batch-size", "4"), 4, "batch-4"),
+    ),
+)
+def test_single_and_batch_modes_use_the_bounded_synthetic_fixture(
+    load_tool_module,
+    monkeypatch,
+    arguments,
+    count,
+    case_id,
+) -> None:
+    module = load_tool_module("benchmark_automatic_fit")
+    built = []
+    fixture = SimpleNamespace(case_id=case_id)
+
+    def build(root, observed_case_id, observed_count):
+        built.append((root.name, observed_case_id, observed_count))
+        return fixture
+
+    monkeypatch.setattr(module, "_benchmark_fixture", build, raising=False)
+
+    def benchmark(observed, repeat_index):
+        assert observed is fixture
+        return module.BenchmarkRun(
+            case_id,
+            repeat_index,
+            0.0,
+            (),
+            0,
+            0,
+            0,
+            ((case_id, "passed"),),
+            ((case_id, 0.0),),
+        )
+
+    monkeypatch.setattr(module, "_benchmark_recovery_case", benchmark)
+
+    def reject_copied_source(*_args, **_kwargs):
+        pytest.fail("single/batch mode copied the unbounded example source")
+
+    monkeypatch.setattr(
+        module,
+        "_benchmark_case",
+        reject_copied_source,
+        raising=False,
+    )
+
+    report = module.run_benchmark(module.parse_args(arguments))
+
+    assert built == [(f"0-{case_id}", case_id, count)]
+    assert report["runs"][0]["case_id"] == case_id
 
 
 def test_adaptive_mode_uses_every_deterministic_recovery_fixture(
@@ -143,7 +206,12 @@ def test_adaptive_mode_uses_every_deterministic_recovery_fixture(
     def reject_fake_source_case(*_args, **_kwargs):
         pytest.fail("adaptive mode used the copied single-layer source")
 
-    monkeypatch.setattr(module, "_benchmark_case", reject_fake_source_case)
+    monkeypatch.setattr(
+        module,
+        "_benchmark_case",
+        reject_fake_source_case,
+        raising=False,
+    )
 
     report = module.run_benchmark(module.parse_args(("--adaptive", "--repeat", "2")))
 

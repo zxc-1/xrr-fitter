@@ -44,6 +44,7 @@ from xrr_fitter.gui.plots.reflectivity import (
     draw_raw,
     draw_residual,
     prepare_project_plots,
+    preview_display_values,
     validate_plot_data,
     validate_result,
 )
@@ -117,6 +118,7 @@ class PlotPanel(QWidget):
         self._candidate_id: str | None = None
         self._trends: BatchTrends | None = None
         self._visible_range: tuple[float, float] | None = None
+        self._preview_line: object | None = None
         self._released = False
         self.toolbar = PlotInteractionToolbar(self)
         self.tabs, self._views = build_tabs()
@@ -344,9 +346,57 @@ class PlotPanel(QWidget):
         values.update(changes)
         return _Projection(**values)
 
+    def set_preview_curve(
+        self,
+        qz_a_inv: object,
+        model_normalized: object,
+    ) -> bool:
+        """Overlay the searching model on the log view without a projection.
+
+        A live preview updates many times per search, so it mutates one owned
+        line artist instead of running the transactional redraw. It carries no
+        committed evidence and is discarded whenever a real projection lands.
+        """
+        if self._dataset_id is None or self._released:
+            return False
+        angles, values = preview_display_values(
+            self._active_data(),
+            qz_a_inv,
+            model_normalized,
+        )
+        view = self._views["log"]
+        if self._preview_line is None:
+            self._preview_line = view.axes.plot(
+                angles,
+                values,
+                "-",
+                color="#009E73",
+                linewidth=1.4,
+                label="搜索中模型",
+            )[0]
+            view.axes.legend()
+        else:
+            self._preview_line.set_data(angles, values)
+        view.canvas.draw_idle()
+        return True
+
+    def clear_preview_curve(self) -> None:
+        """Drop the live overlay so committed evidence renders on its own."""
+        line = self._preview_line
+        self._preview_line = None
+        if line is None or self._released:
+            return
+        line.remove()
+        view = self._views["log"]
+        view.axes.legend()
+        view.canvas.draw_idle()
+
     def _transact(self, projection: _Projection) -> None:
         if self._released:
             raise RuntimeError("plot panel resources have been released")
+        # A full projection clears every axes, so the preview artist it owned
+        # is already gone; dropping the reference avoids reusing a dead line.
+        self._preview_line = None
         scratch = build_scratch_views()
         try:
             self._draw(scratch, projection)

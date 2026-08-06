@@ -99,14 +99,18 @@ def test_known_and_unknown_material_results_do_not_confuse_mass_density() -> Non
     summary = summarize_automatic_results(value, "batch-1")
 
     known, unknown = summary.datasets[0].layers
-    assert known.fitted_density_g_cm3 == pytest.approx(
-        known.nominal_density_g_cm3 * known.density_scale
-    )
-    assert unknown.nominal_density_g_cm3 is None
-    assert unknown.fitted_density_g_cm3 is None
-    assert unknown.density_note == "配比未知，无法换算"
-    assert unknown.electron_density_a3 == pytest.approx(
-        unknown.sld_real_a2 / 2.8179403262e-5
+    assert (
+        known.fitted_density_g_cm3,
+        unknown.nominal_density_g_cm3,
+        unknown.fitted_density_g_cm3,
+        unknown.density_note,
+        unknown.electron_density_a3,
+    ) == (
+        pytest.approx(known.nominal_density_g_cm3 * known.density_scale),
+        None,
+        None,
+        "配比未知，无法换算",
+        pytest.approx(unknown.sld_real_a2 / 2.8179403262e-5),
     )
 
 
@@ -119,8 +123,16 @@ def test_uniformity_uses_only_passed_members_and_population_standard_deviation()
 
     item = summarize_automatic_results(value, "batch-1").uniformity[0]
 
-    assert item.count == 2
-    assert item.mean_thickness_a == 95.0
-    assert item.population_std_a == 5.0
-    assert item.cv_percent == pytest.approx(5.0 / 95.0 * 100.0)
-    assert item.relative_range_percent == pytest.approx(10.0 / 95.0 * 100.0)
+    assert (
+        item.count,
+        item.mean_thickness_a,
+        item.population_std_a,
+        item.cv_percent,
+        item.relative_range_percent,
+    ) == (
+        2,
+        95.0,
+        5.0,
+        pytest.approx(5.0 / 95.0 * 100.0),
+        pytest.approx(10.0 / 95.0 * 100.0),
+    )

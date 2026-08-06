@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import traceback
+from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -101,10 +101,22 @@ class FitController(QObject):
         return events
 
     def _dispatch_batch(self, events: tuple[api.OperationEvent, ...]) -> None:
+        """Project one frame per stage while preserving durable event order.
+
+        A single poll may carry hundreds of progress values, so consecutive
+        frames of the same stage coalesce into their latest value. A stage
+        change still publishes the stage it leaves behind, which keeps every
+        stage visible instead of collapsing the whole batch into one frame.
+        """
         pending_progress: api.FitProgress | None = None
         for event in events:
             self.event_received.emit(event)
             if event.kind == "progress":
+                if (
+                    pending_progress is not None
+                    and event.progress.stage != pending_progress.stage
+                ):
+                    self._flush_progress(pending_progress)
                 pending_progress = event.progress
                 continue
             self._flush_progress(pending_progress)

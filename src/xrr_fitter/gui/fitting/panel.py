@@ -27,6 +27,7 @@ class FitPanel(QWidget):
     result_published = Signal(object)
     checkpoint_published = Signal(object)
     operation_failed = Signal(object)
+    preview_available = Signal(object, object)
 
     def __init__(self, document: ProjectDocument) -> None:
         super().__init__()
@@ -96,10 +97,19 @@ class FitPanel(QWidget):
     def _connect_controller(self) -> None:
         self.controller.running_changed.connect(self._project_running_state)
         self.controller.progress_changed.connect(self.progress_view.set_progress)
+        self.controller.progress_changed.connect(self._project_preview)
         self.controller.checkpoint_ready.connect(self._publish_checkpoint)
         self.controller.fit_finished.connect(self._publish_fit_result)
         self.controller.cancelled.connect(self._show_cancelled)
         self.controller.failed.connect(self._show_failure)
+
+    def _project_preview(self, progress: api.FitProgress) -> None:
+        """Republish only the progress values that carry a preview curve."""
+        qz = progress.preview_qz_a_inv
+        model = progress.preview_model_normalized
+        if qz is None or model is None:
+            return
+        self.preview_available.emit(qz, model)
 
     @property
     def is_running(self) -> bool:

@@ -1,4 +1,11 @@
-"""Dataset import panel backed exclusively by the supported application API."""
+"""Dataset import panel backed exclusively by the supported application API.
+
+The panel owns file selection, measurement presets, filename material previews,
+substrate confirmation, and fit-mask editing. Every mutation adopts the immutable
+project returned by ``xrr_fitter.api``; widgets never patch domain objects in
+place. Batch failures remain visible per source while successful imports update
+the active dataset and the compact source/instrument summary atomically.
+"""
 
 from __future__ import annotations
 
@@ -437,8 +444,17 @@ class DataPanel(QWidget):
             self._confirm_import((Path(name),), folder=True)
 
     def _change_measurement_preset(self) -> None:
+        """Scope a replacement preset to one file-selection attempt.
+
+        Cancelling either chooser leaves the saved preset untouched. The transient
+        flag is cleared even when import validation reports an error, so a later
+        ordinary import can continue using the persisted measurement declaration.
+        """
         self._force_preset_dialog = True
-        self._import_files()
+        try:
+            self._import_files()
+        finally:
+            self._force_preset_dialog = False
 
     def _confirm_import(self, paths: tuple[Path, ...], *, folder: bool) -> None:
         try:
@@ -457,7 +473,6 @@ class DataPanel(QWidget):
                 )
                 mapping = dialog.column_mapping()
                 recursive = dialog.recursive_folder_import()
-                self._force_preset_dialog = False
             sources = self._folder_paths(paths[0], recursive) if folder else paths
             self.import_paths(sources, preset=preset, column_mapping=mapping)
         except (InterruptedError, OSError, ValueError, TypeError) as error:

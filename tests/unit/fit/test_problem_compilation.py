@@ -4,6 +4,8 @@ Coverage keeps parameter layout, stage locks, geometry-dependent bounds, and
 analytic evaluation tied to one immutable compiled snapshot.
 The suite also proves that the shared context survives serialization without
 exposing writable arrays or changing coordinate identity.
+Automatic direct-SLD and staged-release cases additionally bind generated
+parameter modes to the same physical-vector contract.
 """
 
 from __future__ import annotations

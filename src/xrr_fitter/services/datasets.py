@@ -1,4 +1,21 @@
-"""Dataset import, source acceptance, and derived-state invalidation."""
+"""Dataset import, source acceptance, and derived-state invalidation.
+
+This service owns deterministic dataset IDs and seed branches, source parsing,
+measurement metadata, filename-derived automatic structures, and immutable
+project insertion. Batch previews remain descriptive until this module imports
+each valid row in source order; one malformed row becomes an ``ImportFailure``
+without rolling back successful siblings.
+
+Any mutation that changes fitted physics clears candidates, checkpoints,
+evidence, and scale priors through one invalidation path. Expert joint projects
+invalidate as a complete graph, while automatic projects invalidate only the
+matching fit group. Manual rows retain their automation state and unrelated
+automatic groups remain publishable.
+
+Source replacement is split into preview and acceptance so callers can display
+hash drift before adopting bytes. Fit masks, instruments, and structures use the
+same derived-state contract rather than maintaining parallel cleanup rules.
+"""
 
 from __future__ import annotations
 
@@ -266,6 +283,29 @@ def _append_imported_dataset(
     return replace(project, datasets=(*datasets, dataset), ui_state=state)
 
 
+def _import_preview_row(
+    project: XrrProject,
+    row: ImportFilePreview,
+    preview: ImportBatchPreview,
+    choices: Mapping[str, str],
+    mappings: Mapping[str, DataColumnMapping],
+) -> DatasetProject:
+    if row.error is not None:
+        raise ValueError(row.error)
+    backing_token = "Si"
+    if row.requires_substrate_choice:
+        if row.substrate_group_id not in choices:
+            raise ValueError("substrate choice is required for this structure group")
+        backing_token = choices[row.substrate_group_id]
+    return _automatic_dataset(
+        project,
+        row,
+        preview,
+        backing_token,
+        mappings.get(row.source_path),
+    )
+
+
 def import_dataset_batch(
     project: XrrProject,
     preview: ImportBatchPreview,
@@ -283,21 +323,13 @@ def import_dataset_batch(
     imported = []
     failures = []
     for row in preview.files:
-        if row.error is not None:
-            failures.append(_import_failure(row, ValueError(row.error)))
-            continue
         try:
-            backing_token = "Si"
-            if row.requires_substrate_choice:
-                if row.substrate_group_id not in choices:
-                    raise ValueError("substrate choice is required for this structure group")
-                backing_token = choices[row.substrate_group_id]
-            dataset = _automatic_dataset(
+            dataset = _import_preview_row(
                 updated,
                 row,
                 preview,
-                backing_token,
-                mappings.get(row.source_path),
+                choices,
+                mappings,
             )
             updated = _append_imported_dataset(updated, dataset)
             imported.append(dataset.dataset_id)
@@ -405,6 +437,17 @@ def _reset_automatic_state(dataset: DatasetProject) -> DatasetAutomation:
     )
 
 
+def _automatic_fit_group_member(
+    dataset: DatasetProject,
+    groups: set[str],
+) -> bool:
+    state = dataset.automation
+    return (
+        state.role is not AutomaticRole.MANUAL
+        and state.fit_group_id in groups
+    )
+
+
 def _dependent_fit_ids(project: XrrProject, changed_ids: set[str]) -> set[str]:
     if project.batch_mode == "joint" and changed_ids:
         return {dataset.dataset_id for dataset in project.datasets}
@@ -417,7 +460,7 @@ def _dependent_fit_ids(project: XrrProject, changed_ids: set[str]) -> set[str]:
     automatic = {
         dataset.dataset_id
         for dataset in project.datasets
-        if dataset.automation.fit_group_id in groups
+        if _automatic_fit_group_member(dataset, groups)
     }
     if automatic:
         return changed_ids | automatic

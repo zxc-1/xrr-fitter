@@ -19,7 +19,7 @@ from xrr_fitter.physics.materials import (
     material_sld,
 )
 
-_UNKNOWN_DENSITY_NOTE = "配比未知，无法换算"
+UNKNOWN_DENSITY_NOTE = "配比未知，无法换算"
 
 
 def _automatic_datasets(
@@ -122,7 +122,7 @@ def _layer_result(
         sld = _direct_sld(dataset, layer, parameters, prefix)
         nominal_density = None
         fitted_density = None
-        density_note = _UNKNOWN_DENSITY_NOTE
+        density_note = UNKNOWN_DENSITY_NOTE
     return AutomaticLayerResult(
         dataset_id=dataset.dataset_id,
         layer_index=layer_index,

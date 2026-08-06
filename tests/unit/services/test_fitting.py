@@ -1,3 +1,11 @@
+"""Automatic fitting service orchestration contracts.
+
+The suite covers readiness, seed allocation, adaptive search, recovery analysis,
+absorption release, and project publication through the service boundary. Tests
+keep search provenance and immutable project transitions visible while replacing
+expensive numerical work with deterministic collaborators where appropriate.
+"""
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -14,9 +22,12 @@ from tests.support.model_cases import (
     simple_structure,
 )
 
+from xrr_fitter.analysis.report import AnalysisRequest
 from xrr_fitter.evaluation import encode_physical_vector
-from xrr_fitter.fit.candidates import candidate_from_evaluation
+from xrr_fitter.fit.automatic import candidate_from_physical_values
+from xrr_fitter.fit.candidates import best_candidate_index, candidate_from_evaluation
 from xrr_fitter.fit.objective import evaluate_vector
+from xrr_fitter.fit.pipeline import FitSearchRequest
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.automation import (
@@ -28,11 +39,28 @@ from xrr_fitter.model.automation import (
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.fitting import FitConfig, FitSearchResult, FitStageSummary
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.operations import FitReadiness, ProjectFitResult
+from xrr_fitter.model.operations import ProjectFitResult
 from xrr_fitter.model.provenance import fit_search_provenance_sha256
 from xrr_fitter.model.structure import MaterialSpec
 from xrr_fitter.services import fitting
-from xrr_fitter.services.datasets import add_dataset
+from xrr_fitter.services.datasets import add_dataset, service_seed_branches
+from xrr_fitter.services.fitting_phases.automatic_absorption import (
+    _automatic_absorption_problem,
+    _automatic_absorption_search,
+)
+from xrr_fitter.services.fitting_phases.automatic_dataset import (
+    fit_automatic_prepared_dataset as fit_automatic_prepared_dataset_phase,
+)
+from xrr_fitter.services.fitting_phases.base import (
+    fit_prepared_dataset as fit_prepared_dataset_phase,
+)
+from xrr_fitter.services.fitting_phases.joint_execution import (
+    fit_joint_datasets as fit_joint_datasets_phase,
+)
+from xrr_fitter.services.fitting_phases.operations import (
+    automatic_worker_handler as automatic_worker_handler_phase,
+    fit_automatically as fit_automatically_phase,
+)
 from xrr_fitter.services.projects import new_project
 from xrr_fitter.services.structures import set_structure
 
@@ -262,6 +290,53 @@ def test_automatic_prepared_result_keeps_quality_reason_consistent() -> None:
         )
 
 
+def test_automatic_fit_returns_failed_result_when_stage_e_candidates_are_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem = _automatic_problem()
+    prepared = _automatic_prepared(problem)
+    valid_search = _stage_e_search(problem)
+    candidate = valid_search.best_candidate
+    assert candidate is not None
+    invalid = replace(
+        candidate,
+        objective=float("inf"),
+        valid=False,
+        stop_reason="invalid physical candidate",
+    )
+    search = replace(
+        valid_search,
+        candidates=(invalid,),
+        best_index=None,
+        stage_summaries=(
+            replace(
+                valid_search.stage_summaries[0],
+                best_objective=float("inf"),
+                stop_reasons=(invalid.stop_reason,),
+            ),
+        ),
+    )
+    search = replace(
+        search,
+        provenance_sha256=fit_search_provenance_sha256(problem, search),
+    )
+    monkeypatch.setattr(
+        fitting,
+        "run_fit_search",
+        lambda *_args, **_kwargs: search,
+    )
+
+    result = fitting.fit_automatic_prepared_dataset(
+        prepared,
+        local_workers=1,
+    )
+
+    assert result.passed is False
+    assert result.reason == "no valid candidate"
+    assert result.fit_result.best_candidate is None
+    assert result.fit_result.candidates == (invalid,)
+
+
 def test_automatic_absorption_problem_preserves_real_mode_constraints() -> None:
     problem = _automatic_problem()
     search = _stage_e_search(problem)
@@ -269,10 +344,11 @@ def test_automatic_absorption_problem_preserves_real_mode_constraints() -> None:
     assert baseline is not None
     values = {parameter.name: parameter.value for parameter in baseline.parameters}
 
-    trial = fitting._automatic_absorption_problem(
+    trial = _automatic_absorption_problem(
         problem,
         ("component.0.sld_imag_a2",),
         values,
+        compile_fit_problem=compile_fit_problem,
     )
 
     assert tuple(variable.name for variable in trial.variables) == (
@@ -294,9 +370,7 @@ def test_automatic_absorption_problem_preserves_real_mode_constraints() -> None:
     assert evaluate_vector(trial, unit).valid is True
 
 
-def test_automatic_absorption_rejects_insufficient_gain(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_automatic_absorption_rejects_insufficient_gain() -> None:
     problem = _automatic_problem()
     search = _stage_e_search(problem)
     baseline = search.best_candidate
@@ -307,26 +381,27 @@ def test_automatic_absorption_rejects_insufficient_gain(
         problem.config.confidence.equivalent_cost_floor,
     )
     trial = _absorption_trial_candidate(search, gain=0.5 * threshold, value=2e-6)
-    monkeypatch.setattr(
-        fitting,
-        "refit_from_physical_values",
-        lambda *_args, **_kwargs: SimpleNamespace(best_candidate=trial),
-    )
-
-    updated_prepared, result = fitting._automatic_absorption_search(
+    updated_prepared, result = _automatic_absorption_search(
         _automatic_prepared(problem),
         search,
         ("component.0.sld_imag_a2",),
         cancelled=None,
+        compile_fit_problem=compile_fit_problem,
+        refit_from_physical_values=lambda *_args, **_kwargs: SimpleNamespace(
+            best_candidate=trial
+        ),
+        candidate_from_physical_values=candidate_from_physical_values,
+        evaluate_vector=evaluate_vector,
+        candidate_from_evaluation=candidate_from_evaluation,
+        best_candidate_index=best_candidate_index,
+        fit_search_provenance_sha256=fit_search_provenance_sha256,
     )
 
     assert updated_prepared.problem is problem
     assert result is search
 
 
-def test_automatic_absorption_replaces_winner_and_preserves_stage_e_lineage(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_automatic_absorption_replaces_winner_and_preserves_stage_e_lineage() -> None:
     problem = _automatic_problem()
     search = _stage_e_search(problem)
     baseline = search.best_candidate
@@ -337,54 +412,65 @@ def test_automatic_absorption_replaces_winner_and_preserves_stage_e_lineage(
         problem.config.confidence.equivalent_cost_floor,
     )
     trial = _absorption_trial_candidate(search, gain=2.0 * threshold, value=2e-6)
-    monkeypatch.setattr(
-        fitting,
-        "refit_from_physical_values",
-        lambda *_args, **_kwargs: SimpleNamespace(best_candidate=trial),
-    )
-
-    updated_prepared, result = fitting._automatic_absorption_search(
+    updated_prepared, result = _automatic_absorption_search(
         _automatic_prepared(problem),
         search,
         ("component.0.sld_imag_a2",),
         cancelled=None,
+        compile_fit_problem=compile_fit_problem,
+        refit_from_physical_values=lambda *_args, **_kwargs: SimpleNamespace(
+            best_candidate=trial
+        ),
+        candidate_from_physical_values=candidate_from_physical_values,
+        evaluate_vector=evaluate_vector,
+        candidate_from_evaluation=candidate_from_evaluation,
+        best_candidate_index=best_candidate_index,
+        fit_search_provenance_sha256=fit_search_provenance_sha256,
     )
 
     winner = result.best_candidate
     assert winner is not None
-    assert winner is not baseline
-    assert winner.candidate_id == baseline.candidate_id
-    assert result.stage_summaries[-1].candidate_ids == (
-        baseline.candidate_id,
-    )
-    assert next(
+    imag_value = next(
         parameter.value
         for parameter in winner.parameters
         if parameter.name == "component.0.sld_imag_a2"
-    ) == pytest.approx(2e-6)
+    )
     fixed = next(
         definition
         for definition in updated_prepared.problem.parameter_definitions
         if definition.name == "component.0.sld_imag_a2"
     )
-    assert fixed.locked is True
-    assert fixed.initial == pytest.approx(2e-6)
     setting = next(
         value
         for value in updated_prepared.updated_dataset.parameter_settings
         if value.name == "component.0.sld_imag_a2"
     )
-    assert (setting.initial, setting.locked) == (pytest.approx(2e-6), True)
-    assert result.parameter_definitions == updated_prepared.problem.parameter_definitions
-    assert result.provenance_sha256 == fit_search_provenance_sha256(
-        updated_prepared.problem,
-        result,
+    assert (
+        winner is not baseline,
+        winner.candidate_id,
+        result.stage_summaries[-1].candidate_ids,
+        imag_value,
+        fixed.locked,
+        fixed.initial,
+        setting.initial,
+        setting.locked,
+        result.parameter_definitions,
+        result.provenance_sha256,
+    ) == (
+        True,
+        baseline.candidate_id,
+        (baseline.candidate_id,),
+        pytest.approx(2e-6),
+        True,
+        pytest.approx(2e-6),
+        pytest.approx(2e-6),
+        True,
+        updated_prepared.problem.parameter_definitions,
+        fit_search_provenance_sha256(updated_prepared.problem, result),
     )
 
 
-def test_automatic_clean_evidence_skips_recovery_bootstrap_and_profiles(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_automatic_clean_evidence_skips_recovery_bootstrap_and_profiles() -> None:
     problem = _automatic_problem()
     prepared = _automatic_prepared(problem)
     search = _stage_e_search(problem)
@@ -397,24 +483,29 @@ def test_automatic_clean_evidence_skips_recovery_bootstrap_and_profiles(
         profile_names=(),
         reasons=(),
     )
-    monkeypatch.setattr(fitting, "run_fit_search", lambda *_args, **_kwargs: search)
-    monkeypatch.setattr(
-        fitting,
-        "run_analysis",
-        lambda request, **_kwargs: requests.append(request) or analyzed,
-    )
-    monkeypatch.setattr(
-        fitting,
-        "assess_automatic_quality",
-        lambda *_args, **_kwargs: decision,
-    )
-    monkeypatch.setattr(
-        fitting,
-        "_automatic_profile_recovery",
-        lambda *_args, **_kwargs: pytest.fail("clean evidence ran basin recovery"),
-    )
 
-    result = fitting.fit_automatic_prepared_dataset(prepared, local_workers=1)
+    def analyze(request, **_kwargs):
+        requests.append(request)
+        return analyzed
+
+    _RecordingTaskRunner.reset()
+    result = fit_automatic_prepared_dataset_phase(
+        prepared,
+        local_workers=1,
+        fit_search_request=FitSearchRequest,
+        run_fit_search=lambda *_args, **_kwargs: search,
+        analysis_request=AnalysisRequest,
+        run_analysis=analyze,
+        assess_automatic_quality=lambda *_args, **_kwargs: decision,
+        automatic_profile_recovery=lambda *_args, **_kwargs: pytest.fail(
+            "clean evidence ran basin recovery"
+        ),
+        automatic_absorption_search=lambda current, current_search, *_args, **_kwargs: (
+            current,
+            current_search,
+        ),
+        task_runner_factory=_RecordingTaskRunner,
+    )
 
     assert result.passed is True
     assert len(requests) == 2
@@ -422,9 +513,7 @@ def test_automatic_clean_evidence_skips_recovery_bootstrap_and_profiles(
     assert all(request.profile_names == () for request in requests)
 
 
-def test_automatic_search_upgrade_runs_profile_recovery_at_most_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_automatic_search_upgrade_runs_profile_recovery_at_most_once() -> None:
     problem = _automatic_problem()
     prepared = _automatic_prepared(problem)
     search = _stage_e_search(problem)
@@ -456,25 +545,31 @@ def test_automatic_search_upgrade_runs_profile_recovery_at_most_once(
         )
     )
     requests = []
-    monkeypatch.setattr(fitting, "run_fit_search", lambda *_args, **_kwargs: search)
-    monkeypatch.setattr(
-        fitting,
-        "run_analysis",
-        lambda request, **_kwargs: requests.append(request) or analyzed,
-    )
-    monkeypatch.setattr(
-        fitting,
-        "assess_automatic_quality",
-        lambda *_args, **_kwargs: next(decisions),
-    )
+
+    def analyze(request, **_kwargs):
+        requests.append(request)
+        return analyzed
 
     def recover(*_args, **_kwargs):
         recovery_calls.append(True)
         return search
 
-    monkeypatch.setattr(fitting, "_automatic_profile_recovery", recover)
-
-    result = fitting.fit_automatic_prepared_dataset(prepared, local_workers=1)
+    _RecordingTaskRunner.reset()
+    result = fit_automatic_prepared_dataset_phase(
+        prepared,
+        local_workers=1,
+        fit_search_request=FitSearchRequest,
+        run_fit_search=lambda *_args, **_kwargs: search,
+        analysis_request=AnalysisRequest,
+        run_analysis=analyze,
+        assess_automatic_quality=lambda *_args, **_kwargs: next(decisions),
+        automatic_profile_recovery=recover,
+        automatic_absorption_search=lambda current, current_search, *_args, **_kwargs: (
+            current,
+            current_search,
+        ),
+        task_runner_factory=_RecordingTaskRunner,
+    )
 
     assert recovery_calls == [True]
     assert len(requests) == 3
@@ -501,9 +596,9 @@ def test_preflight_loads_current_sources_and_compiles_declared_structure(
 
 def test_fitting_composes_search_profile_recovery_and_analysis_in_order(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
     value = _project(tmp_path)
+    prepared = fitting.prepare_dataset_fit(value, "curve", value.master_seed)
     initial_search = SimpleNamespace(
         best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None)
     )
@@ -517,31 +612,26 @@ def test_fitting_composes_search_profile_recovery_and_analysis_in_order(
     harness = _FittingHarness(initial_search, decision, continued_search, analyzed)
     _RecordingTaskRunner.reset()
 
-    monkeypatch.setattr(
-        fitting,
-        "OrderedTaskRunner",
-        _RecordingTaskRunner,
-        raising=False,
-    )
-    monkeypatch.setattr(fitting, "run_fit_search", harness.run_search)
-    monkeypatch.setattr(fitting, "recover_profile_basin", harness.recover)
-    monkeypatch.setattr(fitting, "continue_profile_basin", harness.continue_search)
-    monkeypatch.setattr(fitting, "AnalysisRequest", harness.analysis_request)
-    monkeypatch.setattr(fitting, "run_analysis", harness.run_analysis)
-
-    result = fitting.fit_project(
-        value,
-        progress_callback=progress_events.append,
-        checkpoint_callback=lambda _project: None,
+    result = fit_prepared_dataset_phase(
+        prepared,
+        progress=progress_events.append,
+        checkpoint=lambda _checkpoint: None,
+        fit_search_request=FitSearchRequest,
+        run_fit_search=harness.run_search,
+        recover_profile_basin=harness.recover,
+        continue_profile_basin=harness.continue_search,
+        analysis_request=harness.analysis_request,
+        run_analysis=harness.run_analysis,
+        task_runner_factory=_RecordingTaskRunner,
     )
 
-    assert result.datasets[0].fit_result is analyzed
+    assert result is analyzed
     _assert_fitting_calls(harness, decision, continued_search)
-    _assert_shared_task_runner(harness, value.fit_config.local_workers)
+    _assert_shared_task_runner(harness, prepared.problem.config.local_workers)
     _assert_basin_progress(progress_events)
 
 
-def test_joint_fit_reports_finalizing_after_stage_e(monkeypatch) -> None:
+def test_joint_fit_reports_finalizing_after_stage_e() -> None:
     prepared = (
         SimpleNamespace(
             dataset_id="first",
@@ -560,16 +650,17 @@ def test_joint_fit_reports_finalizing_after_stage_e(monkeypatch) -> None:
         ),
     )
     analyzed = (object(), object())
-    monkeypatch.setattr(fitting, "compile_joint_problem", lambda *_args: object())
-    monkeypatch.setattr(fitting, "run_joint_fit", lambda *_args, **_kwargs: searches)
-    monkeypatch.setattr(
-        fitting,
-        "_analyze_joint_searches",
-        lambda _problem, _searches: analyzed,
-    )
     events = []
 
-    result = fitting.fit_joint_datasets(prepared, (), progress=events.append)
+    result = fit_joint_datasets_phase(
+        prepared,
+        (),
+        progress=events.append,
+        compile_joint_problem=lambda *_args: object(),
+        joint_fit_request=lambda problem, checkpoints: (problem, checkpoints),
+        run_joint_fit=lambda *_args, **_kwargs: searches,
+        analyze_joint_searches=lambda _problem, _searches: analyzed,
+    )
 
     assert result is analyzed
     assert [
@@ -625,11 +716,22 @@ def test_automatic_dataset_ids_select_only_runnable_statuses_and_batch() -> None
     )
 
 
-def test_fit_automatically_injects_spawn_safe_service_functions(monkeypatch) -> None:
-    from xrr_fitter.services import batch
-
+def test_automatic_operations_phase_injects_spawn_safe_service_functions(
+    tmp_path: Path,
+) -> None:
+    value = _project(tmp_path)
     current = replace(
-        project(_automatic_dataset("pending", "batch-1", AutomaticStatus.PENDING)),
+        value,
+        datasets=(
+            replace(
+                value.datasets[0],
+                automation=DatasetAutomation(
+                    import_batch_id="batch-1",
+                    role=AutomaticRole.UNROUTED,
+                    status=AutomaticStatus.PENDING,
+                ),
+            ),
+        ),
         measurement_preset=MeasurementPreset(
             "lab",
             BeamSpec("monochromatic"),
@@ -645,23 +747,28 @@ def test_fit_automatically_injects_spawn_safe_service_functions(monkeypatch) -> 
     def checkpoint(_value) -> None:
         return None
 
-    monkeypatch.setattr(
-        fitting,
-        "preflight_automatic_fit",
-        lambda *_args, **_kwargs: FitReadiness(True, "ready"),
-    )
-
     def transaction(*args, **kwargs):
         observed.append((args, kwargs))
         return expected
 
-    monkeypatch.setattr(batch, "fit_automatic_transaction", transaction)
+    def prepare_dataset(*_args, **_kwargs):
+        return SimpleNamespace()
 
-    result = fitting.fit_automatically(
+    def fit_dataset(*_args, **_kwargs):
+        return None
+
+    def fit_joint(*_args, **_kwargs):
+        return ()
+
+    result = fit_automatically_phase(
         current,
         "batch-1",
         progress_callback=progress,
         checkpoint_callback=checkpoint,
+        fit_automatic_transaction=transaction,
+        prepare_dataset_fit=prepare_dataset,
+        fit_automatic_prepared_dataset=fit_dataset,
+        fit_automatic_joint_group=fit_joint,
     )
 
     assert result is expected
@@ -669,20 +776,16 @@ def test_fit_automatically_injects_spawn_safe_service_functions(monkeypatch) -> 
         (
             (current, "batch-1", progress, checkpoint, None),
             {
-                "seed_branches": fitting.service_seed_branches,
-                "prepare_dataset": fitting.prepare_dataset_fit,
-                "fit_dataset": fitting.fit_automatic_prepared_dataset,
-                "fit_joint": fitting.fit_automatic_joint_group,
+                "seed_branches": service_seed_branches,
+                "prepare_dataset": prepare_dataset,
+                "fit_dataset": fit_dataset,
+                "fit_joint": fit_joint,
             },
         )
     ]
 
 
-def test_automatic_worker_handler_injects_spawn_safe_service_functions(
-    monkeypatch,
-) -> None:
-    from xrr_fitter.services import batch
-
+def test_automatic_worker_phase_injects_spawn_safe_service_functions() -> None:
     current = project(
         _automatic_dataset("pending", "batch-1", AutomaticStatus.PENDING)
     )
@@ -696,14 +799,25 @@ def test_automatic_worker_handler_injects_spawn_safe_service_functions(
     def cancelled() -> bool:
         return False
 
-    monkeypatch.setattr(batch, "fit_automatic_transaction", transaction)
+    def prepare_dataset(*_args, **_kwargs):
+        return SimpleNamespace()
 
-    result = fitting.automatic_worker_handler(
+    def fit_dataset(*_args, **_kwargs):
+        return None
+
+    def fit_joint(*_args, **_kwargs):
+        return ()
+
+    result = automatic_worker_handler_phase(
         current,
         "batch-1",
         None,
         None,
         cancelled,
+        fit_automatic_transaction=transaction,
+        prepare_dataset_fit=prepare_dataset,
+        fit_automatic_prepared_dataset=fit_dataset,
+        fit_automatic_joint_group=fit_joint,
     )
 
     assert result is expected
@@ -711,10 +825,10 @@ def test_automatic_worker_handler_injects_spawn_safe_service_functions(
         (
             (current, "batch-1", None, None, cancelled),
             {
-                "seed_branches": fitting.service_seed_branches,
-                "prepare_dataset": fitting.prepare_dataset_fit,
-                "fit_dataset": fitting.fit_automatic_prepared_dataset,
-                "fit_joint": fitting.fit_automatic_joint_group,
+                "seed_branches": service_seed_branches,
+                "prepare_dataset": prepare_dataset,
+                "fit_dataset": fit_dataset,
+                "fit_joint": fit_joint,
             },
         )
     ]

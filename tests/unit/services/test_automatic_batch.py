@@ -129,19 +129,35 @@ def test_mixed_import_batch_routes_singletons_and_matching_points_separately(
         fit_joint=calls.fit_joint,
     )
 
-    assert calls.prefit_dataset_ids == {"a", "b", "c", "d"}
-    assert calls.joint_groups == [("a", "b")]
-    assert tuple(item.dataset_id for item in result.datasets) == ("a", "b", "c", "d")
     by_id = {item.dataset_id: item.automation for item in result.updated_project.datasets}
-    assert by_id["a"].role is AutomaticRole.JOINT
-    assert by_id["b"].fit_group_id == by_id["a"].fit_group_id
-    assert by_id["a"].status is AutomaticStatus.PASSED
-    assert by_id["b"].status is AutomaticStatus.PASSED
-    assert by_id["c"].role is AutomaticRole.SINGLE
-    assert by_id["c"].status is AutomaticStatus.PASSED
-    assert by_id["d"].role is AutomaticRole.SINGLE
-    assert by_id["d"].fit_group_id != by_id["a"].fit_group_id
-    assert result.mode == "automatic"
+    actual = (
+        calls.prefit_dataset_ids,
+        calls.joint_groups,
+        tuple(item.dataset_id for item in result.datasets),
+        by_id["a"].role,
+        by_id["b"].fit_group_id == by_id["a"].fit_group_id,
+        by_id["a"].status,
+        by_id["b"].status,
+        by_id["c"].role,
+        by_id["c"].status,
+        by_id["d"].role,
+        by_id["d"].fit_group_id != by_id["a"].fit_group_id,
+        result.mode,
+    )
+    assert actual == (
+        {"a", "b", "c", "d"},
+        [("a", "b")],
+        ("a", "b", "c", "d"),
+        AutomaticRole.JOINT,
+        True,
+        AutomaticStatus.PASSED,
+        AutomaticStatus.PASSED,
+        AutomaticRole.SINGLE,
+        AutomaticStatus.PASSED,
+        AutomaticRole.SINGLE,
+        True,
+        "automatic",
+    )
 
 
 def test_physical_signature_separates_backing_and_beam() -> None:

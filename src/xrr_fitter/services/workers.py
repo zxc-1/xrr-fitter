@@ -1,4 +1,10 @@
-"""Spawn process, queue protocol, cancellation, and worker lifecycle owner."""
+"""Spawn process, queue protocol, cancellation, and worker lifecycle owner.
+
+Child processes emit ordered progress, checkpoint, terminal, and stopped events;
+the parent validates that protocol before exposing immutable operation values.
+Checkpoint persistence stays in the worker so every published snapshot matches
+the bytes available for crash recovery.
+"""
 
 from __future__ import annotations
 

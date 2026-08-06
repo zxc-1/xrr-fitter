@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from PySide6.QtCore import QTimer
 
 import xrr_fitter.api as api
@@ -256,3 +254,83 @@ def test_fit_controller_routes_automatic_start_with_batch_identity(
 
     assert controller.start_automatic_fit(project, "batch-9", "checkpoint.json") is True
     assert calls == [(project, "batch-9", "checkpoint.json")]
+
+
+def _stage_progress(sequence: int, stage: str, completed: int, total: int) -> api.OperationEvent:
+    return api.OperationEvent(
+        sequence,
+        "progress",
+        progress=api.FitProgress(
+            "curve",
+            stage,
+            completed,
+            total,
+            1.0 / (completed + 1),
+            f"{stage} step {completed}",
+        ),
+    )
+
+
+def test_fit_controller_keeps_one_progress_frame_per_stage_in_a_batch(
+    qtbot,
+    monkeypatch,
+) -> None:
+    """A large batch must still show every stage it covered.
+
+    One poll can carry hundreds of Stage-A frames followed by later stages.
+    Collapsing the whole batch to a single frame hides Stage A entirely, so the
+    projection keeps the last frame of each stage while preserving stage order.
+    """
+    from xrr_fitter.gui.fitting.controller import FitController
+
+    batch = tuple(
+        _stage_progress(index, "A", index + 1, 400) for index in range(400)
+    ) + (
+        _stage_progress(400, "B", 1, 2),
+        _stage_progress(401, "B", 2, 2),
+        _stage_progress(402, "C", 1, 3),
+    )
+    job = _FakeJob(batch)
+    monkeypatch.setattr(api, "start_fit_job", lambda *_args, **_kwargs: job)
+    controller = FitController()
+    seen: list[tuple[str, int]] = []
+    controller.progress_changed.connect(
+        lambda value: seen.append((value.stage, value.completed))
+    )
+
+    controller.start_fit(api.new_project())
+    controller.poll_now()
+
+    assert seen == [("A", 400), ("B", 2), ("C", 1)]
+
+
+def test_fit_controller_progress_frames_survive_across_durable_events(
+    qtbot,
+    monkeypatch,
+) -> None:
+    """Stage frames before a checkpoint must not be swallowed by it."""
+    from xrr_fitter.gui.fitting.controller import FitController
+
+    project = api.new_project()
+    checkpoint = api.set_expert_mode(project, True)
+    job = _FakeJob(
+        (
+            _stage_progress(0, "A", 1, 2),
+            _stage_progress(1, "A", 2, 2),
+            api.OperationEvent(2, "checkpoint", checkpoint=checkpoint),
+            _stage_progress(3, "B", 1, 2),
+            _stage_progress(4, "B", 2, 2),
+        )
+    )
+    monkeypatch.setattr(api, "start_fit_job", lambda *_args, **_kwargs: job)
+    controller = FitController()
+    ordered: list[object] = []
+    controller.progress_changed.connect(
+        lambda value: ordered.append((value.stage, value.completed))
+    )
+    controller.checkpoint_ready.connect(lambda _value: ordered.append("checkpoint"))
+
+    controller.start_fit(project)
+    controller.poll_now()
+
+    assert ordered == [("A", 2), "checkpoint", ("B", 2)]

@@ -89,6 +89,8 @@ class MainWindow(QMainWindow):
         self.result_panel.candidate_selected.connect(self._project_candidate)
         self.result_panel.candidate_inspected.connect(self._project_candidate)
         self.fit_panel.running_changed.connect(self._operation_running_changed)
+        self.fit_panel.preview_available.connect(self._project_preview)
+        self.fit_panel.running_changed.connect(self._discard_preview_when_idle)
         self.result_panel.controller.running_changed.connect(
             self._operation_running_changed
         )
@@ -139,6 +141,14 @@ class MainWindow(QMainWindow):
         if dataset is None or dataset.last_valid_result is None:
             raise RuntimeError("candidate projection requires an active fit result")
         self.plot_panel.set_result(dataset.last_valid_result, candidate_id)
+
+    def _project_preview(self, qz_a_inv: object, model_normalized: object) -> None:
+        """Show the searching model without touching committed project state."""
+        self.plot_panel.set_preview_curve(qz_a_inv, model_normalized)
+
+    def _discard_preview_when_idle(self, running: bool) -> None:
+        if not running:
+            self.plot_panel.clear_preview_curve()
 
     def _plot_range_requested(self, lower: float, upper: float) -> None:
         dataset_id = self.document.active_dataset_id

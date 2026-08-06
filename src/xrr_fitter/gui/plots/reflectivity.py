@@ -207,6 +207,29 @@ def draw_log(
     _finish(view)
 
 
+def preview_display_values(
+    data: api.PreparedData,
+    qz_a_inv: np.ndarray,
+    model_normalized: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map a live preview curve onto the angle axis used by the log view.
+
+    A preview is published on the searching context's q grid, which is a subset
+    of the prepared q grid, so interpolating against the prepared pairs recovers
+    the display angle exactly at those points. The display floor matches the
+    published curve so a preview and a committed candidate stay comparable.
+    """
+    qz = np.asarray(qz_a_inv, dtype=float)
+    model = np.asarray(model_normalized, dtype=float)
+    if qz.ndim != 1 or model.ndim != 1 or qz.size != model.size or qz.size == 0:
+        raise ValueError("preview axes must be nonempty one-dimensional pairs")
+    reference_qz = np.asarray(data.qz_a_inv, dtype=float)
+    reference_angle = np.asarray(data.two_theta_deg, dtype=float)
+    order = np.argsort(reference_qz, kind="stable")
+    angles = np.interp(qz, reference_qz[order], reference_angle[order])
+    return angles, np.maximum(model, data.r_floor)
+
+
 def draw_qz4(
     view: DiagnosticView,
     data: api.PreparedData,

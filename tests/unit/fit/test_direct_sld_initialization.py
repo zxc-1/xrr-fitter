@@ -53,6 +53,17 @@ def _all_direct_locations_structure() -> StructureSpec:
     )
 
 
+def _real_sld_rows(pool) -> tuple[tuple[tuple[str, float], ...], ...]:
+    return tuple(
+        tuple((name, value) for name, value in start.values if "sld_real_a2" in name)
+        for start in pool
+    )
+
+
+def _has_layer_distinct_sld(rows) -> bool:
+    return any(len({value for _name, value in row}) > 1 for row in rows if row)
+
+
 def test_direct_sld_real_is_free_but_absorption_starts_locked() -> None:
     definitions = parameter_definitions(
         prepared_data(),
@@ -132,16 +143,12 @@ def test_direct_sld_candidate_rows_are_seed_independent_and_layer_distinct() -> 
         np.random.default_rng(99),
         limit=64,
     )
-    first_sld = tuple(
-        tuple((name, value) for name, value in start.values if "sld_real_a2" in name)
-        for start in first
-    )
-    second_sld = tuple(
-        tuple((name, value) for name, value in start.values if "sld_real_a2" in name)
-        for start in second
-    )
+    first_sld = _real_sld_rows(first)
+    second_sld = _real_sld_rows(second)
     baseline = dict(first[0].values)
-    assert baseline["component.0.sld_imag_a2"] == 0.0
-    assert baseline["component.1.sld_imag_a2"] == 0.0
-    assert first_sld[:6] == second_sld[:6]
-    assert any(len({value for _name, value in row}) > 1 for row in first_sld if row)
+    assert (
+        baseline["component.0.sld_imag_a2"],
+        baseline["component.1.sld_imag_a2"],
+        first_sld[:6],
+    ) == (0.0, 0.0, second_sld[:6])
+    assert _has_layer_distinct_sld(first_sld)

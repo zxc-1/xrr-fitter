@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import CancelledError
+from concurrent.futures import CancelledError, Future
 from threading import Event, Thread, get_ident
 
 import pytest
@@ -86,6 +86,54 @@ def test_completed_callback_observes_finish_order_but_return_stays_input_order()
     assert values == ("slow", "fast")
     assert completed == [(1, "fast"), (0, "slow")]
     assert callback_threads == [caller_thread, caller_thread]
+
+
+def test_completed_callback_preserves_tasks_finished_during_submission(
+    monkeypatch,
+) -> None:
+    from xrr_fitter.services import parallel
+
+    hashes = (1, 2, 4, 8, 16, 32, 64, 128)
+
+    class CompletedFuture(Future[int]):
+        def __init__(self, value: int, hash_value: int) -> None:
+            super().__init__()
+            self._hash_value = hash_value
+            self.set_result(value)
+
+        def __hash__(self) -> int:
+            return self._hash_value
+
+    class CompletingExecutor:
+        def __init__(self, **_kwargs) -> None:
+            self._position = 0
+
+        def submit(self, task) -> Future[int]:
+            value = task()
+            future = CompletedFuture(value, hashes[self._position])
+            self._position += 1
+            return future
+
+        def shutdown(self, **_kwargs) -> None:
+            pass
+
+    monkeypatch.setattr(parallel, "ThreadPoolExecutor", CompletingExecutor)
+    finished: list[int] = []
+    observed: list[int] = []
+
+    def task(index: int) -> int:
+        finished.append(index)
+        return index
+
+    with parallel.OrderedTaskRunner(len(hashes)) as runner:
+        values = runner.run(
+            tuple(lambda index=index: task(index) for index in range(len(hashes))),
+            completed=lambda _index, value: observed.append(value),
+        )
+
+    assert finished == list(range(len(hashes)))
+    assert observed == finished
+    assert values == tuple(finished)
 
 
 def test_parallel_runner_rethrows_first_exception_without_late_callbacks() -> None:
