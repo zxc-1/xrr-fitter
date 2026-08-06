@@ -64,6 +64,6 @@ def test_pr_workflow_checks_out_without_credentials() -> None:
 def test_pr_checkpoint_requires_matrix_success() -> None:
     checkpoint = _payload()["jobs"]["checkpoint"]
     assert checkpoint["needs"] == ["standard"]
-    assert checkpoint["if"] == "always()"
+    assert checkpoint["if"] == "${{ always() && !cancelled() }}"
     run = checkpoint["steps"][0]["run"]
     assert 'test "${{ needs.standard.result }}" = success' in run

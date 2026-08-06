@@ -51,7 +51,7 @@ jobs:
 
   checkpoint:
     needs: [standard]
-    if: always()
+    if: ${{ always() && !cancelled() }}
     runs-on: macos-15
     timeout-minutes: 10
     steps:
