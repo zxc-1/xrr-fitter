@@ -17,15 +17,32 @@ GitHub Actions、`R23-final` tag 或 GitHub Release 的前置条件。
   committed approved-data manifest/records 或 approved-visible runner 时，真实数据专属验证
   不运行；这不是 pytest skip/xfail，也不得产生空成功报告。standard/statistical/GUI/
   distribution/identity/release 门禁不得依赖这些交付后输入。
-- 当前 `R23-final` 表示软件发行完成，不表示真实数据领域验收完成。用户后续验收产生的原始
-  数据、candidate report 和外部 sign-off 仍不得上传 GitHub；是否形成后续签核提交或发行
-  由用户验收时另行决定。
+- 已存在的 `R23-final` 只表示 R23 架构迁移阶段的历史软件冻结点，不表示真实数据领域验收完成，
+  也不作为后续版本的通用 tag。后续正式版本使用与 `pyproject.toml` 一致的 `vMAJOR.MINOR.PATCH`
+  tag；用户后续验收产生的原始数据、candidate report 和外部 sign-off 仍不得上传 GitHub。
 - 本覆盖替代后文所有“真实数据必须在 Task 0/Task 13/Task 14 或 release 前通过”、
   “缺少 approved data 必须阻塞普通 CI/release”以及要求在当前发行身份中绑定尚不存在的
   approved evidence/source tree 的条款。其余架构、TDD、Radon、Git、Actions、禁止兼容层和
   禁止伪造成功的约束继续有效。
 
 执行流程按用户确认的推荐解释固定如下：
+
+### 当前版本发布与 CI 约定（2026-08-06）
+
+- PR 只使用独立的 `pr-verify.yml`，运行在非 self-hosted 的隔离 runner；不得使用
+  `pull_request_target` checkout 不可信 PR，也不得把 fork PR 放到现有 `xrr-ci` runner。
+- `verify.yml` 的 `main` push 只运行普通 quality/tools/unit/gui/integration/spawn/regression/
+  distribution 门禁，不创建 tag，也不构建 Windows。
+- 正式发布只由 `v*` tag 触发。`candidate-readiness` 先验证 annotated tag 的版本与
+  `pyproject.toml` 完全一致，再运行 statistical、identity 和 release；readiness、全部发布门禁
+  或 tag/version 校验失败时，Windows 和 Draft Release 均不得执行。
+- Windows 构建作为同一 release pipeline 的 reusable workflow，在 release 成功后由 `needs` 触发；
+  原 `workflow_dispatch` 保留为人工重跑入口，并要求 `source_ref` 与 40 位 `expected_commit` 精确相等。
+- Windows、wheel/sdist、manifest 和 release identity 一起进入该版本的 Draft GitHub Release；
+  Release 的最终公开仍由 owner 手动发布。除 Draft Release job 外，workflow 顶层权限保持
+  `contents: read`。
+- 版本判断以用户可见契约为准：兼容修复递增 patch，新功能/行为契约递增 minor，破坏兼容性递增
+  major；没有版本发布决定的普通 `main` merge 不改变版本号、不打 tag。
 
 1. 使用 `executing-plans`；任务 brief、审查包和进度台账放在仓库外，R23 不创建
    `.superpowers`。
@@ -3137,18 +3154,16 @@ job。任务 13 只验证 identity/release 的 wiring 和失败前置条件；�
 提交前就必须验证最终 mode registry、CI job registry 和两者映射完全一致；
 任务 14 只从该 clean HEAD 生成 manifest 并重验，不再修改测试或 wiring。
 
-GitHub event contract 与能力同步演进：任务 2 的初始 workflow 只接受
-`push` 到 `r23-clean-architecture`，运行当时已注册的 standard jobs；不使用
-`pull_request_target`，也不把 fork PR 放到 self-hosted runner。任务 13 在最终四个 mode/job
-存在时才加入精确 tag `R23-final` 的 `push` trigger，以及受测的 `candidate-readiness` job。
-readiness 只检查 repository 内可由 standard runner 复算的静态条件：committed
-`verification/r23/tests.json`、最终 ledger，以及候选 jobs 所需的已提交配置和
-路径声明；它不得探测或读取 raw approved data。上述静态输入
-同时存在且通过 strict preflight 时才输出 `true`：任务 13 branch push
-必须明确输出 `false`，任务 14 final-manifest commit 的 branch push 和 `R23-final` tag push
-必须输出 `true` 并运行完整候选矩阵。不得用 commit message、latest run、人工 skip、
-workflow dispatch 或缺数据后成功退出决定 readiness。raw data 挂载、只读性和可见桌面会话
-留给交付后 owner acceptance，不参与软件候选 readiness。
+GitHub event contract 与能力同步演进：普通 `main` push 运行 standard jobs；PR 使用独立的
+`pr-verify.yml` 和非 self-hosted runner；正式版本只接受匹配 `v*` 的 stable version tag。
+不使用 `pull_request_target`，也不把 fork PR 放到 self-hosted runner。tag run 的
+`candidate-readiness` 先校验 annotated tag、`pyproject.toml` 版本和当前 clean HEAD，随后只检查
+repository 内可由 standard runner 复算的静态条件：committed `verification/r23/tests.json`、最终
+ledger，以及候选 jobs 所需的已提交配置和路径声明；它不得探测或读取 raw approved data。上述静态
+输入同时存在且通过 strict preflight 时才输出 `true`，否则 tag checkpoint 失败，不能继续 Windows
+构建或 Draft Release。不得用 commit message、latest run、人工 skip、workflow dispatch 或缺数据后
+成功退出决定 readiness。raw data 挂载、只读性和可见桌面会话留给交付后 owner acceptance，不参与
+软件候选 readiness。
 
 每版 workflow 都有唯一 `checkpoint` aggregator，并使用 `if: always()` 检查完整 `needs`
 集合。任务 2-12 只要求本事件已注册的 standard jobs 全部为 `success`。任务 13 起再按
@@ -3160,8 +3175,8 @@ job-level event/capability condition、readiness output、checkpoint `needs` 和
 `test_quality_gate.py` 精确断言，不能靠 workflow overall status 掩盖未执行的必需门禁。
 
 workflow 顶层 `permissions` 固定为 `contents: read`；所有 `uses:` 第三方 action 固定到完整
-40 位 commit，不使用 mutable tag。GitHub Release 由任务 14 在本机通过已认证 `gh` 发布，
-workflow 不获得 `contents: write`。跨 job 的 distribution bundle 只作为同一 run 的临时
+40 位 commit，不使用 mutable tag。仅 Draft Release job 以 job-level `contents: write` 创建或更新
+Draft GitHub Release，最终公开仍由 owner 手动完成。跨 job 的 distribution bundle 只作为同一 run 的临时
 artifact，固定短 retention，并保持 bundle root，不得把 approved raw data、candidate/
 signoff 外部原件或 freeze receipt 之前的临时 report 上传为 Actions artifact/cache。
 
@@ -3177,20 +3192,22 @@ CI 使用显式作业，不在默认 pytest 选项中隐藏慢速测试。workfl
 
 | Job | 精确 verifier 命令 | Runner / 输入 | 要求频率 |
 |---|---|---|---|
-| quality | `"$PYTHON" tools/verify.py quality` | standard | 每个 R23 branch/tag push |
-| tools | `"$PYTHON" tools/verify.py tools` | standard | 每个 R23 branch/tag push |
-| unit | `"$PYTHON" tools/verify.py unit` | standard | 能力注册后的每个 R23 branch/tag push |
-| integration | `"$PYTHON" tools/verify.py integration` | standard | 能力注册后的每个 R23 branch/tag push |
-| gui | `QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py gui` | standard | 能力注册后的每个 R23 branch/tag push |
-| spawn | `"$PYTHON" tools/verify.py spawn` | standard | 能力注册后的每个 R23 branch/tag push |
-| regression | `"$PYTHON" tools/verify.py regression` | standard | 能力注册后的每个 R23 branch/tag push |
-| statistical | `"$PYTHON" tools/verify.py statistical --report-dir "$RUNNER_TEMP/statistical"` | standard | candidate-ready branch/tag push |
-| r22-reference | `QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py r22-reference --report-dir "$RUNNER_TEMP/r22-reference"` | standard / committed R22 oracle | 能力注册后的每个 R23 branch/tag push |
-| distribution | `"$PYTHON" tools/verify.py distribution --report-dir "$RUNNER_TEMP/distribution-bundle" --artifact-dir "$RUNNER_TEMP/distribution-bundle/artifacts"` | standard | 能力注册后的每个 R23 branch/tag push |
-| identity | `"$PYTHON" tools/verify.py identity --report-dir "$RUNNER_TEMP/identity" --artifact-dir "$RUNNER_TEMP/downloaded-distribution/artifacts" --artifact-manifest "$RUNNER_TEMP/downloaded-distribution/artifact-manifest.json"` | standard / `needs: distribution` 下载物 | candidate-ready branch/tag push |
-| release | `QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release --report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts"` | standard | candidate-ready branch/tag push |
-| candidate-readiness | strict preflight；只输出受测的 `ready=true/false` | standard / committed inputs | 任务 13 起每个 R23 branch/tag push |
-| checkpoint | 无产品命令；验证本事件全部 required `needs` result | standard | 每个 R23 branch/tag push |
+| quality | `"$PYTHON" tools/verify.py quality` | standard | `main` 或 `v*` tag push |
+| tools | `"$PYTHON" tools/verify.py tools` | standard | `main` 或 `v*` tag push |
+| unit | `"$PYTHON" tools/verify.py unit` | standard | `main` 或 `v*` tag push |
+| integration | `"$PYTHON" tools/verify.py integration` | standard | `main` 或 `v*` tag push |
+| gui | `QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py gui` | standard | `main` 或 `v*` tag push |
+| spawn | `"$PYTHON" tools/verify.py spawn` | standard | `main` 或 `v*` tag push |
+| regression | `"$PYTHON" tools/verify.py regression` | standard | `main` 或 `v*` tag push |
+| statistical | `"$PYTHON" tools/verify.py statistical --report-dir "$RUNNER_TEMP/statistical"` | standard | `v*` tag push |
+| r22-reference | `QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py r22-reference --report-dir "$RUNNER_TEMP/r22-reference"` | standard / committed R22 oracle | 仅已注册的 standard 流程 |
+| distribution | `"$PYTHON" tools/verify.py distribution --report-dir "$RUNNER_TEMP/distribution-bundle" --artifact-dir "$RUNNER_TEMP/distribution-bundle/artifacts"` | standard | `main` 或 `v*` tag push |
+| identity | `"$PYTHON" tools/verify.py identity --report-dir "$RUNNER_TEMP/identity" --artifact-dir "$RUNNER_TEMP/downloaded-distribution/artifacts" --artifact-manifest "$RUNNER_TEMP/downloaded-distribution/artifact-manifest.json"` | standard / `needs: distribution` 下载物 | `v*` tag push，readiness=true |
+| release | `QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release --report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts"` | standard | `v*` tag push，readiness=true |
+| windows | reusable `windows-executable.yml` | Windows 2025 | `release` 成功后的 `v*` tag |
+| draft-release | `gh release create/upload` | GitHub-hosted Ubuntu | `release` 与 Windows 均成功 |
+| candidate-readiness | strict preflight；只输出受测的 `ready=true/false` | standard / committed inputs | `v*` tag push |
+| checkpoint | 无产品命令；验证本事件全部 required `needs` result | standard | `main` 或 `v*` tag push |
 
 当必需测试被跳过、预期失败、意外取消选择，或缺少其外部已批准数据清单时，作业不得视为 GREEN。
 
@@ -3205,7 +3222,7 @@ rename 或重排；identity job 通过 `needs: distribution` 精确下载到
 直接失败。standard CI 不伪装执行 owner real-data acceptance；`release` job 自己完整重跑 distribution 和
 identity，不消费其他 job 的历史成功状态。
 
-candidate-ready 的 `release` job 只上传名为 `r23-release-${{ github.sha }}` 的单一 Actions
+candidate-ready 的 `release` job 只上传名为 `xrr-release-${{ github.ref_name }}-${{ github.sha }}` 的单一 Actions
 artifact，内容 root 精确为 `artifact-manifest.json`、`release-identity.json` 和
 `artifacts/` 下唯一 wheel/sdist；不得包含其他 report、log 或 raw evidence。任务 14 使用
 exact-SHA run ID 下载该 artifact，并与本地 release mode 产物逐字节比较。为使该比较成立，

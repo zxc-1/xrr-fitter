@@ -1,0 +1,62 @@
+name: pr-verify
+
+"on":
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-verify-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  standard:
+    name: Verify ${{ matrix.mode }}
+    runs-on: macos-14
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode:
+          - quality
+          - tools
+          - unit
+          - gui
+          - integration
+          - spawn
+          - regression
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify ${{ matrix.mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
+          python3.12 -m venv "$RUNNER_TEMP/venv"
+          PYTHON="$RUNNER_TEMP/venv/bin/python"
+          "$PYTHON" -m pip install pip==26.1.2
+          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          if test "${{ matrix.mode }}" = gui; then
+            QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py gui
+          else
+            "$PYTHON" tools/verify.py "${{ matrix.mode }}"
+          fi
+
+  checkpoint:
+    needs: [standard]
+    if: always()
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - name: Require all PR gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ needs.standard.result }}" = success
