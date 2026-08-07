@@ -7,7 +7,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "pr-verify.yml"
-CHECKOUT = "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+CHECKOUT = "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
 MODES = ("quality", "tools", "unit", "gui", "integration", "spawn", "regression")
 
 

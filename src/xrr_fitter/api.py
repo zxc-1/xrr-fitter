@@ -33,6 +33,7 @@ from xrr_fitter.model.operations import (
     ProjectImportResult,
 )
 from xrr_fitter.model.parameters import (
+    JointFitLayout,
     ParameterDefinition,
     ParameterReference,
     ParameterSetting,
@@ -84,6 +85,7 @@ from xrr_fitter.services.parameters import (
 )
 from xrr_fitter.services.projects import (
     clear_fit_results,
+    describe_joint_layout,
     inspect_sources,
     load_project,
     new_project,
@@ -130,6 +132,7 @@ __all__ = (
     "ImportFilePreview",
     "ImportFailure",
     "InstrumentSpec",
+    "JointFitLayout",
     "LayerSpec",
     "LayerUniformitySummary",
     "MaterialSpec",
@@ -164,6 +167,7 @@ __all__ = (
     "add_dataset",
     "analyze_structure",
     "clear_fit_results",
+    "describe_joint_layout",
     "describe_parameters",
     "export_result",
     "fit_project",

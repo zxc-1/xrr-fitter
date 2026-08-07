@@ -211,3 +211,45 @@ def test_active_dataset_selection_updates_project_ui_state(monkeypatch) -> None:
     assert calls == [(original, "sample")]
     assert document.project is updated
     assert document.is_dirty is True
+
+
+def test_manual_save_discards_the_autosave_draft(qtbot, tmp_path, monkeypatch) -> None:
+    from xrr_fitter.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    path = tmp_path / "proj.xrrproj.json"
+    window.save_project(path)
+
+    # A dirtied project drops a draft; the next real save must supersede and
+    # remove it so no stale draft lingers to trigger a false recovery offer.
+    window.document.mark_dirty()
+    assert window.autosave.autosave_now() is True
+    assert window.autosave.draft_path().exists()
+
+    window.document.mark_dirty()
+    window.save_project(path)
+    assert not window.autosave.draft_path().exists()
+
+
+def test_lingering_draft_offers_recovery_on_construction(qtbot, tmp_path, monkeypatch) -> None:
+    from xrr_fitter.gui.main_window import MainWindow
+
+    path = tmp_path / "proj.xrrproj.json"
+    api.save_project(api.new_project(), path)
+    draft = Path(str(path) + ".autosave")
+    api.save_project(api.new_project(), draft)
+
+    answered: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_a, **_k: answered.append("asked") or QMessageBox.StandardButton.Yes,
+    )
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    # A draft left beside a project is evidence of an unclean prior exit, so the
+    # window offers to recover it exactly once at startup.
+    assert window.maybe_recover_draft(path) is True
+    assert answered == ["asked"]

@@ -27,6 +27,7 @@ from xrr_fitter.gui.operation_state import (
     operation_is_running,
     refresh_operation_state,
 )
+from xrr_fitter.gui.project.autosave import AutosaveController
 from xrr_fitter.gui.window_layout import install_workflow_actions, install_workspace
 from xrr_fitter.gui.workspace import (
     WorkspaceView,
@@ -58,6 +59,8 @@ class MainWindow(QMainWindow):
         self._close_cancel_timer.setSingleShot(True)
         self._close_cancel_timer.setInterval(5000)
         self._close_cancel_timer.timeout.connect(self.close_cancel_deadline_reached)
+        self.autosave = AutosaveController(self.document, parent=self)
+        self.autosave.start()
         install_workspace(self, self.document)
         self.workspace_view = WorkspaceView.from_root(self)
         configure_splitters(self.workspace_view)
@@ -72,7 +75,7 @@ class MainWindow(QMainWindow):
         configure_accessibility(self)
         configure_focus_navigation(self)
         self._refresh_operation_state()
-        self.setWindowTitle("XRR 全自动拟合")
+        self._refresh_window_title()
         self.setMinimumSize(1280, 760)
         if operation_controller is not None:
             self.set_operation_controller(operation_controller)
@@ -96,6 +99,8 @@ class MainWindow(QMainWindow):
         )
         self.document.project_changed.connect(self._restore_workspace)
         self.document.project_changed.connect(self._refresh_operation_state)
+        self.document.dirty_changed.connect(self._refresh_window_title)
+        self.document.path_changed.connect(self._refresh_window_title)
 
     @property
     def close_pending(self) -> bool:
@@ -182,6 +187,19 @@ class MainWindow(QMainWindow):
     def _restore_workspace(self, project: api.XrrProject) -> None:
         restore_project(self.workspace_view, project)
 
+    def _refresh_window_title(self, *_args) -> None:
+        """Reflect the project name and unsaved state in the window title.
+
+        The title uses Qt's ``[*]`` modification placeholder so each platform
+        renders the unsaved marker natively (the close-button dot on macOS, a
+        leading asterisk elsewhere) instead of a hand-placed asterisk that the
+        window manager would not understand.
+        """
+        path = self.document.path
+        name = path.stem if path is not None else "未命名项目"
+        self.setWindowTitle(f"{name}[*] — XRR 全自动拟合")
+        self.setWindowModified(self.document.is_dirty)
+
     def _require_idle(self, operation: str) -> None:
         if self._operation_is_running():
             raise RuntimeError(f"cannot {operation} while an operation is running")
@@ -202,10 +220,44 @@ class MainWindow(QMainWindow):
         if self.document.is_dirty and not discard_unsaved:
             raise RuntimeError("unsaved project changes require explicit discard")
         self.document.open(path)
+        self._offer_draft_recovery()
+
+    def maybe_recover_draft(self, path: str | object) -> bool:
+        """Open a project and offer to restore any leftover autosave draft."""
+        self.document.open(path)
+        return self._offer_draft_recovery()
+
+    def _offer_draft_recovery(self) -> bool:
+        """Prompt to adopt a leftover draft, or clear it when declined.
+
+        A draft beside the just-opened project means the previous session ended
+        without a clean save; adopting it restores that unsaved work as dirty so
+        the user can persist it, while declining removes the stale draft.
+        """
+        if not self.autosave.has_recoverable_draft():
+            return False
+        if self._confirm_recover_draft():
+            self.document.replace_project(self.autosave.recover(), dirty=True)
+            return True
+        self.autosave.discard_draft()
+        return False
+
+    def _confirm_recover_draft(self) -> bool:
+        response = QMessageBox.question(
+            self,
+            "恢复自动保存草稿",
+            "检测到上次会话遗留的自动保存草稿。是否恢复其中未保存的更改？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        return response == QMessageBox.StandardButton.Yes
 
     def save_project(self, path: str | object | None = None):
         self._require_idle("save a project")
         self.document.save(path)
+        # A successful save supersedes any draft, so clear it to avoid a false
+        # recovery offer on the next open.
+        self.autosave.discard_draft()
         return self.document.path
 
     def start_fit(self) -> bool:
@@ -324,6 +376,10 @@ class MainWindow(QMainWindow):
         if self._workspace_released:
             return
         self._workspace_released = True
+        # A clean shutdown must not leave a recovery draft behind; only an
+        # uncleanly terminated session (which never reaches here) should.
+        self.autosave.stop()
+        self.autosave.discard_draft()
         self.document.unregister_project_projection(self._project_plots)
         self.document.unregister_project_projection(self._project_workspace)
         self.plot_panel.release_resources()

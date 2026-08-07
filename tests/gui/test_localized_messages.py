@@ -78,3 +78,34 @@ def test_ready_state_text_matches_main_window_contract() -> None:
     messages = _messages()
 
     assert messages.readiness_text("ready") == messages.READY_TEXT
+
+
+def test_operation_error_text_appends_recovery_advice_for_known_types() -> None:
+    messages = _messages()
+    error = SimpleNamespace(
+        exception_type="OSError",
+        message="source file vanished",
+        detail="",
+    )
+
+    text = messages.operation_error_text(error)
+
+    # A known failure type carries a concrete next step, not just a diagnosis.
+    assert "source file vanished" in text
+    assert "建议：" in text
+    assert "重新链接数据源" in text
+
+
+def test_operation_error_text_omits_advice_for_unknown_types() -> None:
+    messages = _messages()
+    error = SimpleNamespace(
+        exception_type="RuntimeError",
+        message="unexpected worker crash",
+        detail="",
+    )
+
+    text = messages.operation_error_text(error)
+
+    # No invented advice for types without a documented recovery move.
+    assert "unexpected worker crash" in text
+    assert "建议：" not in text

@@ -19,6 +19,7 @@ from xrr_fitter.io.source import (
 from xrr_fitter.io.xy import read_xy
 from xrr_fitter.model.data import with_fit_mask
 from xrr_fitter.model.fitting import FitConfig
+from xrr_fitter.model.parameters import JointFitLayout
 from xrr_fitter.model.project import (
     DatasetProject,
     ProjectUiState,
@@ -321,3 +322,17 @@ def set_batch_mode(
         ui_state=replace(project.ui_state, selected_candidate_ids=()),
     )
     return updated
+
+
+def describe_joint_layout(project: XrrProject) -> JointFitLayout:
+    """Report a joint project's participating datasets and shared parameters.
+
+    This is a pure read of persisted fields: it never compiles a joint problem
+    or loads source data, so it stays cheap enough for a progress view to call
+    on every refresh.  It reports the declared sharing structure as-is and does
+    not verify that each shared parameter still exists or is free.
+    """
+    if project.batch_mode != "joint":
+        raise ValueError("joint layout requires the joint batch mode")
+    dataset_ids = tuple(dataset.dataset_id for dataset in project.datasets)
+    return JointFitLayout(dataset_ids, tuple(project.sharing_rules))

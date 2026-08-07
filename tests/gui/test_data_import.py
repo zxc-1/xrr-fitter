@@ -530,3 +530,123 @@ def test_import_shortcuts_do_not_conflict_with_project_open(qtbot) -> None:
     assert folder.key() == QKeySequence("Ctrl+Shift+I")
     assert files.context() == Qt.ShortcutContext.WidgetWithChildrenShortcut
     assert files.key() != QKeySequence(QKeySequence.StandardKey.Open)
+
+
+def test_data_panel_renders_precise_source_status_with_marker(qtbot, tmp_path) -> None:
+    panel = _panel(qtbot)
+    source = _write_curve(tmp_path / "original.xy")
+    panel.add_paths(
+        (source,),
+        beam=api.BeamSpec("monochromatic"),
+        instrument=_instrument(),
+    )
+    dataset_id = panel.dataset_ids[0]
+    tree = panel.tree
+
+    # A healthy source renders with no marker and a positive status label.
+    assert panel.status_text(dataset_id) == "可拟合"
+    assert panel.status_marker(dataset_id) == ""
+
+    # Removing the source file makes the status specific and glanceable: the
+    # marker ("⛔") flags attention and the label names the exact failure.
+    source.unlink()
+    panel.document.refresh_sources()
+
+    assert panel.status_text(dataset_id) == "源文件缺失"
+    assert panel.status_marker(dataset_id) == "⛔"
+    # The tree cell must combine marker + label so both appear in the list.
+    item = tree.topLevelItem(0)
+    status_column = 4
+    assert "⛔" in item.text(status_column)
+    assert "源文件缺失" in item.text(status_column)
+
+
+def test_data_panel_shows_fit_status_per_dataset(qtbot) -> None:
+    # Multi-dataset work needs an at-a-glance answer to "which curves are done,
+    # and how trustworthy is each result?" without opening every dataset. The
+    # tree therefore carries a fit column: unfitted datasets read "未拟合", and
+    # fitted ones surface the persisted confidence label plus a glyph.
+    from dataclasses import replace
+
+    from tests.support.model_cases import (
+        dataset_project,
+        final_fit_result,
+        fit_candidate,
+        project,
+    )
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.model.analysis import ConfidenceClass
+
+    trusted = replace(
+        final_fit_result(fit_candidate("candidate-a", 0.2)),
+        confidence=ConfidenceClass.TRUSTED,
+    )
+    fitted = dataset_project("fitted", result=trusted)
+    pending = dataset_project("pending", result=None)
+    value = replace(project(fitted, pending), base_directory="/private/tmp")
+    panel = _panel(qtbot, ProjectDocument(value))
+
+    assert panel.fit_status_text("pending") == "未拟合"
+    assert panel.fit_status_text("fitted") == "可信"
+    assert panel.fit_status_marker("fitted") == "●"
+    assert panel.fit_status_marker("pending") == ""
+
+    tree = panel.tree
+    fit_column = 6
+    assert tree.headerItem().text(fit_column) == "拟合"
+    rows = {
+        tree.topLevelItem(row).data(0, Qt.ItemDataRole.UserRole): tree.topLevelItem(row)
+        for row in range(tree.topLevelItemCount())
+    }
+    assert "可信" in rows["fitted"].text(fit_column)
+    assert "●" in rows["fitted"].text(fit_column)
+    assert "未拟合" in rows["pending"].text(fit_column)
+
+
+def test_active_dataset_row_stays_emphasised_when_tree_loses_focus(qtbot) -> None:
+    # Qt's selection highlight fades when the tree loses focus, so after clicking
+    # into the plot or parameters the user can no longer tell which dataset is
+    # active. A bold name persists regardless of focus, keeping the active row
+    # identifiable at a glance across the whole workspace.
+    from dataclasses import replace
+
+    from tests.support.model_cases import dataset_project, project
+    from xrr_fitter.gui.document import ProjectDocument
+
+    first = dataset_project("first")
+    second = dataset_project("second")
+    value = replace(project(first, second), base_directory="/private/tmp")
+    document = ProjectDocument(value)
+    document.select_active_dataset("second")
+    panel = _panel(qtbot, document)
+
+    tree = panel.tree
+    rows = {
+        tree.topLevelItem(row).data(0, Qt.ItemDataRole.UserRole): tree.topLevelItem(row)
+        for row in range(tree.topLevelItemCount())
+    }
+    assert rows["second"].font(0).bold()
+    assert not rows["first"].font(0).bold()
+
+
+def test_data_panel_summarises_dataset_overview(qtbot, tmp_path) -> None:
+    # After a batch import the tree can hold many rows; a one-line aggregate
+    # answers "how many are ready and how many need a look" without scanning
+    # every row. The count reuses the same per-row fittability judgement.
+    panel = _panel(qtbot)
+    assert panel.import_summary_text() == ""
+
+    first = _write_curve(tmp_path / "first.xy")
+    second = _write_curve(tmp_path / "second.xy")
+    panel.add_paths(
+        (first, second),
+        beam=api.BeamSpec("monochromatic"),
+        instrument=_instrument(),
+    )
+    assert panel.import_summary_text() == "共 2 个数据集 · 全部可拟合"
+    assert not panel.summary_label.isHidden()
+
+    # A source problem is surfaced in the aggregate, not only in one buried row.
+    first.unlink()
+    panel.document.refresh_sources()
+    assert panel.import_summary_text() == "共 2 个数据集 · 可拟合 1 · 需注意 1"

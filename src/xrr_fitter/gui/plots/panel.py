@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
 from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -134,6 +135,43 @@ class PlotPanel(QWidget):
         self._pages.addWidget(content)
         self._sync_pages()
         self._interactions = PlotInteractionController(self, self.toolbar)
+        self._install_view_shortcuts()
+
+    def _install_view_shortcuts(self) -> None:
+        """Bind Alt+1..Alt+8 to the diagnostic tabs by visible position.
+
+        Users switch among eight diagnostic plots constantly; clicking or cycling
+        with Ctrl+Tab is slow. Numbering by visible position (not fixed view key)
+        keeps the keys contiguous when the expert-only SLD tab is hidden, so the
+        same key never lands on a hidden tab or skips a number.
+        """
+        self.view_shortcuts: list[QShortcut] = []
+        for position in range(len(self.view_keys())):
+            shortcut = QShortcut(QKeySequence(f"Alt+{position + 1}"), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.setProperty("viewPosition", position)
+            # Bind the position through the sender rather than a lambda closing
+            # over self; a self-capturing closure held by the shortcut's signal
+            # forms a cycle PySide cannot break, leaking the panel on teardown.
+            shortcut.activated.connect(self._view_shortcut_activated)
+            self.view_shortcuts.append(shortcut)
+
+    def _view_shortcut_activated(self) -> None:
+        shortcut = self.sender()
+        if shortcut is not None:
+            self.select_visible_view(int(shortcut.property("viewPosition")))
+
+    def select_visible_view(self, position: int) -> bool:
+        """Select the Nth (0-based) currently-visible diagnostic view."""
+        visible = [
+            key
+            for index, key in enumerate(self.view_keys())
+            if self.tabs.isTabVisible(index)
+        ]
+        if not 0 <= position < len(visible):
+            return False
+        self.select_view(visible[position])
+        return True
 
     def _sync_pages(self) -> None:
         self._pages.setCurrentIndex(0 if self._dataset_id is None else 1)
@@ -270,6 +308,36 @@ class PlotPanel(QWidget):
     def visible_range(self) -> tuple[float, float] | None:
         return self._visible_range
 
+    def zoom_to_range(self) -> bool:
+        """Focus the angle-domain views on the active fit range.
+
+        The fit range is often a small window of a wide scan, so keeping the
+        full sweep on screen buries the region the user is actually judging.
+        This clamps the raw and log x-axes to the highlighted range; it is a
+        pure view operation that leaves the committed projection untouched, so
+        the next redraw restores the full sweep on its own.
+        """
+        visible = self._visible_range
+        if visible is None or self._released or self._dataset_id is None:
+            return False
+        for key in ("raw", "log"):
+            view = self._views[key]
+            view.axes.set_xlim(*visible)
+            view.canvas.draw_idle()
+        return True
+
+    def reset_zoom(self) -> bool:
+        """Return the angle-domain views to their data-driven autoscale."""
+        if self._released or self._dataset_id is None:
+            return False
+        for key in ("raw", "log"):
+            view = self._views[key]
+            view.axes.autoscale(enable=True, axis="x")
+            view.axes.relim()
+            view.axes.autoscale_view(scalex=True, scaley=False)
+            view.canvas.draw_idle()
+        return True
+
     def cancel_interaction(self) -> None:
         self._interactions.cancel()
 
@@ -333,6 +401,17 @@ class PlotPanel(QWidget):
         if len(matches) != 1:
             raise KeyError(f"unknown candidate: {candidate_id}")
         return matches[0]
+
+    def _comparison_candidates(self, projection: _Projection) -> tuple[object, ...]:
+        """Return the other candidates whose SLD profiles overlay the selected one."""
+        result = projection.result
+        if result is None or projection.candidate_id is None:
+            return ()
+        return tuple(
+            candidate
+            for candidate in result.candidates
+            if candidate.candidate_id != projection.candidate_id
+        )
 
     def _current_projection(self, **changes: object) -> _Projection:
         values = {
@@ -421,7 +500,7 @@ class PlotPanel(QWidget):
             draw_log(views["log"], data, candidate)
             draw_qz4(views["qz4"], data, candidate)
             draw_residual(views["residual"], candidate)
-            draw_sld(views["sld"], candidate)
+            draw_sld(views["sld"], candidate, self._comparison_candidates(projection))
             self._draw_range(views, projection.visible_range)
         draw_candidate_comparison(views["candidates"], projection.result, projection.candidate_id)
         draw_uncertainty(views["uncertainty"], projection.result, projection.candidate_id)

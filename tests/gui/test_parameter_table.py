@@ -218,3 +218,51 @@ def test_unstructured_active_dataset_clears_parameter_projection(qtbot, tmp_path
 
     assert panel.definitions == ()
     assert panel.row_names == ()
+
+
+def test_bounds_problem_names_first_inconsistency() -> None:
+    from xrr_fitter.gui.parameters.panel import bounds_problem
+
+    assert bounds_problem(5.0, 1.0, 10.0) is None  # a consistent triple passes
+    assert bounds_problem(5.0, 10.0, 1.0) == "下限不能大于上限"
+    assert bounds_problem(0.5, 1.0, 10.0) == "初值不能小于下限"
+    assert bounds_problem(15.0, 1.0, 10.0) == "初值不能大于上限"
+
+
+def test_inconsistent_bound_edit_flags_cell_and_keeps_entry(qtbot, tmp_path) -> None:
+    panel = _panel(qtbot, tmp_path)
+    table = panel.findChild(QTableWidget, "parameterTable")
+    name = "component.0.thickness_a"
+    row = panel.row_names.index(name)
+    project_before = panel.document.project
+
+    # Drive the lower bound above the upper bound in display units.
+    table.item(row, 2).setText("9999")
+
+    # The edit is rejected without a project mutation, the typed value stays on
+    # screen for correction, the cell is flagged, and the reason is shown.
+    assert panel.document.project is project_before  # no commit happened
+    assert table.item(row, 2).text() == "9999"  # entry preserved, not reverted
+    assert table.item(row, 2).toolTip() == "下限不能大于上限"
+    assert panel.status_label.text() == "下限不能大于上限"
+
+
+def test_reset_parameter_removes_override_and_restores_default(qtbot, tmp_path) -> None:
+    panel = _panel(qtbot, tmp_path)
+    name = "component.0.thickness_a"
+
+    # Establish a user override, then confirm it is persisted.
+    panel.set_display_parameter(name, initial=6.0, lower=2.0, upper=10.0, locked=True)
+    assert any(
+        value.name == name
+        for value in panel.document.project.datasets[0].parameter_settings
+    )
+
+    # Resetting drops the persisted setting so the declared default reasserts.
+    assert panel.reset_parameter(name) is True
+    assert not any(
+        value.name == name
+        for value in panel.document.project.datasets[0].parameter_settings
+    )
+    # Resetting an already-default parameter is a no-op, not an error.
+    assert panel.reset_parameter(name) is False

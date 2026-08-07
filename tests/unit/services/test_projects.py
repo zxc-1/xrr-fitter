@@ -33,11 +33,13 @@ from xrr_fitter.model.automation import (
 )
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
+from xrr_fitter.model.parameters import ParameterReference, SharingRule
 from xrr_fitter.model.project import ProjectUiState, ScalePriorState
 from xrr_fitter.services import projects as project_service
 from xrr_fitter.services.datasets import add_dataset
 from xrr_fitter.services.projects import (
     clear_fit_results,
+    describe_joint_layout,
     inspect_sources,
     load_project,
     new_project,
@@ -542,6 +544,46 @@ def test_batch_mode_change_invalidates_the_complete_result_graph() -> None:
     assert all(dataset.last_valid_result is None for dataset in updated.datasets)
     assert all(dataset.checkpoint is None for dataset in updated.datasets)
     assert updated.ui_state.selected_candidate_ids == ()
+
+
+def test_describe_joint_layout_reports_datasets_and_shared_parameters() -> None:
+    value = project(dataset_project("first"), dataset_project("second"))
+    rule = SharingRule(
+        "shared-thickness",
+        (
+            ParameterReference("first", "component.0.thickness_a"),
+            ParameterReference("second", "component.0.thickness_a"),
+        ),
+    )
+    value = replace(set_batch_mode(value, "joint"), sharing_rules=(rule,))
+
+    layout = describe_joint_layout(value)
+
+    assert layout.dataset_ids == ("first", "second")
+    assert layout.shared_parameters == (rule,)
+    group = layout.shared_parameters[0]
+    assert group.sharing_key == "shared-thickness"
+    assert group.members[0].dataset_id == "first"
+    assert group.members[0].parameter_name == "component.0.thickness_a"
+
+
+def test_describe_joint_layout_allows_a_joint_project_without_sharing() -> None:
+    value = set_batch_mode(
+        project(dataset_project("first"), dataset_project("second")),
+        "joint",
+    )
+
+    layout = describe_joint_layout(value)
+
+    assert layout.dataset_ids == ("first", "second")
+    assert layout.shared_parameters == ()
+
+
+def test_describe_joint_layout_rejects_an_independent_project() -> None:
+    value = project(dataset_project("only"))
+
+    with pytest.raises(ValueError, match="joint"):
+        describe_joint_layout(value)
 
 
 def test_workspace_state_rejects_a_foreign_dataset_reference() -> None:

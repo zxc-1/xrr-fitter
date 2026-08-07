@@ -212,6 +212,22 @@ def _classification_lines(result: object) -> list[str]:
     ]
 
 
+def classification_summary(result: object) -> str:
+    """Condense the confidence reasons into one hover-sized line.
+
+    The confidence badge sits far from the evidence panel, so a user reading a
+    red "不可信" badge has to hunt downward for the cause. Surfacing the same
+    reasons as a badge tooltip answers "why" exactly where the question is asked.
+    Returns an empty string when no reasons exist, so the caller can fall back to
+    the bare classification name rather than assert a meaning the data lacks.
+    """
+    reasons = [
+        CLASSIFICATION_LABELS.get(code, code)
+        for code in result.classification_evidence
+    ]
+    return "；".join(reasons)
+
+
 def _diagnostic_text(diagnostic: object) -> str:
     code = diagnostic.code
     message = diagnostic.message
@@ -287,6 +303,7 @@ class McmcControls(QGroupBox):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("专家 MCMC", parent)
         self._configured_candidate_id: str | None = None
+        self._free_count = 0
         self.setObjectName("expertMcmcGroup")
         self.walkers = _spin("mcmcWalkers", "MCMC walkers 数", 2, 100000)
         self.walkers.setSingleStep(2)
@@ -298,6 +315,10 @@ class McmcControls(QGroupBox):
             10000000,
         )
         self.thin = _spin("mcmcThin", "MCMC thinning 间隔", 1, 1000000)
+        self.recommend_button = QPushButton("推荐配置")
+        self.recommend_button.setObjectName("mcmcRecommendButton")
+        self.recommend_button.setToolTip("根据当前候选的自由参数数量填入推荐采样参数")
+        self.recommend_button.clicked.connect(self.apply_recommended)
         self.run_button = QPushButton("运行 MCMC")
         self.run_button.setObjectName("mcmcButton")
         self.cancel_button = QPushButton("取消")
@@ -305,6 +326,7 @@ class McmcControls(QGroupBox):
         self.force_button = QPushButton("强制停止")
         self.force_button.setObjectName("forceStopMcmcButton")
         buttons = QHBoxLayout()
+        buttons.addWidget(self.recommend_button)
         buttons.addWidget(self.run_button)
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.force_button)
@@ -329,11 +351,27 @@ class McmcControls(QGroupBox):
         form.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
     def configure(self, candidate_id: str | None, free_count: int) -> None:
+        self._free_count = free_count
         if candidate_id == self._configured_candidate_id:
             return
         self._configured_candidate_id = candidate_id
         if free_count == 0:
             return
+        self._fill_recommended(free_count)
+
+    def apply_recommended(self) -> bool:
+        """Reset the inputs to the standard config for the current candidate.
+
+        ``configure`` short-circuits when the candidate is unchanged, so a user
+        who has hand-edited the fields cannot recover the defaults by reselecting
+        the same candidate. This button gives them an unconditional way back.
+        """
+        if self._free_count == 0:
+            return False
+        self._fill_recommended(self._free_count)
+        return True
+
+    def _fill_recommended(self, free_count: int) -> None:
         config = api.McmcConfig.standard(free_count)
         self.walkers.setValue(config.walkers)
         self.burn_in.setValue(config.burn_in)
@@ -360,6 +398,7 @@ class McmcControls(QGroupBox):
         self.run_button.setEnabled(ready and not running)
         self.cancel_button.setEnabled(running)
         self.force_button.setEnabled(running)
+        self.recommend_button.setEnabled(not running)
         for widget in (self.walkers, self.burn_in, self.production, self.thin):
             widget.setEnabled(not running)
 

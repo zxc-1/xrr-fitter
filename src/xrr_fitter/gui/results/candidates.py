@@ -103,6 +103,8 @@ class CandidateList(QListWidget):
         self._inspection_candidate_id: str | None = None
         self.setObjectName("candidateList")
         self.setAccessibleName("拟合候选解")
+        self.setAccessibleDescription("用方向键在候选解之间切换，证据面板会随当前行更新")
+        self.setToolTip("用方向键或点击切换候选解；证据面板随当前行更新")
         self.setWordWrap(True)
         self.currentItemChanged.connect(self._current_item_changed)
 

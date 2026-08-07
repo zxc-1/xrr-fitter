@@ -27,6 +27,8 @@ class PlotInteractionToolbar(QWidget):
     """Own one exclusive, programmatically validated plot mode."""
 
     mode_changed = Signal(str)
+    zoom_to_range_requested = Signal()
+    reset_zoom_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -50,8 +52,33 @@ class PlotInteractionToolbar(QWidget):
             button.setProperty("plotMode", mode)
             button.clicked.connect(self._button_clicked)
         layout.addStretch(1)
+        self._install_zoom_buttons(layout)
         self._buttons["view"].setChecked(True)
         self._mode = "view"
+
+    def _install_zoom_buttons(self, layout: QHBoxLayout) -> None:
+        """Add non-exclusive zoom actions distinct from the mode button group.
+
+        Zooming to the fit range is a one-shot action, not a persistent mode,
+        so these stay outside the exclusive group; pressing one must not clear
+        the active view/range/mask mode the user is working in.
+        """
+        self._zoom_to_range = QToolButton(self)
+        self._zoom_to_range.setObjectName("plotZoomToRange")
+        self._zoom_to_range.setText("缩放拟合区")
+        self._zoom_to_range.setAccessibleName("缩放到拟合范围")
+        self._zoom_to_range.setToolTip("将反射率视图缩放到当前拟合角度范围")
+        self._zoom_to_range.clicked.connect(
+            lambda: self.zoom_to_range_requested.emit()
+        )
+        self._reset_zoom = QToolButton(self)
+        self._reset_zoom.setObjectName("plotResetZoom")
+        self._reset_zoom.setText("全览")
+        self._reset_zoom.setAccessibleName("恢复完整视图")
+        self._reset_zoom.setToolTip("恢复到完整角度范围")
+        self._reset_zoom.clicked.connect(lambda: self.reset_zoom_requested.emit())
+        layout.addWidget(self._zoom_to_range)
+        layout.addWidget(self._reset_zoom)
 
     def buttons(self) -> dict[str, QToolButton]:
         return dict(self._buttons)
@@ -117,6 +144,8 @@ class PlotInteractionController(QObject):
             self._point_clicked,
         )
         toolbar.mode_changed.connect(self._mode_changed)
+        toolbar.zoom_to_range_requested.connect(self._zoom_to_range)
+        toolbar.reset_zoom_requested.connect(self._reset_zoom)
         self._tabs.currentChanged.connect(self._tab_changed)
         panel.installEventFilter(self)
         for child in panel.findChildren(QWidget):
@@ -205,6 +234,14 @@ class PlotInteractionController(QObject):
     def _mode_changed(self, mode: str) -> None:
         if self._range_selector is not None:
             self._range_selector.set_active(mode == "range")
+
+    def _zoom_to_range(self) -> None:
+        if self._panel is not None:
+            self._panel.zoom_to_range()
+
+    def _reset_zoom(self) -> None:
+        if self._panel is not None:
+            self._panel.reset_zoom()
 
     def _span_selected(self, first: float, second: float) -> None:
         panel = self._panel

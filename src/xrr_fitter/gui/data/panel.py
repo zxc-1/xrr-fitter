@@ -37,9 +37,29 @@ from xrr_fitter.gui.document import ProjectDocument
 
 DATA_FILTER = "XRR 数据 (*.xy *.dat *.txt);;所有文件 (*)"
 SUPPORTED_SUFFIXES = {".xy", ".dat", ".txt"}
-TREE_HEADERS = ("数据集", "源文件", "光路", "仪器", "状态", "SHA-256")
-COMPACT_COLUMNS = (0, 4)
+TREE_HEADERS = ("数据集", "源文件", "光路", "仪器", "状态", "SHA-256", "拟合")
+COMPACT_COLUMNS = (0, 4, 6)
 DETAIL_COLUMNS = (1, 2, 3, 5)
+
+# Precise, glanceable rendering of each source-validation status. The marker
+# turns a buried "源文件异常" into an at-a-glance signal, and the label names
+# the exact failure so the fix is obvious without opening the detail pane.
+SOURCE_STATUS_VISUALS = {
+    "ok": ("", "源文件正常"),
+    "missing": ("⛔", "源文件缺失"),
+    "unreadable": ("⚠", "源文件无法读取"),
+    "hash_mismatch": ("⚠", "源文件内容已改变"),
+}
+
+# Glyph per persisted confidence class, so a dataset row states not just that a
+# fit exists but how far to trust it. The glyphs mirror the results panel badge
+# (defined locally to keep the data panel from importing the results module).
+FIT_STATUS_VISUALS = {
+    "可信": "●",
+    "可用但相关": "◆",
+    "多解": "▲",
+    "不可信": "■",
+}
 
 
 class DataPanel(QWidget):
@@ -102,6 +122,7 @@ class DataPanel(QWidget):
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         self.tree.currentItemChanged.connect(self._select_tree_item)
         self.details_label = QLabel()
         self.details_label.setObjectName("datasetDetails")
@@ -129,10 +150,15 @@ class DataPanel(QWidget):
         top.addWidget(self.import_files_button)
         top.addWidget(self.import_folder_button)
         top.addWidget(self.change_preset_button)
+        self.summary_label = QLabel()
+        self.summary_label.setObjectName("datasetSummary")
+        self.summary_label.setProperty("mutedText", True)
+        self.summary_label.hide()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
         layout.addLayout(top)
+        layout.addWidget(self.summary_label)
         layout.addWidget(self.tree)
         layout.addWidget(self.details_label)
         layout.addWidget(self.failure_table)
@@ -295,14 +321,67 @@ class DataPanel(QWidget):
         self.document.replace_project(updated)
         self.instrument_changed.emit(dataset_id, instrument)
 
-    def status_text(self, dataset_id: str) -> str:
-        dataset = self._dataset(dataset_id)
+    def _source_status_code(self, dataset_id: str) -> str:
         try:
-            if self.document.source_status(dataset_id) != "ok":
-                return "源文件异常"
+            return self.document.source_status(dataset_id)
         except KeyError:
-            pass
+            return "ok"
+
+    def status_text(self, dataset_id: str) -> str:
+        code = self._source_status_code(dataset_id)
+        if code != "ok":
+            return SOURCE_STATUS_VISUALS.get(code, ("", "源文件异常"))[1]
+        dataset = self._dataset(dataset_id)
         return "可拟合" if sum(dataset.fit_mask) >= 30 else "数据点不足"
+
+    def status_marker(self, dataset_id: str) -> str:
+        """Return the glanceable marker glyph for the dataset's source status."""
+        code = self._source_status_code(dataset_id)
+        return SOURCE_STATUS_VISUALS.get(code, ("", ""))[0]
+
+    def import_summary_text(self) -> str:
+        """Aggregate the datasets into a one-line readiness overview.
+
+        A batch import can produce many rows; this collapses them into "how many
+        are ready and how many need attention" so the user need not scan every
+        row. Fittability reuses the per-row judgement so the two never disagree.
+        """
+        datasets = self.document.project.datasets
+        total = len(datasets)
+        if total == 0:
+            return ""
+        fittable = sum(
+            1 for dataset in datasets if self.status_text(dataset.dataset_id) == "可拟合"
+        )
+        attention = total - fittable
+        if attention == 0:
+            return f"共 {total} 个数据集 · 全部可拟合"
+        return f"共 {total} 个数据集 · 可拟合 {fittable} · 需注意 {attention}"
+
+    def fit_status_text(self, dataset_id: str) -> str:
+        """Name the dataset's fit outcome: unfitted, or its confidence label."""
+        result = self._dataset(dataset_id).last_valid_result
+        return "未拟合" if result is None else str(result.confidence.value)
+
+    def fit_status_marker(self, dataset_id: str) -> str:
+        """Return the confidence glyph, or empty when the dataset is unfitted."""
+        result = self._dataset(dataset_id).last_valid_result
+        if result is None:
+            return ""
+        return FIT_STATUS_VISUALS.get(str(result.confidence.value), "")
+
+    def _fit_status_tooltip(self, dataset_id: str) -> str:
+        """Summarise the fit outcome so the compact cell can stay short."""
+        result = self._dataset(dataset_id).last_valid_result
+        if result is None:
+            return "尚未拟合该数据集"
+        best = result.best_candidate
+        parts = [f"可信度：{result.confidence.value}", f"候选解 {len(result.candidates)} 个"]
+        if best is not None:
+            parts.append(f"最优目标值 J={best.objective:g}")
+        if result.warnings:
+            parts.append(f"告警 {len(result.warnings)} 条")
+        return " · ".join(parts)
 
     def sha256_text(self, dataset_id: str) -> str:
         return self._dataset(dataset_id).source_sha256
@@ -356,11 +435,19 @@ class DataPanel(QWidget):
             if dataset.dataset_id == self.active_dataset_id:
                 active_item = item
         if active_item is not None:
+            # The selection highlight dims when the tree loses focus, so bold the
+            # active row's name to keep it identifiable no matter where focus went.
+            font = active_item.font(0)
+            font.setBold(True)
+            active_item.setFont(0, font)
             self.tree.setCurrentItem(active_item)
         del blocker
         self.change_preset_button.setVisible(
             self.document.project.ui_state.expert_mode
         )
+        summary = self.import_summary_text()
+        self.summary_label.setText(summary)
+        self.summary_label.setVisible(bool(summary))
         self._render_details()
 
     def _render_details(self) -> None:
@@ -390,22 +477,37 @@ class DataPanel(QWidget):
         self.details_label.show()
 
     def _tree_item(self, dataset: api.DatasetProject) -> QTreeWidgetItem:
+        marker = self.status_marker(dataset.dataset_id)
+        status = self.status_text(dataset.dataset_id)
+        status_cell = f"{marker} {status}" if marker else status
+        fit_marker = self.fit_status_marker(dataset.dataset_id)
+        fit_status = self.fit_status_text(dataset.dataset_id)
+        fit_cell = f"{fit_marker} {fit_status}" if fit_marker else fit_status
         values = (
             dataset.display_name or dataset.dataset_id,
             Path(dataset.source_path).name,
             self.beam_text(dataset.dataset_id),
             self.instrument_text(dataset.dataset_id),
-            self.status_text(dataset.dataset_id),
+            status_cell,
             dataset.source_sha256[:12],
+            fit_cell,
         )
         item = QTreeWidgetItem(values)
         item.setData(0, Qt.ItemDataRole.UserRole, dataset.dataset_id)
         item.setToolTip(1, dataset.source_path)
         item.setToolTip(2, values[2])
         item.setToolTip(3, values[3])
-        item.setToolTip(4, values[4])
+        item.setToolTip(4, self._status_tooltip(dataset.dataset_id, status))
         item.setToolTip(5, dataset.source_sha256)
+        item.setToolTip(6, self._fit_status_tooltip(dataset.dataset_id))
         return item
+
+    def _status_tooltip(self, dataset_id: str, status: str) -> str:
+        """Explain an abnormal source status inline; SHA detail lives here too."""
+        if self._source_status_code(dataset_id) == "ok":
+            return status
+        warning = self.document.source_warning(dataset_id)
+        return warning or status
 
     def _select_tree_item(
         self,

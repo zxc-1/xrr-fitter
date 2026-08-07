@@ -258,3 +258,19 @@ class SharingRule:
             raise TypeError("sharing rule members must be ParameterReference values")
         if len(members) != len(set(members)):
             raise ValueError("sharing rule members must be unique")
+
+
+@dataclass(frozen=True, slots=True)
+class JointFitLayout:
+    """Read-only description of a joint fit's datasets and shared parameters.
+
+    The layout is derived purely from persisted project fields, so it reports
+    the *declared* structure without compiling problems or reading source
+    data.  It therefore cannot assert that a shared parameter still exists or
+    is free; it answers only "which datasets participate and which parameters
+    are declared shared", which is exactly what a progress view needs to
+    attribute a joint run to its members.
+    """
+
+    dataset_ids: tuple[str, ...]
+    shared_parameters: tuple[SharingRule, ...]

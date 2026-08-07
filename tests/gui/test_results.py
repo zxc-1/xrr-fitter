@@ -169,6 +169,28 @@ def test_invalid_candidate_is_inspected_without_persisting_selection(qtbot) -> N
     assert panel.document.project.ui_state.selected_candidate_ids == ()
 
 
+def test_arrow_key_navigation_inspects_next_candidate(qtbot) -> None:
+    # Moving the selection with the keyboard must reach the same inspection path
+    # as a mouse click, so a keyboard-only user can walk candidates and watch the
+    # evidence panel follow. The list advertises this affordance so it is
+    # discoverable rather than a hidden Qt default.
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    panel = _panel(qtbot, _project_with_result(_two_candidate_result()))
+    inspected: list[str] = []
+    panel.candidates.candidate_requested.connect(inspected.append)
+    panel.candidates.setCurrentRow(0)
+    panel.candidates.setFocus()
+    inspected.clear()
+
+    QTest.keyClick(panel.candidates, Qt.Key.Key_Down)
+
+    assert panel.selected_candidate_id() == "candidate-b"
+    assert inspected == ["candidate-b"]
+    assert "方向键" in panel.candidates.accessibleDescription()
+
+
 @pytest.mark.parametrize("confirmed", (False, True))
 def test_archived_candidate_requires_confirmation_before_persisting(
     qtbot,
@@ -614,3 +636,50 @@ def test_automatic_status_labels_are_exact(status, label) -> None:
     from xrr_fitter.gui.results.automatic import automatic_status_text
 
     assert automatic_status_text(status) == label
+
+
+def test_confidence_badge_tooltip_explains_classification_reasons(qtbot) -> None:
+    # A downgraded result carries machine-readable reasons; the badge must
+    # surface their Chinese translation on hover so "why" is answered in place.
+    result = replace(
+        _two_candidate_result(),
+        confidence=type(_two_candidate_result().confidence).CORRELATED,
+        classification_evidence=("strong_correlation", "boundary_hit"),
+    )
+    panel = _panel(qtbot, _project_with_result(result))
+
+    tooltip = panel.confidence_label.toolTip()
+    assert "参数强相关" in tooltip
+    assert "参数触及边界" in tooltip
+    # The accessible description carries the same reasons for screen readers.
+    description = panel.confidence_marker.accessibleDescription()
+    assert "可用但相关" in description
+    assert "参数强相关" in description
+
+
+def test_mcmc_recommend_button_restores_standard_config_after_hand_edits(qtbot) -> None:
+    from PySide6.QtWidgets import QPushButton
+    panel = _panel(qtbot, _project_with_result(_two_candidate_result(), expert=True))
+    group = panel.mcmc_group
+    recommended = api.McmcConfig.standard(17)  # candidate-a has 17 free params
+
+    # The user hand-edits away from the recommended walkers count.
+    group.walkers.setValue(recommended.walkers + 4)
+    assert group.config().walkers != recommended.walkers
+
+    # Reselecting the same candidate would short-circuit; the button does not.
+    button = group.findChild(QPushButton, "mcmcRecommendButton")
+    button.click()
+
+    assert group.config() == recommended
+
+
+def test_mcmc_recommend_button_disabled_while_running(qtbot) -> None:
+    panel = _panel(qtbot, _project_with_result(_two_candidate_result(), expert=True))
+    group = panel.mcmc_group
+
+    group.set_operation_state(running=True, ready=False)
+    assert group.recommend_button.isEnabled() is False
+
+    group.set_operation_state(running=False, ready=True)
+    assert group.recommend_button.isEnabled() is True

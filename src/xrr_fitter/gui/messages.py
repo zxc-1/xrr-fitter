@@ -30,6 +30,16 @@ ERROR_TITLES = {
     "TimeoutError": "操作超时",
 }
 
+# Actionable next steps keyed by exception type. A bare error message names what
+# went wrong but leaves the user stuck; naming a concrete recovery move turns a
+# dead end into a next step. Types without a documented recovery fall through to
+# no suffix rather than inventing generic advice.
+ERROR_ADVICE = {
+    "OSError": "请确认数据源文件仍然存在且可读，必要时重新链接数据源后再试。",
+    "TimeoutError": "可尝试缩小拟合角度范围或减少参数数量，再重新开始拟合。",
+    "ValueError": "请检查参数上下限与初值是否自洽，以及结构是否完整。",
+}
+
 
 def readiness_text(message: str) -> str:
     """Project one preflight readiness message into user-facing Chinese."""
@@ -44,6 +54,9 @@ def readiness_text(message: str) -> str:
 
 
 def operation_error_text(error: object) -> str:
-    """Render an OperationError without leaking exception class names."""
-    title = ERROR_TITLES.get(str(error.exception_type), "操作失败")
-    return f"{title}：{error.message}"
+    """Render an OperationError with a concrete recovery hint when known."""
+    exception_type = str(error.exception_type)
+    title = ERROR_TITLES.get(exception_type, "操作失败")
+    advice = ERROR_ADVICE.get(exception_type)
+    base = f"{title}：{error.message}"
+    return f"{base}\n建议：{advice}" if advice else base

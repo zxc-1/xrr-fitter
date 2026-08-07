@@ -28,7 +28,11 @@ from xrr_fitter.gui.results.candidates import (
     candidate_is_selectable,
     persisted_candidate_id,
 )
-from xrr_fitter.gui.results.uncertainty import McmcControls, UncertaintyView
+from xrr_fitter.gui.results.uncertainty import (
+    McmcControls,
+    UncertaintyView,
+    classification_summary,
+)
 
 CONFIDENCE_VISUALS = {
     "可信": ("●", "#2E7D32"),
@@ -249,7 +253,7 @@ class ResultsPanel(QWidget):
             result,
             selected_id,
         )
-        self._set_confidence(result.confidence.value)
+        self._set_confidence(result.confidence.value, classification_summary(result))
         self.uncertainty.set_result(result, visible_id)
         self.mcmc_group.setVisible(self.document.project.ui_state.expert_mode)
         self._configure_mcmc(self._candidate(visible_id))
@@ -267,14 +271,20 @@ class ResultsPanel(QWidget):
         self.status_label.setText(text)
         theme.set_status_kind(self.status_label, kind)
 
-    def _set_confidence(self, text: str) -> None:
+    def _set_confidence(self, text: str, detail: str = "") -> None:
         marker, color = CONFIDENCE_VISUALS.get(text, ("○", "#666666"))
         self.confidence_label.setText(text)
         self.confidence_label.setProperty("semanticColor", color)
         self.confidence_label.setStyleSheet(f"color: {color}; font-weight: 600;")
         self.confidence_marker.setText(marker)
-        self.confidence_marker.setAccessibleDescription(text)
+        # Bind the reasons to the badge itself so hovering it answers "why";
+        # the accessible description carries the same text for screen readers.
+        described = f"{text}：{detail}" if detail else text
+        self.confidence_marker.setAccessibleDescription(described)
         self.confidence_marker.setStyleSheet(f"color: {color};")
+        tooltip = described if detail else ""
+        self.confidence_label.setToolTip(tooltip)
+        self.confidence_marker.setToolTip(tooltip)
 
     def _configure_mcmc(self, candidate: object | None) -> None:
         candidate_id = None if candidate is None else candidate.candidate_id

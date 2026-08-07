@@ -200,7 +200,10 @@ def test_main_window_has_three_accessible_columns(qtbot) -> None:
     ) == ("projectColumn", "plotColumn", "analysisColumn")
     assert window.minimumWidth() == 1280
     assert window.minimumHeight() == 760
-    assert window.windowTitle() == "XRR 全自动拟合"
+    # A fresh project is untitled and unmodified: the name resolves to the
+    # placeholder and Qt's [*] marker collapses to nothing when not modified.
+    assert window.windowTitle() == "未命名项目[*] — XRR 全自动拟合"
+    assert window.isWindowModified() is False
 
 
 def test_close_dirty_project_asks_before_discarding(qtbot, monkeypatch) -> None:
@@ -360,3 +363,16 @@ def test_main_window_close_timeout_decline_keeps_window_open(qtbot) -> None:
         window.close_cancel_timer.isActive(),
         window.isVisible(),
     ) == ((True, True, True, True), 1, 0, True, False, False, False, True)
+
+
+def test_window_title_tracks_unsaved_state(qtbot) -> None:
+    from xrr_fitter.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    # A dirtying edit flips Qt's native modification marker without rewriting
+    # the human-readable name, so the platform renders the unsaved indicator.
+    window.document.mark_dirty()
+    assert window.isWindowModified() is True
+    assert window.windowTitle() == "未命名项目[*] — XRR 全自动拟合"
