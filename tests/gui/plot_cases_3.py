@@ -265,7 +265,14 @@ def test_plot_panel_mask_mode_click_requests_prepared_point(qtbot) -> None:
 
     assert emitted == [2]
 
-def test_plot_panel_matplotlib_text_has_no_missing_cjk_glyphs(qtbot) -> None:
+def test_plot_panel_matplotlib_text_has_no_missing_cjk_glyphs(
+    qtbot,
+    monkeypatch,
+    caplog,
+) -> None:
+    import xrr_fitter.gui.plots.diagnostics as diagnostics
+
+    monkeypatch.setattr(diagnostics, "CJK_FONT_FAMILIES", ("Hiragino Sans GB",))
     data = prepared_data(size=4)
     panel = _panel(qtbot, data=data, result=_result(data))
 
@@ -280,6 +287,7 @@ def test_plot_panel_matplotlib_text_has_no_missing_cjk_glyphs(qtbot) -> None:
             canvas.release()
 
     assert not [warning for warning in caught if "Glyph" in str(warning.message)]
+    assert "glyph" not in caplog.text.lower()
 
 def test_plot_panel_no_best_redraw_failure_restores_previous_candidate(
     qtbot,

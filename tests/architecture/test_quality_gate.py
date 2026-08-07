@@ -7,14 +7,18 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests.support.release_workflow_contract import (
+    CHECKOUT,
+    DOWNLOAD_ARTIFACT,
+    expected_draft_release_job,
+    expected_windows_job,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "verify.yml"
 RUNNER = ["self-hosted", "macOS", "ARM64", "xrr-ci"]
-CHECKOUT = "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
 UPLOAD_ARTIFACT = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
-DOWNLOAD_ARTIFACT = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
 JOB_TIMEOUTS = {"statistical": 720, "release": 720}
 
 
@@ -222,82 +226,6 @@ def _release_job() -> dict[str, object]:
     return job
 
 
-def _windows_job() -> dict[str, object]:
-    return {
-        "needs": ["release"],
-        "if": "startsWith(github.ref, 'refs/tags/') && needs.release.result == 'success'",
-        "uses": "./.github/workflows/windows-executable.yml",
-        "with": {
-            "source_ref": "${{ github.ref_name }}",
-            "expected_commit": "${{ github.sha }}",
-        },
-    }
-
-
-def _draft_release_job() -> dict[str, object]:
-    return {
-        "needs": ["release", "windows"],
-        "if": (
-            "startsWith(github.ref, 'refs/tags/') && "
-            "needs.release.result == 'success' && needs.windows.result == 'success'"
-        ),
-        "runs-on": "ubuntu-latest",
-        "timeout-minutes": 15,
-        "permissions": {"contents": "write"},
-        "steps": [
-            {
-                "uses": CHECKOUT,
-                "with": {"persist-credentials": False, "fetch-depth": 1},
-            },
-            {
-                "name": "Download canonical release bundle",
-                "uses": DOWNLOAD_ARTIFACT,
-                "with": {
-                    "name": "xrr-release-${{ github.ref_name }}-${{ github.sha }}",
-                    "path": "${{ runner.temp }}/release-bundle",
-                },
-            },
-            {
-                "name": "Download Windows release bundle",
-                "uses": DOWNLOAD_ARTIFACT,
-                "with": {
-                    "name": "xrr-windows-executable-${{ github.sha }}",
-                    "path": "${{ runner.temp }}/windows-release",
-                },
-            },
-            {
-                "name": "Create or update draft GitHub Release",
-                "shell": "bash",
-                "env": {"GH_TOKEN": "${{ github.token }}"},
-                "run": "\n".join(
-                    (
-                        "set -euo pipefail",
-                        'TAG="$GITHUB_REF_NAME"',
-                        "shopt -s nullglob",
-                        "ASSETS=(",
-                        '  "$RUNNER_TEMP/release-bundle/artifact-manifest.json"',
-                        '  "$RUNNER_TEMP/release-bundle/release-identity.json"',
-                        '  "$RUNNER_TEMP/release-bundle/artifacts/"*',
-                        '  "$RUNNER_TEMP/windows-release/"*.exe',
-                        '  "$RUNNER_TEMP/windows-release/"*.json',
-                        ")",
-                        'test "${#ASSETS[@]}" -eq 6',
-                        'for ASSET in "${ASSETS[@]}"; do',
-                        '  test -f "$ASSET"',
-                        "done",
-                        'if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then',
-                        '  gh release upload "$TAG" "${ASSETS[@]}" \\\n    --repo "$GITHUB_REPOSITORY" --clobber',
-                        "else",
-                        '  gh release create "$TAG" "${ASSETS[@]}" \\\n    --repo "$GITHUB_REPOSITORY" \\\n    --verify-tag \\\n    --title "XRR $TAG" \\\n    --notes-file docs/acceptance/r23-release-acceptance.md \\\n    --draft \\\n    --latest=false',
-                        "fi",
-                        "",
-                    )
-                ),
-            },
-        ],
-    }
-
-
 def _checkpoint_job() -> dict[str, object]:
     return {
         "needs": [
@@ -407,8 +335,8 @@ def _expected_workflow() -> dict[str, object]:
             "candidate-readiness": _readiness_job(),
             "identity": _identity_job(),
             "release": _release_job(),
-            "windows": _windows_job(),
-            "draft-release": _draft_release_job(),
+            "windows": expected_windows_job(),
+            "draft-release": expected_draft_release_job(),
             "checkpoint": _checkpoint_job(),
         },
     }
@@ -440,8 +368,6 @@ def test_initial_workflow_has_exact_jobs_permissions_and_trigger() -> None:
         "candidate-readiness",
         "identity",
         "release",
-        "windows",
-        "draft-release",
         "windows",
         "draft-release",
         "checkpoint",
@@ -723,58 +649,3 @@ def test_software_delivery_workflow_never_requires_owner_data() -> None:
     assert {"identity", "release"} < set(payload["jobs"])
     assert "--approved-data-root" not in commands
     assert "--capture-candidate" not in commands
-
-
-def test_release_trigger_uses_stable_version_tags_only() -> None:
-    payload = _payload()
-    assert payload["on"] == {
-        "push": {
-            "branches": ["main"],
-            "tags": ["v*"],
-        }
-    }
-
-
-def test_candidate_readiness_validates_the_version_tag() -> None:
-    job = _payload()["jobs"]["candidate-readiness"]
-    validation = next(
-        step for step in job["steps"] if step.get("name") == "Validate release version tag"
-    )
-    assert validation["if"] == "startsWith(github.ref, 'refs/tags/')"
-    assert "tools/release_version.py" in validation["run"]
-    assert '"$GITHUB_REF_NAME"' in validation["run"]
-
-
-def test_version_tag_release_builds_windows_after_release_gates() -> None:
-    jobs = _payload()["jobs"]
-    windows = jobs["windows"]
-    draft = jobs["draft-release"]
-    assert windows["needs"] == ["release"]
-    assert windows["if"] == "startsWith(github.ref, 'refs/tags/') && needs.release.result == 'success'"
-    assert windows["uses"] == "./.github/workflows/windows-executable.yml"
-    assert windows["with"] == {
-        "source_ref": "${{ github.ref_name }}",
-        "expected_commit": "${{ github.sha }}",
-    }
-    assert draft["needs"] == ["release", "windows"]
-    assert draft["if"] == (
-        "startsWith(github.ref, 'refs/tags/') && "
-        "needs.release.result == 'success' && needs.windows.result == 'success'"
-    )
-    assert draft["permissions"] == {"contents": "write"}
-    draft_run = draft["steps"][-1]["run"]
-    assert "find " not in draft_run
-    assert 'release-bundle/artifact-manifest.json' in draft_run
-    assert 'release-bundle/release-identity.json' in draft_run
-    assert 'windows-release/"*.exe' in draft_run
-
-
-def test_release_checkpoint_requires_windows_and_draft_release_for_tags() -> None:
-    checkpoint = _payload()["jobs"]["checkpoint"]
-    assert "windows" in checkpoint["needs"]
-    assert "draft-release" in checkpoint["needs"]
-    step = checkpoint["steps"][0]
-    assert step["env"]["WINDOWS_RESULT"] == "${{ needs.windows.result }}"
-    assert step["env"]["DRAFT_RELEASE_RESULT"] == "${{ needs.draft-release.result }}"
-    assert 'test "$WINDOWS_RESULT" = success' in step["run"]
-    assert 'test "$DRAFT_RELEASE_RESULT" = success' in step["run"]

@@ -26,7 +26,7 @@ def draw_sld(view: DiagnosticView, candidate: object | None) -> None:
     axes.clear()
     axes.plot(depth_nm, profile.real, label="SLD 实部")
     axes.plot(depth_nm, profile.imag, "--", label="SLD 虚部")
-    axes.set(title="SLD 深度剖面", xlabel="深度 (nm)", ylabel=r"SLD (Å$^{-2}$)")
+    axes.set(title="SLD 深度剖面", xlabel="深度 (nm)", ylabel="SLD (Å⁻²)")
     axes.legend()
     _finish(view)
 

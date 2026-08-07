@@ -47,6 +47,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/architecture/test_pr_verify_workflow.py",
                 "tests/architecture/test_windows_executable_workflow.py",
                 "tests/architecture/test_quality_gate.py",
+                "tests/architecture/test_release_workflow.py",
                 "tests/architecture/test_removed_legacy_modules.py",
                 "-q",
             ),

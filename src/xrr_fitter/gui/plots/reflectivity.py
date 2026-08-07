@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from matplotlib.ticker import LogFormatter
 
 import xrr_fitter.api as api
 from xrr_fitter.gui.plots.diagnostics import DiagnosticView, apply_figure_font, draw_empty
@@ -203,6 +204,7 @@ def draw_log(
         ylabel=f"归一化 R (display floor={data.r_floor:g})",
         yscale="log",
     )
+    axes.yaxis.set_major_formatter(LogFormatter())
     axes.legend()
     _finish(view)
 
@@ -244,7 +246,7 @@ def draw_qz4(
     axes.clear()
     axes.plot(qz, np.asarray(data.intensity_normalized) * transform, "o", label="归一化数据")
     axes.plot(qz, np.asarray(candidate.model_normalized) * transform, "--", label="当前候选模型")
-    axes.set(title="qz⁴R 诊断变换（非拟合数据）", xlabel=r"qz (Å$^{-1}$)", ylabel="qz⁴R")
+    axes.set(title="qz⁴R 诊断变换（非拟合数据）", xlabel="qz (Å⁻¹)", ylabel="qz⁴R")
     axes.legend()
     _finish(view)
 
@@ -258,6 +260,6 @@ def draw_residual(view: DiagnosticView, candidate: object | None) -> None:
     axes.clear()
     axes.plot(qz, candidate.weighted_residuals, "-o", label="加权残差")
     axes.plot(qz, np.zeros_like(qz), ":", label="零参考线")
-    axes.set(title="加权残差", xlabel=r"qz (Å$^{-1}$)", ylabel="加权残差")
+    axes.set(title="加权残差", xlabel="qz (Å⁻¹)", ylabel="加权残差")
     axes.legend()
     _finish(view)
