@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
-
 
 PYTHON = "{python}"
 REPORT = "{report}"
@@ -45,8 +44,10 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/architecture/test_naming_rules.py",
                 "tests/architecture/test_public_api.py",
                 "tests/architecture/test_distribution.py",
+                "tests/architecture/test_pr_verify_workflow.py",
                 "tests/architecture/test_windows_executable_workflow.py",
                 "tests/architecture/test_quality_gate.py",
+                "tests/architecture/test_release_workflow.py",
                 "tests/architecture/test_removed_legacy_modules.py",
                 "-q",
             ),
@@ -80,6 +81,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/integration/test_batch_resume.py",
                 "tests/integration/test_export_workflow.py",
                 "tests/integration/test_gui_project_workflow.py",
+                "tests/integration/test_gui_automatic_workflow.py",
                 "-q",
             ),
         )
@@ -92,6 +94,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/regression/test_numerical_reference.py",
                 "tests/regression/test_recovery_metrics.py",
                 "tests/regression/test_profile_basin_regressions.py",
+                "tests/regression/test_automatic_recovery.py",
                 "-q",
             ),
         )

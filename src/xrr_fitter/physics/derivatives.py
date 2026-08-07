@@ -157,17 +157,21 @@ def _normalize(matrix: np.ndarray, tangent: np.ndarray) -> ComplexTangent:
 
 def _compose(left: np.ndarray, left_tangent: np.ndarray, right: np.ndarray, right_tangent: np.ndarray) -> ComplexTangent:
     matrix = np.empty_like(left)
-    tangent = np.empty_like(left_tangent)
-    # Compose in the primal traversal order and apply the matrix product rule.
+    # Preserve the primal element order while batching the parameter-axis work.
     for row in range(2):
         for column in range(2):
             matrix[:, row, column] = left[:, row, 0] * right[:, 0, column] + left[:, row, 1] * right[:, 1, column]
-            tangent[:, row, column] = (
-                left_tangent[:, row, 0] * right[:, 0, column, None]
-                + left[:, row, 0, None] * right_tangent[:, 0, column]
-                + left_tangent[:, row, 1] * right[:, 1, column, None]
-                + left[:, row, 1, None] * right_tangent[:, 1, column]
-            )
+    tangent = np.einsum(
+        "qijp,qjk->qikp",
+        left_tangent,
+        right,
+        optimize=True,
+    ) + np.einsum(
+        "qij,qjkp->qikp",
+        left,
+        right_tangent,
+        optimize=True,
+    )
     return _normalize(matrix, tangent)
 
 
@@ -201,8 +205,8 @@ class _PeriodicTangents:
     inputs: _Inputs
     qz: np.ndarray = field(init=False)
     qz_tangent: np.ndarray = field(init=False)
-    kz_cache: dict[int, ComplexTangent] = field(default_factory=dict)
-    interface_cache: dict[int, ComplexTangent] = field(default_factory=dict)
+    kz_cache: dict[tuple[complex, bytes], ComplexTangent] = field(default_factory=dict)
+    interface_cache: dict[tuple[object, ...], ComplexTangent] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.qz = self.inputs.qz.ravel()
@@ -211,8 +215,20 @@ class _PeriodicTangents:
             self.inputs.parameter_count,
         )
 
+    def _kz_key(self, medium: int) -> tuple[complex, bytes]:
+        return complex(self.stack.sld_a2[medium]), self.inputs.sld_jacobian[medium].tobytes()
+
+    def _interface_key(self, interface: int) -> tuple[object, ...]:
+        return (
+            self._kz_key(interface),
+            self._kz_key(interface + 1),
+            float(self.stack.roughness_a[interface]),
+            self.inputs.roughness_jacobian[interface].tobytes(),
+        )
+
     def kz_at(self, medium: int) -> ComplexTangent:
-        cached = self.kz_cache.get(medium)
+        key = self._kz_key(medium)
+        cached = self.kz_cache.get(key)
         if cached is not None:
             return cached
         # Periodic evaluation computes only media touched by the compressed traversal.
@@ -230,11 +246,12 @@ class _PeriodicTangents:
         kz = raw.copy()
         kz[flip] *= -1.0
         tangent[flip] *= -1.0
-        self.kz_cache[medium] = (kz, tangent)
+        self.kz_cache[key] = (kz, tangent)
         return kz, tangent
 
     def interface_at(self, interface: int) -> ComplexTangent:
-        cached = self.interface_cache.get(interface)
+        key = self._interface_key(interface)
+        cached = self.interface_cache.get(key)
         if cached is not None:
             return cached
         upper, upper_tangent = self.kz_at(interface)
@@ -253,7 +270,7 @@ class _PeriodicTangents:
         reflection = bare * factor
         factor_tangent = factor[:, None] * exponent_tangent
         tangent = bare_tangent * factor[:, None] + bare[:, None] * factor_tangent
-        self.interface_cache[interface] = (reflection, tangent)
+        self.interface_cache[key] = (reflection, tangent)
         return reflection, tangent
 
     def phase_at(self, medium: int) -> ComplexTangent:
@@ -365,6 +382,47 @@ def _span_normal_tangents_repeat(span: PeriodicSpan, inputs: _Inputs) -> bool:
     )
 
 
+def _active_parameter_mask(inputs: _Inputs) -> np.ndarray:
+    """Return columns that can affect the optical recurrence."""
+    q_axes = tuple(range(inputs.qz_jacobian.ndim - 1))
+    active = np.any(inputs.qz_jacobian != 0.0, axis=q_axes)
+    for tangent in (
+        inputs.thickness_jacobian,
+        inputs.sld_jacobian,
+        inputs.roughness_jacobian,
+    ):
+        active |= np.any(tangent != 0.0, axis=0)
+    return active
+
+
+def _selected_parameter_inputs(inputs: _Inputs, selected: np.ndarray) -> _Inputs:
+    return _Inputs(
+        inputs.qz,
+        inputs.qz_jacobian[..., selected],
+        inputs.thickness_jacobian[:, selected],
+        inputs.sld_jacobian[:, selected],
+        inputs.roughness_jacobian[:, selected],
+        int(np.count_nonzero(selected)),
+    )
+
+
+def _jacobian_for_inputs(
+    stack: SlabStack,
+    inputs: _Inputs,
+) -> tuple[np.ndarray, np.ndarray]:
+    if stack.periodic_spans:
+        if all(
+            _span_normal_tangents_repeat(span, inputs)
+            for span in stack.periodic_spans
+        ):
+            return _periodic_jacobian(stack, inputs)
+        # Keep the public periodic primal grouping while expanding only the
+        # analytic tangent recurrence for independently moving cells.
+        _, jacobian = _standard_jacobian(stack, inputs)
+        return parratt_reflectivity(inputs.qz, stack), jacobian
+    return _standard_jacobian(stack, inputs)
+
+
 def parratt_reflectivity_jacobian(
     qz_a_inv: np.ndarray,
     stack: SlabStack,
@@ -375,14 +433,18 @@ def parratt_reflectivity_jacobian(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return Parratt reflectivity and its analytic real forward Jacobian."""
     inputs = _inputs(qz_a_inv, stack, qz_jacobian, thickness_jacobian, sld_jacobian, roughness_jacobian)
-    if stack.periodic_spans:
-        if all(_span_normal_tangents_repeat(span, inputs) for span in stack.periodic_spans):
-            return _periodic_jacobian(stack, inputs)
-        # Keep the public periodic primal grouping while expanding only the
-        # analytic tangent recurrence for independently moving cells.
-        _, jacobian = _standard_jacobian(stack, inputs)
-        return parratt_reflectivity(inputs.qz, stack), jacobian
-    return _standard_jacobian(stack, inputs)
+    if not stack.periodic_spans:
+        return _standard_jacobian(stack, inputs)
+    active = _active_parameter_mask(inputs)
+    if np.all(active):
+        return _jacobian_for_inputs(stack, inputs)
+    values, reduced = _jacobian_for_inputs(
+        stack,
+        _selected_parameter_inputs(inputs, active),
+    )
+    jacobian = np.zeros(values.shape + (inputs.parameter_count,), dtype=float)
+    jacobian[..., active] = reduced
+    return values, jacobian
 
 
 def _quadrature_tangent(

@@ -28,12 +28,14 @@ def test_patch_release_version_is_0_2_2() -> None:
     assert project["version"] == "0.2.2"
 
 
-def test_windows_workflow_requires_explicit_source_identity() -> None:
-    inputs = _workflow()["on"]["workflow_dispatch"]["inputs"]
-    assert inputs["source_ref"]["required"] is True
-    assert inputs["expected_commit"]["required"] is True
-    assert "default" not in inputs["source_ref"]
-    assert "default" not in inputs["expected_commit"]
+def test_windows_workflow_supports_release_calls_and_manual_retries() -> None:
+    triggers = _workflow()["on"]
+    for trigger in ("workflow_call", "workflow_dispatch"):
+        inputs = triggers[trigger]["inputs"]
+        assert inputs["source_ref"]["required"] is True
+        assert inputs["expected_commit"]["required"] is True
+        assert "default" not in inputs["source_ref"]
+        assert "default" not in inputs["expected_commit"]
 
 
 def test_windows_workflow_derives_asset_names_from_installed_version() -> None:
@@ -65,3 +67,8 @@ def test_windows_workflow_derives_asset_names_from_installed_version() -> None:
         in manifest
     )
     assert "xrr-fitter-0.2.0-windows-x86_64" not in workflow_text
+
+
+def test_windows_artifact_name_is_not_hardcoded_to_r23() -> None:
+    upload = _step("Upload Windows release assets")
+    assert upload["with"]["name"] == "xrr-windows-executable-${{ inputs.expected_commit }}"

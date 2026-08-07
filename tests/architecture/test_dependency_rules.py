@@ -110,13 +110,23 @@ PACKAGE_EDGE_EXCEPTIONS = {
 MODEL_ALLOWED = {
     "data": set(),
     "instrument": set(),
+    "automation": {"data", "instrument"},
     "structure": set(),
     "parameters": set(),
-    "fitting": {"data", "instrument", "structure", "parameters"},
+    "progress": set(),
+    "fitting": {"data", "instrument", "structure", "parameters", "progress"},
     "provenance": {"fitting"},
     "analysis": {"data", "parameters", "fitting"},
-    "project": {"data", "instrument", "structure", "parameters", "fitting", "analysis"},
-    "operations": {"fitting", "analysis", "project"},
+    "project": {
+        "automation",
+        "data",
+        "instrument",
+        "structure",
+        "parameters",
+        "fitting",
+        "analysis",
+    },
+    "operations": {"automation", "fitting", "analysis", "project"},
     "export": {"data", "fitting", "analysis", "project", "operations"},
 }
 THIRD_PARTY_ROOTS = {
@@ -665,6 +675,7 @@ def test_fixture_checker_enforces_model_module_dag_and_services_composition() ->
         "model.provenance",
         "services.batch",
         "services.fitting",
+        "services.fitting_phases.automatic_dataset",
     }
     assert _module_violations(
         "model.analysis", "from xrr_fitter.model import fitting", known
@@ -681,6 +692,11 @@ def test_fixture_checker_enforces_model_module_dag_and_services_composition() ->
     assert _module_violations(
         "services.fitting", "import xrr_fitter.fit\nimport xrr_fitter.analysis", known
     ) == ()
+    assert "services-composition" in _fixture_kinds(
+        "services.fitting_phases.automatic_dataset",
+        "import xrr_fitter.fit\nimport xrr_fitter.analysis",
+        *known,
+    )
     assert "services-composition" in _fixture_kinds(
         "services.batch", "from xrr_fitter import analysis", *known
     )

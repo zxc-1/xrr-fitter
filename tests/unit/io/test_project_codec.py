@@ -16,6 +16,7 @@ from xrr_fitter.io.project_codec import (
     fit_result_to_dict,
     load_project,
     project_from_bytes,
+    project_from_dict,
     project_to_bytes,
     project_to_dict,
     save_project,
@@ -169,6 +170,43 @@ def _manual_result_graph() -> tuple[FitResult, FitCheckpoint]:
     return result, checkpoint
 
 
+def _project_with_result():
+    result, checkpoint = _manual_result_graph()
+    dataset = replace(
+        dataset_project("sample-1"),
+        last_valid_result=result,
+        checkpoint=checkpoint,
+    )
+    return project(dataset)
+
+
+def test_schema_one_migrates_automation_preset_and_bootstrap_flag() -> None:
+    value = _project_with_result()
+    payload = project_to_dict(value)
+    payload["schema_version"] = 1
+    payload.pop("measurement_preset")
+    for dataset in payload["datasets"]:
+        dataset.pop("automation")
+        result = dataset["last_valid_result"]
+        if result is not None and result["uncertainty"] is not None:
+            result["uncertainty"].pop("bootstrap_performed")
+
+    migrated = project_from_dict(payload)
+
+    assert migrated.schema_version == 2
+    assert migrated.measurement_preset is None
+    assert migrated.datasets[0].automation.status.value == "not_run"
+    assert migrated.datasets[0].last_valid_result.uncertainty.bootstrap_performed is True
+
+
+@pytest.mark.parametrize("version", (0, 3, 999))
+def test_only_schema_one_has_a_migration_path(version: int) -> None:
+    payload = project_to_dict(_project_with_result())
+    payload["schema_version"] = version
+    with pytest.raises(ProjectVersionError, match="unsupported project schema"):
+        project_from_dict(payload)
+
+
 def _project_with_legal_json_sentinels():
     result, checkpoint = _manual_result_graph()
     source = result.candidates[0]
@@ -231,14 +269,21 @@ def _rewrite(path: Path, mutation) -> None:
     path.write_text(json.dumps(payload, allow_nan=False), encoding="utf-8")
 
 
-def test_r22_example_projects_round_trip_through_the_only_codec() -> None:
+def test_schema_one_example_projects_migrate_and_round_trip_v2() -> None:
     for stem in ("single-layer", "mo-si-periodic"):
         content = (REFERENCE_INPUTS / f"{stem}.xrrproj.json").read_bytes()
-        expected = json.loads(content)
 
         loaded = project_from_bytes(content)
+        encoded = project_to_bytes(loaded)
+        restored = project_from_bytes(encoded)
 
-        assert project_to_dict(loaded) == expected
+        assert loaded.schema_version == 2
+        assert all(
+            dataset.automation.status.value == "not_run"
+            for dataset in loaded.datasets
+        )
+        assert restored == loaded
+        assert project_to_bytes(restored) == encoded
 
 
 def test_save_load_round_trip_sets_runtime_base_directory(tmp_path: Path) -> None:

@@ -5,7 +5,7 @@ name: verify
     branches:
       - main
     tags:
-      - R23-final
+      - v*
 
 permissions:
   contents: read
@@ -198,7 +198,7 @@ jobs:
       - name: Upload distribution bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: r23-distribution-${{ github.sha }}
+          name: xrr-distribution-${{ github.sha }}
           path: ${{ runner.temp }}/distribution-bundle
           if-no-files-found: error
           retention-days: 1
@@ -215,6 +215,14 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Validate release version tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3.12 tools/release_version.py \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --tag "$GITHUB_REF_NAME"
       - name: Evaluate candidate readiness
         id: readiness
         shell: bash
@@ -254,7 +262,7 @@ jobs:
       - name: Download distribution bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: r23-distribution-${{ github.sha }}
+          name: xrr-distribution-${{ github.sha }}
           path: ${{ runner.temp }}/downloaded-distribution
       - name: Verify identity
         shell: bash
@@ -292,14 +300,76 @@ jobs:
       - name: Upload canonical release bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: r23-release-${{ github.sha }}
+          name: xrr-release-${{ github.ref_name }}-${{ github.sha }}
           path: ${{ runner.temp }}/release
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
 
+  windows:
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/') && needs.release.result == 'success'
+    uses: ./.github/workflows/windows-executable.yml
+    with:
+      source_ref: ${{ github.ref_name }}
+      expected_commit: ${{ github.sha }}
+
+  draft-release:
+    needs: [release, windows]
+    if: startsWith(github.ref, 'refs/tags/') && needs.release.result == 'success' && needs.windows.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Download canonical release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: xrr-release-${{ github.ref_name }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-bundle
+      - name: Download Windows release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: xrr-windows-executable-${{ github.sha }}
+          path: ${{ runner.temp }}/windows-release
+      - name: Create or update draft GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          shopt -s nullglob
+          ASSETS=(
+            "$RUNNER_TEMP/release-bundle/artifact-manifest.json"
+            "$RUNNER_TEMP/release-bundle/release-identity.json"
+            "$RUNNER_TEMP/release-bundle/artifacts/"*
+            "$RUNNER_TEMP/windows-release/"*.exe
+            "$RUNNER_TEMP/windows-release/"*.json
+          )
+          test "${#ASSETS[@]}" -eq 6
+          for ASSET in "${ASSETS[@]}"; do
+            test -f "$ASSET"
+          done
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "${ASSETS[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "XRR $TAG" \
+              --notes-file docs/acceptance/r23-release-acceptance.md \
+              --draft \
+              --latest=false
+          fi
+
   checkpoint:
-    needs: [quality, tools, unit, gui, integration, spawn, regression, statistical, distribution, candidate-readiness, identity, release]
+    needs: [quality, tools, unit, gui, integration, spawn, regression, statistical, distribution, candidate-readiness, identity, release, windows, draft-release]
     if: always()
     runs-on: [self-hosted, macOS, ARM64, xrr-ci]
     timeout-minutes: 10
@@ -319,6 +389,8 @@ jobs:
           READY: ${{ needs.candidate-readiness.outputs.ready }}
           IDENTITY_RESULT: ${{ needs.identity.result }}
           RELEASE_RESULT: ${{ needs.release.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+          DRAFT_RELEASE_RESULT: ${{ needs.draft-release.result }}
           REF: ${{ github.ref }}
         shell: bash
         run: |
@@ -341,20 +413,16 @@ jobs:
           esac
           case "$REF" in
             refs/tags/*)
-              case "$READY" in
-                true)
-                  test "$IDENTITY_RESULT" = success
-                  test "$RELEASE_RESULT" = success
-                  ;;
-                false)
-                  test "$IDENTITY_RESULT" = skipped
-                  test "$RELEASE_RESULT" = skipped
-                  ;;
-                *) exit 1 ;;
-              esac
+              test "$READY" = true
+              test "$IDENTITY_RESULT" = success
+              test "$RELEASE_RESULT" = success
+              test "$WINDOWS_RESULT" = success
+              test "$DRAFT_RELEASE_RESULT" = success
               ;;
             *)
               test "$IDENTITY_RESULT" = skipped
               test "$RELEASE_RESULT" = skipped
+              test "$WINDOWS_RESULT" = skipped
+              test "$DRAFT_RELEASE_RESULT" = skipped
               ;;
           esac

@@ -68,20 +68,24 @@ def _panel(qtbot, tmp_path, count=1):
     return panel
 
 
-def test_progress_view_renders_stage_counts_objective_and_message(qtbot) -> None:
+def test_progress_view_renders_stage_identity_objective_and_message(qtbot) -> None:
     from xrr_fitter.gui.fitting.progress import ProgressView
 
     view = ProgressView()
     qtbot.addWidget(view)
-    progress = api.FitProgress("curve", "stage-c", 3, 10, 0.0125, "local search")
+    progress = api.FitProgress("curve", "C", 3, 10, 0.0125, "local search")
 
     view.set_progress(progress)
 
     bar = view.findChild(QProgressBar, "fitProgressBar")
     stage = view.findChild(QLabel, "fitProgressStage")
     detail = view.findChild(QLabel, "fitProgressDetail")
-    assert (bar.value(), bar.maximum()) == (3, 10)
-    assert stage.text() == "curve · stage-c"
+    # The bar reports one global scale so switching stages cannot rewind it;
+    # the per-stage counts stay visible in the stage label instead.
+    assert bar.maximum() == 1000
+    assert 0 < bar.value() < 1000
+    assert "curve" in stage.text()
+    assert "3/10" in detail.text()
     assert "local search" in detail.text()
     assert "0.0125" in detail.text()
 
@@ -187,3 +191,130 @@ def test_batch_mode_selector_is_visible_persisted_and_rejects_one_dataset_joint(
     joint = _panel(qtbot, tmp_path / "joint", count=2)
     assert joint.set_batch_mode("joint") is True
     assert joint.document.project.batch_mode == "joint"
+
+
+def test_normal_mode_shows_automatic_primary_control_and_hides_expert_controls(
+    qtbot,
+    tmp_path,
+) -> None:
+    panel = _panel(qtbot, tmp_path)
+    automatic = panel.findChild(QPushButton, "startAutomaticFitButton")
+    expert_start = panel.findChild(QPushButton, "startFitButton")
+    selector = panel.findChild(QComboBox, "batchModeSelector")
+
+    assert automatic.text() == "自动拟合"
+    assert automatic.isVisibleTo(panel) is True
+    assert expert_start.isVisibleTo(panel) is False
+    assert selector.isVisibleTo(panel) is False
+
+    panel.document.replace_project(api.set_expert_mode(panel.document.project, True))
+
+    assert automatic.isVisibleTo(panel) is True
+    assert expert_start.isVisibleTo(panel) is True
+    assert selector.isVisibleTo(panel) is True
+
+
+def test_automatic_fit_uses_automatic_preflight_and_resets_progress(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    panel = _panel(qtbot, tmp_path)
+    project = panel.document.project
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        api,
+        "preflight_automatic_fit",
+        lambda *args: (calls.append(("preflight", *args)), api.FitReadiness(True, "ready"))[1],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        panel.controller,
+        "start_automatic_fit",
+        lambda *args: (calls.append(("start", *args)), True)[1],
+        raising=False,
+    )
+    panel.progress_view.set_progress(
+        api.FitProgress("curve", "E", 1, 1, 0.1, "complete")
+    )
+
+    assert panel.start_automatic_fit("batch-9") is True
+    assert calls == [
+        ("preflight", project, "batch-9"),
+        ("start", project, "batch-9", None),
+    ]
+    assert panel.progress_view.bar.value() == 0
+
+
+def test_progress_bar_never_moves_backwards_across_stage_changes(qtbot) -> None:
+    """Each stage owns a slice of one fixed range, so the bar only advances."""
+    from xrr_fitter.gui.fitting.progress import ProgressView
+
+    view = ProgressView()
+    qtbot.addWidget(view)
+    bar = view.findChild(QProgressBar, "fitProgressBar")
+
+    observed: list[int] = []
+    sequence = (
+        ("A", 512, 512),
+        ("B", 1, 2),
+        ("B", 2, 2),
+        ("C", 3, 6),
+        ("C", 6, 6),
+        ("D", 6, 6),
+        ("E", 4, 4),
+        ("bootstrap", 9, 9),
+        ("profile", 9, 9),
+        ("finalizing", 1, 1),
+    )
+    for stage, completed, total in sequence:
+        view.set_progress(api.FitProgress("curve", stage, completed, total, 1.0, stage))
+        observed.append(bar.value())
+
+    assert observed == sorted(observed), f"bar moved backwards: {observed}"
+    assert bar.maximum() == 1000
+    assert observed[0] > 0
+    assert observed[-1] == 1000
+
+
+def test_progress_view_reports_stage_ordinal_and_localized_stage_name(qtbot) -> None:
+    from xrr_fitter.gui.fitting.progress import ProgressView
+
+    view = ProgressView()
+    qtbot.addWidget(view)
+
+    view.set_progress(api.FitProgress("curve", "C", 3, 6, 0.5, "refining"))
+
+    stage = view.findChild(QLabel, "fitProgressStage")
+    detail = view.findChild(QLabel, "fitProgressDetail")
+    assert "阶段 3/9" in stage.text()
+    assert "密度精修" in stage.text()
+    assert "3/6" in detail.text()
+
+
+def test_progress_view_reset_returns_the_bar_to_zero(qtbot) -> None:
+    from xrr_fitter.gui.fitting.progress import ProgressView
+
+    view = ProgressView()
+    qtbot.addWidget(view)
+    view.set_progress(api.FitProgress("curve", "E", 4, 4, 1.0, "seeds"))
+
+    view.reset()
+
+    bar = view.findChild(QProgressBar, "fitProgressBar")
+    assert bar.value() == 0
+    assert view.findChild(QLabel, "fitProgressStage").text() == "等待开始"
+
+
+def test_unknown_stage_does_not_move_the_progress_bar(qtbot) -> None:
+    from xrr_fitter.gui.fitting.progress import ProgressView
+
+    view = ProgressView()
+    qtbot.addWidget(view)
+    bar = view.findChild(QProgressBar, "fitProgressBar")
+    view.set_progress(api.FitProgress("curve", "C", 6, 6, 1.0, "refining"))
+    before = bar.value()
+
+    view.set_progress(api.FitProgress("curve", "mystery-stage", 1, 1, 1.0, "?"))
+
+    assert bar.value() == before

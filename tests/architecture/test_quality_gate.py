@@ -7,14 +7,18 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests.support.release_workflow_contract import (
+    CHECKOUT,
+    DOWNLOAD_ARTIFACT,
+    expected_draft_release_job,
+    expected_windows_job,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "verify.yml"
 RUNNER = ["self-hosted", "macOS", "ARM64", "xrr-ci"]
-CHECKOUT = "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
 UPLOAD_ARTIFACT = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
-DOWNLOAD_ARTIFACT = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
 JOB_TIMEOUTS = {"statistical": 720, "release": 720}
 
 
@@ -95,7 +99,7 @@ def _distribution_job() -> dict[str, object]:
             "name": "Upload distribution bundle",
             "uses": UPLOAD_ARTIFACT,
             "with": {
-                "name": "r23-distribution-${{ github.sha }}",
+                "name": "xrr-distribution-${{ github.sha }}",
                 "path": "${{ runner.temp }}/distribution-bundle",
                 "if-no-files-found": "error",
                 "retention-days": 1,
@@ -147,6 +151,20 @@ def _readiness_job() -> dict[str, object]:
                 "with": {"persist-credentials": False, "fetch-depth": 0},
             },
             {
+                "name": "Validate release version tag",
+                "if": "startsWith(github.ref, 'refs/tags/')",
+                "shell": "bash",
+                "run": "\n".join(
+                    (
+                        "set -euo pipefail",
+                        "python3.12 tools/release_version.py \\",
+                        '  --repo-root "$GITHUB_WORKSPACE" \\',
+                        '  --tag "$GITHUB_REF_NAME"',
+                        "",
+                    )
+                ),
+            },
+            {
                 "name": "Evaluate candidate readiness",
                 "id": "readiness",
                 "shell": "bash",
@@ -166,7 +184,7 @@ def _identity_job() -> dict[str, object]:
             "name": "Download distribution bundle",
             "uses": DOWNLOAD_ARTIFACT,
             "with": {
-                "name": "r23-distribution-${{ github.sha }}",
+                "name": "xrr-distribution-${{ github.sha }}",
                 "path": "${{ runner.temp }}/downloaded-distribution",
             },
         },
@@ -197,7 +215,7 @@ def _release_job() -> dict[str, object]:
             "name": "Upload canonical release bundle",
             "uses": UPLOAD_ARTIFACT,
             "with": {
-                "name": "r23-release-${{ github.sha }}",
+                "name": "xrr-release-${{ github.ref_name }}-${{ github.sha }}",
                 "path": "${{ runner.temp }}/release",
                 "if-no-files-found": "error",
                 "retention-days": 1,
@@ -223,6 +241,8 @@ def _checkpoint_job() -> dict[str, object]:
             "candidate-readiness",
             "identity",
             "release",
+            "windows",
+            "draft-release",
         ],
         "if": "always()",
         "runs-on": RUNNER,
@@ -244,6 +264,8 @@ def _checkpoint_job() -> dict[str, object]:
                     "READY": "${{ needs.candidate-readiness.outputs.ready }}",
                     "IDENTITY_RESULT": "${{ needs.identity.result }}",
                     "RELEASE_RESULT": "${{ needs.release.result }}",
+                    "WINDOWS_RESULT": "${{ needs.windows.result }}",
+                    "DRAFT_RELEASE_RESULT": "${{ needs.draft-release.result }}",
                     "REF": "${{ github.ref }}",
                 },
                 "shell": "bash",
@@ -267,21 +289,17 @@ def _checkpoint_job() -> dict[str, object]:
                     'esac\n'
                     'case "$REF" in\n'
                     '  refs/tags/*)\n'
-                    '    case "$READY" in\n'
-                    '      true)\n'
-                    '        test "$IDENTITY_RESULT" = success\n'
-                    '        test "$RELEASE_RESULT" = success\n'
-                    '        ;;\n'
-                    '      false)\n'
-                    '        test "$IDENTITY_RESULT" = skipped\n'
-                    '        test "$RELEASE_RESULT" = skipped\n'
-                    '        ;;\n'
-                    '      *) exit 1 ;;\n'
-                    '    esac\n'
+                    '    test "$READY" = true\n'
+                    '    test "$IDENTITY_RESULT" = success\n'
+                    '    test "$RELEASE_RESULT" = success\n'
+                    '    test "$WINDOWS_RESULT" = success\n'
+                    '    test "$DRAFT_RELEASE_RESULT" = success\n'
                     '    ;;\n'
                     '  *)\n'
                     '    test "$IDENTITY_RESULT" = skipped\n'
                     '    test "$RELEASE_RESULT" = skipped\n'
+                    '    test "$WINDOWS_RESULT" = skipped\n'
+                    '    test "$DRAFT_RELEASE_RESULT" = skipped\n'
                     '    ;;\n'
                     'esac\n'
                 ),
@@ -296,7 +314,7 @@ def _expected_workflow() -> dict[str, object]:
         "on": {
             "push": {
                 "branches": ["main"],
-                "tags": ["R23-final"],
+                "tags": ["v*"],
             }
         },
         "permissions": {"contents": "read"},
@@ -317,6 +335,8 @@ def _expected_workflow() -> dict[str, object]:
             "candidate-readiness": _readiness_job(),
             "identity": _identity_job(),
             "release": _release_job(),
+            "windows": expected_windows_job(),
+            "draft-release": expected_draft_release_job(),
             "checkpoint": _checkpoint_job(),
         },
     }
@@ -332,7 +352,7 @@ def test_initial_workflow_has_exact_jobs_permissions_and_trigger() -> None:
     assert payload["on"] == {
         "push": {
             "branches": ["main"],
-            "tags": ["R23-final"],
+            "tags": ["v*"],
         }
     }
     assert set(payload["jobs"]) == {
@@ -348,6 +368,8 @@ def test_initial_workflow_has_exact_jobs_permissions_and_trigger() -> None:
         "candidate-readiness",
         "identity",
         "release",
+        "windows",
+        "draft-release",
         "checkpoint",
     }
 
@@ -368,6 +390,8 @@ def test_checkpoint_job_contract() -> None:
         "candidate-readiness",
         "identity",
         "release",
+        "windows",
+        "draft-release",
     ]
     assert checkpoint["if"] == "always()"
     assert checkpoint["runs-on"] == RUNNER
@@ -392,6 +416,8 @@ def test_checkpoint_step_requires_every_gate() -> None:
         "READY": "${{ needs.candidate-readiness.outputs.ready }}",
         "IDENTITY_RESULT": "${{ needs.identity.result }}",
         "RELEASE_RESULT": "${{ needs.release.result }}",
+        "WINDOWS_RESULT": "${{ needs.windows.result }}",
+        "DRAFT_RELEASE_RESULT": "${{ needs.draft-release.result }}",
         "REF": "${{ github.ref }}",
     }
     assert step["run"].splitlines() == [
@@ -414,21 +440,17 @@ def test_checkpoint_step_requires_every_gate() -> None:
         "esac",
         'case "$REF" in',
         "  refs/tags/*)",
-        '    case "$READY" in',
-        "      true)",
-        '        test "$IDENTITY_RESULT" = success',
-        '        test "$RELEASE_RESULT" = success',
-        "        ;;",
-        "      false)",
-        '        test "$IDENTITY_RESULT" = skipped',
-        '        test "$RELEASE_RESULT" = skipped',
-        "        ;;",
-        "      *) exit 1 ;;",
-        "    esac",
+        '    test "$READY" = true',
+        '    test "$IDENTITY_RESULT" = success',
+        '    test "$RELEASE_RESULT" = success',
+        '    test "$WINDOWS_RESULT" = success',
+        '    test "$DRAFT_RELEASE_RESULT" = success',
         "    ;;",
         "  *)",
         '    test "$IDENTITY_RESULT" = skipped',
         '    test "$RELEASE_RESULT" = skipped',
+        '    test "$WINDOWS_RESULT" = skipped',
+        '    test "$DRAFT_RELEASE_RESULT" = skipped',
         "    ;;",
         "esac",
     ]
@@ -511,7 +533,9 @@ def test_release_job_runs_nested_gui_gates_offscreen() -> None:
 def test_candidate_readiness_is_static_and_owner_data_independent() -> None:
     job = _payload()["jobs"]["candidate-readiness"]
     assert job["outputs"] == {"ready": "${{ steps.readiness.outputs.ready }}"}
-    step = job["steps"][1]
+    validation = job["steps"][1]
+    assert validation["name"] == "Validate release version tag"
+    step = job["steps"][2]
     assert step["id"] == "readiness"
     commands = step["run"]
     assert "verification/r23/tests.json" in commands
@@ -539,7 +563,7 @@ def test_release_jobs_are_readiness_gated_and_use_exact_bundles() -> None:
         "name": "Upload distribution bundle",
         "uses": UPLOAD_ARTIFACT,
         "with": {
-            "name": "r23-distribution-${{ github.sha }}",
+            "name": "xrr-distribution-${{ github.sha }}",
             "path": "${{ runner.temp }}/distribution-bundle",
             "if-no-files-found": "error",
             "retention-days": 1,
@@ -550,7 +574,7 @@ def test_release_jobs_are_readiness_gated_and_use_exact_bundles() -> None:
         "name": "Download distribution bundle",
         "uses": DOWNLOAD_ARTIFACT,
         "with": {
-            "name": "r23-distribution-${{ github.sha }}",
+            "name": "xrr-distribution-${{ github.sha }}",
             "path": "${{ runner.temp }}/downloaded-distribution",
         },
     }
@@ -558,7 +582,7 @@ def test_release_jobs_are_readiness_gated_and_use_exact_bundles() -> None:
         "name": "Upload canonical release bundle",
         "uses": UPLOAD_ARTIFACT,
         "with": {
-            "name": "r23-release-${{ github.sha }}",
+            "name": "xrr-release-${{ github.ref_name }}-${{ github.sha }}",
             "path": "${{ runner.temp }}/release",
             "if-no-files-found": "error",
             "retention-days": 1,
@@ -594,7 +618,7 @@ def test_release_jobs_are_readiness_gated_and_use_exact_bundles() -> None:
         lambda payload: payload["jobs"]["distribution"].__setitem__(
             "continue-on-error", True
         ),
-        lambda payload: payload["jobs"]["candidate-readiness"]["steps"][1].__setitem__(
+        lambda payload: payload["jobs"]["candidate-readiness"]["steps"][2].__setitem__(
             "run", "printf 'ready=true\\n' >> \"$GITHUB_OUTPUT\"\n"
         ),
         lambda payload: payload["jobs"]["identity"].__setitem__("if", "true"),

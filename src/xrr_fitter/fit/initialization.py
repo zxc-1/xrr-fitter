@@ -36,6 +36,7 @@ class InitialCandidates:
     backgrounds: tuple[float, ...]
     relative_resolutions: tuple[float, ...]
     footprint_angles_deg: tuple[float, ...]
+    direct_sld_rows: tuple[tuple[tuple[str, float], ...], ...]
     warnings: tuple[str, ...] = ()
 
 
@@ -220,6 +221,83 @@ def critical_edge_candidates(
         return ()
     ranked = peaks[np.argsort(curvature[peaks])[::-1]][:max_candidates]
     return tuple(float(value) for value in np.sort(low_positions[ranked]))
+
+
+DIRECT_SLD_ANCHORS = (
+    -20.0 * 1e-6,
+    0.0 * 1e-6,
+    10.0 * 1e-6,
+    20.0 * 1e-6,
+    40.0 * 1e-6,
+    80.0 * 1e-6,
+    120.0 * 1e-6,
+)
+
+
+def critical_sld_candidates(
+    data: PreparedData,
+    structure: StructureSpec,
+) -> tuple[float, ...]:
+    """Combine fixed SLD anchors with one bounded critical-edge estimate."""
+    del structure
+    mask = data.fit_mask
+    edges = critical_edge_candidates(
+        data.qz_a_inv[mask],
+        data.intensity_normalized[mask],
+    )
+    candidates = set(DIRECT_SLD_ANCHORS)
+    if edges:
+        estimate = edges[0] ** 2 / (16.0 * np.pi)
+        candidates.add(float(np.clip(estimate, -150e-6, 150e-6)))
+    return tuple(sorted(candidates))
+
+
+def _direct_sld_paths(structure: StructureSpec) -> tuple[tuple[str, float], ...]:
+    paths: list[tuple[str, float]] = []
+    for component_index, component in enumerate(structure.components):
+        if isinstance(component, LayerSpec):
+            layers = ((f"component.{component_index}", component),)
+        elif isinstance(component, PeriodicBlock):
+            layers = tuple(
+                (f"component.{component_index}.layer.{layer_index}", layer)
+                for layer_index, layer in enumerate(component.layers)
+            )
+        else:
+            layers = ()
+        paths.extend(
+            (f"{prefix}.sld_real_a2", layer.material.sld_override_a2.real)
+            for prefix, layer in layers
+            if layer.material.sld_override_a2 is not None
+        )
+    if structure.backing.sld_override_a2 is not None:
+        paths.append(("backing.sld_real_a2", structure.backing.sld_override_a2.real))
+    return tuple(paths)
+
+
+def direct_sld_start_rows(
+    structure: StructureSpec,
+    candidates: tuple[float, ...],
+) -> tuple[tuple[tuple[str, float], ...], ...]:
+    """Build at most eight stable direct-SLD hypotheses without a product."""
+    declared = _direct_sld_paths(structure)
+    if not declared:
+        return ()
+    estimate = next(
+        (value for value in candidates if value not in DIRECT_SLD_ANCHORS),
+        candidates[0],
+    )
+    rows = [
+        declared,
+        tuple((name, estimate) for name, _value in declared),
+    ]
+    rows.extend(
+        tuple(
+            (name, DIRECT_SLD_ANCHORS[(rotation + index) % len(DIRECT_SLD_ANCHORS)])
+            for index, (name, _value) in enumerate(declared)
+        )
+        for rotation in range(6)
+    )
+    return tuple(dict.fromkeys(rows))[:8]
 
 
 def ramp_inflection_estimate_deg(data: PreparedData) -> float | None:
@@ -503,6 +581,10 @@ def estimate_initial_candidates(
         backgrounds=backgrounds,
         relative_resolutions=(0.0, 0.002, 0.005, 0.01, 0.02),
         footprint_angles_deg=footprint_angles,
+        direct_sld_rows=direct_sld_start_rows(
+            structure,
+            critical_sld_candidates(data, structure),
+        ),
         warnings=tuple(warnings),
     )
 

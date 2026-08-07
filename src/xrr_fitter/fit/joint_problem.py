@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from hashlib import sha256
-import json
 
 from xrr_fitter.fit.checkpoint import checkpoint_identity
+from xrr_fitter.fit.joint_roughness import SHARED_ROUGHNESS_TRANSFORM
 from xrr_fitter.fit.joint_sharing import validate_sharing_rules
 from xrr_fitter.model.parameters import ParameterReference, SharingRule
 
@@ -48,7 +49,12 @@ def _global_variable(
             None,
             (reference,),
         )
-    return JointVariable(rule.sharing_key, definition.transform, rule.sharing_key, rule.members)
+    transform = (
+        SHARED_ROUGHNESS_TRANSFORM
+        if definition.transform == "roughness_fraction"
+        else definition.transform
+    )
+    return JointVariable(rule.sharing_key, transform, rule.sharing_key, rule.members)
 
 
 def _layout(

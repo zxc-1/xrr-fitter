@@ -4,8 +4,8 @@ from queue import Empty
 from types import SimpleNamespace
 
 import pytest
-
 from tests.support.model_cases import project
+
 from xrr_fitter.services import workers
 
 
@@ -214,3 +214,29 @@ def test_spawn_failure_is_raised_and_closes_owned_queue(
 
     assert queue.closed is True
     assert process.closed is True
+
+
+def test_automatic_job_request_keeps_import_batch_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[object, object]] = []
+    sentinel = object()
+    monkeypatch.setattr(
+        workers,
+        "_start",
+        lambda target, request: (captured.append((target, request)), sentinel)[1],
+    )
+    value = project()
+
+    job = workers.start_automatic_fit_job(
+        value,
+        import_batch_id="batch-gui",
+        checkpoint_path="automatic-checkpoint.json",
+    )
+
+    assert job is sentinel
+    target, request = captured[0]
+    assert target is workers._run_automatic_fit_worker
+    assert request.project is value
+    assert request.import_batch_id == "batch-gui"
+    assert request.checkpoint_path == "automatic-checkpoint.json"

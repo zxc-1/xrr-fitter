@@ -18,6 +18,11 @@ evidence. Owner fields are paired, parameter names define sample columns, and
 published intervals must follow exactly the same ordered axis. Failure rate is
 kept even when the interval gate suppresses all bounds.
 
+Empty bootstrap intervals are therefore meaningful rather than incomplete:
+they record a performed analysis whose failure-rate gate withheld confidence
+bounds. Nonempty rows are normalized to floats only after their names and
+ordering have been checked, so serialization cannot silently permute columns.
+
 Ensemble and MCMC values preserve sampling geometry separately from summaries.
 Their axes align draws, walkers, parameters, log probability, acceptance,
 convergence, and effective sample size without retaining runtime callbacks or
@@ -114,6 +119,7 @@ def _validate_mcmc_axes(
     names: tuple[str, ...],
     arrays: tuple[np.ndarray, ...],
 ) -> None:
+    """Keep flattened retained draws aligned with walker and parameter axes."""
     samples, probability, acceptance, rhat, effective = arrays
     parameter_axes = samples.shape[1] == len(names) == rhat.size == effective.size
     if not parameter_axes:
@@ -155,6 +161,7 @@ def _bootstrap_intervals(
     names: tuple[str, ...],
     values: object,
 ) -> tuple[tuple[str, float, float], ...]:
+    """Normalize optional bounds without erasing a gated empty result."""
     intervals = tuple(values)
     if not intervals:
         return ()
@@ -211,6 +218,7 @@ def _validate_bootstrap_owner(
     candidate_id: str | None,
     provenance_sha256: str | None,
 ) -> None:
+    """Require a complete candidate/provenance pair when ownership is sealed."""
     if (candidate_id is None) != (provenance_sha256 is None):
         raise ValueError("bootstrap candidate_id and provenance_sha256 must be paired")
     if candidate_id is None:
@@ -406,7 +414,13 @@ class EnsembleSamples:
 
 @dataclass(frozen=True, slots=True)
 class McmcReport:
-    """Physical retained samples bound to config, seed, and candidate identity."""
+    """Physical retained samples bound to config, seed, and candidate identity.
+
+    Sample rows and log probabilities share the flattened retained-draw axis;
+    acceptance fractions remain walker-owned, while R-hat and effective sample
+    size remain parameter-owned. The optional candidate ID records which fit
+    state supplied the sampling center without retaining that mutable runtime.
+    """
 
     config: McmcConfig
     child_seed: int
@@ -459,6 +473,7 @@ class UncertaintyReport:
     residual_autocorrelation: bool = False
     mcmc: McmcReport | None = None
     candidate_id: str | None = None
+    bootstrap_performed: bool = True
 
     def __post_init__(self) -> None:
         names = tuple(self.correlation_names)
@@ -478,6 +493,8 @@ class UncertaintyReport:
             raise TypeError("diagnostics must contain PhysicsDiagnostic values")
         if self.candidate_id is not None and not self.candidate_id:
             raise ValueError("candidate_id must be a nonempty string or None")
+        if not isinstance(self.bootstrap_performed, bool):
+            raise TypeError("bootstrap_performed must be bool")
         object.__setattr__(self, "diagnostics", diagnostics)
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:

@@ -18,6 +18,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from matplotlib.text import Text
+from matplotlib.ticker import LogFormatter
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QTabWidget
 
@@ -126,10 +127,10 @@ def _cjk_font() -> font_manager.FontProperties:
     for family in CJK_FONT_FAMILIES:
         properties = font_manager.FontProperties(family=family)
         try:
-            path = font_manager.findfont(properties, fallback_to_default=False)
+            font_manager.findfont(properties, fallback_to_default=False)
         except ValueError:
             continue
-        return font_manager.FontProperties(fname=path)
+        return font_manager.FontProperties(family=(family, "DejaVu Sans"))
     return font_manager.FontProperties(family="sans-serif")
 
 
@@ -270,7 +271,8 @@ def draw_candidate_comparison(
         axes.text(0.5, 0.5, "暂无候选解", ha="center", va="center", transform=axes.transAxes)
     elif candidate_id is None:
         axes.text(0.02, 0.02, "尚未选择候选解", transform=axes.transAxes)
-    axes.set(title="候选解比较", xlabel=r"qz (Å$^{-1}$)", ylabel="归一化 R", yscale="log")
+    axes.set(title="候选解比较", xlabel="qz (Å⁻¹)", ylabel="归一化 R", yscale="log")
+    axes.yaxis.set_major_formatter(LogFormatter())
     if candidates:
         axes.legend(fontsize="small")
     apply_figure_font(view.figure)

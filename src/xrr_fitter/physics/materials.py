@@ -9,6 +9,8 @@ import periodictable
 
 from xrr_fitter.model.structure import MaterialSpec
 
+CLASSICAL_ELECTRON_RADIUS_A = 2.8179403262e-5
+
 
 def _require_positive(value: float, name: str) -> None:
     if not isfinite(value) or value <= 0.0:

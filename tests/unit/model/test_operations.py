@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import fields
 
 import pytest
-
 from tests.support.model_cases import final_fit_result, fit_result, project
+
 from xrr_fitter.model.operations import (
     DatasetFitResult,
     FitReadiness,
@@ -37,6 +37,12 @@ def test_project_fit_result_schema_is_immutable_and_identity_checked() -> None:
     assert result.datasets[0].dataset_id == "curve"
     with pytest.raises(ValueError, match="mode"):
         ProjectFitResult("parallel", result.datasets, (), result.updated_project)
+
+
+def test_project_fit_result_accepts_automatic_mode() -> None:
+    current = project()
+
+    assert ProjectFitResult("automatic", (), (), current).mode == "automatic"
 
 
 def test_operation_error_has_exact_serializable_schema() -> None:

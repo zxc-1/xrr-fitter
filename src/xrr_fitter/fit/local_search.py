@@ -23,6 +23,8 @@ from xrr_fitter.model.fitting import ModelEvaluation
 class SearchCancelled(RuntimeError):
     """Raised when a cooperative search cancellation is observed."""
 
+    _xrr_cooperative_cancellation = True
+
 
 @dataclass(frozen=True, slots=True)
 class LocalSearchResult:

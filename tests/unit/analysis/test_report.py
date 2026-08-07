@@ -8,22 +8,26 @@ pickle round trips, and deterministic winner identity.
 Report tests cover covariance/profile selection, diagnostic enrichment,
 classification order, progress, and uncertainty stage publication. Joint
 ranking is exercised by the real joint pipeline in its focused test module.
+
+Automatic fits deliberately disable bootstrap on their clean fast path while
+retaining bounded profile recovery for ambiguous evidence. The report contract
+therefore records whether work actually ran, rather than inferring it from
+default field values.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from dataclasses import fields
+import pickle
+from dataclasses import dataclass, fields, replace
 from functools import partial
 from importlib import import_module
-import pickle
 from types import SimpleNamespace
 from typing import get_type_hints
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data, simple_structure
+
 from xrr_fitter.evaluation import encode_physical_vector, evaluate_model
 from xrr_fitter.fit.candidates import candidate_from_evaluation
 from xrr_fitter.fit.objective import evaluate_vector
@@ -240,6 +244,7 @@ def _assert_analysis_pickle_contract(api, request, restored) -> None:
         "search_result",
         "profile_names",
         "bootstrap",
+        "bootstrap_enabled",
     )
     assert restored.dataset_id == "curve"
     assert restored.problem.data.qz_a_inv.flags.writeable is False
@@ -289,6 +294,41 @@ def test_analysis_request_and_handler_are_pickle_safe_worker_values(
     )
 
     _assert_analysis_handler_call(observed, restored, result, sentinel)
+
+
+def test_analysis_can_skip_bootstrap_and_profile_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _api()
+    problem = _problem()
+    search = _search_result(
+        problem,
+        tuple(_candidate(problem, f"E-{index}") for index in range(4)),
+    )
+
+    monkeypatch.setattr(
+        module,
+        "bootstrap_problem_local",
+        lambda *_args, **_kwargs: pytest.fail("automatic analysis ran bootstrap"),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_problem_profiles",
+        lambda *_args, **_kwargs: pytest.fail("automatic analysis built profiles"),
+    )
+
+    request = module.AnalysisRequest(
+        "curve",
+        problem,
+        search,
+        profile_names=(),
+        bootstrap_enabled=False,
+    )
+    result = module.run_analysis(request)
+
+    assert result.uncertainty is not None
+    assert result.uncertainty.bootstrap_performed is False
+    assert result.uncertainty.profiles == ()
 
 
 @pytest.mark.parametrize("drift", ["structure", "data"], ids=["structure", "data"])
@@ -672,7 +712,9 @@ def test_fit_dataset_runs_uncertainty_before_classifying_result(monkeypatch) -> 
     calls: list[str] = []
     bootstrap_calls: list[dict[str, object]] = []
     report_calls: list[dict[str, object]] = []
-    task_runner = lambda tasks: tuple(task() for task in tasks)
+
+    def task_runner(tasks):
+        return tuple(task() for task in tasks)
 
     monkeypatch.setattr(
         module,
@@ -827,6 +869,23 @@ def test_joint_result_uncertainty_uses_global_candidate_parameter_names() -> Non
         len(problem.variables),
         len(problem.variables),
     )
+
+
+def test_joint_ensemble_marks_bootstrap_as_not_performed() -> None:
+    joint = import_module("xrr_fitter.analysis.joint")
+
+    report, _confidence, _evidence = joint.analyze_joint_ensemble(
+        variable_names=("shared",),
+        candidate_ids=("E-0",),
+        unit_vectors=np.asarray(((0.5,),)),
+        physical_values=np.asarray(((1.0,),)),
+        objectives=(1.0,),
+        valid=(True,),
+        diagnostics=((),),
+        thresholds=FitConfig.fast(1701).confidence,
+    )
+
+    assert report.bootstrap_performed is False
 
 
 def test_problem_objective_information_uses_robust_weights_and_scale_prior() -> None:

@@ -4,10 +4,15 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
-
 from tests.support.model_cases import final_fit_result, simple_structure
+
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.analysis import StructureEvidence
+from xrr_fitter.model.automation import (
+    AutomaticRole,
+    AutomaticStatus,
+    DatasetAutomation,
+)
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import ParameterSetting
@@ -21,6 +26,7 @@ from xrr_fitter.services.datasets import (
 )
 from xrr_fitter.services.parameters import accept_source_update, describe_parameters
 from xrr_fitter.services.projects import new_project
+from xrr_fitter.services.structures import set_structure
 
 
 def _write_curve(path: Path, *, scale: float = 1.0) -> Path:
@@ -33,6 +39,43 @@ def _write_curve(path: Path, *, scale: float = 1.0) -> Path:
 
 def _instrument() -> InstrumentSpec:
     return InstrumentSpec(instrument_id="service-test")
+
+
+def _with_automatic_results(project, groups: tuple[str, ...]):
+    return replace(
+        project,
+        datasets=tuple(
+            replace(
+                dataset,
+                last_valid_result=final_fit_result(),
+                automation=DatasetAutomation(
+                    import_batch_id="batch-1",
+                    fit_group_id=group_id,
+                    role=AutomaticRole.JOINT,
+                    status=AutomaticStatus.PASSED,
+                    statistics_member=True,
+                    reason="previous result",
+                ),
+            )
+            for dataset, group_id in zip(project.datasets, groups, strict=True)
+        ),
+    )
+
+
+def _filename_structure_snapshot(dataset) -> tuple[object, ...]:
+    structure = dataset.structure
+    assert structure is not None
+    materials = tuple(layer.material for layer in structure.components)
+    return (
+        dataset.dataset_id,
+        dataset.display_name,
+        structure.fronting.name,
+        structure.backing.formula,
+        tuple(material.formula for material in materials),
+        materials[0].bulk_density_g_cm3,
+        tuple(material.bulk_density_g_cm3 is not None for material in materials),
+        tuple(material.sld_override_a2 is not None for material in materials),
+    )
 
 
 def test_add_dataset_uses_source_stem_namespace_and_lowest_available_suffix(
@@ -118,27 +161,28 @@ def test_add_dataset_interprets_filename_materials_from_backing_to_surface(
             _instrument(),
         )
 
-    assert tuple(dataset.dataset_id for dataset in project.datasets) == tuple(
-        case[1] for case in cases
+    assert tuple(_filename_structure_snapshot(dataset) for dataset in project.datasets) == (
+        (
+            cases[0][1],
+            cases[0][0],
+            "Air",
+            "Si",
+            ("Zr", "Si", "Si3N4"),
+            6.52,
+            (True, True, True),
+            (False, False, False),
+        ),
+        (
+            cases[1][1],
+            cases[1][0],
+            "Air",
+            "Si",
+            ("TaN", None, None),
+            14.30,
+            (True, False, False),
+            (False, True, True),
+        ),
     )
-    assert tuple(dataset.display_name for dataset in project.datasets) == tuple(
-        case[0] for case in cases
-    )
-    for dataset, (_stem, _dataset_id, formulas) in zip(
-        project.datasets,
-        cases,
-        strict=True,
-    ):
-        assert dataset.structure is not None
-        assert dataset.structure.fronting.name == "Air"
-        assert dataset.structure.backing.formula == "Si"
-        assert tuple(
-            component.material.formula for component in dataset.structure.components
-        ) == formulas
-        assert all(
-            component.material.bulk_density_g_cm3 > 0.0
-            for component in dataset.structure.components
-        )
 
 
 def test_add_dataset_reuses_matching_filename_structure_for_batch(
@@ -150,6 +194,24 @@ def test_add_dataset_reuses_matching_filename_structure_for_batch(
             project,
             _write_curve(
                 tmp_path / f"{sample} Si3N4+Si+Zr.xy",
+                scale=index + 1.0,
+            ),
+            _instrument(),
+        )
+
+    assert project.datasets[0].structure is not None
+    assert project.datasets[1].structure is project.datasets[0].structure
+
+
+def test_add_dataset_reuses_matching_direct_sld_filename_structure_for_batch(
+    tmp_path: Path,
+) -> None:
+    project = new_project()
+    for index, sample in enumerate(("S300-1", "S300-2")):
+        project = add_dataset(
+            project,
+            _write_curve(
+                tmp_path / f"{sample} CrSiC+SiCMo+TaN.xy",
                 scale=index + 1.0,
             ),
             _instrument(),
@@ -212,6 +274,34 @@ def test_fit_mask_change_clears_only_derived_state_and_candidate_selection(
     )
 
 
+def test_automatic_fit_mask_change_clears_the_matching_fit_group(
+    tmp_path: Path,
+) -> None:
+    project = new_project()
+    for name, scale in (("a", 1.0), ("b", 2.0), ("c", 3.0)):
+        project = add_dataset(
+            project,
+            _write_curve(tmp_path / f"{name}.xy", scale=scale),
+            _instrument(),
+        )
+    project = _with_automatic_results(project, ("g1", "g1", "g2"))
+    mask = np.asarray(project.datasets[0].fit_mask, dtype=bool)
+    mask[-1] = False
+
+    changed = set_fit_mask(project, "a", mask)
+
+    by_id = {dataset.dataset_id: dataset for dataset in changed.datasets}
+    assert by_id["a"].last_valid_result is None
+    assert by_id["b"].last_valid_result is None
+    assert by_id["c"].last_valid_result is not None
+    assert by_id["b"].automation == replace(
+        project.datasets[1].automation,
+        status=AutomaticStatus.PENDING,
+        statistics_member=False,
+        reason=None,
+    )
+
+
 def test_source_update_is_previewed_then_accepted_with_fresh_declarations(
     tmp_path: Path,
 ) -> None:
@@ -265,6 +355,83 @@ def test_source_update_is_previewed_then_accepted_with_fresh_declarations(
         None,
         None,
     )
+
+
+def test_automatic_source_acceptance_clears_the_matching_fit_group(
+    tmp_path: Path,
+) -> None:
+    value = new_project()
+    sources = (
+        _write_curve(tmp_path / "a.xy"),
+        _write_curve(tmp_path / "b.xy", scale=2.0),
+        _write_curve(tmp_path / "c.xy", scale=3.0),
+    )
+    for source in sources:
+        value = add_dataset(value, source, _instrument())
+    value = _with_automatic_results(value, ("g1", "g1", "g2"))
+    sources[0].write_bytes(sources[0].read_bytes() + b"# changed\n")
+
+    changed = accept_source_update(value, preview_source_update(value, "a"))
+
+    by_id = {dataset.dataset_id: dataset for dataset in changed.datasets}
+    assert by_id["a"].last_valid_result is None
+    assert by_id["b"].last_valid_result is None
+    assert by_id["c"].last_valid_result is not None
+    assert by_id["a"].automation == replace(
+        value.datasets[0].automation,
+        status=AutomaticStatus.PENDING,
+        statistics_member=False,
+        reason=None,
+    )
+
+
+def test_automatic_invalidation_preserves_manual_dataset_with_matching_group_id(
+    tmp_path: Path,
+) -> None:
+    value = new_project()
+    for name, scale in (("auto", 1.0), ("manual", 2.0)):
+        value = add_dataset(
+            value,
+            _write_curve(tmp_path / f"{name}.xy", scale=scale),
+            _instrument(),
+        )
+    value = _with_automatic_results(value, ("shared", "shared"))
+    manual = replace(
+        value.datasets[1],
+        automation=DatasetAutomation(fit_group_id="shared"),
+    )
+    value = replace(value, datasets=(value.datasets[0], manual))
+
+    changed = set_instrument(
+        value,
+        "auto",
+        replace(value.datasets[0].instrument, background_kind="linear"),
+    )
+
+    assert changed.datasets[0].last_valid_result is None
+    assert changed.datasets[1] is manual
+
+
+def test_automatic_structure_change_clears_the_matching_fit_group(
+    tmp_path: Path,
+) -> None:
+    project = new_project()
+    for name, scale in (("a", 1.0), ("b", 2.0), ("c", 3.0)):
+        project = add_dataset(
+            project,
+            _write_curve(tmp_path / f"{name}.xy", scale=scale),
+            _instrument(),
+        )
+    project = _with_automatic_results(project, ("g1", "g1", "g2"))
+    structure = replace(simple_structure(), backing_roughness_a=4.0)
+
+    changed = set_structure(project, "a", structure)
+
+    by_id = {dataset.dataset_id: dataset for dataset in changed.datasets}
+    assert by_id["a"].structure == structure
+    assert by_id["a"].last_valid_result is None
+    assert by_id["b"].last_valid_result is None
+    assert by_id["c"].last_valid_result is not None
 
 
 def test_source_update_retains_only_parameter_settings_valid_for_current_definitions(

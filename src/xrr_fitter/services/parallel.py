@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+from queue import SimpleQueue
 from threading import Lock
-from typing import TypeVar
-
+from typing import TypeVar, cast
 
 T = TypeVar("T")
 
@@ -61,50 +61,110 @@ class OrderedTaskRunner:
             future.cancel()
 
     @staticmethod
-    def _cancel_after(futures: tuple[Future[T], ...], index: int) -> None:
-        for future in futures[index + 1 :]:
-            future.cancel()
-
-    def _cancel_on_failure(
-        self,
-        futures: tuple[Future[T], ...],
-        index: int,
-        completed: Future[T],
-    ) -> None:
-        try:
-            failed = completed.exception() is not None
-        except CancelledError:
-            failed = False
-        if failed:
-            self._cancel_after(futures, index)
-
-    def run(self, tasks: Iterable[Callable[[], T]]) -> tuple[T, ...]:
-        """Execute one batch, selecting results and failures by input index."""
+    def _validated_tasks(
+        tasks: Iterable[Callable[[], T]],
+        completed: Callable[[int, T], None] | None,
+    ) -> tuple[Callable[[], T], ...]:
         values = tuple(tasks)
         if any(not callable(task) for task in values):
             raise TypeError("ordered tasks must be callable")
+        if completed is not None and not callable(completed):
+            raise TypeError("completed callback must be callable")
+        return values
+
+    def _run_inline(
+        self,
+        tasks: tuple[Callable[[], T], ...],
+        completed: Callable[[int, T], None] | None,
+    ) -> tuple[T, ...]:
+        results = []
+        for index, task in enumerate(tasks):
+            with self._lock:
+                cancel_requested = self._cancel_requested
+            if cancel_requested:
+                raise CancelledError()
+            value = task()
+            results.append(value)
+            if completed is not None:
+                completed(index, value)
+        return tuple(results)
+
+    @staticmethod
+    def _cancel_pending(
+        futures: Iterable[Future[object]],
+        completed: Future[object] | None = None,
+    ) -> None:
+        for future in futures:
+            if future is not completed and not future.done():
+                future.cancel()
+
+    def _submit_tasks(
+        self,
+        tasks: tuple[Callable[[], T], ...],
+        completed_positions: SimpleQueue[int],
+    ) -> tuple[Future[T], ...]:
+        if self._executor is None:
+            raise RuntimeError("threaded execution requires an executor")
+        futures: list[Future[T]] = []
+        try:
+            for index, task in enumerate(tasks):
+                def observed_task(index=index, task=task):
+                    try:
+                        return task()
+                    finally:
+                        completed_positions.put(index)
+
+                future = self._executor.submit(observed_task)
+                future.add_done_callback(
+                    lambda value, index=index: (
+                        completed_positions.put(index)
+                        if value.cancelled()
+                        else None
+                    )
+                )
+                self._register(futures, future)
+        except BaseException:
+            self._cancel_pending(futures)
+            raise
+        return tuple(futures)
+
+    def _run_threaded(
+        self,
+        tasks: tuple[Callable[[], T], ...],
+        completed: Callable[[int, T], None] | None,
+    ) -> tuple[T, ...]:
+        completed_positions: SimpleQueue[int] = SimpleQueue()
+        submitted = self._submit_tasks(tasks, completed_positions)
+        results: list[T | None] = [None] * len(submitted)
+        for _ in submitted:
+            index = completed_positions.get()
+            future = submitted[index]
+            try:
+                value = future.result()
+            except BaseException:
+                self._cancel_pending(submitted, future)
+                raise
+            results[index] = value
+            if completed is not None:
+                try:
+                    completed(index, value)
+                except BaseException:
+                    self._cancel_pending(submitted, future)
+                    raise
+        return tuple(cast(T, value) for value in results)
+
+    def run(
+        self,
+        tasks: Iterable[Callable[[], T]],
+        completed: Callable[[int, T], None] | None = None,
+    ) -> tuple[T, ...]:
+        """Execute a batch and publish successful results in finish order."""
+        values = self._validated_tasks(tasks, completed)
         self._begin()
         try:
             if self._executor is None:
-                return tuple(task() for task in values)
-            futures: list[Future[T]] = []
-            try:
-                for task in values:
-                    self._register(futures, self._executor.submit(task))
-            except BaseException:
-                for future in futures:
-                    future.cancel()
-                raise
-            submitted = tuple(futures)
-            for index, future in enumerate(submitted):
-                future.add_done_callback(
-                    lambda completed, index=index: self._cancel_on_failure(
-                        submitted,
-                        index,
-                        completed,
-                    )
-                )
-            return tuple(future.result() for future in submitted)
+                return self._run_inline(values, completed)
+            return self._run_threaded(values, completed)
         finally:
             self._finish()
 

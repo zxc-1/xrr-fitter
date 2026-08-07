@@ -1,7 +1,27 @@
-"""Dataset import, source acceptance, and derived-state invalidation."""
+"""Dataset import, source acceptance, and derived-state invalidation.
+
+This service owns deterministic dataset IDs and seed branches, source parsing,
+measurement metadata, filename-derived automatic structures, and immutable
+project insertion. Batch previews remain descriptive until this module imports
+each valid row in source order; one malformed row becomes an ``ImportFailure``
+without rolling back successful siblings.
+
+Any mutation that changes fitted physics clears candidates, checkpoints,
+evidence, and scale priors through one invalidation path. Expert joint projects
+invalidate as a complete graph, while automatic projects invalidate only the
+matching fit group. Manual rows retain their automation state and unrelated
+automatic groups remain publishable.
+
+Source replacement is split into preview and acceptance so callers can display
+hash drift before adopting bytes. Fit masks, instruments, and structures use the
+same derived-state contract rather than maintaining parallel cleanup rules.
+"""
 
 from __future__ import annotations
 
+import json
+import secrets
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -10,6 +30,15 @@ import numpy as np
 
 from xrr_fitter.io.source import dataset_index, resolve_source_path
 from xrr_fitter.io.xy import read_xy, read_xy_bytes
+from xrr_fitter.model.automation import (
+    AutomaticRole,
+    AutomaticStatus,
+    DatasetAutomation,
+    ImportBatchPreview,
+    ImportFailure,
+    ImportFilePreview,
+    MeasurementPreset,
+)
 from xrr_fitter.model.data import (
     BeamSpec,
     DataColumnMapping,
@@ -17,6 +46,8 @@ from xrr_fitter.model.data import (
     with_fit_mask,
 )
 from xrr_fitter.model.instrument import InstrumentSpec
+from xrr_fitter.model.operations import ProjectImportResult
+from xrr_fitter.model.parameters import ParameterSetting
 from xrr_fitter.model.project import (
     DatasetProject,
     ScalePriorState,
@@ -24,8 +55,7 @@ from xrr_fitter.model.project import (
     XrrProject,
 )
 from xrr_fitter.model.structure import LayerSpec, StructureSpec
-from xrr_fitter.services.materials import initial_structure
-
+from xrr_fitter.services.materials import automatic_structure, initial_structure
 
 SERVICE_SEED_TREE_VERSION = 1
 
@@ -96,6 +126,65 @@ def _dataset_id(project: XrrProject, stem: str) -> str:
     return candidate
 
 
+def _strict_filename_materials(stem: str) -> tuple[str, tuple[str, ...]]:
+    parts = stem.rsplit(maxsplit=1)
+    if len(parts) != 2:
+        raise ValueError("filename must end with a space-separated material stack")
+    sample_id, material_segment = parts
+    tokens = tuple(value.strip() for value in material_segment.split("+"))
+    if not sample_id.strip() or not tokens or any(not value for value in tokens):
+        raise ValueError("filename material stack contains an empty token")
+    return sample_id, tokens
+
+
+def _substrate_group_id(tokens: tuple[str, ...]) -> str:
+    encoded = json.dumps(tokens, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+    return sha256(encoded).hexdigest()[:20]
+
+
+def preview_import_batch(
+    paths: Sequence[str | Path],
+    preset: MeasurementPreset,
+    import_batch_id: str | None = None,
+) -> ImportBatchPreview:
+    """Parse a filename batch without reading sources or mutating a project."""
+    if not isinstance(preset, MeasurementPreset):
+        raise TypeError("preset must be MeasurementPreset")
+    batch_id = secrets.token_hex(16) if import_batch_id is None else import_batch_id
+    if not batch_id.strip():
+        raise ValueError("import_batch_id must not be empty")
+    files = []
+    for declaration in paths:
+        path = Path(declaration)
+        try:
+            dataset_id_stem, tokens = _strict_filename_materials(path.stem)
+        except ValueError as error:
+            files.append(
+                ImportFilePreview(
+                    str(path),
+                    path.stem,
+                    None,
+                    (),
+                    None,
+                    False,
+                    str(error),
+                )
+            )
+            continue
+        group_id = _substrate_group_id(tokens)
+        files.append(
+            ImportFilePreview(
+                str(path),
+                path.stem,
+                dataset_id_stem,
+                tokens,
+                group_id,
+                tokens[0] == "Si",
+            )
+        )
+    return ImportBatchPreview(batch_id, preset, tuple(files))
+
+
 def _fit_range(data: PreparedData, mask: np.ndarray | None = None) -> tuple[float, float]:
     selected = np.asarray(data.fit_mask if mask is None else mask, dtype=bool)
     finite = np.asarray(data.two_theta_deg, dtype=float)[selected]
@@ -113,6 +202,8 @@ def _from_prepared(
     *,
     source_path: str,
     structure: StructureSpec | None = None,
+    parameter_settings: tuple[ParameterSetting, ...] = (),
+    automation: DatasetAutomation | None = None,
 ) -> DatasetProject:
     return DatasetProject(
         dataset_id=dataset_id,
@@ -125,7 +216,132 @@ def _from_prepared(
         fit_range_two_theta_deg=_fit_range(data),
         structure=structure,
         instrument=instrument,
+        parameter_settings=parameter_settings,
         display_name=display_name,
+        automation=DatasetAutomation() if automation is None else automation,
+    )
+
+
+def _import_failure(row: ImportFilePreview, error: BaseException) -> ImportFailure:
+    return ImportFailure(
+        source_path=row.source_path,
+        message=f"{type(error).__name__}: {error}",
+        recovery_action=(
+            "rename the file and retry or open manual structure editing"
+            if row.error is not None
+            else "choose the data columns for this file and retry"
+        ),
+    )
+
+
+def _automatic_dataset(
+    project: XrrProject,
+    row: ImportFilePreview,
+    preview: ImportBatchPreview,
+    backing_token: str,
+    column_mapping: DataColumnMapping | None,
+) -> DatasetProject:
+    if row.dataset_id_stem is None:
+        raise ValueError("valid import preview requires a dataset ID stem")
+    structure, automatic_settings = automatic_structure(
+        tuple(reversed(row.layers_backing_to_surface)),
+        backing_token,
+    )
+    data = import_data(
+        row.source_path,
+        preview.preset.beam,
+        preview.preset.import_angle_offset_deg,
+        column_mapping,
+    )
+    return _from_prepared(
+        _dataset_id(project, row.dataset_id_stem),
+        row.display_name,
+        data,
+        preview.preset.instrument,
+        source_path=row.source_path,
+        structure=structure,
+        parameter_settings=automatic_settings,
+        automation=DatasetAutomation(
+            import_batch_id=preview.import_batch_id,
+            role=AutomaticRole.UNROUTED,
+            status=AutomaticStatus.PENDING,
+        ),
+    )
+
+
+def _append_imported_dataset(
+    project: XrrProject,
+    dataset: DatasetProject,
+) -> XrrProject:
+    datasets = project.datasets
+    state = project.ui_state
+    if project.batch_mode == "joint":
+        datasets = tuple(_cleared(value, clear_evidence=False) for value in project.datasets)
+        state = replace(state, selected_candidate_ids=())
+    if state.active_dataset_id is None:
+        state = replace(state, active_dataset_id=dataset.dataset_id)
+    return replace(project, datasets=(*datasets, dataset), ui_state=state)
+
+
+def _import_preview_row(
+    project: XrrProject,
+    row: ImportFilePreview,
+    preview: ImportBatchPreview,
+    choices: Mapping[str, str],
+    mappings: Mapping[str, DataColumnMapping],
+) -> DatasetProject:
+    if row.error is not None:
+        raise ValueError(row.error)
+    backing_token = "Si"
+    if row.requires_substrate_choice:
+        if row.substrate_group_id not in choices:
+            raise ValueError("substrate choice is required for this structure group")
+        backing_token = choices[row.substrate_group_id]
+    return _automatic_dataset(
+        project,
+        row,
+        preview,
+        backing_token,
+        mappings.get(row.source_path),
+    )
+
+
+def import_dataset_batch(
+    project: XrrProject,
+    preview: ImportBatchPreview,
+    substrate_choices: Mapping[str, str] | None = None,
+    column_mappings: Mapping[str, DataColumnMapping] | None = None,
+) -> ProjectImportResult:
+    """Append each valid source independently while preserving preview order."""
+    if not isinstance(project, XrrProject):
+        raise TypeError("project must be an XrrProject")
+    if not isinstance(preview, ImportBatchPreview):
+        raise TypeError("preview must be ImportBatchPreview")
+    choices = {} if substrate_choices is None else substrate_choices
+    mappings = {} if column_mappings is None else column_mappings
+    updated = project
+    imported = []
+    failures = []
+    for row in preview.files:
+        try:
+            dataset = _import_preview_row(
+                updated,
+                row,
+                preview,
+                choices,
+                mappings,
+            )
+            updated = _append_imported_dataset(updated, dataset)
+            imported.append(dataset.dataset_id)
+        except Exception as error:
+            failures.append(_import_failure(row, error))
+    if imported:
+        updated = replace(updated, measurement_preset=preview.preset)
+    return ProjectImportResult(
+        updated,
+        preview.import_batch_id,
+        tuple(imported),
+        tuple(failures),
     )
 
 
@@ -140,12 +356,9 @@ def _filename_materials(stem: str) -> tuple[str, tuple[str, ...] | None]:
 
 
 def _ordinary_layer_formulas(structure: StructureSpec | None) -> tuple[str, ...] | None:
-    if structure is None or any(
-        not isinstance(component, LayerSpec) or component.material.formula is None
-        for component in structure.components
-    ):
+    if structure is None or any(not isinstance(component, LayerSpec) for component in structure.components):
         return None
-    return tuple(component.material.formula.strip() for component in structure.components)
+    return tuple((component.material.formula or component.material.name).strip() for component in structure.components)
 
 
 def _filename_structure(
@@ -155,11 +368,7 @@ def _filename_structure(
     if formulas is None:
         return None
     matching = next(
-        (
-            dataset.structure
-            for dataset in project.datasets
-            if _ordinary_layer_formulas(dataset.structure) == formulas
-        ),
+        (dataset.structure for dataset in project.datasets if _ordinary_layer_formulas(dataset.structure) == formulas),
         None,
     )
     return initial_structure(formulas) if matching is None else matching
@@ -212,7 +421,50 @@ def _cleared(dataset: DatasetProject, *, clear_evidence: bool) -> DatasetProject
         scale_prior=ScalePriorState(enabled=False),
         last_valid_result=None,
         checkpoint=None,
+        automation=_reset_automatic_state(dataset),
     )
+
+
+def _reset_automatic_state(dataset: DatasetProject) -> DatasetAutomation:
+    state = dataset.automation
+    if state.role is AutomaticRole.MANUAL:
+        return state
+    return replace(
+        state,
+        status=AutomaticStatus.PENDING,
+        statistics_member=False,
+        reason=None,
+    )
+
+
+def _automatic_fit_group_member(
+    dataset: DatasetProject,
+    groups: set[str],
+) -> bool:
+    state = dataset.automation
+    return (
+        state.role is not AutomaticRole.MANUAL
+        and state.fit_group_id in groups
+    )
+
+
+def _dependent_fit_ids(project: XrrProject, changed_ids: set[str]) -> set[str]:
+    if project.batch_mode == "joint" and changed_ids:
+        return {dataset.dataset_id for dataset in project.datasets}
+    groups = {
+        dataset.automation.fit_group_id
+        for dataset in project.datasets
+        if dataset.dataset_id in changed_ids
+        and dataset.automation.fit_group_id is not None
+    }
+    automatic = {
+        dataset.dataset_id
+        for dataset in project.datasets
+        if _automatic_fit_group_member(dataset, groups)
+    }
+    if automatic:
+        return changed_ids | automatic
+    return changed_ids
 
 
 def _replace_invalidated(
@@ -224,19 +476,18 @@ def _replace_invalidated(
 ) -> XrrProject:
     datasets = list(project.datasets)
     datasets[index] = updated
-    if project.batch_mode == "joint":
-        datasets = [
-            _cleared(dataset, clear_evidence=clear_evidence)
-            for dataset in datasets
-        ]
-        selected = ()
-    else:
-        datasets[index] = _cleared(updated, clear_evidence=clear_evidence)
-        selected = tuple(
-            item
-            for item in project.ui_state.selected_candidate_ids
-            if item[0] != updated.dataset_id
-        )
+    affected = _dependent_fit_ids(project, {updated.dataset_id})
+    datasets = [
+        _cleared(dataset, clear_evidence=clear_evidence)
+        if dataset.dataset_id in affected
+        else dataset
+        for dataset in datasets
+    ]
+    selected = tuple(
+        item
+        for item in project.ui_state.selected_candidate_ids
+        if item[0] not in affected
+    )
     return replace(
         project,
         datasets=tuple(datasets),
@@ -254,11 +505,7 @@ def _ui_after_removal(
     active = project.ui_state.active_dataset_id
     if active == dataset_id:
         active = datasets[min(index, len(datasets) - 1)].dataset_id if datasets else None
-    selected = tuple(
-        item
-        for item in project.ui_state.selected_candidate_ids
-        if item[0] in remaining_ids
-    )
+    selected = tuple(item for item in project.ui_state.selected_candidate_ids if item[0] in remaining_ids)
     return replace(
         project.ui_state,
         active_dataset_id=active,
@@ -271,9 +518,7 @@ def _sharing_after_removal(
     remaining_ids: set[str],
 ):
     return tuple(
-        rule
-        for rule in project.sharing_rules
-        if all(member.dataset_id in remaining_ids for member in rule.members)
+        rule for rule in project.sharing_rules if all(member.dataset_id in remaining_ids for member in rule.members)
     )
 
 
@@ -284,11 +529,7 @@ def remove_dataset(project: XrrProject, dataset_id: str) -> XrrProject:
     if project.batch_mode == "joint":
         datasets = tuple(_cleared(dataset, clear_evidence=False) for dataset in datasets)
     remaining_ids = {dataset.dataset_id for dataset in datasets}
-    mode = (
-        "independent"
-        if project.batch_mode == "joint" and len(datasets) < 2
-        else project.batch_mode
-    )
+    mode = "independent" if project.batch_mode == "joint" and len(datasets) < 2 else project.batch_mode
     return replace(
         project,
         batch_mode=mode,
@@ -403,10 +644,7 @@ def _accepted_source_dataset(
         raise TypeError("preview must be a SourceUpdatePreview")
     index = dataset_index(project, preview.dataset_id)
     dataset = project.datasets[index]
-    if (
-        preview.current_source_path != dataset.source_path
-        or preview.expected_sha256 != dataset.source_sha256
-    ):
+    if preview.current_source_path != dataset.source_path or preview.expected_sha256 != dataset.source_sha256:
         raise ValueError("source update preview is stale")
     source = _proposed_source(project, dataset, preview.proposed_source_path)
     content = source.read_bytes()

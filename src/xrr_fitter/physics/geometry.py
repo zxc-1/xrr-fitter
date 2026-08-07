@@ -16,7 +16,6 @@ from xrr_fitter.model.structure import (
 from xrr_fitter.physics.materials import material_sld
 from xrr_fitter.physics.stack import expand_structure, rebuild_structure
 
-
 GRADIENT_INTERNAL_INTERFACE = "__gradient_internal_zero__"
 
 
@@ -434,7 +433,11 @@ class _StackJacobianBuilder:
         else:
             self.append_gradient(component, prefix, value_jacobians)
 
-    def finish(self, stack: SlabStack) -> DifferentiableStack:
+    def finish(
+        self,
+        stack: SlabStack,
+        backing_sld_jacobian: np.ndarray,
+    ) -> DifferentiableStack:
         """Append backing rows and prove positional alignment with the stack.
 
         A shape mismatch would attach a derivative to the wrong physical slab
@@ -442,7 +445,7 @@ class _StackJacobianBuilder:
         constructed tangent arrays.
         """
         self.thickness.append(self.zero_real())
-        self.sld.append(self.zero_complex())
+        self.sld.append(np.asarray(backing_sld_jacobian, dtype=np.complex128))
         differentiable = DifferentiableStack(
             stack,
             np.asarray(self.thickness, dtype=float),
@@ -489,4 +492,10 @@ def expand_structure_with_jacobian(
     builder.roughness.append(
         np.asarray(value_jacobians["backing.roughness_a"], dtype=float)
     )
-    return builder.finish(stack)
+    backing_sld_jacobian = builder.zero_complex()
+    if rebuilt.backing.sld_override_a2 is not None:
+        backing_sld_jacobian = (
+            value_jacobians["backing.sld_real_a2"]
+            + 1j * value_jacobians["backing.sld_imag_a2"]
+        )
+    return builder.finish(stack, backing_sld_jacobian)

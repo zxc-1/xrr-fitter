@@ -49,8 +49,10 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
             "tests/architecture/test_naming_rules.py",
             "tests/architecture/test_public_api.py",
             "tests/architecture/test_distribution.py",
+            "tests/architecture/test_pr_verify_workflow.py",
             "tests/architecture/test_windows_executable_workflow.py",
             "tests/architecture/test_quality_gate.py",
+            "tests/architecture/test_release_workflow.py",
             "tests/architecture/test_removed_legacy_modules.py",
             "-q",
         ),
@@ -75,6 +77,7 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
             "tests/regression/test_numerical_reference.py",
             "tests/regression/test_recovery_metrics.py",
             "tests/regression/test_profile_basin_regressions.py",
+            "tests/regression/test_automatic_recovery.py",
             "-q",
         ),
     )
@@ -89,6 +92,7 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
             "tests/integration/test_batch_resume.py",
             "tests/integration/test_export_workflow.py",
             "tests/integration/test_gui_project_workflow.py",
+            "tests/integration/test_gui_automatic_workflow.py",
             "-q",
         ),
     )
@@ -248,8 +252,10 @@ def _write_verifier_fixture(root: Path, verifier: Path, outcome_gate: Path) -> N
         "test_naming_rules.py",
         "test_public_api.py",
         "test_distribution.py",
+        "test_pr_verify_workflow.py",
         "test_windows_executable_workflow.py",
         "test_quality_gate.py",
+        "test_release_workflow.py",
         "test_removed_legacy_modules.py",
     ):
         (root / "tests/architecture" / name).write_text(test_source, encoding="utf-8")
@@ -284,7 +290,7 @@ def test_copied_verifier_derives_each_repository_root_from_its_own_file(
             text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        assert len(execution_log.read_text(encoding="utf-8").splitlines()) == 7
+        assert len(execution_log.read_text(encoding="utf-8").splitlines()) == 9
         assert str(other) not in result.stdout + result.stderr
         assert not (root / "tools/__pycache__").exists()
 

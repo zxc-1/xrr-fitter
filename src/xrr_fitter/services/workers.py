@@ -1,20 +1,29 @@
-"""Spawn process, queue protocol, cancellation, and worker lifecycle owner."""
+"""Spawn process, queue protocol, cancellation, and worker lifecycle owner.
+
+Child processes emit ordered progress, checkpoint, terminal, and stopped events;
+the parent validates that protocol before exposing immutable operation values.
+Checkpoint persistence stays in the worker so every published snapshot matches
+the bytes available for crash recovery.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import multiprocessing
+import traceback as traceback_module
+from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty
 from time import monotonic
-import traceback as traceback_module
 
 from xrr_fitter.model.analysis import McmcConfig
 from xrr_fitter.model.operations import OperationError, OperationEvent
 from xrr_fitter.model.project import XrrProject
-from xrr_fitter.services.fitting import fit_worker_handler, mcmc_worker_handler
+from xrr_fitter.services.fitting import (
+    automatic_worker_handler,
+    fit_worker_handler,
+    mcmc_worker_handler,
+)
 from xrr_fitter.services.projects import save_project
-
 
 TERMINAL_KINDS = frozenset({"fit_result", "mcmc_result", "cancelled", "error"})
 PAYLOAD_KINDS = frozenset({"progress", "checkpoint", *TERMINAL_KINDS, "stopped"})
@@ -24,6 +33,13 @@ FORCE_KILL_AFTER_SECONDS = 0.5
 @dataclass(frozen=True, slots=True)
 class _FitJobRequest:
     project: XrrProject
+    checkpoint_path: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _AutomaticFitJobRequest:
+    project: XrrProject
+    import_batch_id: str | None
     checkpoint_path: str | None
 
 
@@ -59,6 +75,37 @@ def _run_fit_worker(request: _FitJobRequest, queue, cancellation) -> None:
 
         result = fit_worker_handler(
             request.project,
+            progress,
+            checkpoint,
+            cancellation.is_set,
+        )
+        if result.cancelled:
+            _put(queue, "cancelled", "requested")
+        else:
+            _put(queue, "fit_result", result)
+    except BaseException as error:
+        _put(queue, "error", _operation_error(error))
+    finally:
+        _put(queue, "stopped", None)
+
+
+def _run_automatic_fit_worker(
+    request: _AutomaticFitJobRequest,
+    queue,
+    cancellation,
+) -> None:
+    try:
+        def progress(value) -> None:
+            _put(queue, "progress", value)
+
+        def checkpoint(value) -> None:
+            if request.checkpoint_path is not None:
+                save_project(value, request.checkpoint_path)
+            _put(queue, "checkpoint", value)
+
+        result = automatic_worker_handler(
+            request.project,
+            request.import_batch_id,
             progress,
             checkpoint,
             cancellation.is_set,
@@ -304,6 +351,16 @@ def start_fit_job(
 ) -> OperationJob:
     path = None if checkpoint_path is None else str(checkpoint_path)
     return _start(_run_fit_worker, _FitJobRequest(project, path))
+
+
+def start_automatic_fit_job(
+    project: XrrProject,
+    import_batch_id: str | None = None,
+    checkpoint_path: str | Path | None = None,
+) -> OperationJob:
+    path = None if checkpoint_path is None else str(checkpoint_path)
+    request = _AutomaticFitJobRequest(project, import_batch_id, path)
+    return _start(_run_automatic_fit_worker, request)
 
 
 def start_mcmc_job(

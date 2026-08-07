@@ -14,14 +14,13 @@ from xrr_fitter.model.parameters import (
 )
 from xrr_fitter.model.project import DatasetProject, SourceUpdatePreview, XrrProject
 from xrr_fitter.model.structure import StructureSpec
+from xrr_fitter.services import fitting
 from xrr_fitter.services.datasets import (
     _accepted_source_dataset,
     _cleared,
     _prepared_current,
     _replace_invalidated,
 )
-from xrr_fitter.services import fitting
-
 
 ROLE_FIELDS = (
     "display_name",
@@ -205,9 +204,6 @@ def validate_sharing_rules(
     replace(project, sharing_rules=values)
     owners: set[ParameterReference] = set()
     for rule in values:
-        dataset_ids = tuple(member.dataset_id for member in rule.members)
-        if len(dataset_ids) != len(set(dataset_ids)):
-            raise ValueError("sharing group may contain at most one member per dataset")
         for member in rule.members:
             if member in owners:
                 raise ValueError("sharing coordinate has multiple ownership")

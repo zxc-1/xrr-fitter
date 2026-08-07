@@ -4,18 +4,20 @@ Coverage keeps parameter layout, stage locks, geometry-dependent bounds, and
 analytic evaluation tied to one immutable compiled snapshot.
 The suite also proves that the shared context survives serialization without
 exposing writable arrays or changing coordinate identity.
+Automatic direct-SLD and staged-release cases additionally bind generated
+parameter modes to the same physical-vector contract.
 """
 
 from __future__ import annotations
 
+import pickle
 from dataclasses import replace
 from importlib import import_module
-import pickle
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data, simple_structure
+
 from xrr_fitter.evaluation import encode_physical_vector, unit_to_physical, values_by_name
 from xrr_fitter.fit.candidates import bounded_perturbations
 from xrr_fitter.fit.initialization import estimate_initial_candidates
@@ -202,6 +204,27 @@ def _direct_sld_jacobian_problem():
             ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, locked=True),
         ),
         seed=22,
+    )
+
+
+def _direct_backing_jacobian_problem():
+    base = simple_structure()
+    direct_backing = MaterialSpec("direct backing", None, None, 30e-6 + 1e-6j)
+    structure = StructureSpec(
+        base.fronting,
+        base.components,
+        direct_backing,
+        backing_roughness_a=2.0,
+    )
+    return _problem(
+        structure=structure,
+        instrument=InstrumentSpec(footprint_mode="none"),
+        settings=(
+            ParameterSetting("backing.sld_real_a2", 30e-6, 10e-6, 90e-6),
+            ParameterSetting("backing.sld_imag_a2", 1e-6, 0.0, 4e-6),
+            ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, locked=True),
+        ),
+        seed=28,
     )
 
 
@@ -486,12 +509,28 @@ def test_declared_two_angstrom_layer_remains_inside_compiled_bounds() -> None:
     encode_physical_vector(problem, _initial_values(problem))
 
 
+def test_direct_backing_sld_changes_the_evaluated_model() -> None:
+    problem = _direct_backing_jacobian_problem()
+    lower = evaluate_vector(
+        problem,
+        encode_physical_vector(problem, {"backing.sld_real_a2": 20e-6}),
+    )
+    upper = evaluate_vector(
+        problem,
+        encode_physical_vector(problem, {"backing.sld_real_a2": 80e-6}),
+    )
+
+    assert lower.valid and upper.valid
+    assert not np.array_equal(lower.model_normalized, upper.model_normalized)
+
+
 @pytest.mark.parametrize(
     "problem_factory",
     [
         pytest.param(_linear_background_jacobian_problem, id="linear_background_jacobian_problem"),
         pytest.param(_powerlaw_background_jacobian_problem, id="powerlaw_background_jacobian_problem"),
         pytest.param(_direct_sld_jacobian_problem, id="direct_sld_jacobian_problem"),
+        pytest.param(_direct_backing_jacobian_problem, id="direct_backing_jacobian_problem"),
         pytest.param(_gradient_jacobian_problem, id="gradient_jacobian_problem"),
     ],
 )

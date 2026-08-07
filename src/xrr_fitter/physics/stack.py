@@ -166,6 +166,7 @@ def rebuild_structure(
     return replace(
         structure,
         components=components,
+        backing=_replace_material(structure.backing, "backing", values),
         backing_roughness_a=values["backing.roughness_a"],
     )
 

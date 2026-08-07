@@ -41,6 +41,7 @@ from enum import StrEnum
 from math import isclose, isfinite
 
 from xrr_fitter.model.analysis import FitResult, StructureEvidence
+from xrr_fitter.model.automation import DatasetAutomation, MeasurementPreset
 from xrr_fitter.model.data import BeamSpec, DataColumnMapping
 from xrr_fitter.model.fitting import FitCheckpoint, FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
@@ -48,7 +49,7 @@ from xrr_fitter.model.parameters import ParameterSetting, SharingRule
 from xrr_fitter.model.structure import StructureSpec
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ALGORITHM_VERSION = "xrr-fit-v1"
 
 
@@ -184,6 +185,7 @@ class DatasetProject:
     last_valid_result: FitResult | None = None
     checkpoint: FitCheckpoint | None = None
     display_name: str | None = None
+    automation: DatasetAutomation = DatasetAutomation()
 
     def __post_init__(self) -> None:
         _validate_dataset_header(self)
@@ -214,6 +216,7 @@ class XrrProject:
     datasets: tuple[DatasetProject, ...]
     sharing_rules: tuple[SharingRule, ...] = ()
     ui_state: ProjectUiState = ProjectUiState()
+    measurement_preset: MeasurementPreset | None = None
     base_directory: str | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -238,6 +241,12 @@ class XrrProject:
 
 
 class SourceStatus(StrEnum):
+    """Comparison outcome for persisted identity versus observed source bytes.
+
+    Missing and unreadable sources remain distinct from readable bytes whose
+    digest no longer matches the project record.
+    """
+
     OK = "ok"
     MISSING = "missing"
     UNREADABLE = "unreadable"
@@ -448,6 +457,8 @@ def _validate_dataset_attachments(dataset: DatasetProject) -> None:
     _validate_scale_prior(dataset.scale_prior)
     _validate_oxide_decisions(dataset.oxide_decisions)
     _validate_parameter_settings(dataset.parameter_settings)
+    if not isinstance(dataset.automation, DatasetAutomation):
+        raise TypeError("automation must be DatasetAutomation")
     _optional_attachment(dataset.last_valid_result, FitResult, "last_valid_result")
     _optional_attachment(dataset.checkpoint, FitCheckpoint, "checkpoint")
     if dataset.last_valid_result is not None:
@@ -477,6 +488,11 @@ def _validate_project_header(project: XrrProject) -> None:
         raise TypeError("fit_config must be FitConfig")
     if not isinstance(project.ui_state, ProjectUiState):
         raise TypeError("ui_state must be ProjectUiState")
+    _optional_attachment(
+        project.measurement_preset,
+        MeasurementPreset,
+        "measurement_preset",
+    )
 
 
 def _project_dataset_ids(project: XrrProject) -> tuple[str, ...]:
@@ -556,6 +572,13 @@ def _validate_joint_rank(candidates: tuple[object, ...]) -> None:
 
 
 def _validate_joint_results(datasets: tuple[DatasetProject, ...]) -> None:
+    """Validate atomic publication and global lineage for joint projections.
+
+    Each dataset owns local arrays and objectives, but all projections must
+    publish together and agree on candidate identity, selection, seeds, and
+    stage history. Global ranking is then recomputed from the aligned local
+    objectives instead of trusting one projection's stored scalar.
+    """
     # Joint publication is atomic: either every dataset has a projection or none
     # does. Partial results would make best_index and UI selection ambiguous.
     results = tuple(
@@ -622,7 +645,12 @@ def with_active_dataset(project: XrrProject, dataset_id: str | None) -> XrrProje
 
 
 def with_batch_mode(project: XrrProject, mode: str) -> XrrProject:
-    """Return a project using an explicitly supported batch-fit mode."""
+    """Return a project using an explicitly supported batch-fit mode.
+
+    Joint fitting needs at least two dataset namespaces because shared
+    parameter compilation and projected-result validation have no meaning for
+    a singleton project.
+    """
     if mode not in {"independent", "joint"}:
         raise ValueError(f"unsupported batch_mode: {mode}")
     if mode == "joint" and len(project.datasets) < 2:
@@ -635,7 +663,12 @@ def with_dataset_fit_mask(
     dataset_id: str,
     fit_mask: tuple[bool, ...],
 ) -> XrrProject:
-    """Replace one dataset mask without changing its persisted row cardinality."""
+    """Replace one dataset mask without changing persisted row cardinality.
+
+    The helper validates the complete replacement before rebuilding the
+    project, preserving source-row alignment while leaving result invalidation
+    to the service operation that requested the transition.
+    """
     # Mask transitions preserve source-row alignment; invalidation is performed
     # later by the service layer rather than hidden in this value operation.
     dataset = next((value for value in project.datasets if value.dataset_id == dataset_id), None)

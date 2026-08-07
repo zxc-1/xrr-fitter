@@ -141,6 +141,7 @@ def _uncertainty_to_dict(
         "residual_autocorrelation": value.residual_autocorrelation,
         "mcmc": _mcmc_to_dict(value.mcmc),
         "candidate_id": value.candidate_id,
+        "bootstrap_performed": value.bootstrap_performed,
     }
 
 
@@ -164,7 +165,12 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         "residual_autocorrelation",
         "mcmc",
     }
-    payload = _mapping(value, required, "uncertainty report", {"candidate_id"})
+    payload = _mapping(
+        value,
+        required | {"bootstrap_performed"},
+        "uncertainty report",
+        {"candidate_id"},
+    )
     return UncertaintyReport(
         correlation_names=tuple(
             _sequence(payload["correlation_names"], "correlation names")
@@ -195,6 +201,7 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         residual_autocorrelation=payload["residual_autocorrelation"],
         mcmc=_mcmc_from_dict(payload["mcmc"]),
         candidate_id=payload.get("candidate_id"),
+        bootstrap_performed=payload["bootstrap_performed"],
     )
 
 

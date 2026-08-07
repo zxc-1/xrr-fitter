@@ -30,6 +30,28 @@ data = api.import_data(
 )
 ```
 
+### 自动导入文件名
+
+自动入口严格读取文件 stem 的最后一个空格分隔段：
+
+```text
+<样品标识> <基底侧膜层>+...+<表面侧膜层>
+```
+
+每个 `+` token 都是有限膜层，不包含基底。例如 `P1 Zr.xy` 表示一个 Zr
+单层；`S300-1 Si3N4+Si+Zr.xy` 表示从基底侧到表面侧依次为
+`Si3N4 / Si / Zr`。内部结构按表面到基底保存，导入只反转一次顺序。缺少材料段、
+空 token 或无法建模的文件会单独失败，并显示文件名和恢复动作，不阻塞同批其他文件。
+
+基底默认是 Si。只有最左侧有限膜层恰为 `Si` 时，命名不能唯一确定实际基底，GUI
+才会按相同层序组询问一次。确认 Si 基底后，系统在基底与最底层膜之间自动插入
+SiO2 自然氧化层；若相邻层已是精确 `SiO2`，则不重复插入。自动氧化层使用
+2.20 g/cm3 名义密度、10 Å 初始厚度、2-50 Å 厚度边界，并锁定名义密度。
+
+有已知化学式和名义密度的 token 使用 formula-density 模型。`CrSiC`、`SiCMo`
+等未知配比代号使用直接有效 SLD 模型；结果可报告有效 SLD 和波长相关电子密度，
+但质量密度显示“配比未知，无法换算”，不会伪造 g/cm3 数值。
+
 `DataColumnMapping` 固定 `two_theta`、`intensity`、可选误差/分辨率列及其语义。
 导入会保留原始行、解析状态、重复角合并来源、原始字节 SHA-256、归一化、
 `r_floor` 和初始拟合掩码；不会用解析后的文本重新计算“等价”哈希。
@@ -39,7 +61,7 @@ data = api.import_data(
 当前持久格式为：
 
 ```text
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ALGORITHM_VERSION = "xrr-fit-v1"
 ```
 
@@ -148,9 +170,13 @@ if not validation.valid:
     project = api.accept_source_update(project, preview)
 ```
 
-- `independent` 模式只清理受影响 dataset 的 `structure_evidence`、已解析 scale
-  prior、`last_valid_result`、checkpoint 和 candidate selection。
-- `joint` 模式中任一 source 变更会清理所有 datasets 的共享派生状态。
+- `independent` 模式下，自动 dataset 具有非空 `fit_group_id` 时，只清理变更
+  dataset 及共享该组 ID 的 datasets；同一项目中的其他自动组不受影响。组内自动
+  状态回到 `PENDING`，但保留 `import_batch_id`、`fit_group_id` 和路由角色。
+- `independent` 模式中没有自动组身份时，只清理受影响 dataset 的
+  `structure_evidence`、已解析 scale prior、`last_valid_result`、checkpoint 和
+  candidate selection。Expert `batch_mode="joint"` 始终清理所有 datasets 的共享
+  派生状态，即使这些 rows 仍带有自动组身份。
 - structure、mask、instrument、parameter 和 sharing 修改必须调用对应的
   `api.set_*` operation；这些 operation 在同一 immutable transaction 中处理失效。
 - `accept_source_update()` 会再次核对 preview 对应的路径和字节。preview 之后发生
@@ -504,6 +530,8 @@ clear_fit_results(project, dataset_ids)
 import_data(path, beam, import_angle_offset_deg, column_mapping)
 add_dataset(project, source_path, instrument, display_name, column_mapping,
             import_angle_offset_deg, beam)
+preview_import_batch(paths, preset, import_batch_id)
+import_dataset_batch(project, preview, substrate_choices, column_mappings)
 remove_dataset(project, dataset_id)
 set_fit_mask(project, dataset_id, mask)
 set_instrument(project, dataset_id, instrument)
@@ -523,10 +551,14 @@ accept_oxide_suggestion(project, dataset_id, suggestion)
 record_oxide_decision(project, dataset_id, decision)
 
 preflight_fit(project)
+preflight_automatic_fit(project, import_batch_id)
 fit_project(project, progress_callback, checkpoint_callback)
+fit_automatically(project, import_batch_id, progress_callback, checkpoint_callback)
 run_mcmc(project, dataset_id, candidate_id, config, progress_callback)
 start_fit_job(project, checkpoint_path)
+start_automatic_fit_job(project, import_batch_id, checkpoint_path)
 start_mcmc_job(project, dataset_id, candidate_id, config)
+summarize_automatic_results(project, import_batch_id)
 export_result(result, output_dir)
 ```
 
@@ -551,49 +583,50 @@ xrr-fitter
 
 ### 13.1 普通一键流程
 
-1. 选择“导入文件”或“导入文件夹”。导入确认框不会预选光路；必须显式选择
-   “单色”或“混合 Kα”，并确认可见的 `InstrumentSpec`。文件夹模式可显式启用
-   递归。额外列只有在“列映射”中声明后才解释。
-2. 新数据集没有隐式结构。选择“初始化结构”建立 `Air / 空层栈 / Si 基底`，
-   再用“添加普通层”或“添加周期块”声明实际模型。厚度、粗糙度和周期在界面中
-   使用 nm，项目和计算仍保存 Å，换算恒为 `1 nm = 10 Å`。
-3. 若出现“添加自然氧化层”，必须明确接受或选择“忽略建议”。接受会添加普通
-   层；拒绝会把版本化 `OxideDecision` 写入当前 dataset。拟合不会自动添加氧化层。
-4. 数据树可选择 dataset；图形工具可选择拟合范围或排除/恢复单点。操作只更新
-   项目 mask，原始强度、源文件和 expected SHA-256 不会被改写。
-5. 三种足迹模式精确对应 `geometry|fit|none`。`geometry` 使用样品长度和束宽换算，
-   `fit` 释放 `θ_fp`，`none` 固定无足迹；模式和数值都属于当前 dataset。
-6. 在“拟合模式”中明确选择“独立拟合”或“联合拟合”，再点击“一键拟合”。
-   启动前工作台重新计算每个已声明结构的
-   `StructureEvidence`；复杂度警告不阻断拟合。进度显示 dataset、stage、完成数和
-   best objective，GUI 线程不执行优化。
-7. 点击“取消拟合”只请求协作取消。最近有效结果继续显示，已发布 checkpoint
-   保留；关闭窗口会等待协作停止，超时后必须再次确认才会强制终止进程。
-8. 在结果列表切换候选会同步模型、残差、SLD、参数和证据。“早期淘汰”候选仍
-   可检查，但只有显式确认后才持久化为选择；推荐和自动 confidence 不被改写。
-9. “保存”写入项目、active dataset、候选 ID、expert mode、splitter 尺寸和图形
-   tab。再次“打开”会恢复这些状态，并从声明 source 重新读取数据。
-10. “导出”每次创建新的 run 目录，包含每个 dataset 子目录和根
-    `compatibility_summary.xlsx`。成功摘要列出所有实际文件；失败保留以前的 run。
+1. 先按“样品标识 + 空格 + 基底侧到表面侧膜层”命名文件，例如单层
+   `P1 Zr.xy`。选择“导入文件”或“导入文件夹”；文件夹模式可显式启用递归。
+2. 项目首次自动导入时，导入框不预选光路，必须显式选择“单色”或“混合 Kα”并
+   保存测量预设。后续批次复用项目中的预设；只有在 Expert mode 中选择“更换测量
+   预设”才再次询问。额外列只有在“高级列映射”中声明后才解释。
+3. 解析失败只进入导入失败表，表中同时显示文件名、问题和恢复操作；其他有效文件
+   仍会提交。只有最左侧有限膜层是 `Si` 的结构组会弹出一次实际基底输入框，且不
+   预填猜测值。
+4. 有效 dataset 导入后保持 `PENDING`，工作台不会自动启动拟合。先检查或修改膜层、
+   基底、自动 SiO2 和参数，再点击“自动拟合”；该按钮统一运行项目中全部可运行的
+   自动数据集。路由仍以各自 `import_batch_id` 为边界：单条物理签名走单样品路径，
+   同批同签名多点先并行预拟合，再联合精修。
+5. 进度显示 dataset、stage、完成数和 best objective。worker 的部分快照会立即更新
+   曲线；GUI 线程不执行 optimizer。点击“取消”只请求协作取消，已发布 checkpoint
+   保留；关闭窗口超时后必须再次确认才强制终止进程。
+6. 结果区按稳定 dataset 顺序显示逐点逐层结果和自动状态；合格多点组另显示厚度
+   均值、总体标准差、CV 和相对极差。未知配比层显示有效 SLD/电子密度，但不显示
+   虚假的质量密度。
+7. “保存”写入项目、active dataset、候选 ID、expert mode、splitter 尺寸和图形
+   tab。自动拟合不会导出；需要手动结构/拟合、profile、MCMC 或导出时进入下述
+   Expert 流程。
 
-### 13.2 拟合模式、readiness 与 checkpoint
+### 13.2 自动路由、状态与 checkpoint
 
-- `独立拟合` 是默认模式；每个 dataset 独立产生结果和 confidence。
-- `联合拟合` 至少需要两个 source-valid、已声明有效结构的 datasets，并要求所有
-  sharing rules 可由真实 joint compile 接受。模式不合法时界面保留用户选择并显示
-  第一个阻断 dataset/字段及恢复动作，不会静默回退到独立拟合。
-- 切换模式会清除所有 datasets 的 scale prior、checkpoint、结果和 candidate
-  selection，但保留 source、beam/instrument、结构及其 provenance。修改 mask、
-  结构、参数、sharing 或 instrument 时也按实际影响范围失效旧结果。
-- “一键拟合”只有在所有计划 datasets 的 source 为 `ok`、数据可拟合、结构已声明、
-  参数/sharing 有效且当前没有 worker 时才启用。相邻 readiness 文本给出第一个
-  未满足条件，不以禁用按钮代替错误原因。
+- 自动路由只在同一个 `import_batch_id` 内比较物理签名。签名包含有序膜层、确认后
+  的基底、测量预设和影响物理模型的结构状态，不包含 source path、dataset ID、
+  display name、厚度值、粗糙度值、导入顺序或旧拟合结果。
+- 签名组只有一个 dataset 时角色为 `SINGLE`；同批同签名组有多个 datasets 时角色为
+  `JOINT`。同一次选择中的不同签名拆成独立组，不会仅因同时导入而错误共享参数。
+- `PENDING` 表示已导入或失效后等待自动拟合；`REFINING` 表示已路由并正在预拟合或
+  联合精修；`PASSED` 表示候选通过自动质量门槛；`REVIEW` 表示保留了候选但证据要求
+  人工复核；`FAILED` 表示没有可发布候选或准备/运行失败。`reason` 保存复核或失败
+  原因。
+- `statistics_member=true` 只允许出现在 `PASSED` 数据集上。均匀性只统计同一
+  `fit_group_id`、相同 layer index/material 且明确属于统计总体的行；`REVIEW`、
+  `FAILED` 和尚在 `REFINING` 的行不进入统计。
 - worker 发布 checkpoint 时，工作台先接收包含 checkpoint 的 immutable project
   snapshot，再刷新内存状态；若调用方给出 checkpoint path，则子进程先通过
-  `save_project()` 原子保存，再向 GUI 发布。普通按钮不会暗中创建未声明的外部文件。
-- 保存过的项目若含兼容 checkpoint，再次点击拟合会由 service 按 stage、candidate
-  graph、seed ledger、data hash、structure、instrument、parameters 和 config 校验后
-  恢复。任一身份不匹配会明确拒绝该 checkpoint，绝不伪装为“从头恢复成功”。
+  `save_project()` 原子保存，再发布事件。保存过的兼容 checkpoint 会按 stage、
+  candidate graph、seed ledger、data hash、structure、instrument、parameters 和
+  config 校验后恢复，身份不匹配会明确拒绝。
+- `independent` 自动项目中的 source、mask、structure、instrument 或参数变化只让
+  对应自动组失效：清理变更 dataset 及共享其非空 `fit_group_id` 的成员，保留其他
+  自动组。Expert `batch_mode="joint"` 项目始终沿用全项目失效规则。
 
 ### 13.3 Source hash 警告
 
@@ -611,9 +644,18 @@ xrr-fitter
 
 ### 13.4 Expert 模式与候选状态
 
-Expert mode 显示完整 bounds/lock/sharing、背景模型
-`constant|linear|powerlaw`、分辨率域 `q|theta`、scale weak prior 和 MCMC。
-普通流程不要求打开 expert mode。修改参数、仪器模型、共享或项目级 scale prior
+在右侧参数区勾选“专家模式”，或使用“视图 -> 专家模式”。Expert mode 显示完整
+bounds/lock/sharing、背景模型 `constant|linear|powerlaw`、分辨率域 `q|theta`、
+scale weak prior、批量模式选择器和手动“开始拟合”按钮。选择 `独立拟合` 或
+`联合拟合` 后，手动入口继续调用 expert `preflight_fit()` / `start_fit_job()`，不会
+改写自动路由规则；联合模式要求显式且可编译的 `SharingRule`。
+
+profile likelihood 证据位于结果不确定度区，Expert mode 还显示 SLD 深度剖面 tab。
+选择具有当前 candidate-owned uncertainty evidence 的有效候选后，结果区会显示
+MCMC 配置与启动按钮。导出不属于自动完成条件；拟合结束并选择有效候选后，使用
+工具栏“导出结果”、文件菜单“导出结果”或 `Ctrl+Shift+E` 显式创建新 run 目录。
+
+普通流程不要求打开 Expert mode。修改参数、仪器模型、共享或项目级 scale prior
 会按影响范围清除旧结果；不会以 fallback 继续使用不兼容状态。
 
 标准模式隐藏 expert-only optimizer rows、背景/分辨率、MCMC 和 SLD 深度剖面 tab，
@@ -664,7 +706,23 @@ MCMC 只对当前有效候选运行，使用与自动拟合同一个 spawn contr
 - 导出失败：错误消息包含失败路径和原始异常；修复目录权限或源 hash 后重试，
   不要删除以前已经发布的 run。
 
-### 13.7 界面截图
+### 13.7 自动拟合性能基准
+
+以下命令是 Apple Silicon 参考机上的手动 wall-clock 验收，不属于 CI 的时间断言：
+
+```bash
+python tools/benchmark_automatic_fit.py --single --repeat 3 --json
+python tools/benchmark_automatic_fit.py --batch-size 4 --repeat 3 --json
+python tools/benchmark_automatic_fit.py --adaptive --repeat 1 --json
+```
+
+参考目标分别为：常规单点 `median_seconds <= 20`；2-4 点批次
+`median_seconds <= 45`；adaptive 中每个疑难 fixture 的 `elapsed_seconds <= 60`。
+JSON 同时记录每阶段和总 `nfev`、bootstrap/profile 次数、状态及 recovery error。
+CI 使用确定性 work-count 断言，不因机器负载放宽搜索或恢复质量门槛；若数值门槛
+通过但墙钟超标，应单独报告 timing miss。
+
+### 13.8 界面截图
 
 以下截图使用仓库 canonical `single-layer` synthetic example 与固定 seed
 `20260726` 的快速拟合结果，不包含用户 source。平台为 macOS/PySide6 Fusion；

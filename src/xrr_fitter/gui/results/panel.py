@@ -16,6 +16,10 @@ import xrr_fitter.api as api
 from xrr_fitter.gui import messages, theme
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.fitting.controller import FitController
+from xrr_fitter.gui.results.automatic import (
+    AutomaticPointLayerTable,
+    AutomaticUniformityTable,
+)
 from xrr_fitter.gui.results.candidates import (
     CandidateList,
     active_dataset,
@@ -25,7 +29,6 @@ from xrr_fitter.gui.results.candidates import (
     persisted_candidate_id,
 )
 from xrr_fitter.gui.results.uncertainty import McmcControls, UncertaintyView
-
 
 CONFIDENCE_VISUALS = {
     "可信": ("●", "#2E7D32"),
@@ -68,6 +71,8 @@ class ResultsPanel(QWidget):
         confidence_layout.addWidget(self.confidence_marker)
         confidence_layout.addWidget(self.confidence_label, 1)
         self.candidates = CandidateList()
+        self.automatic_points = AutomaticPointLayerTable()
+        self.automatic_uniformity = AutomaticUniformityTable()
         self.clear_button = QPushButton("清除结果")
         self.clear_button.setObjectName("clearResultsButton")
         self.uncertainty = UncertaintyView()
@@ -86,6 +91,8 @@ class ResultsPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
         layout.addWidget(confidence_row)
+        layout.addWidget(self.automatic_points)
+        layout.addWidget(self.automatic_uniformity)
         layout.addWidget(self.candidates)
         layout.addWidget(self.clear_button)
         layout.addWidget(self.uncertainty)
@@ -228,6 +235,9 @@ class ResultsPanel(QWidget):
         return response == QMessageBox.StandardButton.Yes
 
     def _refresh(self, *_args) -> None:
+        summary = api.summarize_automatic_results(self.document.project)
+        self.automatic_points.project_summary(summary)
+        self.automatic_uniformity.project_summary(summary)
         dataset = active_dataset(self.document.project)
         if dataset is None or dataset.last_valid_result is None:
             self._clear_projection("当前数据集尚无拟合结果")

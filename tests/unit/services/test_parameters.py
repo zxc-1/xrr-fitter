@@ -5,8 +5,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import dataset_project, final_fit_result, project, simple_structure
+
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
@@ -113,7 +113,7 @@ def test_sharing_validation_is_pure_and_does_not_read_source(
     assert validate_sharing_rules(value, (rule,)) == (rule,)
 
 
-def test_sharing_validation_rejects_duplicate_ownership_and_same_dataset() -> None:
+def test_sharing_validation_rejects_duplicate_ownership_and_allows_same_dataset() -> None:
     value = project(dataset_project("first"), dataset_project("second"))
     shared = ParameterReference("first", "component.0.thickness_a")
     first = SharingRule(
@@ -134,8 +134,7 @@ def test_sharing_validation_rejects_duplicate_ownership_and_same_dataset() -> No
 
     with pytest.raises(ValueError, match="multiple|ownership"):
         validate_sharing_rules(value, (first, second))
-    with pytest.raises(ValueError, match="one member per dataset"):
-        validate_sharing_rules(value, (same_dataset,))
+    assert validate_sharing_rules(value, (same_dataset,)) == (same_dataset,)
 
 
 def test_set_sharing_rules_invalidates_affected_fit_state() -> None:

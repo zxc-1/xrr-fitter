@@ -1,3 +1,9 @@
+"""Qt data-import contracts for public API routing and explicit instrument input.
+
+The suite keeps dialog validation, filename material parsing, active selection,
+and immutable project adoption observable at the panel boundary.
+"""
+
 from __future__ import annotations
 
 from math import asin, degrees
@@ -7,7 +13,6 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -20,6 +25,14 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+
+
+def _saved_preset() -> api.MeasurementPreset:
+    return api.MeasurementPreset(
+        "gui-lab",
+        api.BeamSpec("monochromatic", wavelength_a=1.5406),
+        api.InstrumentSpec(instrument_id="gui-lab"),
+    )
 
 
 def _write_curve(path: Path, *, scale: float = 1000.0) -> Path:
@@ -46,6 +59,153 @@ def _panel(qtbot, document=None):
 
 def _instrument() -> api.InstrumentSpec:
     return api.InstrumentSpec(instrument_id="gui-import")
+
+
+def test_saved_measurement_preset_skips_the_full_import_dialog(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from dataclasses import replace
+
+    from xrr_fitter.gui.data.import_dialog import ImportDialog
+    from xrr_fitter.gui.document import ProjectDocument
+
+    project = replace(api.new_project(), measurement_preset=_saved_preset())
+    panel = _panel(qtbot, ProjectDocument(project))
+    source = _write_curve(tmp_path / "P1 Zr.xy")
+    monkeypatch.setattr(
+        ImportDialog,
+        "exec",
+        lambda _dialog: (_ for _ in ()).throw(AssertionError("dialog opened")),
+    )
+
+    panel.import_paths((source,))
+
+    assert panel.document.project.measurement_preset is _saved_preset() or (
+        panel.document.project.measurement_preset == _saved_preset()
+    )
+
+
+def test_first_automatic_import_persists_measurement_configuration(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from xrr_fitter.gui.data.import_dialog import ImportDialog
+
+    panel = _panel(qtbot)
+    source = _write_curve(tmp_path / "P1 Zr.xy")
+
+    def accept(dialog: ImportDialog):
+        dialog.select_beam_kind("monochromatic")
+        dialog.instrument_id.setText("first-use-lab")
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(ImportDialog, "exec", accept)
+
+    panel._confirm_import((source,), folder=False)
+
+    preset = panel.document.project.measurement_preset
+    assert preset is not None
+    assert preset.preset_id == "first-use-lab"
+    assert preset.instrument.instrument_id == "first-use-lab"
+    assert preset.beam == api.BeamSpec("monochromatic", wavelength_a=1.5406)
+
+
+@pytest.mark.parametrize("select_source", (False, True))
+def test_cancelled_measurement_preset_change_does_not_affect_next_import(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+    select_source: bool,
+) -> None:
+    """Keep a cancelled replacement request local to one UI action.
+
+    The empty selection covers cancelling the native file chooser. Selecting a
+    source and rejecting ``ImportDialog`` covers cancellation after the source is
+    known. Neither path may force the next ordinary import back through the full
+    measurement dialog.
+    """
+    from dataclasses import replace
+
+    from xrr_fitter.gui.data.import_dialog import ImportDialog
+    from xrr_fitter.gui.document import ProjectDocument
+
+    panel = _panel(
+        qtbot,
+        ProjectDocument(
+            replace(api.new_project(), measurement_preset=_saved_preset())
+        ),
+    )
+    source = _write_curve(tmp_path / "P1 Zr.xy")
+    selected = [str(source)] if select_source else []
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileNames",
+        lambda *_args, **_kwargs: (selected, ""),
+    )
+    monkeypatch.setattr(
+        ImportDialog,
+        "exec",
+        lambda _dialog: QDialog.DialogCode.Rejected,
+    )
+
+    panel._change_measurement_preset()
+
+    assert panel._force_preset_dialog is False
+
+
+def test_ambiguous_substrate_is_requested_once_per_structure_group(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from dataclasses import replace
+
+    from xrr_fitter.gui.data.substrate_dialog import SubstrateDialog
+    from xrr_fitter.gui.document import ProjectDocument
+
+    project = replace(api.new_project(), measurement_preset=_saved_preset())
+    panel = _panel(qtbot, ProjectDocument(project))
+    sources = (
+        _write_curve(tmp_path / "P1 Si+Zr.xy"),
+        _write_curve(tmp_path / "P2 Si+Zr.xy"),
+    )
+    dialogs: list[SubstrateDialog] = []
+
+    def accept(dialog: SubstrateDialog):
+        dialogs.append(dialog)
+        dialog.substrate_editor.setText("Al2O3")
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(SubstrateDialog, "exec", accept)
+
+    panel.import_paths(sources)
+
+    assert len(dialogs) == 1
+    assert len(panel.document.project.datasets) == 2
+
+
+def test_successful_automatic_import_keeps_dataset_pending(
+    qtbot,
+    tmp_path,
+) -> None:
+    from dataclasses import replace
+
+    from xrr_fitter.gui.document import ProjectDocument
+
+    project = replace(api.new_project(), measurement_preset=_saved_preset())
+    panel = _panel(qtbot, ProjectDocument(project))
+
+    result = panel.import_paths((_write_curve(tmp_path / "P1 Zr.xy"),))
+
+    dataset = panel.document.project.datasets[0]
+    assert result.imported_dataset_ids == ("P1",)
+    assert dataset.automation.import_batch_id == result.import_batch_id
+    assert dataset.automation.status.value == "pending"
+    assert dataset.last_valid_result is None
+    assert panel.document.project.batch_mode == "independent"
 
 
 def test_data_panel_imports_multiple_xy_files_and_selects_active_dataset(

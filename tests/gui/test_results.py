@@ -14,6 +14,12 @@ These tests deliberately exercise direct methods and Qt signal paths.  The
 former prove API routing and pre-publication failure atomicity, while the latter
 prove that invalid user input cannot escape through the event-loop exception
 handler.
+
+Automatic result tables add a second ownership boundary. Point roles, quality
+status, fitted layer values, and population uniformity must come from the same
+completed import batch. The assertions intentionally inspect both table models
+and public API calls so presentation changes cannot silently weaken persistence
+rules or attach statistics to excluded points.
 """
 
 from __future__ import annotations
@@ -23,15 +29,16 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
-import xrr_fitter.api as api
-from xrr_fitter.model.instrument import PhysicsDiagnostic
+from PySide6.QtWidgets import QTableWidget
 from tests.support.model_cases import (
     dataset_project,
     final_fit_result,
     fit_candidate,
     project,
 )
+
+import xrr_fitter.api as api
+from xrr_fitter.model.instrument import PhysicsDiagnostic
 
 
 def _uncertainty(candidate_id: str = "candidate-a") -> api.UncertaintyReport:
@@ -87,6 +94,11 @@ def _mcmc_report(**changes):
 
 
 def _project_with_result(result=None, *, selected: str | None = None, expert=False):
+    """Build result state only through supported immutable API transitions.
+
+    Candidate selection and expert mode remain optional so each panel test can
+    declare the exact persisted ownership state it intends to render.
+    """
     value = project(dataset_project(result=result))
     value = replace(value, base_directory="/private/tmp")
     value = api.select_active_dataset(value, "curve")
@@ -540,3 +552,65 @@ def test_results_package_initializer_is_empty() -> None:
     root = Path(__file__).resolve().parents[2]
 
     assert (root / "src/xrr_fitter/gui/results/__init__.py").read_bytes() == b""
+
+
+def test_automatic_result_tables_render_point_layers_and_uniformity(
+    qtbot,
+    monkeypatch,
+) -> None:
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.gui.results.panel import ResultsPanel
+    from xrr_fitter.model.automation import (
+        AutomaticDatasetSummary,
+        AutomaticLayerResult,
+        AutomaticResultSummary,
+        AutomaticStatus,
+        LayerUniformitySummary,
+    )
+
+    layer = AutomaticLayerResult(
+        "point-1", 0, "Zr", 120.0, 4.0, 3.1e-5, 2.0e-7,
+        0.92, 6.52, 1.03, 6.72, None,
+    )
+    summary = AutomaticResultSummary(
+        "batch-9",
+        (AutomaticDatasetSummary("point-1", AutomaticStatus.PASSED, True, None, (layer,)),),
+        (LayerUniformitySummary("group-1", 0, "Zr", 2, 121.0, 120.0, 122.0, 1.0, 0.83, 1.65),),
+    )
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        api,
+        "summarize_automatic_results",
+        lambda *args: (calls.append(args), summary)[1],
+        raising=False,
+    )
+    document = ProjectDocument(api.new_project())
+    panel = ResultsPanel(document)
+    qtbot.addWidget(panel)
+
+    points = panel.findChild(QTableWidget, "automaticPointLayerTable")
+    uniformity = panel.findChild(QTableWidget, "automaticUniformityTable")
+    assert calls == [(document.project,)]
+    assert points.columnCount() == 11
+    assert points.rowCount() == 1
+    assert points.item(0, 0).text() == "point-1"
+    assert points.item(0, 1).text() == "通过"
+    assert points.item(0, 3).text() == "Zr"
+    assert uniformity.columnCount() == 9
+    assert uniformity.rowCount() == 1
+    assert uniformity.item(0, 0).text() == "group-1"
+
+
+@pytest.mark.parametrize(
+    ("status", "label"),
+    (
+        ("passed", "通过"),
+        ("refining", "精修中"),
+        ("review", "需复核"),
+        ("failed", "失败"),
+    ),
+)
+def test_automatic_status_labels_are_exact(status, label) -> None:
+    from xrr_fitter.gui.results.automatic import automatic_status_text
+
+    assert automatic_status_text(status) == label

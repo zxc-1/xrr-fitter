@@ -5,13 +5,14 @@ from importlib import import_module
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data, simple_structure
+
+from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import ParameterReference, SharingRule
-
+from xrr_fitter.model.structure import LayerSpec, MaterialSpec
 
 SHARED_NAME = "component.0.density_scale"
 LOCAL_NAME = "component.0.thickness_a"
@@ -141,22 +142,134 @@ def test_joint_layout_fingerprint_binds_dataset_and_sharing_order() -> None:
     assert baseline.layout_fingerprint != reversed_layout.layout_fingerprint
 
 
-def test_joint_sharing_rejects_two_members_from_one_dataset() -> None:
+def _problem_with_two_direct_sld_layers():
+    base = _problem(seed=827)
+    material = MaterialSpec("CrSiC", None, None, 20e-6 + 0j)
+    structure = replace(
+        base.structure,
+        components=(
+            LayerSpec("CrSiC lower", material, 80.0),
+            LayerSpec("CrSiC upper", material, 100.0),
+        ),
+    )
+    return compile_fit_problem(base.data, structure, base.instrument, base.config)
+
+
+def test_one_material_group_can_share_repeated_members_from_the_same_dataset() -> None:
     api = import_module("xrr_fitter.fit.joint_problem")
+    problems = (
+        _problem_with_two_direct_sld_layers(),
+        _problem_with_two_direct_sld_layers(),
+    )
     rule = SharingRule(
-        "ambiguous-left",
+        "material:CrSiC:sld_real",
         (
-            ParameterReference("left", SHARED_NAME),
-            ParameterReference("left", LOCAL_NAME),
-            ParameterReference("right", SHARED_NAME),
+            ParameterReference("left", "component.0.sld_real_a2"),
+            ParameterReference("left", "component.1.sld_real_a2"),
+            ParameterReference("right", "component.0.sld_real_a2"),
+            ParameterReference("right", "component.1.sld_real_a2"),
         ),
     )
 
-    with pytest.raises(ValueError, match="sharing|dataset|member"):
-        api.compile_joint_problem(
-            ("left", "right"),
-            (_problem(seed=827), _problem(seed=827)),
-            (rule,),
+    joint = api.compile_joint_problem(("left", "right"), problems, (rule,))
+
+    shared = next(
+        value
+        for value in joint.global_variables
+        if value.sharing_key == rule.sharing_key
+    )
+    first_index = _coordinate_index(problems[0], "component.0.sld_real_a2")
+    second_index = _coordinate_index(problems[0], "component.1.sld_real_a2")
+    assert len(shared.members) == 4
+    assert joint.scatter_maps[0][first_index] == joint.scatter_maps[0][second_index]
+
+
+def test_prefit_consensus_uses_shared_median_and_keeps_local_coordinates() -> None:
+    sharing = import_module("xrr_fitter.fit.joint_sharing")
+    joint = _compile()
+    declared = sharing.scatter_joint_vector(
+        joint,
+        sharing.initial_joint_vector(joint),
+    )
+    local_units = tuple(np.array(unit, copy=True) for unit in declared)
+    for unit, problem, value in zip(
+        local_units,
+        joint.problems,
+        (0.2, 0.8),
+        strict=True,
+    ):
+        unit[_coordinate_index(problem, SHARED_NAME)] = value
+        unit[_coordinate_index(problem, LOCAL_NAME)] = value
+    candidates = {
+        dataset_id: type(
+            "Candidate",
+            (),
+            {
+                "valid": True,
+                "parameters": evaluate_vector(problem, unit).parameters,
+            },
+        )()
+        for dataset_id, problem, unit in zip(
+            joint.dataset_ids,
+            joint.problems,
+            local_units,
+            strict=True,
+        )
+    }
+
+    consensus = sharing.consensus_joint_vector(joint, candidates)
+
+    shared_index = joint.scatter_maps[0][
+        _coordinate_index(joint.problems[0], SHARED_NAME)
+    ]
+    left_local = joint.scatter_maps[0][
+        _coordinate_index(joint.problems[0], LOCAL_NAME)
+    ]
+    right_local = joint.scatter_maps[1][
+        _coordinate_index(joint.problems[1], LOCAL_NAME)
+    ]
+    assert consensus[shared_index] == pytest.approx(0.5)
+    assert consensus[left_local] == pytest.approx(0.2)
+    assert consensus[right_local] == pytest.approx(0.8)
+    assert not consensus.flags.writeable
+
+
+def test_prefit_consensus_rejects_missing_and_invalid_candidates() -> None:
+    sharing = import_module("xrr_fitter.fit.joint_sharing")
+    joint = _compile()
+    declared = sharing.scatter_joint_vector(
+        joint,
+        sharing.initial_joint_vector(joint),
+    )
+    candidates = {
+        dataset_id: type(
+            "Candidate",
+            (),
+            {
+                "valid": True,
+                "parameters": evaluate_vector(problem, unit).parameters,
+            },
+        )()
+        for dataset_id, problem, unit in zip(
+            joint.dataset_ids,
+            joint.problems,
+            declared,
+            strict=True,
+        )
+    }
+
+    with pytest.raises(ValueError, match="candidate.*missing|missing.*candidate"):
+        sharing.consensus_joint_vector(joint, {"left": candidates["left"]})
+
+    invalid = type(
+        "Candidate",
+        (),
+        {"valid": False, "parameters": candidates["right"].parameters},
+    )()
+    with pytest.raises(ValueError, match="candidate.*invalid|invalid.*candidate"):
+        sharing.consensus_joint_vector(
+            joint,
+            {"left": candidates["left"], "right": invalid},
         )
 
 

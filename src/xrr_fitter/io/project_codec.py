@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 import json
 import os
@@ -37,6 +38,12 @@ from xrr_fitter.io.codec_results import (
     fit_result_to_dict,
 )
 from xrr_fitter.model.analysis import StructureEvidence
+from xrr_fitter.model.automation import (
+    AutomaticRole,
+    AutomaticStatus,
+    DatasetAutomation,
+    MeasurementPreset,
+)
 from xrr_fitter.model.parameters import (
     ParameterReference,
     ParameterSetting,
@@ -184,6 +191,69 @@ def _ui_from_dict(value: object) -> ProjectUiState:
     )
 
 
+def _measurement_preset_to_dict(
+    value: MeasurementPreset | None,
+) -> dict[str, object] | None:
+    if value is None:
+        return None
+    return {
+        "preset_id": value.preset_id,
+        "beam": _beam_to_dict(value.beam),
+        "instrument": _instrument_to_dict(value.instrument),
+        "import_angle_offset_deg": value.import_angle_offset_deg,
+    }
+
+
+def _measurement_preset_from_dict(value: object) -> MeasurementPreset | None:
+    if value is None:
+        return None
+    payload = _mapping(
+        value,
+        {"preset_id", "beam", "instrument", "import_angle_offset_deg"},
+        "measurement preset",
+    )
+    return MeasurementPreset(
+        preset_id=payload["preset_id"],
+        beam=_beam_from_dict(payload["beam"]),
+        instrument=_instrument_from_dict(payload["instrument"]),
+        import_angle_offset_deg=payload["import_angle_offset_deg"],
+    )
+
+
+def _automation_to_dict(value: DatasetAutomation) -> dict[str, object]:
+    return {
+        "import_batch_id": value.import_batch_id,
+        "fit_group_id": value.fit_group_id,
+        "role": value.role.value,
+        "status": value.status.value,
+        "statistics_member": value.statistics_member,
+        "reason": value.reason,
+    }
+
+
+def _automation_from_dict(value: object) -> DatasetAutomation:
+    payload = _mapping(
+        value,
+        {
+            "import_batch_id",
+            "fit_group_id",
+            "role",
+            "status",
+            "statistics_member",
+            "reason",
+        },
+        "dataset automation",
+    )
+    return DatasetAutomation(
+        import_batch_id=payload["import_batch_id"],
+        fit_group_id=payload["fit_group_id"],
+        role=AutomaticRole(payload["role"]),
+        status=AutomaticStatus(payload["status"]),
+        statistics_member=payload["statistics_member"],
+        reason=payload["reason"],
+    )
+
+
 def _dataset_to_dict(value: DatasetProject) -> dict[str, object]:
     payload = {
         "dataset_id": value.dataset_id,
@@ -206,6 +276,7 @@ def _dataset_to_dict(value: DatasetProject) -> dict[str, object]:
         ],
         "last_valid_result": fit_result_to_dict(value.last_valid_result),
         "checkpoint": _checkpoint_to_dict(value.checkpoint),
+        "automation": _automation_to_dict(value.automation),
     }
     if value.display_name != value.dataset_id:
         payload["display_name"] = value.display_name
@@ -230,6 +301,7 @@ def _dataset_fields() -> set[str]:
         "parameter_settings",
         "last_valid_result",
         "checkpoint",
+        "automation",
     }
 
 
@@ -264,6 +336,7 @@ def _dataset_from_dict(value: object) -> DatasetProject:
         last_valid_result=fit_result_from_dict(payload["last_valid_result"]),
         checkpoint=_checkpoint_from_dict(payload["checkpoint"]),
         display_name=payload.get("display_name"),
+        automation=_automation_from_dict(payload["automation"]),
     )
 
 
@@ -277,6 +350,7 @@ def _project_fields() -> set[str]:
         "datasets",
         "sharing_rules",
         "ui_state",
+        "measurement_preset",
     }
 
 
@@ -295,6 +369,9 @@ def project_to_dict(project: XrrProject) -> dict[str, object]:
             _sharing_to_dict(item) for item in project.sharing_rules
         ],
         "ui_state": _ui_to_dict(project.ui_state),
+        "measurement_preset": _measurement_preset_to_dict(
+            project.measurement_preset
+        ),
     }
 
 
@@ -370,10 +447,40 @@ def _validated_document(value: object) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v1_document(value: object) -> object:
+    if (
+        not isinstance(value, dict)
+        or type(value.get("schema_version")) is not int
+        or value.get("schema_version") != 1
+    ):
+        return value
+    payload = deepcopy(value)
+    payload["schema_version"] = 2
+    payload["measurement_preset"] = None
+    for dataset in payload.get("datasets", ()):
+        if not isinstance(dataset, dict):
+            continue
+        dataset["automation"] = {
+            "import_batch_id": None,
+            "fit_group_id": None,
+            "role": "manual",
+            "status": "not_run",
+            "statistics_member": False,
+            "reason": None,
+        }
+        result = dataset.get("last_valid_result")
+        if not isinstance(result, dict):
+            continue
+        uncertainty = result.get("uncertainty")
+        if isinstance(uncertainty, dict):
+            uncertainty["bootstrap_performed"] = True
+    return payload
+
+
 def project_from_dict(value: object) -> XrrProject:
     """Decode a complete R22-compatible document with exact field sets."""
     try:
-        payload = _validated_document(value)
+        payload = _validated_document(_migrate_v1_document(value))
         return XrrProject(
             schema_version=payload["schema_version"],
             algorithm_version=payload["algorithm_version"],
@@ -391,6 +498,9 @@ def project_from_dict(value: object) -> XrrProject:
                 )
             ),
             ui_state=_ui_from_dict(payload["ui_state"]),
+            measurement_preset=_measurement_preset_from_dict(
+                payload["measurement_preset"]
+            ),
         )
     except ProjectSchemaError:
         raise

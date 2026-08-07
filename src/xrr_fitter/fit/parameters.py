@@ -62,31 +62,26 @@ def thickness_bounds(data: PreparedData) -> tuple[float, float]:
 def _material_definitions(prefix: str, material: MaterialSpec) -> list[ParameterDefinition]:
     if material.sld_override_a2 is None:
         return []
-    real = material.sld_override_a2.real
-    imag = material.sld_override_a2.imag
-    real_span = max(abs(real), 1e-8)
-    imag_upper = max(10.0 * max(imag, 1e-9), 1e-8)
     return [
         _definition(
             f"{prefix}.sld_real_a2",
             f"{prefix} SLD 实部",
             "Å⁻²",
             "material",
-            real,
-            real - 10.0 * real_span,
-            real + 10.0 * real_span,
+            material.sld_override_a2.real,
+            -150e-6,
+            150e-6,
             "linear",
-            True,
-            expert_only=True,
+            False,
         ),
         _definition(
             f"{prefix}.sld_imag_a2",
             f"{prefix} SLD 吸收部",
             "Å⁻²",
             "material",
-            imag,
+            material.sld_override_a2.imag,
             0.0,
-            imag_upper,
+            20e-6,
             "linear",
             True,
             expert_only=True,
@@ -101,6 +96,8 @@ def _layer_definitions(
 ) -> list[ParameterDefinition]:
     lower = max(2.0, min(bounds[0], layer.thickness_a))
     upper = min(2e5, max(bounds[1], layer.thickness_a))
+    direct_sld = layer.material.sld_override_a2 is not None
+    density_initial = 1.0 if direct_sld else layer.density_scale
     definitions = [
         _definition(
             f"{prefix}.thickness_a",
@@ -118,11 +115,11 @@ def _layer_definitions(
             f"{layer.name} 相对密度",
             "",
             "material",
-            layer.density_scale,
-            min(0.5, layer.density_scale),
-            max(1.1, layer.density_scale),
+            density_initial,
+            density_initial if direct_sld else min(0.5, density_initial),
+            density_initial if direct_sld else max(1.1, density_initial),
             "linear",
-            False,
+            direct_sld,
         ),
         _definition(
             f"{prefix}.roughness_a",
@@ -458,6 +455,7 @@ def default_parameter_definitions(
     definitions: list[ParameterDefinition] = []
     for index, component in enumerate(structure.components):
         definitions.extend(_component_definitions(f"component.{index}", component, bounds))
+    definitions.extend(_material_definitions("backing", structure.backing))
     definitions.append(
         _definition(
             "backing.roughness_a",

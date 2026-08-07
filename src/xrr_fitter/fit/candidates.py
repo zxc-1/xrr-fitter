@@ -1,4 +1,25 @@
-"""Deterministic candidate construction, deduplication, and publication."""
+"""Deterministic candidate construction, deduplication, and publication.
+
+Candidate starts are immutable, sorted physical-parameter mappings tagged with
+a feature family. The declared structure is always the protected first start;
+direct-SLD hypotheses overlay that baseline before the remaining geometry,
+material, interface, and instrument dimensions are sampled under one cap.
+Every stochastic choice uses the caller-owned generator.
+
+Selection has two distinct identity tests. Normalized parameter distance first
+partitions nearby starts to bound comparison work, while reflectivity-curve
+distance merges both local duplicates and remote physical degeneracies. Stable
+sorting and minimum-cost representatives make ties reproducible.
+
+Published candidates expand fit-only residuals back to source-row arrays,
+using NaN outside the fit mask, and attach a read-only SLD profile when stack
+expansion succeeded. Ranking uses the explicit joint objective when present;
+otherwise it uses the local objective and excludes invalid or eliminated rows.
+
+Stage-B archiving preserves evidence rather than deleting weak candidates. It
+marks archived rows as eliminated and redistributes their unused perturbation
+budget deterministically across the candidates that remain active.
+"""
 
 from __future__ import annotations
 
@@ -22,13 +43,19 @@ from xrr_fitter.model.structure import (
 )
 from xrr_fitter.physics.sld_profile import sld_depth_profile
 
-
 CURVE_MERGE_DECADES = 0.02
 PARAMETER_PRECLUSTER_DISTANCE = 0.25
 
 
 @dataclass(frozen=True, slots=True)
 class CandidateStart:
+    """One reproducible physical start before unit-space compilation.
+
+    Sorted name/value pairs provide immutable identity for deduplication and
+    dictionary lookup. ``feature_key`` retains the originating hypothesis so
+    coarse selection can protect one representative from each family.
+    """
+
     values: tuple[tuple[str, float], ...]
     feature_key: str
 
@@ -38,6 +65,12 @@ class CandidateStart:
 
 @dataclass(frozen=True, slots=True)
 class StageBArchive:
+    """Active and eliminated Stage-B evidence plus reassigned search work.
+
+    Perturbation counts align positionally with ``active``; archived candidates
+    remain publishable evidence but cannot participate in winner selection.
+    """
+
     active: tuple[FitCandidate, ...]
     archived: tuple[FitCandidate, ...]
     perturbation_counts: tuple[int, ...]
@@ -110,7 +143,10 @@ def _ordinary_interface_values(
     effective = thickness if previous_thickness is None else min(previous_thickness, thickness)
     values: list[tuple[str, float]] = []
     if isinstance(component, LayerSpec):
-        values.append((f"{prefix}.density_scale", density_scale))
+        material_density = (
+            1.0 if component.material.sld_override_a2 is not None else density_scale
+        )
+        values.append((f"{prefix}.density_scale", material_density))
     values.append((f"{prefix}.roughness_a", roughness_fraction * effective))
     return values, thickness
 
@@ -136,7 +172,7 @@ def _periodic_interface_values(
         for index, layer in enumerate(component.layers)
     )
     values: list[tuple[str, float]] = []
-    for index, _layer in enumerate(component.layers):
+    for index, layer in enumerate(component.layers):
         prefix = f"component.{component_index}.layer.{index}"
         thickness = thicknesses[index]
         if index:
@@ -150,7 +186,10 @@ def _periodic_interface_values(
             effective = min(neighbors)
         values.extend(
             (
-                (f"{prefix}.density_scale", density_scale),
+                (
+                    f"{prefix}.density_scale",
+                    1.0 if layer.material.sld_override_a2 is not None else density_scale,
+                ),
                 (f"{prefix}.roughness_a", roughness_fraction * effective),
             )
         )
@@ -210,6 +249,7 @@ def _material_and_interface_values(
 def _make_start(
     structure: StructureSpec,
     geometry: tuple[str, tuple[tuple[str, float], ...]],
+    direct_sld_row: tuple[tuple[str, float], ...],
     density_scale: float,
     roughness_fraction: float,
     angle_offset: float,
@@ -224,6 +264,7 @@ def _make_start(
     """
     feature_key, geometry_values = geometry
     values = list(geometry_values)
+    values.extend(direct_sld_row)
     values.extend(
         _material_and_interface_values(
             structure,
@@ -257,18 +298,34 @@ def _baseline_component_values(
     if isinstance(component, (LayerSpec, GradientLayerSpec)):
         values.append((f"{prefix}.thickness_a", component.thickness_a))
         if isinstance(component, LayerSpec):
-            values.append((f"{prefix}.density_scale", component.density_scale))
+            density = 1.0 if component.material.sld_override_a2 is not None else component.density_scale
+            values.append((f"{prefix}.density_scale", density))
+            if component.material.sld_override_a2 is not None:
+                values.extend(
+                    (
+                        (f"{prefix}.sld_real_a2", component.material.sld_override_a2.real),
+                        (f"{prefix}.sld_imag_a2", component.material.sld_override_a2.imag),
+                    )
+                )
         values.append((f"{prefix}.roughness_a", component.roughness_a))
     elif isinstance(component, PeriodicBlock):
         for index, layer in enumerate(component.layers):
             layer_prefix = f"{prefix}.layer.{index}"
+            density = 1.0 if layer.material.sld_override_a2 is not None else layer.density_scale
             values.extend(
                 (
                     (f"{layer_prefix}.thickness_a", layer.thickness_a),
-                    (f"{layer_prefix}.density_scale", layer.density_scale),
+                    (f"{layer_prefix}.density_scale", density),
                     (f"{layer_prefix}.roughness_a", layer.roughness_a),
                 )
             )
+            if layer.material.sld_override_a2 is not None:
+                values.extend(
+                    (
+                        (f"{layer_prefix}.sld_real_a2", layer.material.sld_override_a2.real),
+                        (f"{layer_prefix}.sld_imag_a2", layer.material.sld_override_a2.imag),
+                    )
+                )
         if component.top_roughness_a is not None:
             values.append((f"{prefix}.top_roughness_a", component.top_roughness_a))
     return values
@@ -283,6 +340,13 @@ def _declared_baseline_start(
     values: list[tuple[str, float]] = []
     for index, component in enumerate(structure.components):
         values.extend(_baseline_component_values(index, component))
+    if structure.backing.sld_override_a2 is not None:
+        values.extend(
+            (
+                ("backing.sld_real_a2", structure.backing.sld_override_a2.real),
+                ("backing.sld_imag_a2", structure.backing.sld_override_a2.imag),
+            )
+        )
     values.extend(
         (
             ("backing.roughness_a", structure.backing_roughness_a),
@@ -299,6 +363,33 @@ def _declared_baseline_start(
 def _validate_candidate_limit(limit: object) -> None:
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise ValueError("candidate limit must be a positive integer")
+
+
+def _overlay_start(
+    baseline: CandidateStart,
+    row: tuple[tuple[str, float], ...],
+    index: int,
+) -> CandidateStart:
+    values = dict(baseline.values)
+    values.update(row)
+    return CandidateStart(tuple(sorted(values.items())), f"direct-sld-{index}")
+
+
+def _protected_starts(
+    baseline: CandidateStart,
+    rows: tuple[tuple[tuple[str, float], ...], ...],
+    limit: int,
+) -> tuple[CandidateStart, ...]:
+    protected: list[CandidateStart] = [baseline]
+    seen = {baseline.values}
+    for index, row in enumerate(rows):
+        start = _overlay_start(baseline, row, index)
+        if start.values not in seen:
+            protected.append(start)
+            seen.add(start.values)
+        if len(protected) == limit:
+            break
+    return tuple(protected)
 
 
 def _selected_combinations(
@@ -332,6 +423,9 @@ def build_candidate_pool(
     if limit == 1:
         return (baseline,)
     initial = estimate_initial_candidates(data, structure, instrument, rng)
+    protected = _protected_starts(baseline, initial.direct_sld_rows, limit)
+    if len(protected) == limit:
+        return protected
     geometry = geometry_variants(structure, initial, rng)
     dimensions = (
         initial.density_scales,
@@ -342,14 +436,25 @@ def build_candidate_pool(
         initial.relative_resolutions,
         initial.footprint_angles_deg,
     )
-    all_dimensions: tuple[tuple[object, ...], ...] = (geometry, *dimensions)
-    generated_limit = limit - 1
-    combinations = _selected_combinations(all_dimensions, rng, generated_limit)
-    generated = tuple(
-        _make_start(structure, *combination)
-        for combination in combinations
-    )
-    return (baseline, *generated[:generated_limit])
+    generated_limit = limit - len(protected)
+    if initial.direct_sld_rows:
+        all_dimensions: tuple[tuple[object, ...], ...] = (
+            geometry,
+            initial.direct_sld_rows,
+            *dimensions,
+        )
+        combinations = _selected_combinations(all_dimensions, rng, generated_limit)
+        generated = tuple(
+            _make_start(structure, *combination) for combination in combinations
+        )
+    else:
+        all_dimensions = (geometry, *dimensions)
+        combinations = _selected_combinations(all_dimensions, rng, generated_limit)
+        generated = tuple(
+            _make_start(structure, combination[0], (), *combination[1:])
+            for combination in combinations
+        )
+    return (*protected, *generated[:generated_limit])
 
 
 def _start_distance(first: CandidateStart, second: CandidateStart) -> float:

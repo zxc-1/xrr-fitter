@@ -70,6 +70,10 @@ from xrr_fitter.fit.global_search import (
 from xrr_fitter.fit.local_search import SearchCancelled, solve_local
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem, compile_stage_problem
+from xrr_fitter.fit.progress import (
+    best_preview_candidate as _best_candidate,
+    emit_progress as _emit,
+)
 from xrr_fitter.fit.screening import fringe_count_screen
 from xrr_fitter.fit.tasking import TaskRunner, run_tasks as _run_tasks
 from xrr_fitter.model.fitting import FitCandidate, FitProgress, FitStageSummary
@@ -205,19 +209,6 @@ def _poll(cancelled: Callable[[], bool] | None) -> None:
         raise SearchCancelled("search cancelled")
 
 
-def _emit(
-    callback: Callable[[FitProgress], None] | None,
-    dataset_id: str | None,
-    stage: str,
-    completed: int,
-    total: int,
-    best: float,
-    message: str,
-) -> None:
-    if callback is not None:
-        callback(FitProgress(dataset_id, stage, completed, total, best, message))
-
-
 def _candidate_values(candidate: FitCandidate) -> dict[str, float]:
     return {value.name: value.value for value in candidate.parameters}
 
@@ -322,14 +313,19 @@ def _evaluate_stage_a_pool(
     rejected_count = 0
     invalid_count = 0
     best = float("inf")
+    incumbent: FitCandidate | None = None
     for index, start in enumerate(pool):
         _poll(cancelled)
         candidate = _stage_a_candidate(problem, start, index)
+        improved = False
         if candidate is None:
             rejected_count += 1
         elif candidate.valid and np.isfinite(candidate.objective):
             evaluated.append((start, candidate))
-            best = min(best, candidate.objective)
+            if candidate.objective < best:
+                best = candidate.objective
+                incumbent = candidate
+                improved = True
         else:
             invalid_count += 1
         message = (
@@ -337,7 +333,18 @@ def _evaluate_stage_a_pool(
             f"physically rejected {rejected_count}; "
             f"invalid evaluations {invalid_count}"
         )
-        _emit(progress, dataset_id, "A", index + 1, len(pool), best, message)
+        # Only a changed incumbent carries a preview, so the live curve redraws
+        # exactly when it would look different and the queue stays small.
+        _emit(
+            progress,
+            dataset_id,
+            "A",
+            index + 1,
+            len(pool),
+            best,
+            message,
+            incumbent if improved else None,
+        )
     return tuple(evaluated), rejected_count, invalid_count
 
 
@@ -604,15 +611,16 @@ def run_stage_b(
     for index, (start, seed) in enumerate(zip(starts, seeds, strict=True)):
         optimized = _stage_b_candidate(problem, start, index, seed, cancelled)
         candidates.extend(_stage_b_launch_evidence(problem, start, optimized, index))
-        best = _best_objective(tuple(candidates))
+        current = tuple(candidates)
         _emit(
             progress,
             dataset_id,
             "B",
             index + 1,
             len(starts),
-            best,
+            _best_objective(current),
             f"completed short differential evolution {index + 1}",
+            _best_candidate(current),
         )
     representatives = _stage_b_representatives(problem, tuple(candidates))
     archive = archive_stage_b_candidates(representatives)
@@ -724,14 +732,16 @@ def run_local_stage(
         for candidate in _run_tasks(tasks, task_runner):
             candidates.append(candidate)
             completed += 1
+            current = tuple(candidates)
             _emit(
                 progress,
                 dataset_id,
                 stage,
                 completed,
                 total,
-                _best_objective(tuple(candidates)),
+                _best_objective(current),
                 message,
+                _best_candidate(current),
             )
     values = tuple(candidates)
     return StageOutcome(values, _summary(stage, values), perturbation_counts=counts)
@@ -1261,6 +1271,7 @@ def run_stage_e(
             len(seeds),
             objective,
             f"completed final seed {index + 1}",
+            best,
         )
     values = tuple(candidates)
     return StageOutcome(values, _summary("E", values))
