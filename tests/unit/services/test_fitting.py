@@ -228,8 +228,10 @@ class _FittingHarness:
         )
         return self.continued_search
 
-    def analysis_request(self, dataset_id, problem, search):
-        self.calls.append(("analysis-request", dataset_id, problem, search))
+    def analysis_request(self, dataset_id, problem, search, *, profile_names=None):
+        self.calls.append(
+            ("analysis-request", dataset_id, problem, search, profile_names)
+        )
         return "analysis-request"
 
     def run_analysis(self, request, **kwargs):
@@ -246,7 +248,8 @@ def _assert_fitting_calls(harness, decision, continued_search) -> None:
         "analysis",
     ]
     assert harness.calls[2][-2] == decision.parameter_name
-    assert harness.calls[3][-1] is continued_search
+    assert harness.calls[3][3] is continued_search
+    assert harness.calls[3][4] is None
 
 
 def _assert_shared_task_runner(harness, worker_count: int) -> None:
@@ -629,6 +632,47 @@ def test_fitting_composes_search_profile_recovery_and_analysis_in_order(
     _assert_fitting_calls(harness, decision, continued_search)
     _assert_shared_task_runner(harness, prepared.problem.config.local_workers)
     _assert_basin_progress(progress_events)
+
+
+# Statistical corpus fits reuse production analysis while requesting only
+# metric-owned profiles. Pin this service boundary so they cannot silently
+# regress to default full-profile selection.
+def test_fitting_forwards_explicit_profile_names_to_analysis_request(
+    tmp_path: Path,
+) -> None:
+    value = _project(tmp_path)
+    prepared = fitting.prepare_dataset_fit(value, "curve", value.master_seed)
+    search = SimpleNamespace(
+        best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None)
+    )
+    analyzed = final_fit_result()
+    harness = _FittingHarness(search, None, search, analyzed)
+    requested = (
+        "component.0.thickness_a",
+        "component.0.density_scale",
+    )
+
+    result = fit_prepared_dataset_phase(
+        prepared,
+        profile_names=requested,
+        fit_search_request=FitSearchRequest,
+        run_fit_search=harness.run_search,
+        recover_profile_basin=harness.recover,
+        continue_profile_basin=harness.continue_search,
+        analysis_request=harness.analysis_request,
+        run_analysis=harness.run_analysis,
+        task_runner_factory=_RecordingTaskRunner,
+    )
+
+    assert result is analyzed
+    request_call = next(call for call in harness.calls if call[0] == "analysis-request")
+    assert request_call == (
+        "analysis-request",
+        prepared.dataset_id,
+        prepared.problem,
+        search,
+        requested,
+    )
 
 
 def test_joint_fit_reports_finalizing_after_stage_e() -> None:

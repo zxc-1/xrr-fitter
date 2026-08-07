@@ -18,6 +18,7 @@ from tests.support.synthetic_recovery_layer_cases import (
 from tests.support.synthetic_recovery_model import SyntheticCase
 from tests.support.synthetic_recovery_model_error_cases import _model_error_cases
 from tests.support.synthetic_recovery_runs import (
+    _parallel_case_outcomes,
     _run_slow_ambiguous_corpus,
     _run_slow_model_error_corpus,
     _run_slow_statistical_recovery_corpus,
@@ -71,9 +72,25 @@ def _partition_cases(
 def run_corpus(cases: tuple[SyntheticCase, ...]) -> CorpusReport:
     values = _validated_cases(cases)
     recovery, ambiguous, model_error = _partition_cases(values)
-    _run_slow_statistical_recovery_corpus(recovery)
-    _run_slow_ambiguous_corpus(ambiguous)
-    _run_slow_model_error_corpus(model_error)
+    outcomes = _parallel_case_outcomes(values)
+    recovery_outcomes = tuple(
+        outcome
+        for case, outcome in zip(values, outcomes, strict=True)
+        if case.category not in {"ambiguous", "model_error"}
+    )
+    ambiguous_outcomes = tuple(
+        outcome
+        for case, outcome in zip(values, outcomes, strict=True)
+        if case.category == "ambiguous"
+    )
+    model_error_outcomes = tuple(
+        outcome
+        for case, outcome in zip(values, outcomes, strict=True)
+        if case.category == "model_error"
+    )
+    _run_slow_statistical_recovery_corpus(recovery, recovery_outcomes)
+    _run_slow_ambiguous_corpus(ambiguous, ambiguous_outcomes)
+    _run_slow_model_error_corpus(model_error, model_error_outcomes)
     counts = Counter(case.category for case in values)
     return CorpusReport(
         "xrr-r23-synthetic-recovery-v1",

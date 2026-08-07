@@ -50,7 +50,7 @@ analytic traversal, whose primal return already contains the modeled values
 needed for the residual. A one-entry callback cache binds that pair to the last
 immutable copy of the unit vector. Trial vectors still trigger fresh physics,
 while the immediately following Jacobian callback reuses only the matching
-pair. The cache belongs to one optimizer invocation and is never global, shared
+pair. Cache state is isolated per calling thread and is never global, shared
 between fits, serialized, or used as a fallback for a different vector.
 """
 
@@ -60,6 +60,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
 from math import isfinite, log
+from threading import local
 
 import numpy as np
 
@@ -2017,21 +2018,19 @@ def cached_least_squares_callbacks(
     helper controls callback lifetime and equality only; it neither catches
     evaluation failures nor manufactures residual or Jacobian values.
     """
-    cached_unit: np.ndarray | None = None
-    cached_values: tuple[np.ndarray, np.ndarray] | None = None
+    state = local()
 
     def evaluate(unit: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        nonlocal cached_unit, cached_values
         value = np.asarray(unit, dtype=float)
+        cached_unit = getattr(state, "unit", None)
         if cached_unit is None or not np.array_equal(value, cached_unit):
             residual, jacobian = system(value)
-            cached_unit = np.array(value, copy=True)
-            cached_values = (
+            state.unit = np.array(value, copy=True)
+            state.values = (
                 np.array(residual, dtype=float, copy=True),
                 np.array(jacobian, dtype=float, copy=True),
             )
-        assert cached_values is not None
-        return cached_values
+        return state.values
 
     def selected(unit: np.ndarray, index: int) -> np.ndarray:
         return np.array(evaluate(unit)[index], copy=True)

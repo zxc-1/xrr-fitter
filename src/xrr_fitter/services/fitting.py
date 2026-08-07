@@ -147,6 +147,7 @@ def fit_prepared_dataset(
     cancelled: CancellationProbe | None = None,
     checkpoint: Callable[[FitCheckpoint], None] | None = None,
     local_workers: int | None = None,
+    profile_names: tuple[str, ...] | None = None,
 ) -> FitResult:
     """Run one independent search, optional recovery, and final analysis."""
     return _base.fit_prepared_dataset(
@@ -155,6 +156,7 @@ def fit_prepared_dataset(
         cancelled=cancelled,
         checkpoint=checkpoint,
         local_workers=local_workers,
+        profile_names=profile_names,
         fit_search_request=FitSearchRequest,
         run_fit_search=run_fit_search,
         recover_profile_basin=recover_profile_basin,

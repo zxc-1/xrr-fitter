@@ -12,7 +12,9 @@ import numpy as np
 from tests.support.synthetic_recovery_metrics import (
     _MetricAccumulator,
     _best_candidate,
+    _metric_profile_requests,
     _metric_error,
+    _metric_truth_is_eligible,
     _values_by_name,
 )
 from tests.support.synthetic_recovery_model import SyntheticCase, _option_dict
@@ -20,6 +22,7 @@ from tests.support.synthetic_recovery_runtime import _fit_case
 from xrr_fitter.analysis.diagnostics import residual_autocorrelation_flag
 from xrr_fitter.model.analysis import ConfidenceClass
 from xrr_fitter.model.data import PreparedData
+from xrr_fitter.model.structure import GradientLayerSpec, PeriodicBlock
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +38,20 @@ class _CaseOutcome:
 
 
 WORKER_CASES: dict[str, SyntheticCase] | None = None
+WORKER_LOCAL_WORKERS = 4
+
+
+def _case_profile_names(case: SyntheticCase) -> tuple[str, ...] | None:
+    """Request only the profiles consumed by recovery metric assertions."""
+    if case.category in {"ambiguous", "model_error"}:
+        return None
+    names = (
+        name
+        for metric in case.metrics
+        if _metric_truth_is_eligible(metric)
+        for name, _truth in _metric_profile_requests(metric)
+    )
+    return tuple(dict.fromkeys(names))
 
 
 def _assert_fit_output_contract(case: SyntheticCase, result, data: PreparedData) -> None:
@@ -104,15 +121,23 @@ def _assert_mixed_mono_exposes_mismatch(case: SyntheticCase, result, data: Prepa
     assert result.confidence is not ConfidenceClass.TRUSTED or acf_flag or uncertainty_flag, evidence
 
 
-def _initialize_worker_cases() -> None:
+def _initialize_worker_cases(local_workers: int = 4) -> None:
     from tests.support.synthetic_recovery import build_corpus
 
-    global WORKER_CASES
+    valid_workers = (
+        isinstance(local_workers, int)
+        and not isinstance(local_workers, bool)
+        and local_workers >= 1
+    )
+    if not valid_workers:
+        raise ValueError("local_workers must be a positive integer")
+    global WORKER_CASES, WORKER_LOCAL_WORKERS
     cases = build_corpus()
     cases_by_id = {case.case_id: case for case in cases}
     if len(cases_by_id) != len(cases):
         raise ValueError("synthetic worker corpus contains duplicate case IDs")
     WORKER_CASES = cases_by_id
+    WORKER_LOCAL_WORKERS = local_workers
 
 
 def _metric_outcome(case: SyntheticCase, result, data: PreparedData) -> _CaseOutcome:
@@ -192,7 +217,11 @@ def _fit_worker_case(case_id: str) -> _CaseOutcome:
     case = WORKER_CASES[case_id]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        result, data = _fit_case(case)
+        result, data = _fit_case(
+            case,
+            local_workers=WORKER_LOCAL_WORKERS,
+            profile_names=_case_profile_names(case),
+        )
     _assert_fit_output_contract(case, result, data)
     if case.category == "ambiguous":
         return _ambiguous_outcome(case, result)
@@ -201,16 +230,49 @@ def _fit_worker_case(case_id: str) -> _CaseOutcome:
     return _recovery_outcome(case, result, data)
 
 
+def _component_layer_work(component: object) -> int:
+    if isinstance(component, PeriodicBlock):
+        return len(component.layers) * component.repeats
+    if isinstance(component, GradientLayerSpec):
+        return ceil(component.thickness_a / component.microslab_max_a)
+    return 1
+
+
+def _case_work_estimate(case: SyntheticCase) -> int:
+    """Estimate optical work only to front-load likely stragglers."""
+    wavelengths = 2 if case.fit_beam.kind == "mixed_kalpha" else 1
+    layers = sum(
+        _component_layer_work(component)
+        for component in case.fit_structure.components
+    )
+    return int(case.theta_deg.size) * wavelengths * max(1, layers)
+
+
 def _parallel_case_outcomes(cases: tuple[SyntheticCase, ...]) -> tuple[_CaseOutcome, ...]:
-    workers = min(5, os.cpu_count() or 1)
+    cpu_count = max(1, os.cpu_count() or 1)
+    workers = min(5, cpu_count)
+    local_workers = min(4, max(1, cpu_count // workers))
     context = multiprocessing.get_context("spawn")
-    case_ids = (case.case_id for case in cases)
+    scheduled = tuple(
+        sorted(
+            enumerate(cases),
+            key=lambda item: (-_case_work_estimate(item[1]), item[0]),
+        )
+    )
+    case_ids = (case.case_id for _index, case in scheduled)
     with ProcessPoolExecutor(
         max_workers=workers,
         mp_context=context,
         initializer=_initialize_worker_cases,
+        initargs=(local_workers,),
     ) as executor:
-        return tuple(executor.map(_fit_worker_case, case_ids, chunksize=1))
+        completed = tuple(executor.map(_fit_worker_case, case_ids, chunksize=1))
+    ordered: list[_CaseOutcome | None] = [None] * len(cases)
+    for (index, _case), outcome in zip(scheduled, completed, strict=True):
+        ordered[index] = outcome
+    if any(outcome is None for outcome in ordered):
+        raise RuntimeError("synthetic worker outcomes are incomplete")
+    return tuple(outcome for outcome in ordered if outcome is not None)
 
 
 def _assert_ordered_outcome(case: SyntheticCase, outcome: _CaseOutcome) -> None:
@@ -228,12 +290,24 @@ def _merge_metric_outcome(accumulator: _MetricAccumulator, outcome: _CaseOutcome
     accumulator.open_interval_total += outcome.open_interval_total
 
 
-def _run_slow_statistical_recovery_corpus(cases: tuple[SyntheticCase, ...]) -> None:
+def _case_outcomes(
+    cases: tuple[SyntheticCase, ...],
+    outcomes: tuple[_CaseOutcome, ...] | None,
+) -> tuple[_CaseOutcome, ...]:
+    values = _parallel_case_outcomes(cases) if outcomes is None else tuple(outcomes)
+    if len(values) != len(cases):
+        raise ValueError("synthetic worker outcomes must align with requested cases")
+    return values
+
+
+def _run_slow_statistical_recovery_corpus(
+    cases: tuple[SyntheticCase, ...],
+    outcomes: tuple[_CaseOutcome, ...] | None = None,
+) -> None:
     accumulator = _MetricAccumulator()
     recovery_count = 0
     mixed_mono_count = 0
-    outcomes = _parallel_case_outcomes(cases)
-    for case, outcome in zip(cases, outcomes, strict=True):
+    for case, outcome in zip(cases, _case_outcomes(cases, outcomes), strict=True):
         _assert_ordered_outcome(case, outcome)
         if case.expectation == "mixed_mono_mismatch":
             mixed_mono_count += 1
@@ -245,10 +319,12 @@ def _run_slow_statistical_recovery_corpus(cases: tuple[SyntheticCase, ...]) -> N
     accumulator.assert_thresholds()
 
 
-def _run_slow_ambiguous_corpus(cases: tuple[SyntheticCase, ...]) -> None:
+def _run_slow_ambiguous_corpus(
+    cases: tuple[SyntheticCase, ...],
+    outcomes: tuple[_CaseOutcome, ...] | None = None,
+) -> None:
     downgraded = 0
-    outcomes = _parallel_case_outcomes(cases)
-    for case, outcome in zip(cases, outcomes, strict=True):
+    for case, outcome in zip(cases, _case_outcomes(cases, outcomes), strict=True):
         _assert_ordered_outcome(case, outcome)
         downgraded += int(outcome.downgraded)
     assert downgraded >= ceil(0.90 * len(cases)), {
@@ -257,11 +333,13 @@ def _run_slow_ambiguous_corpus(cases: tuple[SyntheticCase, ...]) -> None:
     }
 
 
-def _run_slow_model_error_corpus(cases: tuple[SyntheticCase, ...]) -> None:
+def _run_slow_model_error_corpus(
+    cases: tuple[SyntheticCase, ...],
+    outcomes: tuple[_CaseOutcome, ...] | None = None,
+) -> None:
     production_acf_downgraded = 0
     raw_acf_flags = 0
-    outcomes = _parallel_case_outcomes(cases)
-    for case, outcome in zip(cases, outcomes, strict=True):
+    for case, outcome in zip(cases, _case_outcomes(cases, outcomes), strict=True):
         _assert_ordered_outcome(case, outcome)
         raw_acf_flags += int(outcome.raw_acf_flag)
         production_acf_downgraded += int(outcome.production_acf_downgraded)

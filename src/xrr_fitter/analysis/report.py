@@ -37,7 +37,11 @@ from xrr_fitter.analysis.diagnostics import (
     ordered_fit_residuals,
     residual_autocorrelation_flag,
 )
-from xrr_fitter.analysis.profiles import build_problem_profiles, select_profile_names
+from xrr_fitter.analysis.profiles import (
+    _evidence_focused_layout,
+    build_problem_profiles,
+    select_profile_names,
+)
 from xrr_fitter.model.analysis import BootstrapResult, FitResult, UncertaintyReport
 from xrr_fitter.model.fitting import (
     FitEvaluationContext,
@@ -350,7 +354,7 @@ def _selected_profile_names(
     if requested is not None:
         return tuple(requested)
     preliminary = None
-    if len(problem.variables) > 12:
+    if _evidence_focused_layout(problem):
         preliminary = build_uncertainty_report(
             problem,
             candidates,

@@ -150,12 +150,54 @@ def test_recovery_metric_cases_are_deterministic_and_family_complete() -> None:
     )
 
 
+def test_statistical_recovery_requests_only_metric_profile_evidence() -> None:
+    from tests.support.synthetic_recovery import build_corpus
+
+    cases = build_corpus()
+    by_category = {case.category: case for case in cases}
+
+    assert synthetic_recovery_runs._case_profile_names(
+        by_category["single_layer"]
+    ) == (
+        "component.0.thickness_a",
+        "component.0.density_scale",
+        "component.0.roughness_a",
+    )
+    assert synthetic_recovery_runs._case_profile_names(
+        by_category["periodic_mosi"]
+    ) == (
+        "component.0.period_a",
+        "component.0.layer.0.fraction",
+        "component.0.layer.0.roughness_a",
+        "component.0.layer.1.roughness_a",
+    )
+    assert synthetic_recovery_runs._case_profile_names(
+        by_category["instrument_effects"]
+    ) == (
+        "component.0.thickness_a",
+        "component.0.density_scale",
+        "component.0.roughness_a",
+        "instrument.angle_offset_deg",
+        "instrument.scale",
+        "instrument.background",
+        "instrument.relative_sigma",
+    )
+    assert synthetic_recovery_runs._case_profile_names(
+        by_category["ambiguous"]
+    ) is None
+    assert synthetic_recovery_runs._case_profile_names(
+        by_category["model_error"]
+    ) is None
+
+
 def test_corpus_fit_dispatch_is_spawned_bounded_and_ordered(monkeypatch) -> None:
+    from tests.support.synthetic_recovery import build_corpus
+
     observed: dict[str, object] = {}
 
     class FakeExecutor:
-        def __init__(self, *, max_workers, mp_context, initializer) -> None:
-            observed["setup"] = (max_workers, mp_context, initializer)
+        def __init__(self, *, max_workers, mp_context, initializer, initargs) -> None:
+            observed["setup"] = (max_workers, mp_context, initializer, initargs)
 
         def __enter__(self):
             return self
@@ -165,7 +207,10 @@ def test_corpus_fit_dispatch_is_spawned_bounded_and_ordered(monkeypatch) -> None
 
         def map(self, function, case_ids, *, chunksize):
             observed["map"] = (function, tuple(case_ids), chunksize)
-            return ("first-outcome", "second-outcome")
+            return tuple(
+                f"outcome:{case_id}"
+                for case_id in observed["map"][1]
+            )
 
     monkeypatch.setattr(synthetic_recovery_runs, "ProcessPoolExecutor", FakeExecutor)
     monkeypatch.setattr(synthetic_recovery_runs.os, "cpu_count", lambda: 10)
@@ -174,18 +219,91 @@ def test_corpus_fit_dispatch_is_spawned_bounded_and_ordered(monkeypatch) -> None
         "get_context",
         lambda name: f"{name}-context",
     )
-    cases = (SimpleNamespace(case_id="case-b"), SimpleNamespace(case_id="case-a"))
+    corpus = build_corpus()
+    single = next(case for case in corpus if case.case_id == "single-11000")
+    periodic_10 = next(
+        case for case in corpus if case.case_id == "periodic-13000-n10"
+    )
+    periodic_100 = next(
+        case for case in corpus if case.case_id == "periodic-13019-n100"
+    )
+    cases = (single, periodic_10, periodic_100)
 
     outcomes = synthetic_recovery_runs._parallel_case_outcomes(cases)
 
-    assert outcomes == ("first-outcome", "second-outcome")
+    assert outcomes == tuple(f"outcome:{case.case_id}" for case in cases)
     assert observed["setup"] == (
         5,
         "spawn-context",
         synthetic_recovery_runs._initialize_worker_cases,
+        (2,),
     )
     assert observed["map"] == (
         synthetic_recovery_runs._fit_worker_case,
-        ("case-b", "case-a"),
+        (
+            periodic_100.case_id,
+            periodic_10.case_id,
+            single.case_id,
+        ),
         1,
     )
+
+
+def test_statistical_corpus_reuses_one_parallel_dispatch_across_partitions(
+    monkeypatch,
+) -> None:
+    from tests.support import synthetic_recovery
+
+    cases = synthetic_recovery.build_corpus()
+    outcomes = tuple(
+        synthetic_recovery_runs._CaseOutcome(case.case_id)
+        for case in cases
+    )
+    dispatches: list[tuple[str, ...]] = []
+    partitions: dict[str, tuple[tuple[str, ...], tuple[str, ...] | None]] = {}
+
+    def parallel(requested):
+        dispatches.append(tuple(case.case_id for case in requested))
+        return outcomes
+
+    def observe_partition(name):
+        def observed(requested, requested_outcomes=None) -> None:
+            partitions[name] = (
+                tuple(case.case_id for case in requested),
+                (
+                    None
+                    if requested_outcomes is None
+                    else tuple(outcome.case_id for outcome in requested_outcomes)
+                ),
+            )
+
+        return observed
+
+    monkeypatch.setattr(
+        synthetic_recovery,
+        "_parallel_case_outcomes",
+        parallel,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        synthetic_recovery,
+        "_run_slow_statistical_recovery_corpus",
+        observe_partition("recovery"),
+    )
+    monkeypatch.setattr(
+        synthetic_recovery,
+        "_run_slow_ambiguous_corpus",
+        observe_partition("ambiguous"),
+    )
+    monkeypatch.setattr(
+        synthetic_recovery,
+        "_run_slow_model_error_corpus",
+        observe_partition("model_error"),
+    )
+
+    report = synthetic_recovery.run_corpus(cases)
+
+    assert report.status == "PASS"
+    assert dispatches == [tuple(case.case_id for case in cases)]
+    for case_ids, outcome_ids in partitions.values():
+        assert outcome_ids == case_ids

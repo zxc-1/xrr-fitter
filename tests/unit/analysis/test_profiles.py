@@ -172,6 +172,43 @@ def test_profile_uses_supplied_residual_jacobian_for_nuisance_optimization() -> 
     assert calls > 0
 
 
+# Profile closure resolves objective deltas at the 1e-5 scale. Precision below
+# 1e-6 did not change closure decisions but multiplied periodic nuisance work,
+# so both residual least-squares paths must retain the analysis tolerance.
+def test_profile_residual_solvers_use_analysis_tolerance(monkeypatch) -> None:
+    module = _api()
+    calls: list[tuple[tuple[int, ...], float, float, float]] = []
+
+    def solve(_residual, start, **options):
+        value = np.asarray(start, dtype=float)
+        calls.append(
+            (
+                value.shape,
+                options["ftol"],
+                options["xtol"],
+                options["gtol"],
+            )
+        )
+        return SimpleNamespace(x=value)
+
+    monkeypatch.setattr(module, "least_squares", solve)
+    center = np.asarray([0.5, 0.5])
+    profile_parameter(
+        lambda unit: float((unit[0] - 0.8) ** 2 + (unit[1] - 0.5) ** 2),
+        center,
+        parameter_index=0,
+        steps=9,
+        residual=lambda unit: np.asarray([unit[0] - 0.8, unit[1] - 0.5]),
+        residual_jacobian=lambda _unit: np.eye(2),
+    )
+
+    assert {shape for shape, *_tolerances in calls} == {(1,), (2,)}
+    assert {
+        (ftol, xtol, gtol)
+        for _shape, ftol, xtol, gtol in calls
+    } == {(1e-6, 1e-6, 1e-6)}
+
+
 def test_profile_tolerates_physically_invalid_parameter_boundary() -> None:
     center = np.asarray([0.5, 0.5])
 
@@ -397,6 +434,41 @@ def test_profile_selection_covers_all_small_problems_and_required_large_paramete
     assert select_profile_names(small) == (
         "component.0.thickness_a",
         "component.0.density_scale",
+    )
+
+
+def test_profile_selection_treats_twelve_parameter_layout_as_evidence_focused() -> None:
+    names = (
+        "component.0.thickness_a",
+        "component.0.density_scale",
+        "component.0.roughness_a",
+        "backing.roughness_a",
+        "instrument.angle_offset_deg",
+        "instrument.scale",
+        "instrument.background",
+        "instrument.relative_sigma",
+        "nuisance.0",
+        "nuisance.1",
+        "nuisance.2",
+        "nuisance.3",
+    )
+    problem = SimpleNamespace(
+        variables=tuple(SimpleNamespace(name=name) for name in names),
+    )
+    preliminary = SimpleNamespace(
+        boundary_hits=("instrument.scale",),
+        strong_correlations=(("nuisance.0", "nuisance.1", 0.99),),
+    )
+
+    assert select_profile_names(problem, preliminary) == (
+        "component.0.thickness_a",
+        "component.0.density_scale",
+        "component.0.roughness_a",
+        "backing.roughness_a",
+        "instrument.angle_offset_deg",
+        "instrument.scale",
+        "nuisance.0",
+        "nuisance.1",
     )
 
 

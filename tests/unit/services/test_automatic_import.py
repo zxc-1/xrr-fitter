@@ -67,6 +67,49 @@ def test_preview_accepts_single_layer_and_reverses_multilayer_once(
     )
 
 
+def test_preview_uses_parent_folder_stack_for_exported_point_files(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "S300-1-260424-2 CrSiC+SiCMo+TaN"
+    paths = (
+        _curve(folder / "S300-1-260424-2 W2_exported.xy"),
+        _curve(folder / "S300-1-260424-2 W02_exported.xy"),
+    )
+
+    preview = preview_import_batch(paths, _preset(), import_batch_id="batch-folder")
+
+    assert tuple(
+        (
+            row.dataset_id_stem,
+            row.layers_backing_to_surface,
+            row.requires_substrate_choice,
+        )
+        for row in preview.files
+    ) == (
+        (
+            "S300-1-260424-2 W2",
+            ("CrSiC", "SiCMo", "TaN"),
+            False,
+        ),
+        (
+            "S300-1-260424-2 W02",
+            ("CrSiC", "SiCMo", "TaN"),
+            False,
+        ),
+    )
+
+    result = import_dataset_batch(new_project(), preview)
+
+    assert result.imported_dataset_ids == (
+        "S300-1-260424-2 W2",
+        "S300-1-260424-2 W02",
+    )
+    assert tuple(
+        tuple(layer.name for layer in dataset.structure.components[:3])
+        for dataset in result.updated_project.datasets
+    ) == (("TaN", "SiCMo", "CrSiC"),) * 2
+
+
 def test_leftmost_si_requests_one_substrate_choice_per_structure_group(
     tmp_path: Path,
 ) -> None:
