@@ -47,7 +47,7 @@ def test_pr_workflow_runs_only_standard_modes() -> None:
     assert "release" not in commands
 
 
-def test_pr_workflow_checks_out_without_credentials() -> None:
+def test_pr_workflow_checks_out_full_history_without_credentials() -> None:
     checkout_steps = [
         step
         for job in _payload()["jobs"].values()
@@ -57,7 +57,7 @@ def test_pr_workflow_checks_out_without_credentials() -> None:
     assert len(checkout_steps) == 1
     assert checkout_steps[0]["with"] == {
         "persist-credentials": False,
-        "fetch-depth": 1,
+        "fetch-depth": 0,
     }
 
 
