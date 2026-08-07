@@ -70,8 +70,8 @@ from xrr_fitter.model.fitting import FitEvaluationContext
 Scalar = Callable[[np.ndarray], float]
 Vector = Callable[[np.ndarray], np.ndarray]
 # Profile closure never resolves an objective delta below 1e-5.
-_PROFILE_SOLVER_TOLERANCE = 1e-6
-_EXHAUSTIVE_PROFILE_LIMIT = 11
+PROFILE_SOLVER_TOLERANCE = 1e-6
+EXHAUSTIVE_PROFILE_LIMIT = 11
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,9 +319,9 @@ def _residual_nuisance(
         jac=jacobian,
         bounds=(0.0, 1.0),
         loss=residual_loss,
-        ftol=_PROFILE_SOLVER_TOLERANCE,
-        xtol=_PROFILE_SOLVER_TOLERANCE,
-        gtol=_PROFILE_SOLVER_TOLERANCE,
+        ftol=PROFILE_SOLVER_TOLERANCE,
+        xtol=PROFILE_SOLVER_TOLERANCE,
+        gtol=PROFILE_SOLVER_TOLERANCE,
         x_scale="jac",
         max_nfev=max_nfev,
     )
@@ -573,9 +573,9 @@ def _solve_recentered_profile(
         bounds=(0.0, 1.0),
         jac=jacobian,
         loss=residual_loss,
-        ftol=_PROFILE_SOLVER_TOLERANCE,
-        xtol=_PROFILE_SOLVER_TOLERANCE,
-        gtol=_PROFILE_SOLVER_TOLERANCE,
+        ftol=PROFILE_SOLVER_TOLERANCE,
+        xtol=PROFILE_SOLVER_TOLERANCE,
+        gtol=PROFILE_SOLVER_TOLERANCE,
         x_scale="jac",
         max_nfev=max_nfev,
     )
@@ -1108,7 +1108,7 @@ def _degeneracy_profile_names(warnings: tuple[str, ...]) -> set[str]:
 
 
 def _evidence_focused_layout(problem: object) -> bool:
-    return len(problem.variables) > _EXHAUSTIVE_PROFILE_LIMIT
+    return len(problem.variables) > EXHAUSTIVE_PROFILE_LIMIT
 
 
 def select_profile_names(
