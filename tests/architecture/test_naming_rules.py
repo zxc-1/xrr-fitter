@@ -265,7 +265,7 @@ def test_python_symbols_follow_r23_rules() -> None:
 
 
 def test_no_forwarding_or_compatibility_module_name_exists() -> None:
-    names = {path.name for path in ROOT.rglob("*.py")}
+    names = {path.name for path in _radon_python_files()}
     assert names.isdisjoint({"compat.py", "xrr_core.py", "xrr_app.py"})
 
 
@@ -342,6 +342,9 @@ def test_naming_scans_exactly_the_same_python_files_as_radon() -> None:
 
 
 def test_root_conftest_is_the_only_conftest() -> None:
-    assert {path.relative_to(ROOT).as_posix() for path in ROOT.rglob("conftest.py")} == {
-        "tests/conftest.py"
+    conftests = {
+        path.relative_to(ROOT).as_posix()
+        for path in _radon_python_files()
+        if path.name == "conftest.py"
     }
+    assert conftests == {"tests/conftest.py"}
