@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-CHECKOUT = "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+CHECKOUT = "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
 DOWNLOAD_ARTIFACT = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
 
 
