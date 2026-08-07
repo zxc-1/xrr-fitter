@@ -72,6 +72,37 @@ def test_discovery_rejects_wrong_owner_and_ignored_python(
     assert kind in {issue.kind for issue in issues}
 
 
+def test_discovery_skips_ignored_directories_outside_managed_roots(
+    tmp_path: Path, load_tool_module
+) -> None:
+    module = load_tool_module("check_radon")
+    root = _repo(tmp_path)
+    _write(root, ".gitignore", ".venv/\n")
+    _write(root, ".venv/lib/site-packages/vendored.py")
+    paths, issues = module.discover_python_files(root)
+    assert {path.as_posix() for path in paths} == {
+        "examples/a.py",
+        "src/pkg/a.py",
+        "tests/test_a.py",
+        "tools/a.py",
+    }
+    assert issues == ()
+
+
+def test_discovery_still_reports_stray_source_in_a_tracked_subdirectory(
+    tmp_path: Path, load_tool_module
+) -> None:
+    module = load_tool_module("check_radon")
+    root = _repo(tmp_path)
+    _write(root, ".gitignore", ".venv/\n")
+    _write(root, "scripts/nested/stray.py")
+    paths, issues = module.discover_python_files(root)
+    assert "scripts/nested/stray.py" in {path.as_posix() for path in paths}
+    assert [(issue.kind, issue.path) for issue in issues] == [
+        ("ownership", "scripts/nested/stray.py")
+    ]
+
+
 def test_average_a_with_highest_b_passes_and_reports_ranks(load_tool_module) -> None:
     module = load_tool_module("check_radon")
     report = module.evaluate_metrics(
