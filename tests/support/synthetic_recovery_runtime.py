@@ -142,7 +142,12 @@ def _prepared_case_data(case: SyntheticCase, observed: np.ndarray) -> PreparedDa
     )
 
 
-def _fit_case(case: SyntheticCase):
+def _fit_case(
+    case: SyntheticCase,
+    *,
+    local_workers: int | None = None,
+    profile_names: tuple[str, ...] | None = None,
+):
     observed = _generate_case_intensity(case)
     data = _prepared_case_data(case, observed)
     problem = compile_fit_problem(
@@ -157,5 +162,9 @@ def _fit_case(case: SyntheticCase):
         SimpleNamespace(checkpoint=None),
         problem,
     )
-    result = fit_prepared_dataset(prepared)
+    result = fit_prepared_dataset(
+        prepared,
+        local_workers=local_workers,
+        profile_names=profile_names,
+    )
     return result, data

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from threading import Barrier
 from typing import get_type_hints
 
 import numpy as np
@@ -179,6 +181,28 @@ def test_cached_solver_callbacks_evaluate_one_parameter_vector_once() -> None:
 
     assert len(calls) == 2
     np.testing.assert_array_equal(calls, (first, second))
+
+
+def test_cached_solver_callbacks_isolate_concurrent_optimizer_threads() -> None:
+    calls: list[np.ndarray] = []
+    barrier = Barrier(2)
+
+    def system(unit: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        calls.append(np.array(unit, copy=True))
+        return unit + 1.0, np.diag(unit + 2.0)
+
+    residual, jacobian = evaluation.cached_least_squares_callbacks(system)
+
+    def evaluate(unit: np.ndarray) -> None:
+        np.testing.assert_array_equal(residual(unit), unit + 1.0)
+        barrier.wait()
+        np.testing.assert_array_equal(jacobian(unit), np.diag(unit + 2.0))
+
+    units = (np.asarray([0.2, 0.4]), np.asarray([0.3, 0.5]))
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        tuple(executor.map(evaluate, units))
+
+    assert len(calls) == 2
 
 
 def test_shared_problem_log_probability_uses_the_soft_l1_data_likelihood() -> None:

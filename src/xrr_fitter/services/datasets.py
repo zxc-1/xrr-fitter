@@ -137,6 +137,30 @@ def _strict_filename_materials(stem: str) -> tuple[str, tuple[str, ...]]:
     return sample_id, tokens
 
 
+def _strict_source_materials(path: Path) -> tuple[str, tuple[str, ...]]:
+    """Prefer a matching parent stack while preserving the wafer-point ID.
+
+    Only ``W<digits>_exported`` loses the transport suffix. Other stems retain
+    the strict filename parser so malformed or unrelated names still fail.
+    """
+    try:
+        folder_sample_id, folder_tokens = _strict_filename_materials(path.parent.name)
+    except ValueError:
+        pass
+    else:
+        if path.stem.startswith(f"{folder_sample_id} "):
+            point_stem = path.stem[len(folder_sample_id) + 1 :]
+            exported_suffix = "_exported"
+            if (
+                point_stem.startswith("W")
+                and point_stem.endswith(exported_suffix)
+                and point_stem[1 : -len(exported_suffix)].isdigit()
+            ):
+                point_stem = point_stem[: -len(exported_suffix)]
+            return f"{folder_sample_id} {point_stem}", folder_tokens
+    return _strict_filename_materials(path.stem)
+
+
 def _substrate_group_id(tokens: tuple[str, ...]) -> str:
     encoded = json.dumps(tokens, ensure_ascii=True, separators=(",", ":")).encode("ascii")
     return sha256(encoded).hexdigest()[:20]
@@ -147,7 +171,7 @@ def preview_import_batch(
     preset: MeasurementPreset,
     import_batch_id: str | None = None,
 ) -> ImportBatchPreview:
-    """Parse a filename batch without reading sources or mutating a project."""
+    """Parse filename or matching parent-folder stacks without reading sources."""
     if not isinstance(preset, MeasurementPreset):
         raise TypeError("preset must be MeasurementPreset")
     batch_id = secrets.token_hex(16) if import_batch_id is None else import_batch_id
@@ -157,7 +181,7 @@ def preview_import_batch(
     for declaration in paths:
         path = Path(declaration)
         try:
-            dataset_id_stem, tokens = _strict_filename_materials(path.stem)
+            dataset_id_stem, tokens = _strict_source_materials(path)
         except ValueError as error:
             files.append(
                 ImportFilePreview(
@@ -175,7 +199,7 @@ def preview_import_batch(
         files.append(
             ImportFilePreview(
                 str(path),
-                path.stem,
+                dataset_id_stem,
                 dataset_id_stem,
                 tokens,
                 group_id,

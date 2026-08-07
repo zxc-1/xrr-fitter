@@ -331,6 +331,61 @@ def test_analysis_can_skip_bootstrap_and_profile_construction(
     assert result.uncertainty.profiles == ()
 
 
+# Twelve variables used to sit on the exhaustive-profile boundary. Building a
+# zero-profile preliminary report first is what preserves evidence selection
+# while avoiding a full periodic profile scan.
+def test_twelve_parameter_default_profiles_use_preliminary_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _api()
+    problem = SimpleNamespace(
+        variables=tuple(
+            SimpleNamespace(name=f"parameter.{index}")
+            for index in range(12)
+        )
+    )
+    preliminary = object()
+    observed: dict[str, object] = {}
+
+    def build(problem_value, candidates, **options):
+        observed["build"] = (problem_value, candidates, options)
+        return preliminary
+
+    def select(problem_value, report, **options):
+        observed["select"] = (problem_value, report, options)
+        return ("parameter.0",)
+
+    monkeypatch.setattr(module, "build_uncertainty_report", build)
+    monkeypatch.setattr(module, "select_profile_names", select)
+    candidates = (object(),)
+    bootstrap = object()
+
+    selected = module._selected_profile_names(
+        problem,
+        candidates,
+        None,
+        bootstrap,
+        ("warning",),
+        None,
+    )
+
+    assert selected == ("parameter.0",)
+    assert observed["build"] == (
+        problem,
+        candidates,
+        {
+            "profile_names": (),
+            "bootstrap": bootstrap,
+            "cancelled": None,
+        },
+    )
+    assert observed["select"] == (
+        problem,
+        preliminary,
+        {"degeneracy_warnings": ("warning",)},
+    )
+
+
 @pytest.mark.parametrize("drift", ["structure", "data"], ids=["structure", "data"])
 def test_analysis_request_rejects_search_result_from_another_context(drift: str) -> None:
     problem = _problem()

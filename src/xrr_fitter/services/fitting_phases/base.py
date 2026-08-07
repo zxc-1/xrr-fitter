@@ -243,6 +243,7 @@ def fit_prepared_dataset(
     cancelled: CancellationProbe | None = None,
     checkpoint: Callable[[FitCheckpoint], None] | None = None,
     local_workers: int | None = None,
+    profile_names: tuple[str, ...] | None = None,
     fit_search_request: Callable,
     run_fit_search: Callable,
     recover_profile_basin: Callable,
@@ -268,7 +269,12 @@ def fit_prepared_dataset(
             continue_profile_basin=continue_profile_basin,
         )
         return run_analysis(
-            analysis_request(prepared.dataset_id, prepared.problem, search),
+            analysis_request(
+                prepared.dataset_id,
+                prepared.problem,
+                search,
+                profile_names=profile_names,
+            ),
             cancelled=cancelled,
             progress=progress,
             task_runner=runner.run,
