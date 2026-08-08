@@ -109,7 +109,10 @@ EXPECTED_ACTIONS = {
 def _assert_workspace_layout(window) -> None:
     assert window.objectName() == "mainWindow"
     assert len(window.docks) == 5
-    assert window.centralWidget() is window.plot_panel
+    # Guidance opens first and shares the central slot with the plot; the expert
+    # surface is what this workspace contract describes.
+    window.set_guidance_visible(False)
+    assert window.central_stack.currentWidget() is window.plot_panel
     assert window.fit_panel.parent() is not None
     assert window.result_panel.parent() is not None
 

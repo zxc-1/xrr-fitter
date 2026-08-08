@@ -165,6 +165,17 @@ def _install_view_menu(window: QWidget, bar: QMenuBar) -> None:
             menu.addAction(_view_action(window, group, key))
     _install_dock_actions(window, menu)
     menu.addSeparator()
+    guidance = _action(
+        window,
+        "guidanceModeAction",
+        "引导模式",
+        window.set_guidance_visible,
+        checkable=True,
+    )
+    guidance.setChecked(window.guidance_is_visible())
+    window.chrome_actions["guidanceModeAction"] = guidance
+    menu.addAction(guidance)
+    menu.addSeparator()
     expert = _action(
         window,
         "expertModeAction",

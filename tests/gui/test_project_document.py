@@ -194,8 +194,10 @@ def test_main_window_docks_every_side_panel_around_the_plot(qtbot) -> None:
     qtbot.addWidget(window)
     window.show()
 
+    window.set_guidance_visible(False)
+
     assert window.findChild(QSplitter, "workspaceSplitter") is None
-    assert window.centralWidget() is window.plot_panel
+    assert window.central_stack.currentWidget() is window.plot_panel
     assert tuple(window.docks) == (
         "dataDock",
         "structureDock",

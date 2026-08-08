@@ -11,12 +11,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from xrr_fitter.gui.data.panel import DataPanel
+from xrr_fitter.gui.guidance.panel import GuidancePanel
 from xrr_fitter.gui.fitting.panel import FitPanel
 from xrr_fitter.gui.parameters.panel import ParametersPanel
 from xrr_fitter.gui.plots.panel import PlotPanel
@@ -139,6 +141,19 @@ def _build_analysis_sections(window: object) -> None:
     window.analysis_sections["resultsSection"].set_expanded(False)
 
 
+def _guidance_actions(window: object) -> dict:
+    """Bind each guided step's action to the panel that already performs it.
+
+    Guidance never reimplements a workflow; it routes to the same buttons and
+    methods the expert surface uses, so both paths share one code path.
+    """
+    return {
+        "import_files": window.data_panel.import_files_button.click,
+        "initialize_structure": window.structure_panel.initialize_button.click,
+        "start_fit": window.start_fit,
+    }
+
+
 def install_workspace(window: object, document: object) -> None:
     """Build the plot-centred workspace with one dock per side panel."""
     window.project_actions = ProjectActions(window, document)
@@ -169,7 +184,14 @@ def install_workspace(window: object, document: object) -> None:
         dock = _dock(name, title, accessible, _scrolled(f"{name}Scroll", inner))
         window.addDockWidget(area, dock)
         window.docks[name] = dock
-    window.setCentralWidget(window.plot_panel)
+    # Guidance and the plot share the central slot: they are two surfaces onto
+    # one project, so a stack swaps them without either being rebuilt.
+    window.guidance = GuidancePanel(document, _guidance_actions(window))
+    window.central_stack = QStackedWidget()
+    window.central_stack.setObjectName("centralStack")
+    window.central_stack.addWidget(window.guidance)
+    window.central_stack.addWidget(window.plot_panel)
+    window.setCentralWidget(window.central_stack)
     window.setDockOptions(
         QMainWindow.DockOption.AnimatedDocks
         | QMainWindow.DockOption.AllowNestedDocks

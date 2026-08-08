@@ -320,6 +320,9 @@ def test_save_as_button_and_primary_controls_are_accessible_at_minimum_size(qtbo
     module.configure_accessibility(window)
     window.resize(1280, 760)
     window.show()
+    # The import buttons live in the data dock, which the guided opening surface
+    # hides; this contract is about the expert surface at its minimum size.
+    window.set_guidance_visible(False)
     qtbot.wait(1)
 
     names = (

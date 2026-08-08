@@ -74,6 +74,9 @@ class MainWindow(QMainWindow):
         self._connect_workflows()
         configure_accessibility(self)
         configure_focus_navigation(self)
+        # Guidance is the opening surface: a newcomer should meet four steps, not
+        # the full dock workspace. Expert users switch once from the View menu.
+        self.set_guidance_visible(True)
         self._refresh_operation_state()
         self._refresh_window_title()
         self.setMinimumSize(1280, 760)
@@ -91,6 +94,9 @@ class MainWindow(QMainWindow):
             dock.dockLocationChanged.connect(self._dock_layout_changed)
             dock.topLevelChanged.connect(self._dock_layout_changed)
             dock.visibilityChanged.connect(self._dock_layout_changed)
+        self.guidance.leave_requested.connect(
+            lambda: self.set_guidance_visible(False)
+        )
         self.result_panel.candidate_selected.connect(self._project_candidate)
         self.result_panel.candidate_inspected.connect(self._project_candidate)
         self.fit_panel.running_changed.connect(self._operation_running_changed)
@@ -211,6 +217,30 @@ class MainWindow(QMainWindow):
     def _restore_workspace(self, project: api.XrrProject) -> None:
         restore_project(self.workspace_view, project)
         self.restore_dock_layout(project)
+
+    def set_guidance_visible(self, visible: bool) -> None:
+        """Swap between the guided flow and the full dock workspace.
+
+        Both surfaces read the same document, so switching changes only what is
+        on screen. The docks are hidden alongside guidance because their whole
+        purpose is the expert surface; leaving them up would defeat the point of
+        a small guided step.
+        """
+        self.central_stack.setCurrentWidget(
+            self.guidance if visible else self.plot_panel
+        )
+        self._restoring_docks = True
+        try:
+            for dock in self.docks.values():
+                dock.setVisible(not visible)
+        finally:
+            self._restoring_docks = False
+        action = self.chrome_actions.get("guidanceModeAction")
+        if action is not None and action.isChecked() != visible:
+            action.setChecked(visible)
+
+    def guidance_is_visible(self) -> bool:
+        return self.central_stack.currentWidget() is self.guidance
 
     def capture_dock_layout(self) -> bool:
         """Persist the current dock arrangement onto the project.

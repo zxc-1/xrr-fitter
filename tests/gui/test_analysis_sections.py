@@ -59,6 +59,8 @@ def _window(qtbot, tmp_path: Path, *, expert: bool = False, size=(1280, 760)):
     qtbot.addWidget(window)
     window.resize(*size)
     window.show()
+    # The sections live in docks, which the guided surface hides by design.
+    window.set_guidance_visible(False)
     qtbot.wait(1)
     return window
 

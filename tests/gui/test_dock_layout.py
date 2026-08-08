@@ -28,10 +28,16 @@ DOCK_NAMES = (
 
 
 def _window(qtbot):
+    """Build a window on the expert surface, where the docks are the subject.
+
+    Guidance is the opening surface and deliberately hides the docks, so these
+    contracts switch to the expert surface first.
+    """
     from xrr_fitter.gui.main_window import MainWindow
 
     window = MainWindow()
     qtbot.addWidget(window)
+    window.set_guidance_visible(False)
     return window
 
 
@@ -52,7 +58,7 @@ def test_the_plot_is_the_central_widget_not_a_dock(qtbot) -> None:
     """The plot is the subject of the workspace, so it is never dockable."""
     window = _window(qtbot)
 
-    assert window.centralWidget() is window.plot_panel
+    assert window.central_stack.currentWidget() is window.plot_panel
     assert window.findChild(QDockWidget, "plotDock") is None
 
 

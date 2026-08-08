@@ -76,7 +76,10 @@ def test_persisted_dock_and_plot_tab_changes_mark_project_dirty(
     assert window.document.is_dirty is True
 
     # Panel geometry now lives in the opaque dock state rather than splitter
-    # sizes, so rearranging a dock is what has to reach the project.
+    # sizes, so rearranging a dock is what has to reach the project. The docks
+    # only exist on the expert surface, which the guided default hides.
+    window.set_guidance_visible(False)
+    QApplication.processEvents()
     window.docks["resultsDock"].hide()
     QApplication.processEvents()
     assert window.document.project.ui_state.dock_state != ""
