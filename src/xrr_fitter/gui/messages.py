@@ -17,6 +17,9 @@ READINESS_TEXTS = {
     "ready": READY_TEXT,
     "project has no datasets": "项目中还没有数据集，请先导入 XRR 数据",
     "source validation failed": "数据源校验失败，请检查源文件后重试",
+    "automatic fit requires a measurement preset": (
+        "自动拟合需要测量预设，请通过导入对话框设置光路与仪器"
+    ),
 }
 
 STRUCTURE_PATTERN = re.compile(r"^dataset (?P<dataset>.+) has no structure$")

@@ -294,7 +294,9 @@ class ResultsPanel(QWidget):
         self.uncertainty.set_result(result, visible_id)
         self.uncertainty_button.setVisible(self.document.project.ui_state.expert_mode)
         self._configure_mcmc(self._candidate(visible_id))
-        self._show_status(f"{len(result.candidates)} 个候选解", kind="")
+        # The candidate list directly above already shows how many there are, so
+        # this line stays free for MCMC outcomes and failures.
+        self._show_status("", kind="")
 
     def _clear_projection(self, message: str) -> None:
         self._set_confidence("不可用")
