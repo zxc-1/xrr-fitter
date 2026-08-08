@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -80,7 +81,21 @@ class ResultsPanel(QWidget):
         self.clear_button = QPushButton("清除结果")
         self.clear_button.setObjectName("clearResultsButton")
         self.uncertainty = UncertaintyView()
-        self.mcmc_group = McmcControls()
+        # MCMC is an opt-in deep dive whose seven inputs would otherwise sit on
+        # screen for every project. The panel keeps ownership so candidate
+        # configuration and operation state still track the selection, but the
+        # widgets live in a dialog that is only built when the user asks.
+        # Parented to the panel but deliberately left out of its layout, so
+        # accessibility configuration and lookups still reach the controls while
+        # they occupy no space until the dialog adopts them.
+        self.mcmc_group = McmcControls(self)
+        self.mcmc_group.hide()
+        self.uncertainty_button = QPushButton("不确定度分析…")
+        self.uncertainty_button.setObjectName("openUncertaintyDialogButton")
+        self.uncertainty_button.setAccessibleName("打开不确定度分析")
+        self.uncertainty_button.setToolTip("对当前候选解运行专家 MCMC 采样")
+        self.uncertainty_button.clicked.connect(self._show_uncertainty_dialog)
+        self._uncertainty_dialog: QDialog | None = None
         self.walkers = self.mcmc_group.walkers
         self.burn_in = self.mcmc_group.burn_in
         self.production = self.mcmc_group.production
@@ -100,8 +115,30 @@ class ResultsPanel(QWidget):
         layout.addWidget(self.candidates)
         layout.addWidget(self.clear_button)
         layout.addWidget(self.uncertainty)
-        layout.addWidget(self.mcmc_group)
+        layout.addWidget(self.uncertainty_button)
         layout.addWidget(self.status_label)
+
+    def open_uncertainty_dialog(self) -> QDialog:
+        """Reparent the owned MCMC controls into a reusable modeless dialog.
+
+        The dialog is built once and reused so the controls keep their identity
+        across openings; a user's hand-edited sampling config therefore survives
+        closing and reopening the window.
+        """
+        dialog = self._uncertainty_dialog
+        if dialog is None:
+            dialog = QDialog(self)
+            dialog.setObjectName("uncertaintyDialog")
+            dialog.setWindowTitle("不确定度分析")
+            dialog.setAccessibleName("不确定度分析")
+            layout = QVBoxLayout(dialog)
+            layout.addWidget(self.mcmc_group)
+            self._uncertainty_dialog = dialog
+        self.mcmc_group.show()
+        return dialog
+
+    def _show_uncertainty_dialog(self) -> None:
+        self.open_uncertainty_dialog().show()
 
     def _connect_events(self) -> None:
         self.document.project_changed.connect(self._refresh)
@@ -255,15 +292,17 @@ class ResultsPanel(QWidget):
         )
         self._set_confidence(result.confidence.value, classification_summary(result))
         self.uncertainty.set_result(result, visible_id)
-        self.mcmc_group.setVisible(self.document.project.ui_state.expert_mode)
+        self.uncertainty_button.setVisible(self.document.project.ui_state.expert_mode)
         self._configure_mcmc(self._candidate(visible_id))
-        self._show_status(f"{len(result.candidates)} 个候选解", kind="")
+        # The candidate list directly above already shows how many there are, so
+        # this line stays free for MCMC outcomes and failures.
+        self._show_status("", kind="")
 
     def _clear_projection(self, message: str) -> None:
         self._set_confidence("不可用")
         self.candidates.clear_projection()
         self.uncertainty.clear_result(message)
-        self.mcmc_group.setVisible(self.document.project.ui_state.expert_mode)
+        self.uncertainty_button.setVisible(self.document.project.ui_state.expert_mode)
         self._configure_mcmc(None)
         self._show_status("", kind="")
 

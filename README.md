@@ -13,8 +13,11 @@ parameter uncertainty.
 - Automatic structure construction and fitting from strict filename layer stacks.
 - Single-point fitting or same-import, same-physics joint refinement with
   point-local thickness and batch uniformity summaries.
+- Guided four-step workflow for routine fitting, plus a dockable expert
+  workspace whose panel layout is saved with the project.
 - Interactive expert structure editor for layers, periodic stacks, gradients,
-  and the substrate backing, with reflectivity and SLD-profile plots.
+  and the substrate backing, with reflectivity and SLD-profile plots shown
+  side by side.
 - Global screening followed by local least-squares refinement with checkpointed,
   resumable fits.
 - Uncertainty analysis: bootstrap resampling, MCMC sampling, and parameter
@@ -75,9 +78,10 @@ codes use a direct effective-SLD model and report effective SLD/electron density
 but do not invent a mass density in g/cm3.
 
 The standard result view reports per-point status and statistics membership as
-well as layer and uniformity values. Enable **Expert mode** to use manual
-independent/joint fitting, profile diagnostics, MCMC, and explicit result export;
-automatic fitting itself does not export files.
+well as layer and uniformity values. Leave the guided flow via **View ▸ Guidance
+mode**, then enable **Expert mode** to use manual independent/joint fitting,
+profile diagnostics, MCMC, and explicit result export; automatic fitting itself
+does not export files.
 
 ## Public API
 

@@ -7,6 +7,7 @@ from tests.gui.plot_cases_1 import *  # noqa: F401,F403
 from tests.gui.plot_cases_2 import *  # noqa: F401,F403
 from tests.gui.plot_cases_3 import *  # noqa: F401,F403
 from tests.gui.plot_cases_4 import *  # noqa: F401,F403
+from tests.gui.plot_cases_5 import *  # noqa: F401,F403
 
 
 @pytest.fixture(autouse=True)

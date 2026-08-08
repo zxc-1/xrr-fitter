@@ -29,9 +29,8 @@ class AccessibilitySpec:
 
 
 ACCESSIBILITY_SPECS = (
-    AccessibilitySpec("projectColumn", "项目与数据列", "项目、数据源与结构工作区", "管理项目、数据源和样品结构"),
-    AccessibilitySpec("plotColumn", "反射率与 SLD 列", "曲线、SLD 与拟合诊断工作区", "查看反射率曲线和拟合诊断"),
-    AccessibilitySpec("analysisColumn", "参数与结果列", "参数、拟合与结果工作区", "编辑参数并查看拟合结果"),
+    # Dock titles carry their own accessible names from window_layout; these
+    # specs describe the panels the docks contain.
     AccessibilitySpec("dataPanel", "数据与掩膜", "导入数据并管理拟合掩膜", "数据集、数据源和拟合范围"),
     AccessibilitySpec("structurePanel", "样品结构", "编辑活动数据集的样品结构", "样品层、周期块和氧化层建议"),
     AccessibilitySpec("structureEditor", "结构编辑", "编辑样品层和周期结构", "添加、删除和排序结构组件"),
@@ -54,7 +53,12 @@ ACCESSIBILITY_SPECS = (
     AccessibilitySpec("cancelFitButton", "取消拟合", "请求取消当前拟合"),
     AccessibilitySpec("forceStopFitButton", "强制停止拟合", "强制终止当前拟合进程"),
     AccessibilitySpec("mcmcButton", "运行专家 MCMC", "对当前候选解运行显式专家 MCMC"),
-    AccessibilitySpec("cancelMcmcButton", "取消 MCMC", "请求取消当前 MCMC"),
+    AccessibilitySpec(
+        "openUncertaintyDialogButton",
+        "打开不确定度分析",
+        "对当前候选解运行专家 MCMC 采样",
+        "在独立窗口中配置并运行 MCMC 采样",
+    ),    AccessibilitySpec("cancelMcmcButton", "取消 MCMC", "请求取消当前 MCMC"),
     AccessibilitySpec("forceStopMcmcButton", "强制停止 MCMC", "强制终止当前 MCMC 进程"),
     AccessibilitySpec("mcmcWalkers", "MCMC walkers 数", "设置 MCMC walkers 数量"),
     AccessibilitySpec("mcmcBurnIn", "MCMC burn-in 步数", "设置 MCMC burn-in 步数"),
@@ -116,13 +120,9 @@ FOCUS_ORDER = (
     "forceStopFitButton",
     "candidateList",
     "uncertaintyEvidence",
-    "mcmcWalkers",
-    "mcmcBurnIn",
-    "mcmcProduction",
-    "mcmcThin",
-    "mcmcButton",
-    "cancelMcmcButton",
-    "forceStopMcmcButton",
+    # The MCMC inputs moved into an on-demand dialog, so the main window's tab
+    # chain stops at the entry point; the dialog owns its own internal order.
+    "openUncertaintyDialogButton",
     "clearResultsButton",
     "exportResultsButton",
 )

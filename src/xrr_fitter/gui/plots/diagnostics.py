@@ -20,19 +20,31 @@ from matplotlib.figure import Figure
 from matplotlib.text import Text
 from matplotlib.ticker import LogFormatter
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QTabWidget
+from PySide6.QtWidgets import QApplication, QTabWidget
+
+from xrr_fitter.gui import theme
 
 
+# The switchable diagnostic tabs, in display order. The log view leads because
+# reflectivity spans several decades: on a linear axis everything below the
+# critical angle collapses onto the baseline, so the raw view answers far fewer
+# questions than its former first position implied.
 TAB_SPECS = (
-    ("raw", "原始数据与模型", "查看存储角度、原始强度、拟合点和排除点"),
     ("log", "对数反射率", "查看仅应用显示下限的归一化反射率"),
+    ("raw", "原始数据与模型", "查看存储角度、原始强度、拟合点和排除点"),
     ("qz4", "qz⁴R", "查看当前候选 qz 网格上的 qz 四次方诊断"),
     ("residual", "加权残差", "查看当前候选发布的全长加权残差"),
-    ("sld", "SLD 深度剖面", "查看当前候选的实部和虚部 SLD"),
     ("candidates", "候选解比较", "比较全部保留候选及其审计状态"),
     ("uncertainty", "相关性与区间", "查看当前候选拥有的相关和区间证据"),
     ("trend", "批量趋势", "查看多个数据集的厚度和周期趋势"),
 )
+
+# The SLD depth profile is not a tab. Judging a fit means reading curve
+# agreement and the resulting structure together, so it occupies a companion
+# pane that stays on screen whichever diagnostic tab is selected.
+COMPANION_SPEC = ("sld", "SLD 深度剖面", "查看当前候选的实部和虚部 SLD")
+
+VIEW_SPECS = (*TAB_SPECS, COMPANION_SPEC)
 
 DIAGNOSTIC_LABELS = {
     "gauss_hermite_unconverged": "Gauss-Hermite 积分未收敛",
@@ -135,10 +147,16 @@ def _cjk_font() -> font_manager.FontProperties:
 
 
 def apply_figure_font(figure: Figure) -> None:
-    """Apply a local font to current artists without mutating global style."""
+    """Apply the local font and theme palette to the figure's current artists.
+
+    Every draw ends here, and ``Axes.clear()`` resets facecolor and tick colours
+    to the Matplotlib defaults, so the palette has to be reapplied at this point
+    rather than only at construction.
+    """
     properties = _cjk_font()
     for artist in figure.findobj(match=Text):
         artist.set_fontproperties(properties)
+    apply_figure_palette(figure)
 
 
 def draw_empty(view: DiagnosticView, title: str, message: str = "暂无可用数据") -> None:
@@ -149,6 +167,7 @@ def draw_empty(view: DiagnosticView, title: str, message: str = "暂无可用数
         axes.set_xticks(())
         axes.set_yticks(())
     view.axes.set_title(title)
+    palette = apply_figure_palette(view.figure)
     view.axes.text(
         0.5,
         0.5,
@@ -156,7 +175,7 @@ def draw_empty(view: DiagnosticView, title: str, message: str = "暂无可用数
         ha="center",
         va="center",
         transform=view.axes.transAxes,
-        color="#8A8A8E",
+        color=palette.muted,
     )
     apply_figure_font(view.figure)
     view.canvas.draw_idle()
@@ -170,12 +189,40 @@ def _axes(figure: Figure, key: str) -> object:
     return figure.subplots()
 
 
+def current_plot_palette() -> theme.PlotPalette:
+    """Resolve the figure palette from the running application's palette.
+
+    Figures are drawn outside the stylesheet, so each draw reads the palette
+    afresh; that is what lets a system appearance change reach the plots on the
+    next repaint without any switching logic.
+    """
+    application = QApplication.instance()
+    if application is None:
+        return theme.LIGHT_PLOT_PALETTE
+    return theme.plot_palette(theme.palette_tokens(application.palette()))
+
+
+def apply_figure_palette(figure: Figure) -> theme.PlotPalette:
+    """Paint one figure's structural colours and return the palette used."""
+    palette = current_plot_palette()
+    figure.set_facecolor(palette.background)
+    for axes in figure.axes:
+        axes.set_facecolor(palette.background)
+        axes.tick_params(colors=palette.foreground, which="both")
+        for spine in axes.spines.values():
+            spine.set_color(palette.muted)
+        for text in (axes.title, axes.xaxis.label, axes.yaxis.label):
+            text.set_color(palette.foreground)
+    return palette
+
+
 def _view(key: str, *, qt: bool) -> DiagnosticView:
-    title = next(title for name, title, _description in TAB_SPECS if name == key)
+    title = next(title for name, title, _description in VIEW_SPECS if name == key)
     figure = Figure(layout="constrained") if qt else Figure(figsize=(0.8, 0.6), dpi=25)
     canvas = DiagnosticCanvas(figure) if qt else FigureCanvasAgg(figure)
     axes = _axes(figure, key)
     view = DiagnosticView(figure, canvas, axes)
+    apply_figure_palette(figure)
     if qt:
         draw_empty(view, title)
     return view
@@ -187,14 +234,15 @@ def build_tabs() -> tuple[QTabWidget, dict[str, DiagnosticView]]:
     tabs.setAccessibleName("拟合诊断图标签")
     tabs.setToolTip("切换原始曲线、残差、候选解和专家诊断视图")
     views: dict[str, DiagnosticView] = {}
-    for key, title, description in TAB_SPECS:
+    for key, title, description in VIEW_SPECS:
         view = _view(key, qt=True)
         view.canvas.setObjectName(f"diagnosticCanvas:{key}")
         view.canvas.setAccessibleName(title)
         view.canvas.setAccessibleDescription(description)
         view.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         views[key] = view
-        tabs.addTab(view.canvas, title)
+        if key != COMPANION_SPEC[0]:
+            tabs.addTab(view.canvas, title)
     return tabs, views
 
 
@@ -202,7 +250,7 @@ def build_scratch_views() -> dict[str, DiagnosticView]:
     global SCRATCH_VIEWS
     if SCRATCH_VIEWS is None:
         SCRATCH_VIEWS = {
-            key: _view(key, qt=False) for key, _title, _description in TAB_SPECS
+            key: _view(key, qt=False) for key, _title, _description in VIEW_SPECS
         }
     return dict(SCRATCH_VIEWS)
 

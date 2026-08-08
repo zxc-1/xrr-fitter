@@ -256,11 +256,18 @@ class FitPanel(QWidget):
         theme.set_status_kind(self.status_label, kind)
 
     def _show_readiness(self, readiness: api.FitReadiness | None = None) -> None:
+        """Report only what the status bar does not already say.
+
+        The status bar carries the persistent readiness verdict. Repeating a
+        successful one here put the identical sentence on screen twice, so a
+        ready project leaves this label empty and it is reserved for blocking
+        reasons and operation outcomes.
+        """
         value = self._readiness if readiness is None else readiness
-        self._show_status(
-            messages.readiness_text(value.message),
-            kind="ok" if value.ready else "warn",
-        )
+        if value.ready:
+            self._show_status("", kind="")
+            return
+        self._show_status(messages.readiness_text(value.message), kind="warn")
 
     def _project_running_state(self, running: bool) -> None:
         if not running:

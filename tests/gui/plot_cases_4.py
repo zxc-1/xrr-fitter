@@ -41,23 +41,24 @@ def test_plot_renders_excluded_points_as_scene_markers(qtbot) -> None:
     np.testing.assert_array_equal(excluded.get_xdata(), data.two_theta_deg[[0, 2]])
 
 def test_standard_mode_hides_sld_and_expert_mode_restores_it(qtbot) -> None:
-    panel = _panel(qtbot)
-    sld_index = panel.view_keys().index("sld")
+    """Expert mode now gates the companion pane instead of an SLD tab."""
+    panel = _panel(qtbot, data=prepared_data(size=4))
 
     panel.set_expert_mode(False)
-    assert panel.tabs.isTabVisible(sld_index) is False
+    assert panel.sld_pane.isVisibleTo(panel) is False
 
     panel.set_expert_mode(True)
-    assert panel.tabs.isTabVisible(sld_index) is True
+    assert panel.sld_pane.isVisibleTo(panel) is True
 
-def test_number_key_shortcuts_follow_visible_position_in_expert_mode(qtbot) -> None:
+def test_number_key_shortcuts_address_tabs_by_visible_position(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
     panel.set_expert_mode(True)
 
     assert panel.select_visible_view(4) is True
-    assert panel.current_view_key() == "sld"
+    assert panel.current_view_key() == "candidates"
 
-def test_number_key_shortcuts_skip_hidden_tabs_in_standard_mode(qtbot) -> None:
+def test_number_key_shortcut_positions_are_mode_independent(qtbot) -> None:
+    """Every tab is selectable in both modes, so ordinals never shift."""
     panel = _panel(qtbot, data=prepared_data(size=4))
     panel.set_expert_mode(False)
 
@@ -71,11 +72,11 @@ def test_number_key_shortcuts_reject_out_of_range_ordinal(qtbot) -> None:
     assert panel.select_visible_view(20) is False
     assert panel.current_view_key() == before
 
-def test_view_shortcuts_register_alt_1_through_8(qtbot) -> None:
+def test_view_shortcuts_register_one_key_per_tab(qtbot) -> None:
     from PySide6.QtGui import QKeySequence
 
     panel = _panel(qtbot, data=prepared_data(size=4))
     keys = [shortcut.key() for shortcut in panel.view_shortcuts]
 
     assert keys[0] == QKeySequence("Alt+1")
-    assert keys[7] == QKeySequence("Alt+8")
+    assert keys[-1] == QKeySequence(f"Alt+{len(panel.tab_keys())}")

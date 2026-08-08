@@ -9,7 +9,12 @@ import numpy as np
 from matplotlib.ticker import LogFormatter
 
 import xrr_fitter.api as api
-from xrr_fitter.gui.plots.diagnostics import DiagnosticView, apply_figure_font, draw_empty
+from xrr_fitter.gui.plots.diagnostics import (
+    DiagnosticView,
+    apply_figure_font,
+    current_plot_palette,
+    draw_empty,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,7 +173,10 @@ def draw_raw(
         raw[excluded],
         linestyle="none",
         marker="x",
-        color="#202020",
+        # Structural rather than a data series: excluded points read as "struck
+        # out", so they follow the foreground and would vanish on a dark canvas
+        # if left at a fixed near-black.
+        color=current_plot_palette().foreground,
         markerfacecolor="none",
         label="排除点",
     )

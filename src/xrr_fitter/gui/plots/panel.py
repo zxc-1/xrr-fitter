@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSplitter,
     QStackedLayout,
     QVBoxLayout,
     QWidget,
@@ -24,7 +25,9 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 from xrr_fitter.gui.plots.diagnostics import (
+    COMPANION_SPEC,
     TAB_SPECS,
+    VIEW_SPECS,
     DiagnosticView,
     build_scratch_views,
     build_tabs,
@@ -123,19 +126,47 @@ class PlotPanel(QWidget):
         self._released = False
         self.toolbar = PlotInteractionToolbar(self)
         self.tabs, self._views = build_tabs()
+        self.sld_pane = self._build_sld_pane()
+        # Reflectivity above, depth profile below: a fit is judged on curve
+        # agreement and structural plausibility at once, so neither may hide
+        # the other behind a tab.
+        self.plot_splitter = QSplitter(Qt.Orientation.Vertical, self)
+        self.plot_splitter.setObjectName("plotSplitter")
+        self.plot_splitter.setChildrenCollapsible(False)
+        self.plot_splitter.addWidget(self.tabs)
+        self.plot_splitter.addWidget(self.sld_pane)
+        self.plot_splitter.setStretchFactor(0, 3)
+        self.plot_splitter.setStretchFactor(1, 2)
         content = QWidget(self)
         content.setObjectName("plotContent")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(6)
         content_layout.addWidget(self.toolbar)
-        content_layout.addWidget(self.tabs, 1)
+        content_layout.addWidget(self.plot_splitter, 1)
         self._pages = QStackedLayout(self)
         self._pages.addWidget(_empty_state_widget(self))
         self._pages.addWidget(content)
         self._sync_pages()
         self._interactions = PlotInteractionController(self, self.toolbar)
         self._install_view_shortcuts()
+
+    def _build_sld_pane(self) -> QWidget:
+        """Wrap the companion SLD canvas with its own heading."""
+        key, title, description = COMPANION_SPEC
+        pane = QWidget(self)
+        pane.setObjectName("sldPane")
+        pane.setAccessibleName(title)
+        pane.setAccessibleDescription(description)
+        heading = QLabel(title, pane)
+        heading.setObjectName("sldPaneHeader")
+        heading.setProperty("sectionHeader", True)
+        layout = QVBoxLayout(pane)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(heading)
+        layout.addWidget(self._views[key].canvas, 1)
+        return pane
 
     def _install_view_shortcuts(self) -> None:
         """Bind Alt+1..Alt+8 to the diagnostic tabs by visible position.
@@ -146,7 +177,7 @@ class PlotPanel(QWidget):
         same key never lands on a hidden tab or skips a number.
         """
         self.view_shortcuts: list[QShortcut] = []
-        for position in range(len(self.view_keys())):
+        for position in range(len(self.tab_keys())):
             shortcut = QShortcut(QKeySequence(f"Alt+{position + 1}"), self)
             shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             shortcut.setProperty("viewPosition", position)
@@ -165,7 +196,7 @@ class PlotPanel(QWidget):
         """Select the Nth (0-based) currently-visible diagnostic view."""
         visible = [
             key
-            for index, key in enumerate(self.view_keys())
+            for index, key in enumerate(self.tab_keys())
             if self.tabs.isTabVisible(index)
         ]
         if not 0 <= position < len(visible):
@@ -179,8 +210,13 @@ class PlotPanel(QWidget):
     def tab_titles(self) -> tuple[str, ...]:
         return tuple(self.tabs.tabText(index) for index in range(self.tabs.count()))
 
-    def view_keys(self) -> tuple[str, ...]:
+    def tab_keys(self) -> tuple[str, ...]:
+        """The switchable diagnostic tabs, in tab-bar order."""
         return tuple(key for key, _title, _description in TAB_SPECS)
+
+    def view_keys(self) -> tuple[str, ...]:
+        """Every owned view, including the companion pane outside the tab bar."""
+        return tuple(key for key, _title, _description in VIEW_SPECS)
 
     def view(self, key: str) -> DiagnosticView:
         try:
@@ -493,7 +529,7 @@ class PlotPanel(QWidget):
         candidate = self._candidate(projection.result, projection.candidate_id)
         if data is None or projection.mask is None:
             for key in ("raw", "log", "qz4", "residual", "sld"):
-                title = next(title for name, title, _description in TAB_SPECS if name == key)
+                title = next(title for name, title, _description in VIEW_SPECS if name == key)
                 draw_empty(views[key], title)
         else:
             draw_raw(views["raw"], data, projection.mask, candidate)

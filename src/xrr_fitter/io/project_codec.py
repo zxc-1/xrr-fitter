@@ -152,6 +152,7 @@ def _ui_to_dict(value: ProjectUiState) -> dict[str, object]:
         "workspace_splitter_sizes": list(value.workspace_splitter_sizes),
         "left_splitter_sizes": list(value.left_splitter_sizes),
         "plot_tab_index": value.plot_tab_index,
+        "dock_state": value.dock_state,
     }
 
 
@@ -167,6 +168,9 @@ def _ui_from_dict(value: object) -> ProjectUiState:
             "plot_tab_index",
         },
         "project UI state",
+        # Projects written before the dockable layout carry no dock_state; they
+        # must still load, falling back to the default arrangement.
+        optional={"dock_state"},
     )
     return ProjectUiState(
         active_dataset_id=payload["active_dataset_id"],
@@ -188,6 +192,7 @@ def _ui_from_dict(value: object) -> ProjectUiState:
             _sequence(payload["left_splitter_sizes"], "left splitter sizes")
         ),
         plot_tab_index=payload["plot_tab_index"],
+        dock_state=payload.get("dock_state", ""),
     )
 
 

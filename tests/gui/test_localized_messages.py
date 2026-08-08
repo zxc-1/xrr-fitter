@@ -47,6 +47,21 @@ def test_unknown_readiness_message_passes_through_verbatim() -> None:
     assert messages.readiness_text("结构尚未准备") == "结构尚未准备"
 
 
+def test_missing_measurement_preset_message_is_localized() -> None:
+    """Standard mode surfaces this preflight verdict, so it must be translated.
+
+    An untranslated string reaches the fit panel whenever a project has data but
+    no measurement preset, which is the normal state right after a manual
+    import.
+    """
+    messages = _messages()
+
+    text = messages.readiness_text("automatic fit requires a measurement preset")
+
+    assert "预设" in text
+    assert "measurement preset" not in text
+
+
 @pytest.mark.parametrize(
     ("exception_type", "fragment"),
     (

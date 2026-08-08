@@ -161,7 +161,7 @@ def test_import_dialog_names_all_actionable_controls(qtbot, tmp_path: Path) -> N
     assert dialog.import_button().accessibleName() == "确认导入"
 
 
-def test_main_window_has_three_accessible_columns(qtbot) -> None:
+def test_main_window_docks_carry_accessible_names(qtbot) -> None:
     from xrr_fitter.gui.main_window import MainWindow
 
     module = _accessibility()
@@ -170,15 +170,15 @@ def test_main_window_has_three_accessible_columns(qtbot) -> None:
     module.configure_accessibility(window)
 
     expected = {
-        "projectColumn": "项目与数据列",
-        "plotColumn": "反射率与 SLD 列",
-        "analysisColumn": "参数与结果列",
+        "dataDock": "数据集面板",
+        "structureDock": "样品结构面板",
+        "parametersDock": "拟合参数面板",
+        "fitDock": "拟合控制面板",
+        "resultsDock": "拟合结果面板",
     }
-    assert window.workspace_splitter.count() == 3
+    assert set(window.docks) == set(expected)
     for object_name, name in expected.items():
-        widget = _named(window, object_name)
-        assert widget.accessibleName() == name
-        assert widget.accessibleDescription()
+        assert window.docks[object_name].accessibleName() == name
 
 
 def test_panels_have_stable_accessible_identity_and_titles(qtbot) -> None:
@@ -320,6 +320,9 @@ def test_save_as_button_and_primary_controls_are_accessible_at_minimum_size(qtbo
     module.configure_accessibility(window)
     window.resize(1280, 760)
     window.show()
+    # The import buttons live in the data dock, which the guided opening surface
+    # hides; this contract is about the expert surface at its minimum size.
+    window.set_guidance_visible(False)
     qtbot.wait(1)
 
     names = (

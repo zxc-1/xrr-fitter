@@ -59,7 +59,7 @@ def test_nonactive_mask_update_does_not_switch_plot_dataset(qtbot) -> None:
     assert panel.selected_dataset_id() == "first"
     assert _artist_snapshot(panel) == before
 
-def test_persisted_splitter_and_plot_tab_changes_mark_project_dirty(
+def test_persisted_dock_and_plot_tab_changes_mark_project_dirty(
     qtbot,
     tmp_path,
 ) -> None:
@@ -75,11 +75,14 @@ def test_persisted_splitter_and_plot_tab_changes_mark_project_dirty(
     assert window.document.project.ui_state.plot_tab_index == 1
     assert window.document.is_dirty is True
 
-    window.workspace_splitter.moveSplitter(360, 1)
+    # Panel geometry now lives in the opaque dock state rather than splitter
+    # sizes, so rearranging a dock is what has to reach the project. The docks
+    # only exist on the expert surface, which the guided default hides.
+    window.set_guidance_visible(False)
     QApplication.processEvents()
-    assert window.document.project.ui_state.workspace_splitter_sizes == tuple(
-        window.workspace_splitter.sizes()
-    )
+    window.docks["resultsDock"].hide()
+    QApplication.processEvents()
+    assert window.document.project.ui_state.dock_state != ""
 
 @pytest.mark.parametrize(
     ("expert_mode", "operation"),
@@ -143,7 +146,9 @@ def test_plot_panel_close_releases_agg_renderer_buffers(qtbot) -> None:
 
 def test_hidden_plot_canvas_defers_queued_draw_until_visible(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
-    canvas = panel.view("raw").canvas
+    # Only the selected tab's canvas becomes visible, so the deferral contract
+    # is observed on the default view rather than an arbitrary background tab.
+    canvas = panel.view(panel.current_view_key()).canvas
 
     QApplication.processEvents()
 

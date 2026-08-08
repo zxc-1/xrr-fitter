@@ -302,7 +302,10 @@ class ParametersPanel(QWidget):
             self._clear_projection(str(error))
             return
         self.parameter_table.load(self._definitions, expert_mode=self.expert_mode)
-        self.status_label.setText(f"{len(self.parameter_table.definitions)} 个可见参数")
+        # The row count is legible from the table itself, so the status line
+        # stays empty here and is reserved for validation problems and the
+        # outcome of a reset.
+        self.status_label.clear()
 
     def _clear_projection(self, message: str) -> None:
         self._definitions = ()

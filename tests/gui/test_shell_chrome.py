@@ -214,3 +214,38 @@ def test_dataset_tree_presents_compact_columns_with_details_label(
     assert details is not None
     assert "d.xy" in details.text()
     assert panel.sha256_text("d")[:12] in details.text()
+
+
+def test_readiness_is_reported_once_across_status_bar_and_fit_panel(
+    qtbot,
+    tmp_path,
+) -> None:
+    """The same readiness verdict must not occupy two labels at once.
+
+    The status bar owns the persistent readiness report. The fit panel's label
+    is for operation outcomes (cancelled, failed, finished), so while idle and
+    ready it stays quiet instead of restating what the status bar already says.
+    """
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.gui.main_window import MainWindow
+
+    project = api.new_project()
+    project = api.add_dataset(
+        project,
+        _write_curve(tmp_path / "e.xy"),
+        api.InstrumentSpec(),
+    )
+    structure = api.StructureSpec(
+        api.MaterialSpec("Air", None, None, 0.0j),
+        (api.LayerSpec("film", api.MaterialSpec("SiO2", "SiO2", 2.20), 40.0),),
+        api.MaterialSpec("Si", "Si", 2.329),
+    )
+    project = api.set_structure(project, "e", structure)
+    project = api.set_expert_mode(project, True)
+    window = MainWindow(ProjectDocument(project))
+    qtbot.addWidget(window)
+    window.show()
+
+    bar_text = window.findChild(QLabel, "fitReadinessStatus").text()
+    assert "就绪" in bar_text
+    assert window.fit_panel.status_text() != bar_text

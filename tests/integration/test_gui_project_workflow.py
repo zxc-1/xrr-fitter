@@ -108,7 +108,11 @@ EXPECTED_ACTIONS = {
 
 def _assert_workspace_layout(window) -> None:
     assert window.objectName() == "mainWindow"
-    assert window.left_splitter.count() == 2
+    assert len(window.docks) == 5
+    # Guidance opens first and shares the central slot with the plot; the expert
+    # surface is what this workspace contract describes.
+    window.set_guidance_visible(False)
+    assert window.central_stack.currentWidget() is window.plot_panel
     assert window.fit_panel.parent() is not None
     assert window.result_panel.parent() is not None
 
@@ -184,6 +188,13 @@ def test_expert_mcmc_controls_remain_readable_at_documented_window_size(
     qtbot.addWidget(window)
     window.resize(1600, 900)
     window.show()
+    qtbot.wait(1)
+
+    # The controls live in an on-demand dialog rather than the analysis column,
+    # so readability is asserted where the user actually meets them.
+    dialog = window.result_panel.open_uncertainty_dialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
     qtbot.wait(1)
 
     controls = (

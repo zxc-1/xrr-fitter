@@ -153,10 +153,10 @@ class PlotInteractionController(QObject):
         self.watch_parent()
 
     def current_view_key(self) -> str:
-        return self._panel.view_keys()[self._tabs.currentIndex()]
+        return self._panel.tab_keys()[self._tabs.currentIndex()]
 
     def select_view(self, key: str) -> None:
-        keys = self._panel.view_keys()
+        keys = self._panel.tab_keys()
         if key not in keys:
             raise KeyError(f"unknown diagnostic view: {key}")
         index = keys.index(key)
@@ -286,24 +286,18 @@ class PlotInteractionController(QObject):
         self._panel.view_changed.emit(index)
 
     def _apply_tabs(self, expert_mode: bool, requested_index: int) -> None:
-        sld_index = self._panel.view_keys().index("sld")
+        """Project expert mode onto the companion pane, not the tab bar.
+
+        The SLD profile left the tab bar for a permanent pane, so expert mode
+        now shows or hides that pane. Every tab stays selectable in both modes,
+        which means a persisted selection can always be honoured.
+        """
         self._projecting_tabs = True
         try:
-            self._tabs.setTabVisible(sld_index, expert_mode)
-            self._select_projected_tab(expert_mode, requested_index, sld_index)
+            self._panel.sld_pane.setVisible(expert_mode)
+            self._tabs.setCurrentIndex(requested_index)
         finally:
             self._projecting_tabs = False
-
-    def _select_projected_tab(
-        self,
-        expert_mode: bool,
-        requested_index: int,
-        sld_index: int,
-    ) -> None:
-        if expert_mode or requested_index != sld_index:
-            self._tabs.setCurrentIndex(requested_index)
-        elif self._tabs.currentIndex() == sld_index:
-            self._tabs.setCurrentIndex(0)
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         panel = getattr(self, "_panel", None)

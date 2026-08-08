@@ -139,9 +139,15 @@ class ProjectUiState:
     active_dataset_id: str | None = None
     selected_candidate_ids: tuple[tuple[str, str], ...] = ()
     expert_mode: bool = False
+    # Retained for backward compatibility with projects written before the
+    # dockable layout. ``dock_state`` supersedes them; these no longer drive
+    # the arrangement and are kept only so older files stay readable.
     workspace_splitter_sizes: tuple[int, int, int] = (320, 680, 380)
     left_splitter_sizes: tuple[int, int] = (280, 480)
     plot_tab_index: int = 0
+    # Base64 of ``QMainWindow.saveState()``. Opaque and Qt-version dependent, so
+    # it is never interpreted here; an empty value means the default layout.
+    dock_state: str = ""
 
     def __post_init__(self) -> None:
         if self.active_dataset_id is not None:
@@ -153,6 +159,8 @@ class ProjectUiState:
         )
         _nonnegative_index(self.plot_tab_index, "plot_tab_index")
         _bool_value(self.expert_mode, "expert_mode")
+        if not isinstance(self.dock_state, str):
+            raise TypeError("dock_state must be str")
         object.__setattr__(self, "selected_candidate_ids", selected)
         object.__setattr__(self, "workspace_splitter_sizes", workspace)
         object.__setattr__(self, "left_splitter_sizes", left)

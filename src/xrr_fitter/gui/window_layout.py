@@ -5,17 +5,20 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
+    QDockWidget,
     QFrame,
-    QLabel,
+    QMainWindow,
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSplitter,
+    QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from xrr_fitter.gui.data.panel import DataPanel
+from xrr_fitter.gui.guidance.panel import GuidancePanel
 from xrr_fitter.gui.fitting.panel import FitPanel
 from xrr_fitter.gui.parameters.panel import ParametersPanel
 from xrr_fitter.gui.plots.panel import PlotPanel
@@ -31,113 +34,182 @@ WORKFLOW_ACTION_SPECS = (
 )
 
 
-def _column(name: str) -> QWidget:
-    widget = QWidget()
-    widget.setObjectName(name)
-    layout = QVBoxLayout(widget)
-    layout.setContentsMargins(8, 8, 8, 8)
-    layout.setSpacing(8)
-    return widget
+class AnalysisSection(QFrame):
+    """A titled analysis card whose header toggles its body.
+
+    Three permanently expanded cards overflowed the analysis column at the
+    documented minimum window size, leaving the lower ones reachable only by
+    scrolling. Collapsing is per section rather than mutually exclusive, because
+    reading fit progress against the parameter table needs two open at once.
+    """
+
+    def __init__(self, title: str, name: str, inner: QWidget) -> None:
+        super().__init__()
+        self.setObjectName(name)
+        self.setProperty("sectionCard", True)
+        self.body = inner
+        self.toggle = QToolButton()
+        self.toggle.setObjectName(f"{name}Header")
+        self.toggle.setText(title)
+        self.toggle.setCheckable(True)
+        self.toggle.setChecked(True)
+        self.toggle.setAccessibleName(f"{title}分区")
+        self.toggle.setToolTip(f"展开或折叠{title}分区")
+        self.toggle.setProperty("sectionHeader", True)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow)
+        self.toggle.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.toggle.toggled.connect(self.set_expanded)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 10)
+        layout.setSpacing(6)
+        layout.addWidget(self.toggle)
+        layout.addWidget(inner)
+
+    def is_expanded(self) -> bool:
+        return self.toggle.isChecked()
+
+    def set_expanded(self, expanded: bool) -> None:
+        """Show or hide the body, keeping the header reachable either way."""
+        if self.toggle.isChecked() != expanded:
+            self.toggle.setChecked(expanded)
+            return
+        self.body.setVisible(expanded)
+        self.toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
 
 
-def _section(title: str, name: str, inner: QWidget) -> QFrame:
-    frame = QFrame()
-    frame.setObjectName(name)
-    frame.setProperty("sectionCard", True)
-    layout = QVBoxLayout(frame)
-    layout.setContentsMargins(10, 8, 10, 10)
-    layout.setSpacing(6)
-    heading = QLabel(title)
-    heading.setObjectName(f"{name}Header")
-    heading.setProperty("sectionHeader", True)
-    layout.addWidget(heading)
-    layout.addWidget(inner)
-    return frame
+DOCK_SPECS = (
+    ("dataDock", "数据集", "数据集面板", Qt.DockWidgetArea.LeftDockWidgetArea),
+    ("structureDock", "样品结构", "样品结构面板", Qt.DockWidgetArea.LeftDockWidgetArea),
+    ("parametersDock", "参数", "拟合参数面板", Qt.DockWidgetArea.RightDockWidgetArea),
+    ("fitDock", "拟合", "拟合控制面板", Qt.DockWidgetArea.RightDockWidgetArea),
+    ("resultsDock", "结果", "拟合结果面板", Qt.DockWidgetArea.RightDockWidgetArea),
+)
+
+DOCK_FEATURES = (
+    QDockWidget.DockWidgetFeature.DockWidgetMovable
+    | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+    | QDockWidget.DockWidgetFeature.DockWidgetClosable
+)
 
 
-def _install_project_column(window: object, document: object) -> QWidget:
-    project_column = _column("projectColumn")
+def _dock(name: str, title: str, accessible: str, inner: QWidget) -> QDockWidget:
+    dock = QDockWidget(title)
+    dock.setObjectName(name)
+    dock.setAccessibleName(accessible)
+    dock.setFeatures(DOCK_FEATURES)
+    dock.setAllowedAreas(
+        Qt.DockWidgetArea.LeftDockWidgetArea
+        | Qt.DockWidgetArea.RightDockWidgetArea
+        | Qt.DockWidgetArea.BottomDockWidgetArea
+    )
+    dock.setWidget(inner)
+    return dock
+
+
+def _scrolled(name: str, inner: QWidget) -> QScrollArea:
+    """Wrap a panel so a narrow dock scrolls instead of clipping."""
+    scroll = QScrollArea()
+    scroll.setObjectName(name)
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setWidget(inner)
+    return scroll
+
+
+def _build_analysis_sections(window: object) -> None:
+    """Create the collapsible analysis cards each analysis dock will hold."""
+    specs = (
+        ("参数", "parametersSection", window.parameters_panel),
+        ("拟合", "fitSection", window.fit_panel),
+        ("结果", "resultsSection", window.result_panel),
+    )
+    window.analysis_sections = {
+        name: AnalysisSection(title, name, panel) for title, name, panel in specs
+    }
+    # The result card carries the candidate list, uncertainty evidence, and
+    # automatic tables, which together exceed a dock's height at the documented
+    # minimum size. A fresh project has no result to read, so it starts collapsed
+    # and the user expands it once a fit has produced something.
+    window.analysis_sections["resultsSection"].set_expanded(False)
+
+
+def _guidance_actions(window: object) -> dict:
+    """Bind each guided step's action to the panel that already performs it.
+
+    Guidance never reimplements a workflow; it routes to the same buttons and
+    methods the expert surface uses, so both paths share one code path.
+    """
+    return {
+        "import_files": window.data_panel.import_files_button.click,
+        "initialize_structure": window.structure_panel.initialize_button.click,
+        "start_fit": window.start_fit,
+    }
+
+
+def install_workspace(window: object, document: object) -> None:
+    """Build the plot-centred workspace with one dock per side panel."""
     window.project_actions = ProjectActions(window, document)
     window.data_panel = DataPanel(document)
     window.structure_panel = StructurePanel(document)
-    window.left_splitter = QSplitter(Qt.Orientation.Vertical)
-    window.left_splitter.setObjectName("leftSplitter")
-    window.left_splitter.addWidget(window.data_panel)
-    window.left_splitter.addWidget(window.structure_panel)
-    window.left_splitter.setSizes(list(document.project.ui_state.left_splitter_sizes))
-    project_column.layout().addWidget(window.left_splitter, 1)
-    project_column.setSizePolicy(
-        QSizePolicy.Policy.Ignored,
-        QSizePolicy.Policy.Expanding,
-    )
-    project_column.setMinimumWidth(320)
-    return project_column
-
-
-def _install_plot_column(window: object) -> QWidget:
-    plot_column = _column("plotColumn")
-    window.plot_panel = PlotPanel()
-    plot_column.layout().addWidget(window.plot_panel, 1)
-    return plot_column
-
-
-def _install_analysis_column(window: object, document: object) -> QWidget:
-    analysis_column = _column("analysisColumn")
     window.parameters_panel = ParametersPanel(document)
     window.fit_panel = FitPanel(document)
     window.result_panel = ResultsPanel(document)
+    window.plot_panel = PlotPanel()
     window.export_button = QPushButton("导出结果")
     window.export_button.setObjectName("exportResultsButton")
     window.export_button.setAccessibleName("导出拟合结果")
     window.export_button.setToolTip("将当前项目的拟合结果导出到所选目录")
     window.export_button.clicked.connect(window.export_results_dialog)
-    content = QWidget()
-    content_layout = QVBoxLayout(content)
-    content_layout.setContentsMargins(0, 0, 4, 0)
-    content_layout.setSpacing(8)
-    sections = (
-        ("参数", "parametersSection", window.parameters_panel),
-        ("拟合", "fitSection", window.fit_panel),
-        ("结果", "resultsSection", window.result_panel),
+    # Each analysis panel keeps its collapsible card so a dock holding several of
+    # them still fits; the cards are split across dedicated docks here.
+    _build_analysis_sections(window)
+    widgets = {
+        "dataDock": window.data_panel,
+        "structureDock": window.structure_panel,
+        "parametersDock": window.analysis_sections["parametersSection"],
+        "fitDock": window.analysis_sections["fitSection"],
+        "resultsDock": window.analysis_sections["resultsSection"],
+    }
+    window.docks = {}
+    for name, title, accessible, area in DOCK_SPECS:
+        inner = widgets[name]
+        dock = _dock(name, title, accessible, _scrolled(f"{name}Scroll", inner))
+        window.addDockWidget(area, dock)
+        window.docks[name] = dock
+    # Guidance and the plot share the central slot: they are two surfaces onto
+    # one project, so a stack swaps them without either being rebuilt.
+    window.guidance = GuidancePanel(document, _guidance_actions(window))
+    window.central_stack = QStackedWidget()
+    window.central_stack.setObjectName("centralStack")
+    window.central_stack.addWidget(window.guidance)
+    window.central_stack.addWidget(window.plot_panel)
+    window.setCentralWidget(window.central_stack)
+    window.setDockOptions(
+        QMainWindow.DockOption.AnimatedDocks
+        | QMainWindow.DockOption.AllowNestedDocks
+        | QMainWindow.DockOption.AllowTabbedDocks
     )
-    for title, name, panel in sections:
-        content_layout.addWidget(_section(title, name, panel))
-    content_layout.addStretch(1)
-    scroll = QScrollArea()
-    scroll.setObjectName("analysisScroll")
-    scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QFrame.Shape.NoFrame)
-    scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    scroll.setWidget(content)
-    analysis_column.layout().addWidget(scroll, 1)
-    analysis_column.setSizePolicy(
-        QSizePolicy.Policy.Ignored,
-        QSizePolicy.Policy.Expanding,
+    # Stacking parameters, fit, and results vertically gives each a third of the
+    # height, and all three then overflow at the documented minimum size. Tabbing
+    # them gives whichever is in front the full height; a user who wants two at
+    # once can now drag one out, which is the point of a dock layout.
+    window.tabifyDockWidget(window.docks["parametersDock"], window.docks["fitDock"])
+    window.tabifyDockWidget(window.docks["fitDock"], window.docks["resultsDock"])
+    window.docks["parametersDock"].raise_()
+    window.resizeDocks(
+        [window.docks["dataDock"], window.docks["parametersDock"]],
+        [320, 380],
+        Qt.Orientation.Horizontal,
     )
-    analysis_column.setMinimumWidth(380)
-    return analysis_column
-
-
-def install_workspace(window: object, document: object) -> None:
-    splitter = QSplitter(Qt.Orientation.Horizontal)
-    window.workspace_splitter = splitter
-    splitter.setObjectName("workspaceSplitter")
-    splitter.setChildrenCollapsible(False)
-    columns = (
-        _install_project_column(window, document),
-        _install_plot_column(window),
-        _install_analysis_column(window, document),
-    )
-    for widget in columns:
-        splitter.addWidget(widget)
-    for index in range(splitter.count()):
-        splitter.setCollapsible(index, False)
-    splitter.setStretchFactor(0, 0)
-    splitter.setStretchFactor(1, 1)
-    splitter.setStretchFactor(2, 0)
-    splitter.setSizes(list(document.project.ui_state.workspace_splitter_sizes))
-    window.setCentralWidget(splitter)
+    window._default_dock_state = window.saveState()
 
 
 def install_workflow_actions(window: object) -> None:

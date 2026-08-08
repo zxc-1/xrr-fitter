@@ -56,6 +56,47 @@ DARK_TOKENS = ThemeTokens(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class PlotPalette:
+    """Structural colours for a Matplotlib figure, as RGBA 0..1 tuples.
+
+    A ``Figure`` is not styled by the Qt stylesheet, so the diagnostic plots
+    need the palette handed to them explicitly. Only structural colours live
+    here; the data series keep their fixed Okabe-Ito hues, which stay legible
+    against either background.
+    """
+
+    background: tuple[float, float, float, float]
+    foreground: tuple[float, float, float, float]
+    muted: tuple[float, float, float, float]
+    grid: tuple[float, float, float, float]
+
+
+def _rgba(value: str, alpha: float = 1.0) -> tuple[float, float, float, float]:
+    channels = tuple(int(value[index : index + 2], 16) / 255.0 for index in (1, 3, 5))
+    return (*channels, alpha)
+
+
+LIGHT_PLOT_PALETTE = PlotPalette(
+    background=_rgba("#FFFFFF"),
+    foreground=_rgba("#202020"),
+    muted=_rgba("#6B6B70"),
+    grid=_rgba("#202020", 0.16),
+)
+
+DARK_PLOT_PALETTE = PlotPalette(
+    background=_rgba("#1E1F22"),
+    foreground=_rgba("#E8E8EA"),
+    muted=_rgba("#A0A0A6"),
+    grid=_rgba("#E8E8EA", 0.20),
+)
+
+
+def plot_palette(tokens: ThemeTokens) -> PlotPalette:
+    """Return the figure palette matching a resolved token set."""
+    return DARK_PLOT_PALETTE if tokens is DARK_TOKENS else LIGHT_PLOT_PALETTE
+
+
 def palette_tokens(palette: QPalette) -> ThemeTokens:
     window = palette.color(QPalette.ColorRole.Window)
     return DARK_TOKENS if window.lightness() < 128 else LIGHT_TOKENS
