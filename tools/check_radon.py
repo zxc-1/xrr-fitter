@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -22,9 +23,22 @@ class DiscoveryIssue:
     detail: str
 
 
-def _is_pruned(relative: Path) -> bool:
-    directories = relative.parts[:-1]
-    return any(part in PRUNED_DIRS or part.endswith(".egg-info") for part in directories)
+def _discovery_issues(root: Path, relative: Path) -> list[DiscoveryIssue]:
+    if relative.parts[0] not in MANAGED_ROOTS:
+        detail = "Python source is outside a managed root"
+        return [DiscoveryIssue("ownership", relative.as_posix(), detail)]
+    if _ignored(root, relative):
+        detail = "managed Python source is ignored"
+        return [DiscoveryIssue("ignore-policy", relative.as_posix(), detail)]
+    return []
+
+
+def _prunable(root: Path, relative: Path) -> bool:
+    if relative.name in PRUNED_DIRS or relative.name.endswith(".egg-info"):
+        return True
+    # A directory git ignores outside the managed roots is a local artifact such as
+    # a virtual environment, so it carries no source the gate governs.
+    return relative.parts[0] not in MANAGED_ROOTS and _ignored(root, relative)
 
 
 def _ignored(root: Path, relative: Path) -> bool:
@@ -41,17 +55,17 @@ def discover_python_files(root: str | Path) -> tuple[tuple[Path, ...], tuple[Dis
     repository = Path(root).resolve()
     paths: list[Path] = []
     issues: list[DiscoveryIssue] = []
-    for path in repository.rglob("*.py"):
-        relative = path.relative_to(repository)
-        if _is_pruned(relative) or not path.is_file():
-            continue
-        paths.append(relative)
-        if relative.parts[0] not in MANAGED_ROOTS:
-            detail = "Python source is outside a managed root"
-            issues.append(DiscoveryIssue("ownership", relative.as_posix(), detail))
-        elif _ignored(repository, relative):
-            detail = "managed Python source is ignored"
-            issues.append(DiscoveryIssue("ignore-policy", relative.as_posix(), detail))
+    for current, directories, names in os.walk(repository):
+        base = Path(current).relative_to(repository)
+        directories[:] = [
+            name for name in directories if not _prunable(repository, base / name)
+        ]
+        for name in names:
+            if not name.endswith(".py") or not (Path(current) / name).is_file():
+                continue
+            relative = base / name
+            paths.append(relative)
+            issues.extend(_discovery_issues(repository, relative))
     ordered_paths = tuple(sorted(paths, key=lambda item: item.as_posix()))
     ordered_issues = tuple(sorted(issues, key=lambda item: (item.path, item.kind, item.detail)))
     return ordered_paths, ordered_issues
