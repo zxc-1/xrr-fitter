@@ -20,7 +20,9 @@ from matplotlib.figure import Figure
 from matplotlib.text import Text
 from matplotlib.ticker import LogFormatter
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QTabWidget
+from PySide6.QtWidgets import QApplication, QTabWidget
+
+from xrr_fitter.gui import theme
 
 
 # The switchable diagnostic tabs, in display order. The log view leads because
@@ -145,10 +147,16 @@ def _cjk_font() -> font_manager.FontProperties:
 
 
 def apply_figure_font(figure: Figure) -> None:
-    """Apply a local font to current artists without mutating global style."""
+    """Apply the local font and theme palette to the figure's current artists.
+
+    Every draw ends here, and ``Axes.clear()`` resets facecolor and tick colours
+    to the Matplotlib defaults, so the palette has to be reapplied at this point
+    rather than only at construction.
+    """
     properties = _cjk_font()
     for artist in figure.findobj(match=Text):
         artist.set_fontproperties(properties)
+    apply_figure_palette(figure)
 
 
 def draw_empty(view: DiagnosticView, title: str, message: str = "暂无可用数据") -> None:
@@ -159,6 +167,7 @@ def draw_empty(view: DiagnosticView, title: str, message: str = "暂无可用数
         axes.set_xticks(())
         axes.set_yticks(())
     view.axes.set_title(title)
+    palette = apply_figure_palette(view.figure)
     view.axes.text(
         0.5,
         0.5,
@@ -166,7 +175,7 @@ def draw_empty(view: DiagnosticView, title: str, message: str = "暂无可用数
         ha="center",
         va="center",
         transform=view.axes.transAxes,
-        color="#8A8A8E",
+        color=palette.muted,
     )
     apply_figure_font(view.figure)
     view.canvas.draw_idle()
@@ -180,12 +189,40 @@ def _axes(figure: Figure, key: str) -> object:
     return figure.subplots()
 
 
+def current_plot_palette() -> theme.PlotPalette:
+    """Resolve the figure palette from the running application's palette.
+
+    Figures are drawn outside the stylesheet, so each draw reads the palette
+    afresh; that is what lets a system appearance change reach the plots on the
+    next repaint without any switching logic.
+    """
+    application = QApplication.instance()
+    if application is None:
+        return theme.LIGHT_PLOT_PALETTE
+    return theme.plot_palette(theme.palette_tokens(application.palette()))
+
+
+def apply_figure_palette(figure: Figure) -> theme.PlotPalette:
+    """Paint one figure's structural colours and return the palette used."""
+    palette = current_plot_palette()
+    figure.set_facecolor(palette.background)
+    for axes in figure.axes:
+        axes.set_facecolor(palette.background)
+        axes.tick_params(colors=palette.foreground, which="both")
+        for spine in axes.spines.values():
+            spine.set_color(palette.muted)
+        for text in (axes.title, axes.xaxis.label, axes.yaxis.label):
+            text.set_color(palette.foreground)
+    return palette
+
+
 def _view(key: str, *, qt: bool) -> DiagnosticView:
     title = next(title for name, title, _description in VIEW_SPECS if name == key)
     figure = Figure(layout="constrained") if qt else Figure(figsize=(0.8, 0.6), dpi=25)
     canvas = DiagnosticCanvas(figure) if qt else FigureCanvasAgg(figure)
     axes = _axes(figure, key)
     view = DiagnosticView(figure, canvas, axes)
+    apply_figure_palette(figure)
     if qt:
         draw_empty(view, title)
     return view
