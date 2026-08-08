@@ -764,15 +764,24 @@ profile（例如二元周期结构只保留 period、fraction 和两项 roughnes
 
 ### 13.8 界面截图
 
-以下截图使用仓库 canonical `single-layer` synthetic example 与固定 seed
-`20260726` 的快速拟合结果，不包含用户 source。平台为 macOS/PySide6 Fusion；
-覆盖 minimum/normal window、light/dark palette 与 standard/expert 状态：
-
-> **注意**：这些截图拍摄于工作区改造之前，仍显示固定三列、SLD 作为诊断 tab、
-> 内联的 MCMC 控件组，且没有引导模式与可停靠面板。重新生成需要运行带
-> `XRR_GUI_E2E_SCREENSHOT` 的 GUI E2E 流程。
+以下截图由 `tests/integration/test_gui_synthetic_xy_workflow.py` 的完整 GUI E2E
+流程生成，使用该测试合成的 `S1 SiO2` / `S2 SiO2+Al2O3` 数据与其拟合结果，不包含
+用户 source。平台为 macOS/PySide6 Fusion；覆盖 minimum/normal window、light/dark
+palette 与 standard/expert 状态：
 
 - [Light 1280×760](images/gui-light-1280x760.png)
 - [Light 1600×900 Expert](images/gui-light-1600x900-expert.png)
 - [Dark 1280×760](images/gui-dark-1280x760.png)
 - [Dark 1600×900 Expert](images/gui-dark-1600x900-expert.png)
+
+重新生成命令（逐张设置环境变量后运行同一个 GUI E2E 流程）：
+
+```bash
+QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
+  XRR_GUI_E2E_SCREENSHOT="$PWD/docs/images/gui-light-1280x760.png" \
+  XRR_GUI_E2E_SCREENSHOT_SIZE=1280x760 \
+  python -m pytest tests/integration/test_gui_synthetic_xy_workflow.py -q
+```
+
+追加 `XRR_GUI_E2E_SCREENSHOT_DARK=1` 得到暗色版，追加
+`XRR_GUI_E2E_SCREENSHOT_EXPERT=1` 得到专家版（专家版使用 `1600x900`）。

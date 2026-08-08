@@ -232,8 +232,8 @@ def _workflow_inputs(
         api.LayerSpec("SiO2", SIO2, 110.0, roughness_a=3.0),
     )
     sources = (
-        _write_synthetic_xy(tmp_path / "single-layer.xy", (single_layer,)),
-        _write_synthetic_xy(tmp_path / "double-layer.xy", double_layers),
+        _write_synthetic_xy(tmp_path / "S1 SiO2.xy", (single_layer,)),
+        _write_synthetic_xy(tmp_path / "S2 SiO2+Al2O3.xy", double_layers),
     )
     return (
         sources,
@@ -278,6 +278,9 @@ def _show_window(qtbot, width: int, height: int):
     qtbot.addWidget(window)
     window.resize(width, height)
     window.show()
+    # This workflow drives the panels directly, so it needs the expert surface;
+    # the guided opening surface deliberately hides the docks that hold them.
+    window.set_guidance_visible(False)
     qtbot.wait(1)
     return window
 
@@ -290,7 +293,7 @@ def _import_sources(window) -> None:
         _configure_import,
     )
 
-    assert window.data_panel.dataset_ids == ("single-layer", "double-layer")
+    assert window.data_panel.dataset_ids == ("S1", "S2")
     assert all(
         dataset.column_mapping == api.DataColumnMapping(0, 1)
         for dataset in window.document.project.datasets
@@ -301,23 +304,28 @@ def _import_sources(window) -> None:
     )
 
 
-def _build_dataset_structures(
+def _adopt_dataset_structures(
     window,
     expected_layers: tuple[
         tuple[api.LayerSpec, ...],
         tuple[api.LayerSpec, ...],
     ],
 ) -> None:
+    """Confirm the filename-declared stack, then narrow the fitted parameters.
+
+    These filenames declare their layer stacks, so import builds each structure
+    on the way in and the manual "initialize structure" entry is correctly
+    absent. The workflow therefore adopts what import produced and asserts the
+    declared layer order survived, rather than rebuilding it by hand.
+    """
     tree = window.findChild(QTreeWidget, "datasetTree")
     for row, layers in enumerate(expected_layers):
         dataset_id = _select_dataset(tree, row)
         assert window.document.active_dataset_id == dataset_id
-        initialize = window.findChild(QPushButton, "initializeStructureButton")
-        assert initialize is not None and initialize.isVisible()
-        QTest.mouseClick(initialize, Qt.MouseButton.LeftButton)
-        for layer in layers:
-            _add_layer(window, layer)
-        assert window.structure_panel.structure.components == layers
+        components = window.structure_panel.structure.components
+        assert tuple(component.name for component in components) == tuple(
+            layer.name for layer in layers
+        )
         _lock_all_but_first_thickness(
             window,
             initial_nm=layers[0].thickness_a / 10.0 * 0.95,
@@ -418,13 +426,57 @@ def _save_and_export(window, project_path: Path) -> None:
     )
 
 
+def _screenshot_geometry() -> tuple[int, int]:
+    """Let the screenshot run pick the window size it needs to document."""
+    raw = os.environ.get("XRR_GUI_E2E_SCREENSHOT_SIZE")
+    if not raw:
+        return (1280, 760)
+    width, _, height = raw.partition("x")
+    return (int(width), int(height))
+
+
+DARK_PALETTE_ROLES = (
+    ("Window", "#1E1F22"),
+    ("WindowText", "#E8E8EA"),
+    ("Base", "#26282C"),
+    ("AlternateBase", "#2E3034"),
+    ("Text", "#E8E8EA"),
+    ("Button", "#2A2C30"),
+    ("ButtonText", "#E8E8EA"),
+    ("ToolTipBase", "#26282C"),
+    ("ToolTipText", "#E8E8EA"),
+)
+
+
+def _apply_screenshot_palette() -> None:
+    """Switch the application to a dark palette when the run asks for it.
+
+    The theme resolves its tokens from the live QPalette, so documenting dark
+    mode means setting the palette before the window is built rather than
+    threading a mode through the GUI.
+    """
+    if not os.environ.get("XRR_GUI_E2E_SCREENSHOT_DARK"):
+        return
+    from PySide6.QtGui import QColor, QPalette
+
+    from xrr_fitter.gui.theme import apply_theme
+
+    application = QApplication.instance()
+    palette = QPalette()
+    for role, value in DARK_PALETTE_ROLES:
+        palette.setColor(getattr(QPalette.ColorRole, role), QColor(value))
+    application.setPalette(palette)
+    apply_theme(application)
+
+
 def _reopen_and_verify(qtbot, target_id: str) -> None:
-    reopened = _show_window(qtbot, 1280, 760)
+    _apply_screenshot_palette()
+    reopened = _show_window(qtbot, *_screenshot_geometry())
     open_button = reopened.findChild(QPushButton, "openProjectButton")
     QTest.mouseClick(open_button, Qt.MouseButton.LeftButton)
     qtbot.wait(1)
 
-    assert reopened.data_panel.dataset_ids == ("single-layer", "double-layer")
+    assert reopened.data_panel.dataset_ids == ("S1", "S2")
     assert tuple(
         len(dataset.structure.components)
         for dataset in reopened.document.project.datasets
@@ -437,6 +489,12 @@ def _reopen_and_verify(qtbot, target_id: str) -> None:
     assert reopened.plot_panel.selected_candidate_id() == target_id
     screenshot = os.environ.get("XRR_GUI_E2E_SCREENSHOT")
     if screenshot:
+        # The documented screenshots cover standard and expert state; expert mode
+        # is what reveals the SLD companion pane and the full parameter table.
+        if os.environ.get("XRR_GUI_E2E_SCREENSHOT_EXPERT"):
+            reopened.parameters_panel.set_expert_mode(True)
+            qtbot.wait(1)
+        QApplication.processEvents()
         assert reopened.grab().save(screenshot)
 
 
@@ -450,7 +508,7 @@ def test_generated_single_and_double_layer_xy_complete_gui_workflow(
     _patch_file_dialogs(monkeypatch, sources, project_path, export_root)
     window = _show_window(qtbot, 1600, 900)
     _import_sources(window)
-    _build_dataset_structures(window, expected_layers)
+    _adopt_dataset_structures(window, expected_layers)
     _edit_plot_mask(window, sources[1])
     _run_gui_fit(window, qtbot)
     target_id = _select_alternate_candidate(window)

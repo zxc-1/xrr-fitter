@@ -21,9 +21,12 @@ class StructurePanel(QWidget):
         super().__init__()
         self.document = document
         self.setObjectName("structurePanel")
+        # The dock title bar already names this panel; see DataPanel for why the
+        # heading is retained but hidden.
         heading = QLabel("样品结构")
         heading.setObjectName("structurePanelHeader")
         heading.setProperty("sectionHeader", True)
+        heading.hide()
         self.initialize_button = QPushButton("初始化结构")
         self.initialize_button.setObjectName("initializeStructureButton")
         self.initialize_button.setAccessibleName("初始化结构")
