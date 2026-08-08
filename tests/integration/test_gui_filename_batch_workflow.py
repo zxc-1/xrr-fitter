@@ -78,15 +78,25 @@ def _import_filename_batch(window) -> None:
     )
     assert snapshot == (
         ("S300-1_250904-2", "S300-2_250904-2"),
-        (
-            "S300-1_250904-2 Si3N4+Si+Zr",
-            "S300-2_250904-2 Si3N4+Si+Zr",
-        ),
+        # The display name is the wafer point identifier, not the full stem: a
+        # folder-declared stack keeps the point ID and drops the material stack,
+        # which is what "preserve wafer import names" (3a37a39) established.
+        ("S300-1_250904-2", "S300-2_250904-2"),
         (api.DataColumnMapping(0, 1), api.DataColumnMapping(0, 1)),
-        (("Zr", "Si", "Si3N4"), ("Zr", "Si", "Si3N4")),
+        # A Si substrate gains a 10 A SiO2 native oxide unless the adjacent layer
+        # is already exactly SiO2. Here the substrate-side layer is Si3N4, so the
+        # oxide is inserted and the stack carries four layers, surface first.
+        (
+            ("Zr", "Si", "Si3N4", "SiO2"),
+            ("Zr", "Si", "Si3N4", "SiO2"),
+        ),
         True,
     )
-    assert project.datasets[0].structure is project.datasets[1].structure
+    # Equality, not object identity: joint routing groups datasets by physical
+    # signature (services/batch.py `_component_signature`), which compares values.
+    # Batch import builds each structure from the declared stack, so two rows with
+    # the same stack are equal without necessarily being the same instance.
+    assert project.datasets[0].structure == project.datasets[1].structure
 
 
 def _select_joint_mode(window) -> None:
@@ -131,27 +141,37 @@ def _exercise_recoverable_layer_dialog(window) -> None:
         "layerDialog",
         configure,
     )
+    # The native oxide makes this a four-layer stack, so the rejected interface is
+    # index 4 rather than 3.
     assert observed == [
         (
             True,
             True,
-            "interface.3.roughness_a must be below 4.9 A",
-            (3, 3),
+            "interface.4.roughness_a must be below 4.9 A",
+            (4, 4),
         )
     ]
     assert _component_names(window) == (
-        ("Zr", "Si", "Si3N4", "validation-layer"),
-        ("Zr", "Si", "Si3N4", "validation-layer"),
+        ("Zr", "Si", "Si3N4", "SiO2 native oxide", "validation-layer"),
+        ("Zr", "Si", "Si3N4", "SiO2 native oxide", "validation-layer"),
     )
 
+    # Locate the added layer by name: the tree also shows the ambient row and the
+    # native oxide, so a fixed row index silently targets the wrong component
+    # whenever the stack changes.
     tree = window.findChild(QTreeWidget, "structureTree")
-    tree.setCurrentItem(tree.topLevelItem(4))
+    target = next(
+        tree.topLevelItem(row)
+        for row in range(tree.topLevelItemCount())
+        if tree.topLevelItem(row).text(0) == "validation-layer"
+    )
+    tree.setCurrentItem(target)
     remove = window.findChild(QPushButton, "removeComponentButton")
     QTest.mouseClick(remove, Qt.MouseButton.LeftButton)
     QApplication.processEvents()
     assert _component_names(window) == (
-        ("Zr", "Si", "Si3N4"),
-        ("Zr", "Si", "Si3N4"),
+        ("Zr", "Si", "Si3N4", "SiO2 native oxide"),
+        ("Zr", "Si", "Si3N4", "SiO2 native oxide"),
     )
 
 

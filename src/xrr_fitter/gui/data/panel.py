@@ -84,9 +84,12 @@ class DataPanel(QWidget):
         self._render_project()
 
     def _build_controls(self) -> None:
+        # The dock title bar names this panel, so an in-panel heading would show
+        # the same word twice. It is kept for standalone use and hidden here.
         heading = QLabel("数据集")
         heading.setObjectName("dataPanelHeader")
         heading.setProperty("sectionHeader", True)
+        heading.hide()
         self.import_files_button = QPushButton("导入文件")
         self.import_files_button.setObjectName("importFilesButton")
         self.import_files_button.setProperty("commandBar", True)
