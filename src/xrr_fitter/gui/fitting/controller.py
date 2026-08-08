@@ -23,9 +23,20 @@ class FitController(QObject):
     failed = Signal(object)
     stopped = Signal()
 
-    def __init__(self, parent: QObject | None = None, *, poll_interval_ms: int = 25) -> None:
+    def __init__(
+        self,
+        parent: QObject | None = None,
+        *,
+        poll_interval_ms: int = 25,
+        idle_poll_interval_ms: int = 200,
+        backoff_after_empty_polls: int = 8,
+    ) -> None:
         super().__init__(parent)
         self._job: object | None = None
+        self._base_interval_ms = poll_interval_ms
+        self._idle_interval_ms = idle_poll_interval_ms
+        self._backoff_after = backoff_after_empty_polls
+        self._empty_polls = 0
         self._timer = QTimer(self)
         self._timer.setObjectName("operationPollTimer")
         self._timer.setInterval(poll_interval_ms)
@@ -88,6 +99,8 @@ class FitController(QObject):
             )
             return False
         self._job = job
+        self._empty_polls = 0
+        self._timer.setInterval(self._base_interval_ms)
         self._timer.start()
         self.running_changed.emit(True)
         return True
@@ -98,7 +111,31 @@ class FitController(QObject):
             return ()
         events = tuple(job.poll())
         self._dispatch_batch(events)
+        self._adjust_poll_interval(bool(events))
         return events
+
+    def _adjust_poll_interval(self, had_events: bool) -> None:
+        """Back off toward the idle interval during silence; snap back on events.
+
+        A long fit spends most of its wall-clock producing no events, so a fixed
+        fast interval burns tens of thousands of empty polls. Widening the timer
+        after sustained silence cuts that waste, while any single event restores
+        the responsive interval immediately so progress never lags. The timer is
+        only ever reprogrammed while a job is running.
+        """
+        if self._job is None:
+            return
+        if had_events:
+            self._empty_polls = 0
+            if self._timer.interval() != self._base_interval_ms:
+                self._timer.setInterval(self._base_interval_ms)
+            return
+        self._empty_polls += 1
+        if (
+            self._empty_polls >= self._backoff_after
+            and self._timer.interval() != self._idle_interval_ms
+        ):
+            self._timer.setInterval(self._idle_interval_ms)
 
     def _dispatch_batch(self, events: tuple[api.OperationEvent, ...]) -> None:
         """Project one frame per stage while preserving durable event order.
