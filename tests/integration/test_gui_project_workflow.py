@@ -186,6 +186,13 @@ def test_expert_mcmc_controls_remain_readable_at_documented_window_size(
     window.show()
     qtbot.wait(1)
 
+    # The controls live in an on-demand dialog rather than the analysis column,
+    # so readability is asserted where the user actually meets them.
+    dialog = window.result_panel.open_uncertainty_dialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.wait(1)
+
     controls = (
         window.result_panel.walkers,
         window.result_panel.burn_in,

@@ -683,3 +683,45 @@ def test_mcmc_recommend_button_disabled_while_running(qtbot) -> None:
 
     group.set_operation_state(running=False, ready=True)
     assert group.recommend_button.isEnabled() is True
+
+
+def test_mcmc_controls_stay_out_of_the_panel_layout(qtbot) -> None:
+    """MCMC is an opt-in deep dive, so its inputs must not crowd the panel.
+
+    Four spin boxes and three buttons permanently on screen push the analysis
+    column past the viewport on a 1280x760 display. The controls stay owned by
+    the panel (so configuration still tracks the selected candidate) but are
+    parented to an on-demand dialog rather than the visible layout.
+    """
+    panel = _panel(qtbot, _project_with_result(_two_candidate_result(), expert=True))
+    panel.show()
+
+    assert panel.mcmc_group.isVisibleTo(panel) is False
+    for control in (panel.walkers, panel.burn_in, panel.production, panel.thin):
+        assert control.isVisibleTo(panel) is False
+
+
+def test_uncertainty_dialog_button_is_expert_only(qtbot) -> None:
+    """One entry point replaces the inline group, and only in expert mode."""
+    expert = _panel(qtbot, _project_with_result(_two_candidate_result(), expert=True))
+    expert.show()
+
+    assert expert.uncertainty_button.isVisibleTo(expert) is True
+
+    plain = _panel(qtbot, _project_with_result(_two_candidate_result()))
+    plain.show()
+
+    assert plain.uncertainty_button.isVisibleTo(plain) is False
+
+
+def test_uncertainty_dialog_hosts_the_mcmc_controls(qtbot) -> None:
+    """Opening the entry point reveals the same owned controls, not copies."""
+    panel = _panel(qtbot, _project_with_result(_two_candidate_result(), expert=True))
+    panel.show()
+
+    dialog = panel.open_uncertainty_dialog()
+    qtbot.addWidget(dialog)
+
+    assert panel.mcmc_group.isVisibleTo(dialog) is True
+    assert panel.mcmc_group.window() is dialog
+    assert panel.mcmc_config() == api.McmcConfig.standard(17)
