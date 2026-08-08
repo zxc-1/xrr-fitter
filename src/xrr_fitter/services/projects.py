@@ -227,6 +227,23 @@ def set_workspace_state(project: XrrProject, state: ProjectUiState) -> XrrProjec
     return with_workspace_state(project, state)
 
 
+def set_dock_state(project: XrrProject, state: str) -> XrrProject:
+    """Persist the opaque dock arrangement, or return the project unchanged.
+
+    The value is base64 of ``QMainWindow.saveState()`` and is stored verbatim;
+    validating it here is impossible because its format belongs to Qt. An
+    unchanged layout returns the same project so it never marks a project dirty.
+    """
+    if not isinstance(state, str):
+        raise TypeError("state must be str")
+    if project.ui_state.dock_state == state:
+        return project
+    return replace(
+        project,
+        ui_state=replace(project.ui_state, dock_state=state),
+    )
+
+
 def _joint_structure_template(
     datasets: tuple[DatasetProject, ...],
     active_id: str | None,

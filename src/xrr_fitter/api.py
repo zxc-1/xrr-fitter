@@ -93,6 +93,7 @@ from xrr_fitter.services.projects import (
     select_active_dataset,
     select_candidate,
     set_batch_mode,
+    set_dock_state,
     set_expert_mode,
     set_workspace_state,
 )
@@ -188,6 +189,7 @@ __all__ = (
     "select_active_dataset",
     "select_candidate",
     "set_batch_mode",
+    "set_dock_state",
     "set_expert_mode",
     "set_fit_mask",
     "set_instrument",
