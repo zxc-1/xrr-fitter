@@ -108,7 +108,8 @@ EXPECTED_ACTIONS = {
 
 def _assert_workspace_layout(window) -> None:
     assert window.objectName() == "mainWindow"
-    assert window.left_splitter.count() == 2
+    assert len(window.docks) == 5
+    assert window.centralWidget() is window.plot_panel
     assert window.fit_panel.parent() is not None
     assert window.result_panel.parent() is not None
 

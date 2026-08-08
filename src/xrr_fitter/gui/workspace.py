@@ -12,7 +12,7 @@ import xrr_fitter.api as api
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceSnapshot:
-    workspace_splitter_sizes: tuple[int, int, int]
+    workspace_splitter_sizes: tuple[int, int, int] | None
     left_splitter_sizes: tuple[int, int] | None
     plot_tab_index: int | None
     expert_mode: bool | None
@@ -21,19 +21,22 @@ class WorkspaceSnapshot:
 @dataclass(frozen=True, slots=True)
 class WorkspaceView:
     root: QWidget
-    workspace_splitter: QSplitter
+    workspace_splitter: QSplitter | None
     left_splitter: QSplitter | None
     plot_tabs: QTabWidget | None
     expert_toggle: QAbstractButton | None
 
     @classmethod
     def from_root(cls, root: QWidget) -> WorkspaceView:
-        workspace = root.findChild(QSplitter, "workspaceSplitter")
-        if workspace is None:
-            raise LookupError("workspaceSplitter is required")
+        """Bind to whichever workspace widgets the root actually has.
+
+        Panel geometry moved to the dock layout, which persists separately as
+        an opaque ``dock_state``. Splitters are therefore optional here; this
+        view now carries only the tab selection and expert mode.
+        """
         return cls(
             root,
-            workspace,
+            root.findChild(QSplitter, "workspaceSplitter"),
             root.findChild(QSplitter, "leftSplitter"),
             root.findChild(QTabWidget, "diagnosticTabs"),
             root.findChild(QAbstractButton, "expertModeToggle"),
@@ -41,7 +44,9 @@ class WorkspaceView:
 
     def snapshot(self) -> WorkspaceSnapshot:
         return WorkspaceSnapshot(
-            tuple(self.workspace_splitter.sizes()),
+            None
+            if self.workspace_splitter is None
+            else tuple(self.workspace_splitter.sizes()),
             None if self.left_splitter is None else tuple(self.left_splitter.sizes()),
             None if self.plot_tabs is None else self.plot_tabs.currentIndex(),
             None if self.expert_toggle is None else self.expert_toggle.isChecked(),
@@ -55,21 +60,43 @@ class WorkspaceView:
             self._apply(previous)
             raise
 
-    def _apply(self, snapshot: WorkspaceSnapshot) -> None:
-        widgets = [self.workspace_splitter]
-        widgets.extend(
-            widget
-            for widget in (self.left_splitter, self.plot_tabs, self.expert_toggle)
-            if widget is not None
+    def _assignments(
+        self,
+        snapshot: WorkspaceSnapshot,
+    ) -> tuple[tuple[QWidget | None, object, object], ...]:
+        """Pair each optional widget with its setter and the value to apply."""
+        return (
+            (
+                self.workspace_splitter,
+                snapshot.workspace_splitter_sizes,
+                lambda widget, value: widget.setSizes(list(value)),
+            ),
+            (
+                self.left_splitter,
+                snapshot.left_splitter_sizes,
+                lambda widget, value: widget.setSizes(list(value)),
+            ),
+            (
+                self.plot_tabs,
+                snapshot.plot_tab_index,
+                lambda widget, value: widget.setCurrentIndex(value),
+            ),
+            (
+                self.expert_toggle,
+                snapshot.expert_mode,
+                lambda widget, value: widget.setChecked(value),
+            ),
         )
-        blockers = [QSignalBlocker(widget) for widget in widgets]
-        self.workspace_splitter.setSizes(list(snapshot.workspace_splitter_sizes))
-        if self.left_splitter is not None and snapshot.left_splitter_sizes is not None:
-            self.left_splitter.setSizes(list(snapshot.left_splitter_sizes))
-        if self.plot_tabs is not None and snapshot.plot_tab_index is not None:
-            self.plot_tabs.setCurrentIndex(snapshot.plot_tab_index)
-        if self.expert_toggle is not None and snapshot.expert_mode is not None:
-            self.expert_toggle.setChecked(snapshot.expert_mode)
+
+    def _apply(self, snapshot: WorkspaceSnapshot) -> None:
+        pending = [
+            (widget, value, setter)
+            for widget, value, setter in self._assignments(snapshot)
+            if widget is not None and value is not None
+        ]
+        blockers = [QSignalBlocker(widget) for widget, _value, _setter in pending]
+        for widget, value, setter in pending:
+            setter(widget, value)
         del blockers
 
 
@@ -96,7 +123,11 @@ def capture_project(project: api.XrrProject, view: WorkspaceView) -> api.XrrProj
     current = project.ui_state
     state = replace(
         current,
-        workspace_splitter_sizes=snapshot.workspace_splitter_sizes,
+        workspace_splitter_sizes=(
+            current.workspace_splitter_sizes
+            if snapshot.workspace_splitter_sizes is None
+            else snapshot.workspace_splitter_sizes
+        ),
         left_splitter_sizes=(
             current.left_splitter_sizes
             if snapshot.left_splitter_sizes is None

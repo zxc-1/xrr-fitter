@@ -97,12 +97,15 @@ def test_sections_are_independent_rather_than_mutually_exclusive(
     assert window.analysis_sections["fitSection"].body.isVisibleTo(window)
 
 
-def test_default_open_sections_fit_the_documented_minimum_window(
+def test_each_analysis_dock_fits_the_documented_minimum_window(
     qtbot,
     tmp_path,
 ) -> None:
-    """At 1280x760 the column's default content must not overflow its viewport."""
+    """At 1280x760 no analysis dock's content may overflow its own viewport."""
     window = _window(qtbot, tmp_path, expert=True)
 
-    scroll = window.findChild(QScrollArea, "analysisScroll")
-    assert scroll.widget().sizeHint().height() <= scroll.viewport().height()
+    for name in ("parametersDock", "fitDock", "resultsDock"):
+        scroll = window.findChild(QScrollArea, f"{name}Scroll")
+        assert scroll is not None, name
+        overflow = scroll.widget().sizeHint().height() - scroll.viewport().height()
+        assert overflow <= 0, f"{name} overflows by {overflow}px"

@@ -184,20 +184,27 @@ def test_open_project_revalidation_restores_persisted_mask_after_retry(
     assert document.project.datasets[0].fit_mask[8] is False
 
 
-def test_main_window_has_three_accessible_columns(qtbot) -> None:
+def test_main_window_docks_every_side_panel_around_the_plot(qtbot) -> None:
+    """The fixed three columns became docks arranged around a central plot."""
+    from PySide6.QtWidgets import QDockWidget
+
     from xrr_fitter.gui.main_window import MainWindow
 
     window = MainWindow()
     qtbot.addWidget(window)
     window.show()
 
-    splitter = window.findChild(QSplitter, "workspaceSplitter")
-    assert splitter is not None
-    assert splitter.orientation() == Qt.Orientation.Horizontal
-    assert splitter.count() == 3
-    assert tuple(
-        splitter.widget(index).objectName() for index in range(splitter.count())
-    ) == ("projectColumn", "plotColumn", "analysisColumn")
+    assert window.findChild(QSplitter, "workspaceSplitter") is None
+    assert window.centralWidget() is window.plot_panel
+    assert tuple(window.docks) == (
+        "dataDock",
+        "structureDock",
+        "parametersDock",
+        "fitDock",
+        "resultsDock",
+    )
+    assert all(isinstance(dock, QDockWidget) for dock in window.docks.values())
+    assert all(dock.widget() is not None for dock in window.docks.values())
     assert window.minimumWidth() == 1280
     assert window.minimumHeight() == 760
     # A fresh project is untitled and unmodified: the name resolves to the

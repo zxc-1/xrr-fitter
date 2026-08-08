@@ -9,7 +9,7 @@ the GUI event loop.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QByteArray, QTimer
 from PySide6.QtWidgets import QMainWindow, QMessageBox
 
 import xrr_fitter.api as api
@@ -32,7 +32,6 @@ from xrr_fitter.gui.window_layout import install_workflow_actions, install_works
 from xrr_fitter.gui.workspace import (
     WorkspaceView,
     capture_project,
-    configure_splitters,
     restore_project,
 )
 
@@ -54,6 +53,8 @@ class MainWindow(QMainWindow):
         self._resume_user_close = False
         self._force_close_prompt: QMessageBox | None = None
         self._workspace_released = False
+        self._restoring_docks = False
+        self._docks_settled = False
         self._close_cancel_timer = QTimer(self)
         self._close_cancel_timer.setObjectName("closeCancelTimer")
         self._close_cancel_timer.setSingleShot(True)
@@ -63,7 +64,6 @@ class MainWindow(QMainWindow):
         self.autosave.start()
         install_workspace(self, self.document)
         self.workspace_view = WorkspaceView.from_root(self)
-        configure_splitters(self.workspace_view)
         self.export_workflow = ExportWorkflow(
             self.document,
             is_running=self._operation_is_running,
@@ -87,8 +87,10 @@ class MainWindow(QMainWindow):
         self.plot_panel.import_requested.connect(
             self.data_panel.import_files_button.click
         )
-        self.workspace_splitter.splitterMoved.connect(self._workspace_changed)
-        self.left_splitter.splitterMoved.connect(self._workspace_changed)
+        for dock in self.docks.values():
+            dock.dockLocationChanged.connect(self._dock_layout_changed)
+            dock.topLevelChanged.connect(self._dock_layout_changed)
+            dock.visibilityChanged.connect(self._dock_layout_changed)
         self.result_panel.candidate_selected.connect(self._project_candidate)
         self.result_panel.candidate_inspected.connect(self._project_candidate)
         self.fit_panel.running_changed.connect(self._operation_running_changed)
@@ -171,8 +173,30 @@ class MainWindow(QMainWindow):
         if index != self.document.project.ui_state.plot_tab_index:
             self._capture_workspace()
 
-    def _workspace_changed(self, _position: int, _index: int) -> None:
-        self._capture_workspace()
+    def _dock_layout_changed(self, *_args) -> None:
+        """Persist a rearrangement the user actually made.
+
+        Docks emit these signals while the default layout is assembled, while a
+        restore is in flight, and as a side effect of the first show; capturing
+        then would either dirty a freshly opened project or write back the state
+        being applied.
+        """
+        if self._restoring_docks or not self._docks_settled:
+            return
+        self.capture_dock_layout()
+
+    def showEvent(self, event: object) -> None:
+        """Adopt the shown geometry as the default the user is compared against.
+
+        ``saveState`` before the first show carries no real geometry, so the
+        pre-show baseline would never equal a post-show capture and every window
+        would look rearranged.
+        """
+        super().showEvent(event)
+        if not self._docks_settled:
+            self._default_dock_state = self.saveState()
+            self._docks_settled = True
+            self.restore_dock_layout(self.document.project)
 
     def _capture_workspace(self) -> None:
         current = self.document.project
@@ -186,6 +210,64 @@ class MainWindow(QMainWindow):
 
     def _restore_workspace(self, project: api.XrrProject) -> None:
         restore_project(self.workspace_view, project)
+        self.restore_dock_layout(project)
+
+    def capture_dock_layout(self) -> bool:
+        """Persist the current dock arrangement onto the project.
+
+        A layout matching the construction default persists as the empty string
+        rather than its byte encoding, so merely showing a window (which Qt
+        reports as a dock visibility change) cannot dirty an untouched project.
+        """
+        current_state = self.saveState()
+        state = (
+            ""
+            if current_state == self._default_dock_state
+            else bytes(current_state.toBase64().data()).decode("ascii")
+        )
+        current = self.document.project
+        updated = api.set_dock_state(current, state)
+        if updated is current:
+            return False
+        self.document.replace_project(updated)
+        return True
+
+    def restore_dock_layout(self, project: api.XrrProject) -> bool:
+        """Apply a persisted arrangement, falling back to the default layout.
+
+        ``saveState`` bytes belong to the Qt build that produced them, so a
+        project written by another version can legitimately fail to restore.
+        That must not make the project unopenable, so any rejection or decoding
+        failure leaves the default arrangement in place.
+        """
+        state = project.ui_state.dock_state
+        if not state:
+            return False
+        try:
+            payload = QByteArray.fromBase64(state.encode("ascii"))
+        except UnicodeEncodeError:
+            payload = QByteArray()
+        self._restoring_docks = True
+        try:
+            if payload.isEmpty() or not self.restoreState(payload):
+                self._apply_default_dock_layout()
+                return False
+        finally:
+            self._restoring_docks = False
+        return True
+
+    def reset_dock_layout(self) -> None:
+        """Return every dock to the arrangement built at construction."""
+        self._restoring_docks = True
+        try:
+            self._apply_default_dock_layout()
+        finally:
+            self._restoring_docks = False
+
+    def _apply_default_dock_layout(self) -> None:
+        self.restoreState(self._default_dock_state)
+        for dock in self.docks.values():
+            dock.show()
 
     def _refresh_window_title(self, *_args) -> None:
         """Reflect the project name and unsaved state in the window title.

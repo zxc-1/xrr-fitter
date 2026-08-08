@@ -163,6 +163,7 @@ def _install_view_menu(window: QWidget, bar: QMenuBar) -> None:
         menu.addSection(title)
         for key in keys:
             menu.addAction(_view_action(window, group, key))
+    _install_dock_actions(window, menu)
     menu.addSeparator()
     expert = _action(
         window,
@@ -176,6 +177,28 @@ def _install_view_menu(window: QWidget, bar: QMenuBar) -> None:
     expert.setChecked(window.parameters_panel.expert_toggle.isChecked())
     menu.addAction(expert)
     bar.addMenu(menu)
+
+
+def _install_dock_actions(window: QWidget, menu: QMenu) -> None:
+    """Expose each dock's own toggle plus a way back to the default layout.
+
+    ``toggleViewAction`` is reused rather than wrapped so the menu check state
+    and the dock's visibility can never disagree.
+    """
+    menu.addSection("面板")
+    for name, dock in window.docks.items():
+        action = dock.toggleViewAction()
+        action.setObjectName(f"dockToggle:{name}")
+        window.chrome_actions[f"dockToggle:{name}"] = action
+        menu.addAction(action)
+    reset = _action(
+        window,
+        "resetDockLayoutAction",
+        "重置面板布局",
+        window.reset_dock_layout,
+    )
+    window.chrome_actions["resetDockLayoutAction"] = reset
+    menu.addAction(reset)
 
 
 def _view_action(window: QWidget, group: QActionGroup, key: str) -> QAction:
