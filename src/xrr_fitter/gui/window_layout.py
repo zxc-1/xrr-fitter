@@ -6,11 +6,11 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QFrame,
-    QLabel,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -40,19 +40,53 @@ def _column(name: str) -> QWidget:
     return widget
 
 
-def _section(title: str, name: str, inner: QWidget) -> QFrame:
-    frame = QFrame()
-    frame.setObjectName(name)
-    frame.setProperty("sectionCard", True)
-    layout = QVBoxLayout(frame)
-    layout.setContentsMargins(10, 8, 10, 10)
-    layout.setSpacing(6)
-    heading = QLabel(title)
-    heading.setObjectName(f"{name}Header")
-    heading.setProperty("sectionHeader", True)
-    layout.addWidget(heading)
-    layout.addWidget(inner)
-    return frame
+class AnalysisSection(QFrame):
+    """A titled analysis card whose header toggles its body.
+
+    Three permanently expanded cards overflowed the analysis column at the
+    documented minimum window size, leaving the lower ones reachable only by
+    scrolling. Collapsing is per section rather than mutually exclusive, because
+    reading fit progress against the parameter table needs two open at once.
+    """
+
+    def __init__(self, title: str, name: str, inner: QWidget) -> None:
+        super().__init__()
+        self.setObjectName(name)
+        self.setProperty("sectionCard", True)
+        self.body = inner
+        self.toggle = QToolButton()
+        self.toggle.setObjectName(f"{name}Header")
+        self.toggle.setText(title)
+        self.toggle.setCheckable(True)
+        self.toggle.setChecked(True)
+        self.toggle.setAccessibleName(f"{title}分区")
+        self.toggle.setToolTip(f"展开或折叠{title}分区")
+        self.toggle.setProperty("sectionHeader", True)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow)
+        self.toggle.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.toggle.toggled.connect(self.set_expanded)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 10)
+        layout.setSpacing(6)
+        layout.addWidget(self.toggle)
+        layout.addWidget(inner)
+
+    def is_expanded(self) -> bool:
+        return self.toggle.isChecked()
+
+    def set_expanded(self, expanded: bool) -> None:
+        """Show or hide the body, keeping the header reachable either way."""
+        if self.toggle.isChecked() != expanded:
+            self.toggle.setChecked(expanded)
+            return
+        self.body.setVisible(expanded)
+        self.toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
 
 
 def _install_project_column(window: object, document: object) -> QWidget:
@@ -95,13 +129,20 @@ def _install_analysis_column(window: object, document: object) -> QWidget:
     content_layout = QVBoxLayout(content)
     content_layout.setContentsMargins(0, 0, 4, 0)
     content_layout.setSpacing(8)
-    sections = (
+    specs = (
         ("参数", "parametersSection", window.parameters_panel),
         ("拟合", "fitSection", window.fit_panel),
         ("结果", "resultsSection", window.result_panel),
     )
-    for title, name, panel in sections:
-        content_layout.addWidget(_section(title, name, panel))
+    window.analysis_sections = {}
+    for title, name, panel in specs:
+        section = AnalysisSection(title, name, panel)
+        window.analysis_sections[name] = section
+        content_layout.addWidget(section)
+    # The results section starts collapsed: a fresh project has no result to
+    # read, and keeping all three open is what pushed the column past the
+    # viewport at 1280x760.
+    window.analysis_sections["resultsSection"].set_expanded(False)
     content_layout.addStretch(1)
     scroll = QScrollArea()
     scroll.setObjectName("analysisScroll")
