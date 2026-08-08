@@ -663,16 +663,19 @@ scale weak prior、批量模式选择器和手动“开始拟合”按钮。选�
 `联合拟合` 后，手动入口继续调用 expert `preflight_fit()` / `start_fit_job()`，不会
 改写自动路由规则；联合模式要求显式且可编译的 `SharingRule`。
 
-profile likelihood 证据位于结果不确定度区，Expert mode 还显示 SLD 深度剖面 tab。
-选择具有当前 candidate-owned uncertainty evidence 的有效候选后，结果区会显示
-MCMC 配置与启动按钮。导出不属于自动完成条件；拟合结束并选择有效候选后，使用
-工具栏“导出结果”、文件菜单“导出结果”或 `Ctrl+Shift+E` 显式创建新 run 目录。
+profile likelihood 证据位于结果不确定度区，Expert mode 还显示中央下方常驻的
+SLD 深度剖面窗格（与反射率图上下并置，可用分隔条调整高度）。选择具有当前
+candidate-owned uncertainty evidence 的有效候选后，结果区显示“不确定度分析…”
+入口，点击后在独立窗口中配置并启动 MCMC。导出不属于自动完成条件；拟合结束并
+选择有效候选后，使用工具栏“导出结果”、文件菜单“导出结果”或 `Ctrl+Shift+E`
+显式创建新 run 目录。
 
 普通流程不要求打开 Expert mode。修改参数、仪器模型、共享或项目级 scale prior
 会按影响范围清除旧结果；不会以 fallback 继续使用不兼容状态。
 
-标准模式隐藏 expert-only optimizer rows、背景/分辨率、MCMC 和 SLD 深度剖面 tab，
-但不删除其持久状态；重新打开 Expert mode 会恢复相同控件、tab canvas 和可用选择。
+标准模式隐藏 expert-only optimizer rows、背景/分辨率、MCMC 入口和 SLD 深度剖面
+窗格，但不删除其持久状态；重新打开 Expert mode 会恢复相同控件、canvas 和可用
+选择。诊断 tab 本身不再受模式影响，因此已保存的 tab 选择在两种模式下都能恢复。
 
 - `invalid` candidate 表示物理/数值校验失败，不可持久化、导出或运行 MCMC；仍保留
   在列表中作为失败证据。
@@ -755,6 +758,10 @@ profile（例如二元周期结构只保留 period、fraction 和两项 roughnes
 以下截图使用仓库 canonical `single-layer` synthetic example 与固定 seed
 `20260726` 的快速拟合结果，不包含用户 source。平台为 macOS/PySide6 Fusion；
 覆盖 minimum/normal window、light/dark palette 与 standard/expert 状态：
+
+> **注意**：这些截图拍摄于工作区布局调整之前，仍显示 SLD 作为诊断 tab、内联的
+> MCMC 控件组和三段常驻展开的右侧列。重新生成需要运行带
+> `XRR_GUI_E2E_SCREENSHOT` 的 GUI E2E 流程。
 
 - [Light 1280×760](images/gui-light-1280x760.png)
 - [Light 1600×900 Expert](images/gui-light-1600x900-expert.png)
