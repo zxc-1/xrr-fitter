@@ -26,9 +26,10 @@ from xrr_fitter.gui import messages, theme
 from xrr_fitter.gui.plots.diagnostics import TAB_SPECS
 
 
+# The SLD profile is no longer a selectable view; it is a permanent companion
+# pane, so the menu lists only the switchable diagnostic tabs.
 VIEW_GROUPS = (
-    ("反射率", ("raw", "log", "qz4", "residual")),
-    ("SLD", ("sld",)),
+    ("反射率", ("log", "raw", "qz4", "residual")),
     ("诊断", ("candidates", "uncertainty", "trend")),
 )
 
@@ -257,12 +258,9 @@ def _connect_view_sync(window: QWidget) -> None:
 
 def _sync_view_actions(window: QWidget) -> None:
     current = window.plot_panel.current_view_key()
-    expert = window.parameters_panel.expert_toggle.isChecked()
     for key, _title, _description in TAB_SPECS:
         action = window.chrome_actions[f"plotViewAction:{key}"]
         action.setChecked(key == current)
-        if key == "sld":
-            action.setEnabled(expert)
 
 
 def _active_dataset_text(window: QWidget) -> str:

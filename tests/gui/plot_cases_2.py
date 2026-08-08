@@ -240,7 +240,7 @@ def test_diagnostic_selection_rollback_restores_previous_view(
     window.plot_panel.tabs.setCurrentIndex(1)
 
     assert window.document.project.ui_state.plot_tab_index == 0
-    assert window.plot_panel.current_view_key() == "raw"
+    assert window.plot_panel.current_view_key() == window.plot_panel.tab_keys()[0]
     assert window.document.is_dirty is False
 
 def test_expert_projection_preserves_standard_selection_and_sld_canvas_state(qtbot) -> None:
@@ -254,18 +254,18 @@ def test_expert_projection_preserves_standard_selection_and_sld_canvas_state(qtb
     assert panel.current_view_key() == "qz4"
     assert panel.view("sld").canvas is sld_canvas
 
-def test_hidden_sld_selection_is_restored_unless_standard_selection_changes(qtbot) -> None:
+def test_tab_selection_survives_expert_mode_round_trips(qtbot) -> None:
+    """No tab is mode-gated now, so a selection is never displaced."""
     panel = _panel(qtbot)
-    panel.select_view("sld")
+    panel.select_view("residual")
 
     panel.set_expert_mode(False)
-    assert panel.current_view_key() != "sld"
+    assert panel.current_view_key() == "residual"
     panel.set_expert_mode(True)
-    assert panel.current_view_key() == "sld"
+    assert panel.current_view_key() == "residual"
 
-    panel.set_expert_mode(False)
     panel.select_view("log")
-    panel.set_expert_mode(True)
+    panel.set_expert_mode(False)
     assert panel.current_view_key() == "log"
 
 def test_import_plots_core_invalid_points_as_excluded(qtbot) -> None:
@@ -334,11 +334,11 @@ def test_main_window_projects_parameter_expert_mode_to_sld_visibility(
 
     window = MainWindow(ProjectDocument(_project_with_curves(tmp_path, count=1)))
     qtbot.addWidget(window)
-    sld_index = window.plot_panel.view_keys().index("sld")
+    pane = window.plot_panel.sld_pane
 
-    assert window.plot_panel.tabs.isTabVisible(sld_index) is False
+    assert pane.isVisibleTo(window.plot_panel) is False
     window.parameters_panel.set_expert_mode(True)
-    assert window.plot_panel.tabs.isTabVisible(sld_index) is True
+    assert pane.isVisibleTo(window.plot_panel) is True
 
 
 def test_plot_panel_zoom_to_range_focuses_angle_views_on_visible_region(qtbot) -> None:

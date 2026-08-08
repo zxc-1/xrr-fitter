@@ -143,7 +143,9 @@ def test_plot_panel_close_releases_agg_renderer_buffers(qtbot) -> None:
 
 def test_hidden_plot_canvas_defers_queued_draw_until_visible(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
-    canvas = panel.view("raw").canvas
+    # Only the selected tab's canvas becomes visible, so the deferral contract
+    # is observed on the default view rather than an arbitrary background tab.
+    canvas = panel.view(panel.current_view_key()).canvas
 
     QApplication.processEvents()
 

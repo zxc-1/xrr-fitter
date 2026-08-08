@@ -8,15 +8,16 @@ def test_plot_panel_has_all_diagnostic_tabs(qtbot) -> None:
     panel = _panel(qtbot)
 
     assert panel.tab_titles() == TAB_TITLES
+    # Every view stays owned; "sld" is the companion pane, not a tab.
     assert panel.view_keys() == (
-        "raw",
         "log",
+        "raw",
         "qz4",
         "residual",
-        "sld",
         "candidates",
         "uncertainty",
         "trend",
+        "sld",
     )
 
 @pytest.mark.parametrize(

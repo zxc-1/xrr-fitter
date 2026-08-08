@@ -36,12 +36,13 @@ from tests.support.model_cases import (
 )
 
 
+# The SLD profile left the tab bar for a permanent companion pane, so these are
+# the switchable diagnostic tabs only, with the log view leading.
 TAB_TITLES = (
-    "原始数据与模型",
     "对数反射率",
+    "原始数据与模型",
     "qz⁴R",
     "加权残差",
-    "SLD 深度剖面",
     "候选解比较",
     "相关性与区间",
     "批量趋势",
