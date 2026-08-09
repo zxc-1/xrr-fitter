@@ -52,7 +52,7 @@
 - Preserves: the `tools/freeze_approved_data.py` convention — canonical JSON, sorted keys, sha256 per file.
 - Removes: nothing.
 
-- [ ] **Step 1: Write the failing tool contract**
+- [x] **Step 1: Write the failing tool contract**
 
 Create `tests/unit/tools/test_sync_orso_suite.py`:
 
@@ -153,7 +153,7 @@ def test_index_json_in_the_repository_matches_its_recorded_hashes(load_tool_modu
     module.verify_index(root)
 ```
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m pytest -o addopts= --import-mode=importlib -p no:cacheprovider tests/unit/tools/test_sync_orso_suite.py -q
@@ -161,7 +161,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m pytest -o addopts= 
 
 Expected: 8 failures, each `missing implementation: tools/sync_orso_suite.py` from the `load_tool_module` fixture.
 
-- [ ] **Step 3: Implement the sync tool**
+- [x] **Step 3: Implement the sync tool**
 
 Create `tools/sync_orso_suite.py`. Keep every function at CC ≤ 10 by splitting fetch, freeze, and verify.
 
@@ -295,7 +295,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 4: Fetch the suite once, by hand**
+- [x] **Step 4: Fetch the suite once, by hand**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/sync_orso_suite.py --root tests/fixtures/orso --fetch
@@ -304,7 +304,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/sync_orso_suite.py --root tests
 
 Expected: `--fetch` reports `"file_count": 22` (8 manifests + 6 layer tables + 8 data files) and `--check` reports `PASS`. If the count differs, stop and reconcile against the pinned commit before continuing — do not adjust the assertion to match.
 
-- [ ] **Step 5: Confirm GREEN**
+- [x] **Step 5: Confirm GREEN**
 
 Run the exact command from Step 2.
 
@@ -325,7 +325,7 @@ Expected: `8 passed`. `Untitled.ipynb` is absent from `tests/fixtures/orso/`; co
 - Produces: one parametrized regression test per frozen manifest.
 - Removes: nothing.
 
-- [ ] **Step 1: Write the failing regression module**
+- [x] **Step 1: Write the failing regression module**
 
 Create `tests/regression/test_orso_validation.py`:
 
@@ -472,7 +472,7 @@ def test_frozen_suite_content_is_hash_bound() -> None:
     module.verify_index(SUITE)
 ```
 
-- [ ] **Step 2: Confirm RED and read the real deviations**
+- [x] **Step 2: Confirm RED and read the real deviations**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m pytest -o addopts= --import-mode=importlib -p no:cacheprovider tests/regression/test_orso_validation.py -q
@@ -480,7 +480,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m pytest -o addopts= 
 
 Expected before Task 1 lands: collection error on the missing fixture directory. After Task 1: the run should be green. If a case fails, the assertion message names the manifest, the worst deviation, the q value, and the column count — use it to decide between a real numerical defect and a reading error. Do not widen `KERNEL_RTOL` or `SMEARED_RTOL`; they are the suite's own published values.
 
-- [ ] **Step 3: Register the module in the regression mode**
+- [x] **Step 3: Register the module in the regression mode**
 
 In `tools/verify_registry.py`, add one entry to the `regression` mode tuple, after `test_numerical_reference.py`:
 
@@ -491,11 +491,11 @@ In `tools/verify_registry.py`, add one entry to the `regression` mode tuple, aft
 
 In `tests/unit/tools/test_verify_registry.py`, make the same insertion inside `_expected_registry`'s `"regression"` tuple. That test asserts exact registry equality, so both files must change together.
 
-- [ ] **Step 4: Record the measured baseline**
+- [x] **Step 4: Record the measured baseline**
 
 Once green, replace the deviation comment in the module docstring with the observed worst deviation per tolerance class, taken from the Step 2 output. This is the baseline for future regressions.
 
-- [ ] **Step 5: Document coverage and its boundary**
+- [x] **Step 5: Document coverage and its boundary**
 
 In `docs/algorithm.md`, insert a new section immediately after `## Pinned Refnx Benchmark`:
 
@@ -519,7 +519,7 @@ by itself validate the XRR path. The pinned refnx benchmark above, two orders
 of magnitude tighter, remains the primary gate.
 ```
 
-- [ ] **Step 6: Run affected repository gates**
+- [x] **Step 6: Run affected repository gates**
 
 Run each command separately:
 
@@ -533,7 +533,7 @@ git diff --check
 
 Expected: every command exits 0. `tools` covers the new sync tests and the registry equality assertion; `regression` runs the new module through the outcome gate, which proves no case was skipped or deselected.
 
-- [ ] **Step 7: Commit the vendored suite and its gate**
+- [x] **Step 7: Commit the vendored suite and its gate**
 
 ```bash
 git add tools/sync_orso_suite.py tests/unit/tools/test_sync_orso_suite.py tests/regression/test_orso_validation.py tests/fixtures/orso tools/verify_registry.py tests/unit/tools/test_verify_registry.py docs/algorithm.md
@@ -548,9 +548,17 @@ The suite is CC0 1.0, so vendoring carries no attribution obligation; the proven
 
 | 项 | 命令 | 结果 |
 | --- | --- | --- |
-| 工具契约 | `python tools/verify.py tools` | |
-| 回归对标 | `python tools/verify.py regression` | |
-| 架构与复杂度 | `python tools/verify.py quality` + `tools/check_radon.py` | |
-| 冻结绑定 | `python tools/sync_orso_suite.py --root tests/fixtures/orso --check` | |
-| 最差偏差（严格档） | 记入 `test_orso_validation.py` docstring | |
-| 最差偏差（宽松档） | 记入 `test_orso_validation.py` docstring | |
+| 工具契约 | `pytest tests/unit/tools`（= `verify.py tools` 的 pytest 段） | 388 passed |
+| 回归对标 | `pytest` regression 五个模块（= `verify.py regression` 的 pytest 段） | 47 passed，outcome gate 无 skip/xfail/deselect |
+| 架构与复杂度 | `pytest tests/architecture`（9 模块）+ `lock_windows_environment.py --check` + `check_radon.py` | 156 passed；lock exit 0；radon exit 0 |
+| 冻结绑定 | `python tools/sync_orso_suite.py --root tests/fixtures/orso --check` | `{"status": "PASS", "suite_commit": "6a01b4a4..."}` exit 0 |
+| 最差偏差（严格档） | 记入 `test_orso_validation.py` docstring | 6.3854e-05（test1.txt @ q=0.57205，6 个 case，rtol 8e-5） |
+| 最差偏差（宽松档） | 记入 `test_orso_validation.py` docstring | 1.3366e-04（test4.txt @ q=0.013916，2 个 case，rtol 0.03） |
+
+本地未直接执行 `tools/verify.py <mode>`：它在每个 mode 前后硬编码 `check_hygiene.py`，而仓内 `.venv/`、`.pytest_cache/`、`.ruff_cache/` 会被判为 "generated directory inside repository"，产生数万条本地失败；CI 把 venv 建在 `$RUNNER_TEMP/venv`（仓外）故不受影响。上表按 `verify_registry.py` 打印出的各 mode 真实命令逐条执行。
+
+计划外的必要修正：`.gitattributes` 增加 `tests/fixtures/orso/** -text -whitespace`。上游 `layers/test1.layers` 为 CRLF，而 `index.json` 按磁盘字节记 sha256；原有的 `* text=auto eol=lf` 会把入库 blob 规范化为 LF（668 → 646 字节，哈希 `52e31afe…` → `cf708188…`），新克隆下 `--check` 必然失败。已用 `git checkout-index` 导出「新克隆等价树」复验：CRLF 保留，`--check` PASS。`-whitespace` 使 `git diff --check` 不把上游 CR 判为行尾空白。
+
+计划外的必要修正 2：`tests/unit/tools/test_verify.py::test_registry_commands_are_exact_for_completed_suites` 还有第二份 regression 期望副本，计划只提到 `test_verify_registry.py`。两处必须同改。
+
+宽松档实现说明：`gaussian_smear` 无截断参数且本计划禁止改 `src/`，故宽松档由测试内 `_suite_smeared` 复刻套件生成约定（±3.5σ 截断 Gauss-Legendre + 解析归一化，401 点）。该约定为套件四个参考实现共有（refnx `_INTLIMIT`、refl1d `linspace(q±3.5dQ)`、BornAgain `DistributionGaussian(0,1,21,3.5)`、GenX `resintrange=3.5`）。生产的无截断路径另由 `test_untruncated_production_smearing_agrees_away_from_minima` 钉住。两档容差均未放宽。
