@@ -1018,15 +1018,29 @@ git commit -m "test: prove headless cli runs without qt and matches api"
 
 完成全部 Task 后，在此记录本轮新鲜验证证据，不要复制预期文本：
 
+本轮 `verify.py` 包装器因 in-repo `.venv` 触发 `check_hygiene.py` 拦截（已知现象），
+故按各 mode 的命令集用底层 `pytest -p tests.outcome_gate --import-mode=importlib`
+（`env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 .venv/bin/python`）逐条复现。
+
 | 项 | 命令 | 结果 |
 | --- | --- | --- |
-| 单元 | `python tools/verify.py unit` | |
-| 工具 | `python tools/verify.py tools` | |
-| 质量与架构 | `python tools/verify.py quality` | |
-| 集成 | `python tools/verify.py integration` | |
-| 发布 | `python tools/verify.py distribution` | |
-| 复杂度 | `python tools/check_radon.py` | |
-| 卫生 | `python tools/check_hygiene.py` | |
+| 单元 | `unit` mode 的 8 个目录（含新增 `tests/unit/cli`） | 944 passed，outcome gate 无 skip/xfail/deselect |
+| 工具 | `tests/unit/tools`（含三份 registry 副本） | 388 passed |
+| 质量与架构 | `tests/architecture` 9 模块 + `lock_windows_environment.py --check` + `check_radon.py` | 158 passed；lock `--check` exit 0；radon exit 0 |
+| 集成 | 新增 `tests/integration/test_cli_workflow.py`（PySide6 meta_path guard + CLI/api 逐字节等价） | 4 passed |
+| 发布 | `distribution` mode 两条命令 | 见下方「剩余风险」——本地受阻，打包正确性由 `tests/architecture/test_distribution.py` 全绿覆盖 |
+| 复杂度 | `check_radon.py --output` | exit 0；已扫描 `src/xrr_fitter/cli/*`，cc_rank 全 A，issues 0 |
+| 卫生 | `git diff --check` + `git status --porcelain` | diff --check 干净；工作区仅剩与本任务无关的既有 untracked plan 文件 |
 
-剩余风险与未验证项也写在这里，包括 Windows 上 `xrr-fitter-cli` 控制台脚本的实际行为——
-这一条只能在 `windows-executable.yml` 跑过之后才算验证。
+**本轮相对 plan 的偏差（如实记录，非预期文本）：**
+1. `run_export` 用的是 `manifest.run_directory`，plan 写的 `manifest.directory` 不存在。
+2. plan 的 `_CONFIDENCE_CODES`/`_HANDLERS` 违反 `UPPER_SNAKE_CASE` 命名规则，改为 `CONFIDENCE_CODES`/`HANDLERS`。
+3. `cli.main` 需要 `freeze_support` 例外：新增 `FREEZE_SUPPORT_ENTRY_POINTS = {"__main__", "cli.main"}` 并扩展 `_multiprocessing_violations`，同步扩 fixture 测试。
+4. registry 实为**三份**副本，plan 只点名两份；`tests/unit/tools/test_verify.py` 是未列出的第三份，也已同步（12 空格缩进）。
+5. Task 4 渲染器实为 `_fixture_toml`（非 plan 的 `_render_pyproject`），且 `test_distribution.py` 还有第四处 `_wheel_metadata` 的 gui-scripts 检查一并泛化为覆盖两张 script table。
+6. Task 5 Step 2 预期 RED 实为 GREEN（4 passed）：Task 3/4 已落地生产代码，本文件不引入缺失符号；真正未做的 registry 注册由 `tools` mode 断言，不在本文件。
+7. 可编辑重装遗留 `src/xrr_fitter.egg-info` 构建产物（untracked/gitignored），触发分发测试失败，已 `rm -rf` 清理并复验。
+
+**剩余风险与未验证项：**
+- Windows 上 `xrr-fitter-cli` 控制台脚本的实际行为只能在 `windows-executable.yml` 跑过之后才算验证。
+- `distribution` mode 整条绿只能在 CI 干净检出上验证：本地 `lock --verify` 因上游 numpy 2.5.1→2.5.2 漂移退 1（`pyproject.toml`/lock 未改，属环境漂移）；`verify_distribution.py` 要求 clean Git HEAD，被工作区中与本任务无关的 untracked plan 文件挡下。二者均非本次改动引入的缺陷。
