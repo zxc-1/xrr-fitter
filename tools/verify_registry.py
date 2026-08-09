@@ -71,6 +71,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/unit/fit",
                 "tests/unit/analysis",
                 "tests/unit/services",
+                "tests/unit/cli",
                 "-q",
             ),
         )

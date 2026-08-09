@@ -1,0 +1,76 @@
+"""Prove parser wiring, freeze-support ordering, and api-only dispatch."""
+
+from __future__ import annotations
+
+from xrr_fitter.cli import main as cli_main
+
+
+def test_subcommands_are_exactly_the_designed_four() -> None:
+    parser = cli_main.build_parser()
+    actions = [
+        action
+        for action in parser._subparsers._group_actions  # noqa: SLF001
+        if action.choices
+    ]
+
+    assert len(actions) == 1
+    assert sorted(actions[0].choices) == ["export", "fit", "mcmc", "validate"]
+
+
+def test_no_subcommand_is_an_input_error_not_a_crash(capsys) -> None:
+    assert cli_main.main([]) == 2
+
+    assert "usage: xrr-fitter-cli" in capsys.readouterr().err
+
+
+def test_freeze_support_runs_before_any_command(monkeypatch) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(cli_main, "freeze_support", lambda: events.append("freeze"))
+    monkeypatch.setattr(
+        cli_main,
+        "_dispatch",
+        lambda arguments: (events.append("dispatch"), 0)[1],
+    )
+
+    assert cli_main.main(["fit", "project.json"]) == 0
+    assert events == ["freeze", "dispatch"]
+
+
+def test_missing_project_file_is_an_input_error(tmp_path, capsys) -> None:
+    missing = tmp_path / "absent.json"
+
+    assert cli_main.main(["validate", str(missing)]) == 2
+
+    assert str(missing) in capsys.readouterr().err
+
+
+def test_stale_source_maps_to_its_own_exit_code(monkeypatch, tmp_path) -> None:
+    import xrr_fitter.api as api
+    from xrr_fitter.cli import commands
+
+    project_path = tmp_path / "p.json"
+    project_path.write_text("{}", encoding="utf-8")
+    stale = api.ProjectValidation(
+        datasets=(),
+        issues=(api.ValidationIssue(code="source", message="源文件已变化"),),
+    )
+    monkeypatch.setattr(commands.api, "load_project", lambda path: object())
+    monkeypatch.setattr(commands.api, "inspect_sources", lambda project: stale)
+
+    assert cli_main.main(["validate", str(project_path)]) == 3
+
+
+def test_cli_package_never_imports_pyside6() -> None:
+    import ast
+    from pathlib import Path
+
+    root = Path(cli_main.__file__).resolve().parent
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            names = ()
+            if isinstance(node, ast.Import):
+                names = tuple(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = (node.module,)
+            assert not any(name.startswith("PySide6") for name in names), path

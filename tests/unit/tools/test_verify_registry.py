@@ -50,6 +50,7 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
                 "tests/unit/fit",
                 "tests/unit/analysis",
                 "tests/unit/services",
+                "tests/unit/cli",
                 "-q",
             ),
         ),

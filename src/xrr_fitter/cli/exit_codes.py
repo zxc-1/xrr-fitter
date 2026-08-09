@@ -12,7 +12,7 @@ NOT_CONVERGED = 1
 INVALID_INPUT = 2
 STALE_SOURCE = 3
 
-_CONFIDENCE_CODES = {
+CONFIDENCE_CODES = {
     api.ConfidenceClass.TRUSTED: SUCCESS,
     api.ConfidenceClass.CORRELATED: SUCCESS,
     api.ConfidenceClass.MULTIPLE: NOT_CONVERGED,
@@ -22,7 +22,7 @@ _CONFIDENCE_CODES = {
 
 def confidence_exit_code(confidence: api.ConfidenceClass) -> int:
     """Map one published confidence class onto its exit code."""
-    return _CONFIDENCE_CODES[confidence]
+    return CONFIDENCE_CODES[confidence]
 
 
 def worst_exit_code(values: Iterable[api.ConfidenceClass]) -> int:

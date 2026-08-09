@@ -74,6 +74,7 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
             "tests/unit/fit",
             "tests/unit/analysis",
             "tests/unit/services",
+            "tests/unit/cli",
             "-q",
         ),
     )
