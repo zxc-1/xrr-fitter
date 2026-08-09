@@ -11,12 +11,25 @@ exactly identical. The first repeated cell may retain its explicit top
 roughness override, while later interfaces must match the normal repeated
 cell. This keeps the optimized periodic representation equivalent to the full
 slab sequence rather than treating metadata as an unchecked performance hint.
+
+An interface transition replaces the Nevot-Croce roughness of the layer's
+incident interface instead of adding to it; a single interface cannot be
+broadened twice, so a layer carrying a transition must declare
+``roughness_a == 0``. Only the declared value is checked here, because the
+compiled fit locks that coordinate at zero and rebuilds layers from optimizer
+values every iteration. Branch weights are normalized at construction so that
+they always sum to one, and the transition occupies the incident side of the
+layer, leaving ``thickness_a - width`` for the layer body. Widths are capped at
+``MAX_TRANSITION_SLABS`` microslabs to keep expansion bounded. Kind names are
+duplicated here rather than imported because this module deliberately depends
+on nothing else in the package; ``physics.transitions`` owns the kernels and a
+test pins the two name sets together.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
+from math import ceil, isfinite
 
 import numpy as np
 
@@ -120,12 +133,80 @@ def _gradient_sld(name: str, fields: tuple[tuple[str, complex], ...]) -> None:
             raise ValueError(f"{name}.{field} must be finite with nonnegative absorption")
 
 
+TRANSITION_KINDS = frozenset({"erf", "linear", "exponential", "tanh", "sine", "step"})
+MAX_TRANSITION_SLABS = 512
+
+
+@dataclass(frozen=True, slots=True)
+class TransitionBranch:
+    """One weighted kernel inside an interface transition."""
+
+    kind: str
+    weight: float = 1.0
+    thickness_a: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.kind not in TRANSITION_KINDS:
+            raise ValueError(f"transition kind must be one of {sorted(TRANSITION_KINDS)}: {self.kind}")
+        for field, value in (("weight", self.weight), ("thickness_a", self.thickness_a)):
+            if not isfinite(value) or value <= 0.0:
+                raise ValueError(f"transition branch {field} must be finite and positive: {value}")
+
+
+def _transition_width(branches: tuple[TransitionBranch, ...]) -> float:
+    return max(branch.thickness_a for branch in branches)
+
+
+def _transition_branches(values: object) -> tuple[TransitionBranch, ...]:
+    """Tupleize, type-check, and renormalize declared branch weights."""
+    branches = tuple(values)
+    if not branches:
+        raise ValueError("transition branches must not be empty")
+    if any(not isinstance(branch, TransitionBranch) for branch in branches):
+        raise TypeError("transition branches must be TransitionBranch values")
+    total = sum(branch.weight for branch in branches)
+    return tuple(TransitionBranch(item.kind, item.weight / total, item.thickness_a) for item in branches)
+
+
+@dataclass(frozen=True, slots=True)
+class InterfaceTransition:
+    """A normalizable interface width model discretized into microslabs."""
+
+    branches: tuple[TransitionBranch, ...]
+    microslab_max_a: float = 1.0
+
+    def __post_init__(self) -> None:
+        branches = _transition_branches(self.branches)
+        width = _transition_width(branches)
+        maximum = self.microslab_max_a
+        if not isfinite(maximum) or maximum <= 0.0 or maximum > width:
+            raise ValueError("transition microslab_max_a must be in (0,width]")
+        if ceil(width / maximum) > MAX_TRANSITION_SLABS:
+            raise ValueError(f"transition microslab count must not exceed {MAX_TRANSITION_SLABS}")
+        object.__setattr__(self, "branches", branches)
+
+
+def _layer_transition(name: str, thickness_a: float, roughness_a: float, value: object) -> None:
+    """Reject declarations where a transition and a rough interface overlap."""
+    if value is None:
+        return
+    if not isinstance(value, InterfaceTransition):
+        raise TypeError("layer transition must be an InterfaceTransition")
+    if roughness_a != 0.0:
+        raise ValueError(f"{name}.roughness_a must be 0 when a transition sets the interface width")
+    width = _transition_width(value.branches)
+    if width > thickness_a:
+        raise ValueError(f"{name} transition width {width} must not exceed thickness_a {thickness_a}")
+
+
 def _periodic_layers(values: object, name: str) -> tuple[LayerSpec, ...]:
     layers = tuple(values)
     if not layers:
         raise ValueError(f"{name}.layers must not be empty")
     if any(not isinstance(layer, LayerSpec) for layer in layers):
         raise TypeError("periodic block layers must be LayerSpec values")
+    if any(layer.transition is not None for layer in layers):
+        raise ValueError(f"{name}.layers must not declare a transition inside a periodic block")
     return layers
 
 
@@ -151,6 +232,7 @@ class LayerSpec:
     thickness_a: float
     density_scale: float = 1.0
     roughness_a: float = 0.0
+    transition: InterfaceTransition | None = None
 
     def __post_init__(self) -> None:
         _component_name(self.name, "layer")
@@ -160,6 +242,7 @@ class LayerSpec:
         if not isfinite(self.density_scale) or self.density_scale <= 0.0:
             raise ValueError(f"{self.name}.density_scale must be finite and positive")
         _roughness(self.name, self.roughness_a)
+        _layer_transition(self.name, self.thickness_a, self.roughness_a, self.transition)
 
 
 @dataclass(frozen=True, slots=True)

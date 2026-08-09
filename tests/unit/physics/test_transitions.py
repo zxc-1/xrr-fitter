@@ -56,6 +56,13 @@ def test_slab_count_is_at_least_one_and_ceils() -> None:
     assert transition_slab_count(1.0, 4.0) == 1
 
 
+def test_kind_sets_agree_across_model_and_physics() -> None:
+    from xrr_fitter.model.structure import TRANSITION_KINDS as model_kinds
+    from xrr_fitter.physics.transitions import TRANSITION_KINDS as physics_kinds
+
+    assert model_kinds == physics_kinds
+
+
 @pytest.mark.parametrize(
     ("width_a", "microslab_max_a"),
     [
