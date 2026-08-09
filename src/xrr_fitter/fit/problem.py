@@ -13,6 +13,7 @@ from xrr_fitter.fit.parameters import (
     stage_parameter_settings,
     validate_compiled_definitions,
     validate_instrument_modes,
+    validate_transition_modes,
 )
 from xrr_fitter.model.data import PreparedData
 from xrr_fitter.model.fitting import FitConfig, FitEvaluationContext
@@ -22,8 +23,8 @@ from xrr_fitter.model.parameters import (
     ParameterDefinition,
     ParameterSetting,
 )
-from xrr_fitter.model.structure import StructureSpec
-from xrr_fitter.model.structure import LayerSpec, PeriodicBlock
+from xrr_fitter.model.structure import LayerSpec, PeriodicBlock, StructureSpec
+
 
 def _readonly(value: np.ndarray) -> np.ndarray:
     result = np.array(value, copy=True)
@@ -119,11 +120,7 @@ def _plateau_scale_estimate(
         return None, "未识别可靠临界边，尺度弱先验已关闭"
     if instrument.footprint_mode == "fit" and ramp_inflection_estimate_deg(data) is not None:
         return None, "低角足迹爬坡未锁定，尺度弱先验已关闭"
-    lower = (
-        1.05 * instrument.footprint_spill_angle_deg
-        if instrument.footprint_mode == "geometry"
-        else 0.0
-    )
+    lower = 1.05 * instrument.footprint_spill_angle_deg if instrument.footprint_mode == "geometry" else 0.0
     plateau = (theta > lower) & (theta <= 0.8 * min(edges)) & (observed > 0.0)
     if np.count_nonzero(plateau) < 10:
         return None, "全反射平台点不足，尺度弱先验已关闭"
@@ -164,6 +161,7 @@ def compile_fit_problem(
     )
     validate_compiled_definitions(definitions)
     validate_instrument_modes(definitions, instrument)
+    validate_transition_modes(definitions, structure)
     labels, weights = _region_layout(data)
     center, reason = _scale_prior_state(data, instrument, config)
     return FitEvaluationContext(
