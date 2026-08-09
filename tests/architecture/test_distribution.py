@@ -18,6 +18,7 @@ import zipfile
 from packaging.markers import Marker
 from packaging.requirements import Requirement
 import pytest
+from tools import build_release_spec
 from tools.verify_distribution import canonicalize_sdist
 
 
@@ -35,14 +36,39 @@ def test_gui_entrypoint_and_shell_modules_are_explicit() -> None:
     assert payload["project"]["gui-scripts"] == {
         "xrr-fitter": "xrr_fitter.__main__:main"
     }
+    assert payload["project"]["scripts"] == {
+        "xrr-fitter-cli": "xrr_fitter.cli.main:main",
+    }
     required = {
         ROOT / "src/xrr_fitter/__main__.py",
         ROOT / "src/xrr_fitter/gui/__init__.py",
         ROOT / "src/xrr_fitter/gui/application.py",
         ROOT / "src/xrr_fitter/gui/document.py",
         ROOT / "src/xrr_fitter/gui/main_window.py",
+        ROOT / "src/xrr_fitter/cli/__init__.py",
+        ROOT / "src/xrr_fitter/cli/main.py",
     }
     assert all(path.is_file() and not path.is_symlink() for path in required)
+
+
+def test_release_spec_renders_both_script_tables() -> None:
+    rendered = build_release_spec._fixture_toml(  # noqa: SLF001
+        {
+            "project": {
+                "name": "x",
+                "version": "0",
+                "requires-python": ">=3.12",
+                "dependencies": [],
+                "optional-dependencies": {"test": []},
+                "gui-scripts": {"xrr-fitter": "xrr_fitter.__main__:main"},
+                "scripts": {"xrr-fitter-cli": "xrr_fitter.cli.main:main"},
+            }
+        }
+    )
+
+    assert "[project.gui-scripts]" in rendered
+    assert "[project.scripts]" in rendered
+    assert '"xrr_fitter.cli.main:main"' in rendered
 
 
 def _repository_inputs(policy: dict[str, object]) -> tuple[PurePosixPath, ...]:
@@ -162,7 +188,7 @@ def _wheel_metadata() -> set[str]:
     root = f"{name}-{version}.dist-info"
     members = {f"{root}/{name}" for name in ("METADATA", "RECORD", "WHEEL", "top_level.txt", "LICENSE")}
     payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    if payload["project"].get("gui-scripts"):
+    if any(payload["project"].get(table) for table in build_release_spec.SCRIPT_TABLES):
         members.add(f"{root}/entry_points.txt")
     return members
 

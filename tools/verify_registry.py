@@ -38,6 +38,12 @@ MODE_REGISTRY: Mapping[str, Mode] = {
     "quality": Mode(
         (
             (PYTHON, "tools/check_radon.py", "--output", f"{REPORT}/radon.json"),
+            (
+                PYTHON,
+                "tools/lock_windows_environment.py",
+                "--check",
+                "requirements-windows-x64-py312.lock",
+            ),
             PYTEST_PREFIX
             + (
                 "tests/architecture/test_dependency_rules.py",
@@ -65,6 +71,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/unit/fit",
                 "tests/unit/analysis",
                 "tests/unit/services",
+                "tests/unit/cli",
                 "-q",
             ),
         )
@@ -80,6 +87,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/integration/test_joint_fit_workflow.py",
                 "tests/integration/test_batch_resume.py",
                 "tests/integration/test_export_workflow.py",
+                "tests/integration/test_cli_workflow.py",
                 "tests/integration/test_gui_project_workflow.py",
                 "tests/integration/test_gui_automatic_workflow.py",
                 "-q",
@@ -92,6 +100,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
             PYTEST_PREFIX
             + (
                 "tests/regression/test_numerical_reference.py",
+                "tests/regression/test_orso_validation.py",
                 "tests/regression/test_recovery_metrics.py",
                 "tests/regression/test_profile_basin_regressions.py",
                 "tests/regression/test_automatic_recovery.py",
@@ -110,6 +119,12 @@ MODE_REGISTRY: Mapping[str, Mode] = {
     ),
     "distribution": Mode(
         (
+            (
+                PYTHON,
+                "tools/lock_windows_environment.py",
+                "--verify",
+                "requirements-windows-x64-py312.lock",
+            ),
             (
                 PYTHON,
                 "tools/verify_distribution.py",

@@ -3,6 +3,14 @@
   "batch_mode": "independent",
   "datasets": [
     {
+      "automation": {
+        "fit_group_id": null,
+        "import_batch_id": "example-single-layer",
+        "reason": null,
+        "role": "unrouted",
+        "statistics_member": false,
+        "status": "pending"
+      },
       "beam": {
         "intensity_ratio_21": 0.5,
         "kind": "monochromatic",
@@ -1312,10 +1320,31 @@
     "scale_prior_tau_decades": 0.1
   },
   "input_angle_kind": "two_theta_deg",
-  "schema_version": 1,
+  "measurement_preset": {
+    "beam": {
+      "intensity_ratio_21": 0.5,
+      "kind": "monochromatic",
+      "wavelength_1_a": 1.54056,
+      "wavelength_2_a": 1.54439,
+      "wavelength_a": 1.5406
+    },
+    "import_angle_offset_deg": 0.0,
+    "instrument": {
+      "background_kind": "constant",
+      "beam_width_mm": null,
+      "footprint_mode": "fit",
+      "footprint_spill_angle_deg": 0.0,
+      "instrument_id": "example-lab-xrr",
+      "resolution_domain": "q",
+      "sample_length_mm": null
+    },
+    "preset_id": "example-lab-xrr"
+  },
+  "schema_version": 2,
   "sharing_rules": [],
   "ui_state": {
     "active_dataset_id": null,
+    "dock_state": "",
     "expert_mode": false,
     "left_splitter_sizes": [
       280,

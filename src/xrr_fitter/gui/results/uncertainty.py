@@ -27,7 +27,6 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 
-
 CLASSIFICATION_LABELS = {
     "bootstrap_failure_rate": "Bootstrap 失败率超过阈值",
     "boundary_hit": "参数触及边界",
@@ -52,6 +51,18 @@ DIAGNOSTIC_LABELS = {
     "surface_thin_layer_residual": "疑似表面薄层残差",
     "suspected_diffuse_background": "疑似漫散射背景",
     "suspected_unmodeled_footprint": "疑似未建模的足迹效应",
+}
+
+# Stage warnings arrive as stable machine codes, unlike the prose some stages
+# already emit. Rendering the code alone left a Chinese surface showing raw
+# identifiers, so a known code gains an explanation while keeping the code for
+# users matching against logs.
+FIT_WARNING_LABELS = {
+    "fringe_count_screen_disabled": "条纹计数筛选已关闭",
+    "stage_a_all_candidates_rejected": "阶段 A 的候选解全部被剔除",
+    "stage_a_fringe_candidate_rejected": "部分候选解因条纹特征不符被剔除",
+    "stage_a_invalid_candidate_evaluation": "部分候选解的评估结果无效",
+    "stage_a_physical_candidate_rejected": "候选解因不满足物理约束被剔除",
 }
 
 LENGTH_SUFFIXES = (
@@ -102,10 +113,9 @@ def _profile_text(profile: object) -> str:
 
 def _report_lines(report: object) -> list[str]:
     boundaries = _joined(report.boundary_hits) or "无"
-    correlations = _joined(
-        f"{left}/{right}={value:.3g}"
-        for left, right, value in report.strong_correlations
-    ) or "无强相关"
+    correlations = (
+        _joined(f"{left}/{right}={value:.3g}" for left, right, value in report.strong_correlations) or "无强相关"
+    )
     profiles = _joined(_profile_text(profile) for profile in report.profiles)
     intervals = _joined(_interval_text(item) for item in report.bootstrap_intervals)
     lines = [
@@ -206,10 +216,7 @@ def _mcmc_lines(report: object, candidate_id: str) -> list[str]:
 
 
 def _classification_lines(result: object) -> list[str]:
-    return [
-        f"分类证据：{CLASSIFICATION_LABELS.get(code, code)}（{code}）"
-        for code in result.classification_evidence
-    ]
+    return [f"分类证据：{CLASSIFICATION_LABELS.get(code, code)}（{code}）" for code in result.classification_evidence]
 
 
 def classification_summary(result: object) -> str:
@@ -221,10 +228,7 @@ def classification_summary(result: object) -> str:
     Returns an empty string when no reasons exist, so the caller can fall back to
     the bare classification name rather than assert a meaning the data lacks.
     """
-    reasons = [
-        CLASSIFICATION_LABELS.get(code, code)
-        for code in result.classification_evidence
-    ]
+    reasons = [CLASSIFICATION_LABELS.get(code, code) for code in result.classification_evidence]
     return "；".join(reasons)
 
 
@@ -241,25 +245,30 @@ def _owned_warning(owner: str | None, text: str) -> str:
     return text if owner is None else f"{owner}: {text}"
 
 
+def _fit_warning_text(warning: object) -> str:
+    """Explain a known stage warning code, passing anything else through.
+
+    Some stages already emit Chinese prose, so only exact code matches are
+    translated; an unrecognised value is never reworded, because losing an
+    unmapped warning would hide evidence the user needs.
+    """
+    text = str(warning)
+    label = FIT_WARNING_LABELS.get(text)
+    return text if label is None else f"{label}（{text}）"
+
+
 def _warning_lines(result: object) -> tuple[str, ...]:
-    lines = [str(warning) for warning in result.warnings]
+    lines = [_fit_warning_text(warning) for warning in result.warnings]
     for candidate in result.candidates:
         lines.extend(
-            _owned_warning(candidate.candidate_id, _diagnostic_text(diagnostic))
-            for diagnostic in candidate.diagnostics
+            _owned_warning(candidate.candidate_id, _diagnostic_text(diagnostic)) for diagnostic in candidate.diagnostics
         )
     report = result.uncertainty
     if report is None:
         return tuple(lines)
-    lines.extend(
-        _owned_warning(report.candidate_id, _diagnostic_text(diagnostic))
-        for diagnostic in report.diagnostics
-    )
+    lines.extend(_owned_warning(report.candidate_id, _diagnostic_text(diagnostic)) for diagnostic in report.diagnostics)
     if report.mcmc is not None:
-        lines.extend(
-            _owned_warning(report.mcmc.candidate_id, f"MCMC: {warning}")
-            for warning in report.mcmc.warnings
-        )
+        lines.extend(_owned_warning(report.mcmc.candidate_id, f"MCMC: {warning}") for warning in report.mcmc.warnings)
     return tuple(dict.fromkeys(lines))
 
 

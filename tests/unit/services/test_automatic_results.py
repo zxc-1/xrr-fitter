@@ -16,6 +16,12 @@ from xrr_fitter.model.automation import (
     DatasetAutomation,
 )
 from xrr_fitter.model.parameters import ParameterValue
+from xrr_fitter.model.structure import (
+    LayerSpec,
+    MaterialSpec,
+    PeriodicBlock,
+    StructureSpec,
+)
 from xrr_fitter.services.materials import automatic_structure
 from xrr_fitter.services.results import summarize_automatic_results
 
@@ -42,9 +48,7 @@ def _point(
     tokens = ("Si3N4", "CrSiC") if len(thicknesses) == 2 else ("Zr",)
     structure, settings = automatic_structure(tokens, "Al2O3")
     parameters = []
-    for index, (layer, thickness) in enumerate(
-        zip(structure.components, thicknesses, strict=True)
-    ):
+    for index, (layer, thickness) in enumerate(zip(structure.components, thicknesses, strict=True)):
         prefix = f"component.{index}"
         parameters.extend(
             (
@@ -89,6 +93,48 @@ def _point(
 
 def _fitted_project(*points):
     return project(*points)
+
+
+def test_periodic_structures_report_status_without_per_layer_rows() -> None:
+    """A periodic block must not turn the summary into a hard failure.
+
+    The results panel summarizes every automatic dataset on each refresh, so
+    rejecting periodic structures outright raised straight out of a Qt slot and
+    took the whole panel down. Per-layer rows assume filename-derived flat
+    layers, so the periodic dataset reports its status with no rows instead.
+    """
+    dataset = replace(
+        dataset_project("periodic"),
+        structure=StructureSpec(
+            MaterialSpec("Air", None, None, 0.0j),
+            (
+                PeriodicBlock(
+                    "Mo/Si",
+                    (
+                        LayerSpec("Mo", MaterialSpec("Mo", "Mo", 10.28), 28.0),
+                        LayerSpec("Si", MaterialSpec("Si", "Si", 2.329), 42.0),
+                    ),
+                    repeats=20,
+                ),
+            ),
+            MaterialSpec("Si", "Si", 2.329),
+        ),
+        automation=DatasetAutomation(
+            import_batch_id="batch-1",
+            role=AutomaticRole.UNROUTED,
+            status=AutomaticStatus.PENDING,
+        ),
+    )
+
+    summary = summarize_automatic_results(project(dataset), "batch-1")
+
+    assert (
+        len(summary.datasets),
+        summary.datasets[0].dataset_id,
+        summary.datasets[0].status,
+        summary.datasets[0].layers,
+        summary.uniformity,
+    ) == (1, "periodic", AutomaticStatus.PENDING, (), ())
 
 
 def test_known_and_unknown_material_results_do_not_confuse_mass_density() -> None:

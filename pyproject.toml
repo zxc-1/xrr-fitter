@@ -17,11 +17,16 @@ dependencies = [
   "pandas>=2.2,<3",
   "xlsxwriter>=3.2,<4",
   "matplotlib>=3.9,<4",
+  "orsopy>=1.2,<2",
+  "jsonschema>=4.0,<5",
   "PySide6>=6.8,<7",
 ]
 
 [project.gui-scripts]
 xrr-fitter = "xrr_fitter.__main__:main"
+
+[project.scripts]
+xrr-fitter-cli = "xrr_fitter.cli.main:main"
 
 [project.optional-dependencies]
 test = [
@@ -37,6 +42,13 @@ test = [
 where = ["src"]
 include = ["xrr_fitter*"]
 namespaces = false
+
+# Extra direct requirements needed to freeze the Windows standalone executable.
+# Deliberately not an optional-dependencies group: every extras group is injected
+# into the published wheel's Requires-Dist, and PyInstaller is a build-time tool
+# that must not become a runtime requirement for library consumers.
+[tool.xrr.windows-packaging]
+requires = ["pyinstaller==6.21.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -32,7 +32,7 @@ Third-party boundaries:
 
 Execution boundaries:
 - subprocess is unavailable throughout the production tree;
-- multiprocessing has only workers and freeze_support exceptions;
+- multiprocessing has only workers and the two freeze_support entry points;
 - process-pool, asyncio subprocess, and os spawn aliases are rejected;
 - __import__, importlib, exec, and eval cannot form discovery channels;
 - wildcard imports cannot hide dependency ownership.
@@ -81,7 +81,8 @@ ALLOWED = {
     "services": {"services", "model", "io", "physics", "fit", "analysis"},
     "api": {"model", "services"},
     "gui": {"gui", "api"},
-    "__main__": {"gui"},
+    "cli": {"cli", "api"},
+    "__main__": {"gui", "cli"},
     "__init__": set(),
 }
 PACKAGE_EDGE_EXCEPTIONS = {
@@ -176,6 +177,9 @@ FORBIDDEN_REFERENCES = {
 DYNAMIC_REFERENCES = {"__import__", "builtins.__import__", "exec", "eval", "importlib.import_module"}
 GETATTR_REFERENCES = {"getattr", "builtins.getattr"}
 FIT_RUNTIME_MODULE_TOKENS = {"executor", "ipc", "process", "queue", "worker"}
+# Frozen Windows builds need freeze_support() in every process entry point, so
+# both the GUI launcher and the headless CLI launcher carry the same exception.
+FREEZE_SUPPORT_ENTRY_POINTS = {"__main__", "cli.main"}
 
 
 @dataclass(frozen=True)
@@ -427,7 +431,8 @@ def _valid_main_multiprocessing(imports: list[ast.AST]) -> bool:
 def _multiprocessing_violations(module: str, tree: ast.AST) -> list[RuleViolation]:
     multiprocessing_imports = _multiprocessing_imports(tree)
     allowed = module == "services.workers" or (
-        module == "__main__" and _valid_main_multiprocessing(multiprocessing_imports)
+        module in FREEZE_SUPPORT_ENTRY_POINTS
+        and _valid_main_multiprocessing(multiprocessing_imports)
     )
     if not multiprocessing_imports or allowed:
         return []
@@ -715,6 +720,21 @@ def test_fixture_checker_allows_gui_domain_access_only_through_public_api() -> N
     )
 
 
+def test_fixture_checker_allows_cli_domain_access_only_through_public_api() -> None:
+    known = {"api", "cli.commands", "services.fitting", "fit.resume"}
+    public = "import xrr_fitter.api as api\n\ndef run(path):\n    return api.load_project(path)\n"
+
+    assert _module_violations("cli.commands", public, known) == ()
+    assert "package-edge" in _fixture_kinds(
+        "cli.commands", "from xrr_fitter.services.fitting import fit_project", *known
+    )
+    assert "package-edge" in _fixture_kinds(
+        "cli.commands",
+        "from xrr_fitter.fit.resume import validate_resume_checkpoint",
+        *known,
+    )
+
+
 @pytest.mark.parametrize(
     ("module", "source"),
     [
@@ -772,15 +792,17 @@ def test_fixture_checker_rejects_process_and_dynamic_import_aliases(
     assert kind in _fixture_kinds("fit.search", source, "fit.search")
 
 
-def test_fixture_checker_allows_only_the_two_multiprocessing_exceptions() -> None:
+def test_fixture_checker_allows_only_the_declared_multiprocessing_exceptions() -> None:
     workers = "import multiprocessing as mp\nCONTEXT = mp.get_context('spawn')"
     main = "from multiprocessing import freeze_support\nfreeze_support()"
     assert _module_violations("services.workers", workers, {"services.workers"}) == ()
-    assert _module_violations("__main__", main, {"__main__"}) == ()
+    for entry_point in sorted(FREEZE_SUPPORT_ENTRY_POINTS):
+        assert _module_violations(entry_point, main, {entry_point}) == ()
+        assert "process" in _fixture_kinds(
+            entry_point, "from multiprocessing import get_context", entry_point
+        )
     assert "process" in _fixture_kinds("fit.search", workers, "fit.search")
-    assert "process" in _fixture_kinds(
-        "__main__", "from multiprocessing import get_context", "__main__"
-    )
+    assert "process" in _fixture_kinds("fit.search", main, "fit.search")
 
 
 def test_fixture_checker_rejects_wildcard_imports() -> None:

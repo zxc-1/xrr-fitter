@@ -42,9 +42,7 @@ def _window(qtbot):
 
 
 def _docks(window) -> dict[str, QDockWidget]:
-    return {
-        name: window.findChild(QDockWidget, name) for name in DOCK_NAMES
-    }
+    return {name: window.findChild(QDockWidget, name) for name in DOCK_NAMES}
 
 
 def test_every_side_panel_is_a_dock(qtbot) -> None:
@@ -141,3 +139,39 @@ def test_empty_dock_state_leaves_the_default_layout_untouched(qtbot) -> None:
     assert window.document.project.ui_state.dock_state == ""
     for name, dock in _docks(window).items():
         assert dock.isVisibleTo(window) is True, name
+
+
+def test_raising_a_tabbed_dock_does_not_restore_mid_notification(qtbot) -> None:
+    """Selecting a tabbed dock must not rebuild the layout being changed.
+
+    The analysis docks are tabbed, so raising one is what a user does by
+    clicking its tab. That emits ``visibilityChanged`` on both the raised and
+    the displaced dock, and capturing there replaces the project, whose
+    ``project_changed`` handler calls ``restoreState``. Rebuilding every dock
+    while Qt is still delivering its own dock notification tears down the
+    widgets Qt is iterating, which crashes the process rather than raising.
+    """
+    window = _window(qtbot)
+    window.show()
+    restores: list[object] = []
+    real_restore = window.restore_dock_layout
+    window.restore_dock_layout = lambda project: (
+        restores.append(project),
+        real_restore(project),
+    )[1]
+
+    window.docks["resultsDock"].raise_()
+
+    assert restores == []
+
+
+def test_raising_a_tabbed_dock_still_persists_the_new_arrangement(qtbot) -> None:
+    """Deferring the capture must not drop it: the tab change still persists."""
+    window = _window(qtbot)
+    window.show()
+    assert window.docks["parametersDock"].isVisible() is True
+
+    window.docks["resultsDock"].raise_()
+    qtbot.waitUntil(lambda: window.document.project.ui_state.dock_state != "")
+
+    assert window.docks["resultsDock"].isVisible() is True

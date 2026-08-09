@@ -1,6 +1,7 @@
 """The complete supported Python API for XRR project workflows."""
 
 from xrr_fitter.model.analysis import (
+    ConfidenceClass,
     FitResult,
     McmcConfig,
     McmcReport,
@@ -120,6 +121,7 @@ __all__ = (
     "AutomaticRole",
     "AutomaticStatus",
     "BeamSpec",
+    "ConfidenceClass",
     "DataColumnMapping",
     "DatasetAutomation",
     "DatasetProject",

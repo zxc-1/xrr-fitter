@@ -142,6 +142,38 @@ this test-only oracle selection never changes production physics. Separate
 analytic tests preserve complete complex non-air fronting behavior and the
 independence of the local Abeles implementation.
 
+## ORSO Community Validation Suite
+
+The suite is vendored at commit
+`6a01b4a4febfc52cd3881d2147c732dd1701bc8e` under `tests/fixtures/orso`, hash
+bound by `index.json` and refreshed only through
+`tools/sync_orso_suite.py --fetch`. Tests never reach the network.
+
+Eight unpolarised cases are compared. Layer tables are four columns
+(thickness, real SLD, imaginary SLD, top-interface roughness). Data files with
+fewer than four columns compare the bare Parratt kernel at `rtol=8e-5`; a
+fourth column is a pointwise 1-sigma `dQ` and selects the smeared comparison at
+`rtol=0.03`. Both values are the suite's own published tolerances.
+
+The smeared cases carry a convention boundary worth stating plainly. The suite
+generated its reference data with a resolution kernel truncated at `±3.5σ`, and
+all four reference implementations pin that same limit: refnx's `_INTLIMIT`,
+refl1d's `linspace(q - 3.5 dQ, q + 3.5 dQ)`, BornAgain's
+`DistributionGaussian(0, 1, 21, 3.5)`, and GenX's `resintrange = 3.5`. Our
+production smearing in `xrr_fitter.physics.resolution` is deliberately
+untruncated, which is the more faithful convolution but disagrees with the suite
+by up to `9.0e-02` at deep interference minima, where the tails beyond `3.5σ`
+sample regions one to two orders of magnitude brighter than the minimum itself.
+The regression module therefore compares the smeared tier through a
+transcription of the suite's own truncated quadrature, and separately holds the
+untruncated production path to the same `rtol=0.03` at every non-minimum point.
+Neither path relaxes a tolerance and no production numerics change.
+
+The suite covers neutron SLD magnitudes near `1e-6 Å⁻²`. X-ray work runs near
+`1e-5 Å⁻²` with a different absorption balance, so passing the suite does not
+by itself validate the XRR path. The pinned refnx benchmark above, two orders
+of magnitude tighter, remains the primary gate.
+
 ## Synthetic Recovery Slow Corpus
 
 The reproducible automatic-fitter stage gate lives in
