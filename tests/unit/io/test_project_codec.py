@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import dataset_project, project
+
 from xrr_fitter.io.project_codec import (
     ProjectSchemaError,
     ProjectVersionError,
@@ -34,7 +34,6 @@ from xrr_fitter.model.instrument import PhysicsDiagnostic
 from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue
 from xrr_fitter.model.project import ProjectUiState
 from xrr_fitter.model.structure import PeriodicSpan, SlabStack
-
 
 ROOT = Path(__file__).resolve().parents[3]
 REFERENCE_INPUTS = ROOT / "examples"
@@ -75,9 +74,7 @@ def _manual_result_graph() -> tuple[FitResult, FitCheckpoint]:
     parameter = ParameterValue("layer.0.thickness_a", 10.25, 2.0, 50.0)
     stack = SlabStack(
         thickness_a=np.array([0.0, 10.0, 10.0, 0.0]),
-        sld_a2=np.array(
-            [0.0j, 2.0e-6 + 0.1e-6j, 2.0e-6 + 0.1e-6j, 3.0e-6j]
-        ),
+        sld_a2=np.array([0.0j, 2.0e-6 + 0.1e-6j, 2.0e-6 + 0.1e-6j, 3.0e-6j]),
         roughness_a=np.array([1.0, 1.0, 1.0]),
         periodic_spans=(PeriodicSpan(1, 1, 2),),
     )
@@ -97,9 +94,7 @@ def _manual_result_graph() -> tuple[FitResult, FitCheckpoint]:
         weighted_residuals=np.array([0.0, 0.5, -1.0]),
         expanded_stack=stack,
         sld_depth_a=np.array([0.0, 5.0, 10.0]),
-        sld_profile_a2=np.array(
-            [0.0j, 1.0e-6 + 0.2e-6j, 2.0e-6 + 0.1e-6j]
-        ),
+        sld_profile_a2=np.array([0.0j, 1.0e-6 + 0.2e-6j, 2.0e-6 + 0.1e-6j]),
         diagnostics=(diagnostic,),
     )
     stage = FitStageSummary(
@@ -215,9 +210,7 @@ def _project_with_legal_json_sentinels():
         model_normalized=np.array([1.0, np.nan, 0.25]),
         log_residuals_decades=np.array([0.0, np.nan, -0.02]),
         weighted_residuals=np.array([0.0, np.nan, -1.0]),
-        sld_profile_a2=np.array(
-            [0.0j, complex(np.nan, np.nan), 2.0e-6 + 0.1e-6j]
-        ),
+        sld_profile_a2=np.array([0.0j, complex(np.nan, np.nan), 2.0e-6 + 0.1e-6j]),
     )
     invalid = replace(
         valid,
@@ -251,9 +244,7 @@ def _project_with_legal_json_sentinels():
     )
     return replace(
         project(dataset),
-        ui_state=ProjectUiState(
-            selected_candidate_ids=(("sample-1", "candidate-1"),)
-        ),
+        ui_state=ProjectUiState(selected_candidate_ids=(("sample-1", "candidate-1"),)),
     )
 
 
@@ -269,7 +260,14 @@ def _rewrite(path: Path, mutation) -> None:
     path.write_text(json.dumps(payload, allow_nan=False), encoding="utf-8")
 
 
-def test_schema_one_example_projects_migrate_and_round_trip_v2() -> None:
+def test_committed_example_projects_decode_and_round_trip_verbatim() -> None:
+    """The published examples decode to exactly the bytes they ship.
+
+    Migration from schema 1 is covered synthetically above; these files are
+    written at schema 2 and carry the pending automation markers that keep the
+    automatic fit action reachable, so re-encoding them must reproduce the
+    committed bytes rather than merely an equal value.
+    """
     for stem in ("single-layer", "mo-si-periodic"):
         content = (REFERENCE_INPUTS / f"{stem}.xrrproj.json").read_bytes()
 
@@ -278,12 +276,9 @@ def test_schema_one_example_projects_migrate_and_round_trip_v2() -> None:
         restored = project_from_bytes(encoded)
 
         assert loaded.schema_version == 2
-        assert all(
-            dataset.automation.status.value == "not_run"
-            for dataset in loaded.datasets
-        )
+        assert all(dataset.automation.status.value == "pending" for dataset in loaded.datasets)
         assert restored == loaded
-        assert project_to_bytes(restored) == encoded
+        assert encoded == content
 
 
 def test_save_load_round_trip_sets_runtime_base_directory(tmp_path: Path) -> None:
@@ -359,9 +354,7 @@ def test_project_rejects_unknown_structure_discriminator(tmp_path: Path) -> None
     path = _saved_project_path(tmp_path)
     _rewrite(
         path,
-        lambda payload: payload["datasets"][0]["structure"]["components"][0].update(
-            kind="mystery"
-        ),
+        lambda payload: payload["datasets"][0]["structure"]["components"][0].update(kind="mystery"),
     )
 
     with pytest.raises(ProjectSchemaError, match="structure.*mystery"):

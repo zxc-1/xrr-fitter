@@ -78,9 +78,7 @@ def _mcmc_report(**changes):
         "config": api.McmcConfig(walkers=4, burn_in=2, production_steps=4),
         "child_seed": 7,
         "parameter_names": ("component.0.thickness_a", "instrument.scale"),
-        "samples_physical": np.array(
-            [[10.0, 1.0], [20.0, 2.0], [30.0, 3.0], [40.0, 4.0]]
-        ),
+        "samples_physical": np.array([[10.0, 1.0], [20.0, 2.0], [30.0, 3.0], [40.0, 4.0]]),
         "log_probability": np.zeros(4),
         "acceptance_fraction": np.array([0.2, 0.6, 0.4, 0.8]),
         "split_rhat": np.array([1.05, 1.12]),
@@ -246,9 +244,7 @@ def test_candidate_selection_uses_public_api_returned_project(
 def test_candidate_selection_failure_is_atomic(qtbot, monkeypatch) -> None:
     panel = _panel(qtbot, _project_with_result(_two_candidate_result()))
     before_project = panel.document.project
-    before_rows = tuple(
-        panel.candidate_text(index) for index in range(panel.candidate_count())
-    )
+    before_rows = tuple(panel.candidate_text(index) for index in range(panel.candidate_count()))
     before_selected = panel.selected_candidate_id()
     selected: list[str] = []
     panel.candidate_selected.connect(selected.append)
@@ -263,9 +259,7 @@ def test_candidate_selection_failure_is_atomic(qtbot, monkeypatch) -> None:
 
     assert panel.document.project is before_project
     assert panel.selected_candidate_id() == before_selected
-    assert tuple(
-        panel.candidate_text(index) for index in range(panel.candidate_count())
-    ) == before_rows
+    assert tuple(panel.candidate_text(index) for index in range(panel.candidate_count())) == before_rows
     assert selected == []
 
 
@@ -438,6 +432,38 @@ def test_result_warnings_keep_candidate_and_evidence_owner_ids(qtbot) -> None:
     assert "candidate-a: MCMC: chain warning" in warnings
 
 
+def test_known_fit_warning_codes_are_shown_in_chinese(qtbot) -> None:
+    """A stage warning code is machine-oriented; the panel must explain it.
+
+    ``result.warnings`` carries stable codes from the fit stages, and the panel
+    was rendering them verbatim, so a Chinese-language surface showed raw
+    identifiers like ``stage_a_fringe_candidate_rejected``. The code is retained
+    alongside the explanation because expert users match it against logs.
+    """
+    result = _two_candidate_result()
+    result = replace(
+        result,
+        warnings=(
+            "stage_a_physical_candidate_rejected",
+            "stage_a_fringe_candidate_rejected",
+        ),
+    )
+    panel = _panel(qtbot, _project_with_result(result))
+
+    warnings = panel.warning_texts()
+    assert "候选解因不满足物理约束被剔除（stage_a_physical_candidate_rejected）" in warnings
+    assert "部分候选解因条纹特征不符被剔除（stage_a_fringe_candidate_rejected）" in warnings
+
+
+def test_unknown_fit_warning_codes_pass_through_verbatim(qtbot) -> None:
+    """An untranslated warning must never be swallowed or renamed."""
+    result = _two_candidate_result()
+    result = replace(result, warnings=("some_future_warning_code",))
+    panel = _panel(qtbot, _project_with_result(result))
+
+    assert "some_future_warning_code" in panel.warning_texts()
+
+
 def test_confidence_uses_redundant_marker_and_semantic_color(qtbot) -> None:
     result = _two_candidate_result()
     multiple = replace(result, confidence=type(result.confidence).MULTIPLE)
@@ -591,8 +617,18 @@ def test_automatic_result_tables_render_point_layers_and_uniformity(
     )
 
     layer = AutomaticLayerResult(
-        "point-1", 0, "Zr", 120.0, 4.0, 3.1e-5, 2.0e-7,
-        0.92, 6.52, 1.03, 6.72, None,
+        "point-1",
+        0,
+        "Zr",
+        120.0,
+        4.0,
+        3.1e-5,
+        2.0e-7,
+        0.92,
+        6.52,
+        1.03,
+        6.72,
+        None,
     )
     summary = AutomaticResultSummary(
         "batch-9",
@@ -659,6 +695,7 @@ def test_confidence_badge_tooltip_explains_classification_reasons(qtbot) -> None
 
 def test_mcmc_recommend_button_restores_standard_config_after_hand_edits(qtbot) -> None:
     from PySide6.QtWidgets import QPushButton
+
     panel = _panel(qtbot, _project_with_result(_two_candidate_result(), expert=True))
     group = panel.mcmc_group
     recommended = api.McmcConfig.standard(17)  # candidate-a has 17 free params

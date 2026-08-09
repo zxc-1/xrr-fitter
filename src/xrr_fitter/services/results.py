@@ -30,10 +30,7 @@ def _automatic_datasets(
         dataset
         for dataset in project.datasets
         if dataset.automation.role is not AutomaticRole.MANUAL
-        and (
-            import_batch_id is None
-            or dataset.automation.import_batch_id == import_batch_id
-        )
+        and (import_batch_id is None or dataset.automation.import_batch_id == import_batch_id)
     )
 
 
@@ -53,11 +50,7 @@ def _layer_value(
     if name in parameters:
         return parameters[name]
     setting = next(
-        (
-            value
-            for value in dataset.parameter_settings
-            if value.name == name and value.locked
-        ),
+        (value for value in dataset.parameter_settings if value.name == name and value.locked),
         None,
     )
     if setting is None:
@@ -81,11 +74,7 @@ def _direct_sld(
         real = _layer_value(dataset, parameters, real_name)
     if imag is None:
         locked = next(
-            (
-                value.initial
-                for value in dataset.parameter_settings
-                if value.name == imag_name and value.locked
-            ),
+            (value.initial for value in dataset.parameter_settings if value.name == imag_name and value.locked),
             declared.imag,
         )
         imag = locked
@@ -142,21 +131,16 @@ def _layer_result(
 def _dataset_summary(dataset: DatasetProject) -> AutomaticDatasetSummary:
     structure = dataset.structure
     if structure is None:
-        raise ValueError(
-            f"automatic result requires a structure: {dataset.dataset_id}"
-        )
-    if any(not isinstance(component, LayerSpec) for component in structure.components):
-        raise ValueError(
-            "automatic result summary supports ordinary filename-derived layers only"
-        )
+        raise ValueError(f"automatic result requires a structure: {dataset.dataset_id}")
+    # Per-layer rows assume the flat filename-derived layers the automatic route
+    # builds. Anything else still deserves a status row: this runs on every
+    # results refresh, so raising here would tear down the panel from a Qt slot.
+    flat = all(isinstance(component, LayerSpec) for component in structure.components)
     parameters = _parameter_map(dataset)
     layers = (
         ()
-        if parameters is None
-        else tuple(
-            _layer_result(dataset, layer, index, parameters)
-            for index, layer in enumerate(structure.components)
-        )
+        if parameters is None or not flat
+        else tuple(_layer_result(dataset, layer, index, parameters) for index, layer in enumerate(structure.components))
     )
     return AutomaticDatasetSummary(
         dataset_id=dataset.dataset_id,
@@ -173,15 +157,9 @@ def _uniformity_row(
 ) -> LayerUniformitySummary:
     thicknesses = tuple(values)
     mean = sum(thicknesses) / len(thicknesses)
-    population_std = sqrt(
-        sum((value - mean) ** 2 for value in thicknesses) / len(thicknesses)
-    )
+    population_std = sqrt(sum((value - mean) ** 2 for value in thicknesses) / len(thicknesses))
     cv_percent = 0.0 if mean == 0.0 else population_std / mean * 100.0
-    relative_range = (
-        0.0
-        if mean == 0.0
-        else (max(thicknesses) - min(thicknesses)) / mean * 100.0
-    )
+    relative_range = 0.0 if mean == 0.0 else (max(thicknesses) - min(thicknesses)) / mean * 100.0
     fit_group_id, layer_index, material_name = key
     return LayerUniformitySummary(
         fit_group_id=fit_group_id,

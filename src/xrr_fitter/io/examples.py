@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,12 @@ import numpy as np
 from xrr_fitter.io.export_run import ArtifactPayload, publish_exact_tree
 from xrr_fitter.io.project_codec import project_to_bytes
 from xrr_fitter.io.xy import read_xy_bytes, xy_bytes
+from xrr_fitter.model.automation import (
+    AutomaticRole,
+    AutomaticStatus,
+    DatasetAutomation,
+    MeasurementPreset,
+)
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.project import DatasetProject, XrrProject
@@ -20,7 +27,6 @@ from xrr_fitter.model.structure import (
 )
 from xrr_fitter.physics.reflectivity import instrument_reflectivity
 from xrr_fitter.physics.stack import expand_structure
-
 
 BEAM = BeamSpec(kind="monochromatic", wavelength_a=1.5406)
 INSTRUMENT = InstrumentSpec(
@@ -144,8 +150,28 @@ def _project(
         ),
         structure=structure,
         instrument=INSTRUMENT,
+        # The automatic route only considers datasets an import has marked, so a
+        # default manual role keeps them out of the preflight entirely. The batch
+        # id is derived from the stem rather than generated, because published
+        # example files must stay byte reproducible.
+        automation=DatasetAutomation(
+            import_batch_id=f"example-{stem}",
+            role=AutomaticRole.UNROUTED,
+            status=AutomaticStatus.PENDING,
+        ),
     )
-    return XrrProject.new((dataset,), master_seed=seed)
+    # The automatic fit preflight requires a project-level preset, which only an
+    # import normally produces. Without it the headline automatic action stays
+    # disabled on the examples meant to demonstrate it, so each example declares
+    # the preset matching the beam and instrument its dataset already records.
+    return replace(
+        XrrProject.new((dataset,), master_seed=seed),
+        measurement_preset=MeasurementPreset(
+            INSTRUMENT.instrument_id,
+            BEAM,
+            INSTRUMENT,
+        ),
+    )
 
 
 def _single_layer_example() -> tuple[bytes, XrrProject]:

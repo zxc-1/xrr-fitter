@@ -14,6 +14,10 @@ repos:
     rev: v5.0.0
     hooks:
       - id: end-of-file-fixer
+        # Published example projects are byte-reproducible output of
+        # write_examples(); appending a newline breaks the round-trip contract
+        # asserted by tests/unit/io/test_project_codec.py.
+        exclude: ^examples/.*\.(xrrproj\.json|xy)$
       - id: trailing-whitespace
       - id: check-yaml
       - id: check-toml

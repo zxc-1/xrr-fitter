@@ -13,11 +13,7 @@ from xrr_fitter.model.parameters import ParameterValue
 
 def _write_curve(path: Path) -> Path:
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}"
-            for index in range(32)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}" for index in range(32)) + "\n",
         encoding="utf-8",
     )
     return path
@@ -70,6 +66,31 @@ class FakeJob:
 
     def close(self) -> None:
         pass
+
+
+def test_opening_a_shipped_example_enables_the_automatic_fit_button(
+    qtbot,
+    tmp_path,
+) -> None:
+    """The shipped examples exist to demonstrate the headline automatic action.
+
+    They are built rather than imported, so they used to carry neither the
+    project preset nor the automation markers the preflight requires, leaving
+    「自动拟合」 greyed out on exactly the projects meant to showcase it.
+    """
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.gui.main_window import MainWindow
+    from xrr_fitter.io.examples import write_examples
+
+    destination = tmp_path / "examples"
+    write_examples(destination)
+    window = MainWindow(ProjectDocument())
+    qtbot.addWidget(window)
+
+    for stem in ("single-layer", "mo-si-periodic"):
+        window.document.open(destination / f"{stem}.xrrproj.json")
+
+        assert window.fit_panel.automatic_button.isEnabled(), stem
 
 
 def test_partial_import_waits_for_manual_fit_keeps_failure_recovery_and_publishes_curve(

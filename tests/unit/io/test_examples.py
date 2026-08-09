@@ -14,9 +14,10 @@ from xrr_fitter.io.examples import (
 )
 from xrr_fitter.io.project_codec import load_project
 from xrr_fitter.io.xy import read_xy
+from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
 from xrr_fitter.physics.reflectivity import instrument_reflectivity
 from xrr_fitter.physics.stack import expand_structure
-
+from xrr_fitter.services.fitting import preflight_automatic_fit
 
 CANONICAL_FILES = (
     "mo-si-periodic.xrrproj.json",
@@ -70,6 +71,60 @@ def test_example_builders_return_unfitted_relocatable_model_values() -> None:
         2301,
         1800,
     )
+
+
+def test_examples_carry_the_measurement_preset_their_datasets_declare() -> None:
+    """An example without a preset cannot reach the automatic fit path.
+
+    ``preflight_automatic_fit`` requires ``project.measurement_preset``, which
+    only an import produces. Shipping examples without it left the headline
+    automatic action permanently disabled on the very projects meant to
+    demonstrate it, so each example declares the preset matching the beam and
+    instrument its dataset already records.
+    """
+    for value in (build_single_layer_example(), build_mo_si_periodic_example()):
+        preset = value.measurement_preset
+        assert preset is not None
+        dataset = value.datasets[0]
+        assert preset.beam == dataset.beam
+        assert preset.instrument == dataset.instrument
+        assert preset.preset_id == dataset.instrument.instrument_id
+
+
+def test_examples_are_runnable_through_the_automatic_fit_route() -> None:
+    """A preset alone still leaves the automatic action disabled.
+
+    ``preflight_automatic_fit`` skips every dataset whose automation role is
+    ``manual``, so examples carrying only the preset reported "no runnable
+    automatic datasets". Each example therefore ships the unrouted/pending
+    markers an import would produce, under a fixed batch id that keeps the
+    published files byte reproducible.
+    """
+    for value in (build_single_layer_example(), build_mo_si_periodic_example()):
+        automation = value.datasets[0].automation
+        assert automation.role is AutomaticRole.UNROUTED
+        assert automation.status is AutomaticStatus.PENDING
+        assert automation.import_batch_id == f"example-{value.datasets[0].dataset_id}"
+        assert automation.fit_group_id is None
+        assert automation.statistics_member is False
+
+
+def test_published_examples_pass_the_automatic_fit_preflight(
+    tmp_path: Path,
+) -> None:
+    """The published examples must satisfy the preflight a user's click runs.
+
+    The builders return relocatable values whose sources only resolve once the
+    file is loaded from disk, so readiness is only meaningful on the published
+    tree. This is the exact state the GUI holds after opening an example.
+    """
+    destination = tmp_path / "examples"
+    write_examples(destination)
+
+    for stem in ("single-layer", "mo-si-periodic"):
+        loaded = load_project(destination / f"{stem}.xrrproj.json")
+        readiness = preflight_automatic_fit(loaded)
+        assert readiness.ready, readiness.message
 
 
 def _file_bytes(paths: tuple[Path, ...]) -> dict[str, bytes]:

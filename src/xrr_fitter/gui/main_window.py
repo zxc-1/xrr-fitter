@@ -55,6 +55,16 @@ class MainWindow(QMainWindow):
         self._workspace_released = False
         self._restoring_docks = False
         self._docks_settled = False
+        self._capture_scheduled = False
+        # Owned by the window so a pending capture dies with it. A bare
+        # QTimer.singleShot would still fire after the window is gone and touch a
+        # deleted C++ object, which in a long test run disturbs whichever window
+        # is active by then.
+        self._capture_timer = QTimer(self)
+        self._capture_timer.setObjectName("dockCaptureTimer")
+        self._capture_timer.setSingleShot(True)
+        self._capture_timer.setInterval(0)
+        self._capture_timer.timeout.connect(self._capture_scheduled_layout)
         self._close_cancel_timer = QTimer(self)
         self._close_cancel_timer.setObjectName("closeCancelTimer")
         self._close_cancel_timer.setSingleShot(True)
@@ -87,24 +97,18 @@ class MainWindow(QMainWindow):
         self.plot_panel.fit_range_requested.connect(self._plot_range_requested)
         self.plot_panel.point_mask_requested.connect(self._plot_point_requested)
         self.plot_panel.view_changed.connect(self._plot_tab_changed)
-        self.plot_panel.import_requested.connect(
-            self.data_panel.import_files_button.click
-        )
+        self.plot_panel.import_requested.connect(self.data_panel.import_files_button.click)
         for dock in self.docks.values():
             dock.dockLocationChanged.connect(self._dock_layout_changed)
             dock.topLevelChanged.connect(self._dock_layout_changed)
             dock.visibilityChanged.connect(self._dock_layout_changed)
-        self.guidance.leave_requested.connect(
-            lambda: self.set_guidance_visible(False)
-        )
+        self.guidance.leave_requested.connect(lambda: self.set_guidance_visible(False))
         self.result_panel.candidate_selected.connect(self._project_candidate)
         self.result_panel.candidate_inspected.connect(self._project_candidate)
         self.fit_panel.running_changed.connect(self._operation_running_changed)
         self.fit_panel.preview_available.connect(self._project_preview)
         self.fit_panel.running_changed.connect(self._discard_preview_when_idle)
-        self.result_panel.controller.running_changed.connect(
-            self._operation_running_changed
-        )
+        self.result_panel.controller.running_changed.connect(self._operation_running_changed)
         self.document.project_changed.connect(self._restore_workspace)
         self.document.project_changed.connect(self._refresh_operation_state)
         self.document.dirty_changed.connect(self._refresh_window_title)
@@ -144,11 +148,7 @@ class MainWindow(QMainWindow):
     def _project_candidate(self, candidate_id: str) -> None:
         dataset_id = self.document.active_dataset_id
         dataset = next(
-            (
-                value
-                for value in self.document.project.datasets
-                if value.dataset_id == dataset_id
-            ),
+            (value for value in self.document.project.datasets if value.dataset_id == dataset_id),
             None,
         )
         if dataset is None or dataset.last_valid_result is None:
@@ -186,8 +186,26 @@ class MainWindow(QMainWindow):
         restore is in flight, and as a side effect of the first show; capturing
         then would either dirty a freshly opened project or write back the state
         being applied.
+
+        Capture is also deferred out of the notification itself. Persisting the
+        layout replaces the project, and the resulting ``project_changed`` calls
+        ``restoreState``; rebuilding every dock while Qt is still delivering its
+        own dock notification destroys the widgets Qt is iterating over. The
+        window-owned single-shot timer lets that delivery finish first.
         """
         if self._restoring_docks or not self._docks_settled:
+            return
+        if self._capture_scheduled:
+            return
+        self._capture_scheduled = True
+        self._capture_timer.start()
+
+    def _capture_scheduled_layout(self) -> None:
+        """Capture the settled arrangement once the dock notification is done."""
+        self._capture_scheduled = False
+        if self._restoring_docks or not self._docks_settled:
+            return
+        if self._workspace_released:
             return
         self.capture_dock_layout()
 
@@ -226,9 +244,7 @@ class MainWindow(QMainWindow):
         purpose is the expert surface; leaving them up would defeat the point of
         a small guided step.
         """
-        self.central_stack.setCurrentWidget(
-            self.guidance if visible else self.plot_panel
-        )
+        self.central_stack.setCurrentWidget(self.guidance if visible else self.plot_panel)
         self._restoring_docks = True
         try:
             for dock in self.docks.values():
@@ -251,9 +267,7 @@ class MainWindow(QMainWindow):
         """
         current_state = self.saveState()
         state = (
-            ""
-            if current_state == self._default_dock_state
-            else bytes(current_state.toBase64().data()).decode("ascii")
+            "" if current_state == self._default_dock_state else bytes(current_state.toBase64().data()).decode("ascii")
         )
         current = self.document.project
         updated = api.set_dock_state(current, state)
@@ -551,12 +565,9 @@ class MainWindow(QMainWindow):
         prompt.setAccessibleName("确认强制结束后台任务")
         prompt.setIcon(QMessageBox.Icon.Warning)
         prompt.setText(
-            "后台任务未在 5 秒内停止。强制结束可能丢失尚未写入的检查点，"
-            "并可能损坏未完成的工作状态。是否继续？"
+            "后台任务未在 5 秒内停止。强制结束可能丢失尚未写入的检查点，并可能损坏未完成的工作状态。是否继续？"
         )
-        prompt.setStandardButtons(
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
+        prompt.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         prompt.setDefaultButton(QMessageBox.StandardButton.No)
         prompt.setModal(True)
         prompt.finished.connect(self._force_prompt_finished)
