@@ -44,6 +44,7 @@ GENERATED_METADATA = (
     "src/xrr_fitter.egg-info/top_level.txt",
 )
 ENTRY_POINT_METADATA = "src/xrr_fitter.egg-info/entry_points.txt"
+SCRIPT_TABLES = ("gui-scripts", "scripts")
 VCS_REVISION = re.compile(r"[0-9a-f]{40}")
 
 
@@ -214,11 +215,13 @@ def _fixture_toml(payload: dict[str, object]) -> str:
         "[project.optional-dependencies]",
         f"test = {_toml_array(tests)}",
     ]
-    scripts = project.get("gui-scripts")
-    if scripts is not None:
+    for table in SCRIPT_TABLES:
+        scripts = project.get(table)
+        if scripts is None:
+            continue
         if not isinstance(scripts, dict) or not scripts:
-            raise ValueError("invalid gui-scripts metadata")
-        lines.extend(("", "[project.gui-scripts]"))
+            raise ValueError(f"invalid {table} metadata")
+        lines.extend(("", f"[project.{table}]"))
         lines.extend(f"{key} = {json.dumps(value)}" for key, value in sorted(scripts.items()))
     lines.extend(
         (
@@ -292,7 +295,7 @@ def _generated_metadata(archive: Path) -> tuple[str, ...]:
 def _expected_generated_metadata(payload: dict[str, object]) -> tuple[str, ...]:
     project = payload["project"]
     assert isinstance(project, dict)
-    if project.get("gui-scripts") is None:
+    if all(project.get(table) is None for table in SCRIPT_TABLES):
         return GENERATED_METADATA
     return tuple(sorted((*GENERATED_METADATA, ENTRY_POINT_METADATA)))
 

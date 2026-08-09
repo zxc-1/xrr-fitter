@@ -25,6 +25,9 @@ dependencies = [
 [project.gui-scripts]
 xrr-fitter = "xrr_fitter.__main__:main"
 
+[project.scripts]
+xrr-fitter-cli = "xrr_fitter.cli.main:main"
+
 [project.optional-dependencies]
 test = [
   "pytest>=8.3,<9",
