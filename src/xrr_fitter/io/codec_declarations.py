@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from xrr_fitter.io.codec_common import (
     ProjectSchemaError,
@@ -20,10 +20,12 @@ from xrr_fitter.model.fitting import (
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
+    InterfaceTransition,
     LayerSpec,
     MaterialSpec,
     PeriodicBlock,
     StructureSpec,
+    TransitionBranch,
 )
 
 
@@ -107,17 +109,11 @@ def _fit_config_to_dict(value: FitConfig) -> dict[str, object]:
         "objective_version": value.objective_version,
         "c_decades": value.c_decades,
         "final_seed_count": value.final_seed_count,
-        "budget": {
-            field: getattr(value.budget, field)
-            for field in value.budget.__dataclass_fields__
-        },
+        "budget": {field: getattr(value.budget, field) for field in value.budget.__dataclass_fields__},
         "local_workers": value.local_workers,
         "scale_prior_enabled": value.scale_prior_enabled,
         "scale_prior_tau_decades": value.scale_prior_tau_decades,
-        "confidence": {
-            field: getattr(value.confidence, field)
-            for field in value.confidence.__dataclass_fields__
-        },
+        "confidence": {field: getattr(value.confidence, field) for field in value.confidence.__dataclass_fields__},
         "fringe_screen_threshold_version": value.fringe_screen_threshold_version,
         "budget_reclaim_threshold_version": value.budget_reclaim_threshold_version,
         "downsample_rule_version": value.downsample_rule_version,
@@ -146,14 +142,8 @@ def _fit_config_from_dict(value: object) -> FitConfig:
     budget_fields = set(SearchBudget.__dataclass_fields__)
     confidence_fields = set(ConfidenceThresholds.__dataclass_fields__)
     budget = SearchBudget(**_mapping(payload["budget"], budget_fields, "search budget"))
-    confidence = ConfidenceThresholds(
-        **_mapping(payload["confidence"], confidence_fields, "confidence thresholds")
-    )
-    scalar = {
-        key: item
-        for key, item in payload.items()
-        if key not in {"budget", "confidence"}
-    }
+    confidence = ConfidenceThresholds(**_mapping(payload["confidence"], confidence_fields, "confidence thresholds"))
+    scalar = {key: item for key, item in payload.items() if key not in {"budget", "confidence"}}
     return FitConfig(**scalar, budget=budget, confidence=confidence)
 
 
@@ -180,8 +170,42 @@ def _material_from_dict(value: object) -> MaterialSpec:
     )
 
 
-def _layer_to_dict(value: LayerSpec) -> dict[str, object]:
+def _transition_branch_to_dict(value: TransitionBranch) -> dict[str, object]:
     return {
+        "kind": value.kind,
+        "weight": value.weight,
+        "thickness_a": value.thickness_a,
+    }
+
+
+def _transition_branch_from_dict(value: object) -> TransitionBranch:
+    payload = _mapping(value, {"kind", "weight", "thickness_a"}, "transition branch")
+    return TransitionBranch(
+        kind=payload["kind"],
+        weight=payload["weight"],
+        thickness_a=payload["thickness_a"],
+    )
+
+
+def _transition_to_dict(value: InterfaceTransition) -> dict[str, object]:
+    return {
+        "branches": [_transition_branch_to_dict(branch) for branch in value.branches],
+        "microslab_max_a": value.microslab_max_a,
+    }
+
+
+def _transition_from_dict(value: object) -> InterfaceTransition:
+    payload = _mapping(value, {"branches", "microslab_max_a"}, "interface transition")
+    return InterfaceTransition(
+        branches=tuple(
+            _transition_branch_from_dict(item) for item in _sequence(payload["branches"], "transition branches")
+        ),
+        microslab_max_a=payload["microslab_max_a"],
+    )
+
+
+def _layer_to_dict(value: LayerSpec) -> dict[str, object]:
+    payload: dict[str, object] = {
         "kind": "layer",
         "name": value.name,
         "material": _material_to_dict(value.material),
@@ -189,6 +213,11 @@ def _layer_to_dict(value: LayerSpec) -> dict[str, object]:
         "density_scale": value.density_scale,
         "roughness_a": value.roughness_a,
     }
+    # Emitting the key only when present keeps files written before transitions
+    # existed byte-identical, and lets older readers load them unchanged.
+    if value.transition is not None:
+        payload["transition"] = _transition_to_dict(value.transition)
+    return payload
 
 
 def _layer_from_dict(value: object) -> LayerSpec:
@@ -196,15 +225,18 @@ def _layer_from_dict(value: object) -> LayerSpec:
         value,
         {"kind", "name", "material", "thickness_a", "density_scale", "roughness_a"},
         "layer",
+        optional={"transition"},
     )
     if payload["kind"] != "layer":
         raise ProjectSchemaError(f"unknown structure discriminator: {payload['kind']}")
+    transition = payload.get("transition")
     return LayerSpec(
         name=payload["name"],
         material=_material_from_dict(payload["material"]),
         thickness_a=payload["thickness_a"],
         density_scale=payload["density_scale"],
         roughness_a=payload["roughness_a"],
+        transition=None if transition is None else _transition_from_dict(transition),
     )
 
 
@@ -226,10 +258,7 @@ def _periodic_from_dict(value: object) -> PeriodicBlock:
     )
     return PeriodicBlock(
         name=payload["name"],
-        layers=tuple(
-            _layer_from_dict(item)
-            for item in _sequence(payload["layers"], "layers")
-        ),
+        layers=tuple(_layer_from_dict(item) for item in _sequence(payload["layers"], "layers")),
         repeats=payload["repeats"],
         top_roughness_a=payload["top_roughness_a"],
     )
@@ -326,8 +355,7 @@ def _structure_from_dict(value: object) -> StructureSpec | None:
     return StructureSpec(
         fronting=_material_from_dict(payload["fronting"]),
         components=tuple(
-            _component_from_dict(item)
-            for item in _sequence(payload["components"], "structure components")
+            _component_from_dict(item) for item in _sequence(payload["components"], "structure components")
         ),
         backing=_material_from_dict(payload["backing"]),
         backing_roughness_a=payload["backing_roughness_a"],
