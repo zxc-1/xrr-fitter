@@ -98,6 +98,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
             PYTEST_PREFIX
             + (
                 "tests/regression/test_numerical_reference.py",
+                "tests/regression/test_orso_validation.py",
                 "tests/regression/test_recovery_metrics.py",
                 "tests/regression/test_profile_basin_regressions.py",
                 "tests/regression/test_automatic_recovery.py",

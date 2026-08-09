@@ -10,3 +10,10 @@
 # Data and manifests are text but line-ending sensitive; keep LF explicitly.
 *.xy text eol=lf
 *.json text eol=lf
+
+# Vendored upstream suites are hash bound by their exact on-disk bytes, so they
+# must not be normalized at all. tests/fixtures/orso/index.json records a
+# sha256 per file; upstream ships at least one CRLF layer table, and normalizing
+# it to LF changes those bytes and breaks
+# `tools/sync_orso_suite.py --check` in a fresh clone.
+tests/fixtures/orso/** -text -whitespace

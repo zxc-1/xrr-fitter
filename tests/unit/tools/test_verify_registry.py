@@ -75,6 +75,7 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
             pytest_prefix
             + (
                 "tests/regression/test_numerical_reference.py",
+                "tests/regression/test_orso_validation.py",
                 "tests/regression/test_recovery_metrics.py",
                 "tests/regression/test_profile_basin_regressions.py",
                 "tests/regression/test_automatic_recovery.py",
