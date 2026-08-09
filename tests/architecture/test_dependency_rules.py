@@ -81,7 +81,8 @@ ALLOWED = {
     "services": {"services", "model", "io", "physics", "fit", "analysis"},
     "api": {"model", "services"},
     "gui": {"gui", "api"},
-    "__main__": {"gui"},
+    "cli": {"cli", "api"},
+    "__main__": {"gui", "cli"},
     "__init__": set(),
 }
 PACKAGE_EDGE_EXCEPTIONS = {
@@ -712,6 +713,21 @@ def test_fixture_checker_allows_gui_domain_access_only_through_public_api() -> N
     )
     assert "package-edge" in _fixture_kinds(
         "gui.document", "from xrr_fitter.services.projects import new_project", *known
+    )
+
+
+def test_fixture_checker_allows_cli_domain_access_only_through_public_api() -> None:
+    known = {"api", "cli.commands", "services.fitting", "fit.resume"}
+    public = "import xrr_fitter.api as api\n\ndef run(path):\n    return api.load_project(path)\n"
+
+    assert _module_violations("cli.commands", public, known) == ()
+    assert "package-edge" in _fixture_kinds(
+        "cli.commands", "from xrr_fitter.services.fitting import fit_project", *known
+    )
+    assert "package-edge" in _fixture_kinds(
+        "cli.commands",
+        "from xrr_fitter.fit.resume import validate_resume_checkpoint",
+        *known,
     )
 
 

@@ -13,6 +13,7 @@ PUBLIC_NAMES = (
     "AutomaticRole",
     "AutomaticStatus",
     "BeamSpec",
+    "ConfidenceClass",
     "DataColumnMapping",
     "DatasetAutomation",
     "DatasetProject",
