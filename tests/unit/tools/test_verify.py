@@ -43,6 +43,12 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
     module = load_tool_module("verify")
     expected_quality = (
         (module.PYTHON, "tools/check_radon.py", "--output", f"{module.REPORT}/radon.json"),
+        (
+            module.PYTHON,
+            "tools/lock_windows_environment.py",
+            "--check",
+            "requirements-windows-x64-py312.lock",
+        ),
         module.PYTEST_PREFIX
         + (
             "tests/architecture/test_dependency_rules.py",
@@ -101,6 +107,12 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
         + ("tests/integration/test_process_workers.py", "-q"),
     )
     expected_distribution = (
+        (
+            module.PYTHON,
+            "tools/lock_windows_environment.py",
+            "--verify",
+            "requirements-windows-x64-py312.lock",
+        ),
         (
             module.PYTHON,
             "tools/verify_distribution.py",
@@ -237,6 +249,7 @@ def _write_verifier_fixture(root: Path, verifier: Path, outcome_gate: Path) -> N
     )
     (root / "tools/check_hygiene.py").write_text(checker, encoding="utf-8")
     (root / "tools/check_radon.py").write_text(checker, encoding="utf-8")
+    (root / "tools/lock_windows_environment.py").write_text(checker, encoding="utf-8")
     test_source = (
         "from pathlib import Path\n"
         "import os\n\n"

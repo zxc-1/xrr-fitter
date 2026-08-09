@@ -17,12 +17,21 @@ analysis = Analysis(
     [str(entrypoint)],
     pathex=[str(source_root / "src")],
     binaries=[],
-    datas=collect_data_files("periodictable"),
+    # orsopy reads refl_header.schema.json from its own package directory at
+    # validation time, so the schema has to ship at orsopy/fileio/schema.
+    datas=[
+        *collect_data_files("periodictable"),
+        *collect_data_files("orsopy", subdir="fileio/schema"),
+    ],
     hiddenimports=["xlsxwriter"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # slddb is orsopy's SLD lookup database (~1.2 MB frozen, plus sqlite3).
+    # Only Material.generate_density() and Layer.resolve_names() reach it, and
+    # only for materials given without density; our export path writes headers
+    # and never calls either, so excluding it trades that lookup for size.
+    excludes=["orsopy.slddb"],
     noarchive=False,
     optimize=0,
 )

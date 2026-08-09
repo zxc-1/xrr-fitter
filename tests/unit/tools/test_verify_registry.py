@@ -19,6 +19,12 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
                 "--output",
                 f"{module.REPORT}/radon.json",
             ),
+            (
+                module.PYTHON,
+                "tools/lock_windows_environment.py",
+                "--check",
+                "requirements-windows-x64-py312.lock",
+            ),
             pytest_prefix
             + (
                     "tests/architecture/test_dependency_rules.py",
@@ -86,6 +92,12 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
             + ("tests/acceptance/test_gui_real_data_workflows.py", "-q"),
         ),
         "distribution": (
+            (
+                module.PYTHON,
+                "tools/lock_windows_environment.py",
+                "--verify",
+                "requirements-windows-x64-py312.lock",
+            ),
             (
                 module.PYTHON,
                 "tools/verify_distribution.py",

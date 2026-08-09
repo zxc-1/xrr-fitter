@@ -38,6 +38,12 @@ MODE_REGISTRY: Mapping[str, Mode] = {
     "quality": Mode(
         (
             (PYTHON, "tools/check_radon.py", "--output", f"{REPORT}/radon.json"),
+            (
+                PYTHON,
+                "tools/lock_windows_environment.py",
+                "--check",
+                "requirements-windows-x64-py312.lock",
+            ),
             PYTEST_PREFIX
             + (
                 "tests/architecture/test_dependency_rules.py",
@@ -110,6 +116,12 @@ MODE_REGISTRY: Mapping[str, Mode] = {
     ),
     "distribution": Mode(
         (
+            (
+                PYTHON,
+                "tools/lock_windows_environment.py",
+                "--verify",
+                "requirements-windows-x64-py312.lock",
+            ),
             (
                 PYTHON,
                 "tools/verify_distribution.py",
