@@ -20,6 +20,11 @@ from xrr_fitter.model.structure import (
     StructureSpec,
 )
 from xrr_fitter.physics.materials import material_sld
+from xrr_fitter.physics.transitions import (
+    transition_fractions,
+    transition_slab_count,
+    transition_width,
+)
 
 
 def _replace_material(
@@ -89,11 +94,7 @@ def _replace_periodic(
     )
     # A missing top override is semantic inheritance, not a zero roughness value.
     # Preserve the sentinel so later expansion chooses layer zero exactly once.
-    top_roughness = (
-        None
-        if block.top_roughness_a is None
-        else values[f"{prefix}.top_roughness_a"]
-    )
+    top_roughness = None if block.top_roughness_a is None else values[f"{prefix}.top_roughness_a"]
     return replace(
         block,
         layers=layers,
@@ -188,11 +189,40 @@ class _Expansion:
         return self.cache[key]
 
 
+def _append_transition_layer(state: _Expansion, layer: LayerSpec) -> None:
+    """Expand a graded incident interface into microslabs plus the layer body.
+
+    The upper medium is read from the expansion state rather than the preceding
+    declaration so that periodic blocks and gradients above this layer resolve
+    correctly. The body slab is emitted unconditionally, even at zero thickness,
+    keeping the expanded row count exactly ``count + 1``.
+    """
+    transition = layer.transition
+    assert transition is not None
+    upper = state.sld[-1]
+    lower = state.sld_for(layer.material, layer.density_scale)
+    width = transition_width(transition)
+    count = transition_slab_count(width, transition.microslab_max_a)
+    fractions = transition_fractions(transition, count)
+    for index, fraction in enumerate(fractions):
+        state.thickness.append(width / count)
+        state.limit_thickness.append(layer.thickness_a)
+        state.sld.append((1.0 - fraction) * upper + fraction * lower)
+        state.roughness.append(layer.roughness_a if index == 0 else 0.0)
+    state.thickness.append(layer.thickness_a - width)
+    state.limit_thickness.append(layer.thickness_a)
+    state.sld.append(lower)
+    state.roughness.append(0.0)
+
+
 def _append_layer(state: _Expansion, layer: LayerSpec, roughness: float | None = None) -> None:
+    if layer.transition is not None:
+        return _append_transition_layer(state, layer)
     state.thickness.append(layer.thickness_a)
     state.limit_thickness.append(layer.thickness_a)
     state.sld.append(state.sld_for(layer.material, layer.density_scale))
     state.roughness.append(layer.roughness_a if roughness is None else roughness)
+    return None
 
 
 def _append_periodic(state: _Expansion, block: PeriodicBlock) -> None:
@@ -240,9 +270,7 @@ def _validate_roughness(thickness: np.ndarray, roughness: np.ndarray) -> None:
         limit = 0.49 * min(neighbors) if neighbors else 50.0
         invalid = sigma >= limit if neighbors else sigma > limit
         if invalid:
-            raise PhysicalValueError(
-                f"interface.{interface}.roughness_a must be below {limit:g} A"
-            )
+            raise PhysicalValueError(f"interface.{interface}.roughness_a must be below {limit:g} A")
 
 
 def expand_structure(structure: StructureSpec, wavelength_a: float) -> SlabStack:

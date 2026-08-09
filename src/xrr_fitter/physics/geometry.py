@@ -15,15 +15,25 @@ from xrr_fitter.model.structure import (
 )
 from xrr_fitter.physics.materials import material_sld
 from xrr_fitter.physics.stack import expand_structure, rebuild_structure
+from xrr_fitter.physics.transitions import (
+    transition_fractions,
+    transition_slab_count,
+    transition_width,
+)
 
 GRADIENT_INTERNAL_INTERFACE = "__gradient_internal_zero__"
 
 
+def _transition_count(layer: LayerSpec) -> int:
+    """Resolve one layer's microslab count from the shared primal source."""
+    transition = layer.transition
+    assert transition is not None
+    return transition_slab_count(transition_width(transition), transition.microslab_max_a)
+
+
 def _periodic_interface_names(prefix: str, block: PeriodicBlock) -> tuple[str, ...]:
     """Mirror repeated interfaces back to their shared source coordinates."""
-    ordinary = tuple(
-        map("layer.{}.roughness_a".format, range(len(block.layers)))
-    )
+    ordinary = tuple(map("layer.{}.roughness_a".format, range(len(block.layers))))
     first = ordinary[0] if block.top_roughness_a is None else "top_roughness_a"
     suffixes = (first, *ordinary[1:], *(ordinary * (block.repeats - 1)))
     return tuple(map(f"{prefix}.{{}}".format, suffixes))
@@ -40,6 +50,10 @@ def _expanded_interface_names(structure: StructureSpec) -> tuple[str, ...]:
             names.extend((GRADIENT_INTERNAL_INTERFACE,) * (count - 1))
         elif isinstance(component, LayerSpec):
             names.append(f"{prefix}.roughness_a")
+            if component.transition is not None:
+                # Microslab boundaries are numerical subdivisions, not physical
+                # interfaces, so they stay out of the dynamic roughness limits.
+                names.extend((GRADIENT_INTERNAL_INTERFACE,) * _transition_count(component))
         else:
             names.extend(_periodic_interface_names(prefix, component))
     names.append("backing.roughness_a")
@@ -80,6 +94,30 @@ def _geometry_tangent(
     return tangent if divisor == 1 else tangent / divisor
 
 
+def _append_transition_geometry(
+    thickness: list[float],
+    tangents: list[np.ndarray] | None,
+    component: LayerSpec,
+    prefix: str,
+    value_jacobians: dict[str, np.ndarray] | None,
+) -> None:
+    # Transition widths are declared constants, so only the body carries the
+    # thickness tangent; the microslabs contribute exactly zero.
+    transition = component.transition
+    assert transition is not None
+    width = transition_width(transition)
+    count = _transition_count(component)
+    zero = None if tangents is None else np.zeros(len(tangents[0]), dtype=float)
+    for _ in range(count):
+        _append_geometry(thickness, tangents, width / count, zero)
+    _append_geometry(
+        thickness,
+        tangents,
+        component.thickness_a - width,
+        _geometry_tangent(value_jacobians, f"{prefix}.thickness_a"),
+    )
+
+
 def _append_layer_geometry(
     thickness: list[float],
     tangents: list[np.ndarray] | None,
@@ -88,6 +126,15 @@ def _append_layer_geometry(
     value_jacobians: dict[str, np.ndarray] | None,
 ) -> None:
     # Ordinary layers contribute one finite medium and one public interface.
+    if component.transition is not None:
+        _append_transition_geometry(
+            thickness,
+            tangents,
+            component,
+            prefix,
+            value_jacobians,
+        )
+        return
     _append_geometry(
         thickness,
         tangents,
@@ -171,11 +218,7 @@ def expand_geometry(
         assert parameter_count is not None
     thickness: list[float] = [0.0]
     # The leading zero is the incident medium; backing is appended below.
-    tangents = (
-        None
-        if value_jacobians is None
-        else [np.zeros(parameter_count, dtype=float)]
-    )
+    tangents = None if value_jacobians is None else [np.zeros(parameter_count, dtype=float)]
     for component_index, component in enumerate(structure.components):
         _append_component_geometry(
             thickness,
@@ -188,9 +231,7 @@ def expand_geometry(
         thickness,
         tangents,
         0.0,
-        None
-        if value_jacobians is None
-        else np.zeros(parameter_count, dtype=float),
+        None if value_jacobians is None else np.zeros(parameter_count, dtype=float),
     )
     names = _expanded_interface_names(structure)
     # Source labels and expanded media must remain positionally aligned.
@@ -248,10 +289,7 @@ def _layer_sld_jacobian(
         imaginary_name,
         np.zeros_like(density_jacobian),
     )
-    return (
-        layer.material.sld_override_a2 * density_jacobian
-        + density * override_jacobian
-    )
+    return layer.material.sld_override_a2 * density_jacobian + density * override_jacobian
 
 
 def _periodic_roughness_name(
@@ -315,9 +353,7 @@ class _StackJacobianBuilder:
         first periodic interface may use a block override while all later cells
         share their ordinary layer declaration.
         """
-        self.thickness.append(
-            np.asarray(value_jacobians[f"{prefix}.thickness_a"], dtype=float)
-        )
+        self.thickness.append(np.asarray(value_jacobians[f"{prefix}.thickness_a"], dtype=float))
         # Cache scope is one builder and therefore one candidate/wavelength pair.
         # Repeated cells reuse values without sharing mutable state across calls.
         if prefix not in self.sld_cache:
@@ -332,9 +368,7 @@ class _StackJacobianBuilder:
                 dtype=np.complex128,
             )
         self.sld.append(self.sld_cache[prefix])
-        self.roughness.append(
-            np.asarray(value_jacobians[roughness_name], dtype=float)
-        )
+        self.roughness.append(np.asarray(value_jacobians[roughness_name], dtype=float))
 
     def append_periodic(
         self,
@@ -383,22 +417,54 @@ class _StackJacobianBuilder:
         count = int(np.ceil(layer.thickness_a / layer.microslab_max_a))
         thickness_jacobian = value_jacobians[f"{prefix}.thickness_a"] / count
         upper_jacobian = (
-            value_jacobians[f"{prefix}.upper_sld_real_a2"]
-            + 1j * value_jacobians[f"{prefix}.upper_sld_imag_a2"]
+            value_jacobians[f"{prefix}.upper_sld_real_a2"] + 1j * value_jacobians[f"{prefix}.upper_sld_imag_a2"]
         )
         lower_jacobian = (
-            value_jacobians[f"{prefix}.lower_sld_real_a2"]
-            + 1j * value_jacobians[f"{prefix}.lower_sld_imag_a2"]
+            value_jacobians[f"{prefix}.lower_sld_real_a2"] + 1j * value_jacobians[f"{prefix}.lower_sld_imag_a2"]
         )
         roughness_jacobians = [self.zero_real()] * count
         roughness_jacobians[0] = value_jacobians[f"{prefix}.roughness_a"].copy()
         for slab_index in range(count):
             fraction = (slab_index + 0.5) / count
             self.thickness.append(thickness_jacobian.copy())
-            self.sld.append(
-                upper_jacobian + fraction * (lower_jacobian - upper_jacobian)
-            )
+            self.sld.append(upper_jacobian + fraction * (lower_jacobian - upper_jacobian))
             self.roughness.append(roughness_jacobians[slab_index])
+
+    def append_transition_layer(
+        self,
+        layer: LayerSpec,
+        prefix: str,
+        values: dict[str, float],
+        value_jacobians: dict[str, np.ndarray],
+        wavelength_a: float,
+    ) -> None:
+        """Differentiate a graded incident interface into microslabs plus body.
+
+        The blend fractions are declared constants, so each microslab tangent is
+        a fixed linear combination of the upper medium and this layer. The upper
+        tangent must be read before any row is appended, mirroring the primal
+        expansion's ``state.sld[-1]``.
+        """
+        transition = layer.transition
+        assert transition is not None
+        upper_jacobian = self.sld[-1]
+        lower_jacobian = np.asarray(
+            _layer_sld_jacobian(layer, prefix, values, value_jacobians, wavelength_a),
+            dtype=np.complex128,
+        )
+        count = _transition_count(layer)
+        fractions = transition_fractions(transition, count)
+        for index, fraction in enumerate(fractions):
+            self.thickness.append(self.zero_real())
+            self.sld.append((1.0 - fraction) * upper_jacobian + fraction * lower_jacobian)
+            self.roughness.append(
+                np.asarray(value_jacobians[f"{prefix}.roughness_a"], dtype=float).copy()
+                if index == 0
+                else self.zero_real()
+            )
+        self.thickness.append(np.asarray(value_jacobians[f"{prefix}.thickness_a"], dtype=float))
+        self.sld.append(lower_jacobian)
+        self.roughness.append(self.zero_real())
 
     def append_component(
         self,
@@ -413,7 +479,15 @@ class _StackJacobianBuilder:
         ``StructureSpec`` validation closes this union to ordinary, periodic,
         and gradient components, so no fallback component semantics are needed.
         """
-        if isinstance(component, LayerSpec):
+        if isinstance(component, LayerSpec) and component.transition is not None:
+            self.append_transition_layer(
+                component,
+                prefix,
+                values,
+                value_jacobians,
+                wavelength_a,
+            )
+        elif isinstance(component, LayerSpec):
             self.append_layer(
                 component,
                 prefix,
@@ -457,12 +531,9 @@ class _StackJacobianBuilder:
         expected = (self.parameter_count,)
         valid = all(
             (
-                differentiable.thickness_jacobian.shape
-                == stack.thickness_a.shape + expected,
-                differentiable.sld_jacobian.shape
-                == stack.sld_a2.shape + expected,
-                differentiable.roughness_jacobian.shape
-                == stack.roughness_a.shape + expected,
+                differentiable.thickness_jacobian.shape == stack.thickness_a.shape + expected,
+                differentiable.sld_jacobian.shape == stack.sld_a2.shape + expected,
+                differentiable.roughness_jacobian.shape == stack.roughness_a.shape + expected,
             )
         )
         if not valid:
@@ -489,13 +560,8 @@ def expand_structure_with_jacobian(
             value_jacobians,
             wavelength_a,
         )
-    builder.roughness.append(
-        np.asarray(value_jacobians["backing.roughness_a"], dtype=float)
-    )
+    builder.roughness.append(np.asarray(value_jacobians["backing.roughness_a"], dtype=float))
     backing_sld_jacobian = builder.zero_complex()
     if rebuilt.backing.sld_override_a2 is not None:
-        backing_sld_jacobian = (
-            value_jacobians["backing.sld_real_a2"]
-            + 1j * value_jacobians["backing.sld_imag_a2"]
-        )
+        backing_sld_jacobian = value_jacobians["backing.sld_real_a2"] + 1j * value_jacobians["backing.sld_imag_a2"]
     return builder.finish(stack, backing_sld_jacobian)
