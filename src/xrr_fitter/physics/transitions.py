@@ -20,13 +20,13 @@ ERF_HALF_WIDTH_SIGMAS = 2.0
 TANH_HALF_WIDTH = 2.0
 EXPONENTIAL_RATE = 4.0
 
-_ERF_DENOMINATOR = float(erf(ERF_HALF_WIDTH_SIGMAS / np.sqrt(2.0)))
-_TANH_DENOMINATOR = float(np.tanh(TANH_HALF_WIDTH))
-_EXPONENTIAL_DENOMINATOR = float(1.0 - np.exp(-EXPONENTIAL_RATE))
+ERF_DENOMINATOR = float(erf(ERF_HALF_WIDTH_SIGMAS / np.sqrt(2.0)))
+TANH_DENOMINATOR = float(np.tanh(TANH_HALF_WIDTH))
+EXPONENTIAL_DENOMINATOR = float(1.0 - np.exp(-EXPONENTIAL_RATE))
 
 
 def _erf_profile(t: np.ndarray) -> np.ndarray:
-    return 0.5 * (1.0 + erf(ERF_HALF_WIDTH_SIGMAS * (2.0 * t - 1.0) / np.sqrt(2.0)) / _ERF_DENOMINATOR)
+    return 0.5 * (1.0 + erf(ERF_HALF_WIDTH_SIGMAS * (2.0 * t - 1.0) / np.sqrt(2.0)) / ERF_DENOMINATOR)
 
 
 def _linear_profile(t: np.ndarray) -> np.ndarray:
@@ -34,7 +34,7 @@ def _linear_profile(t: np.ndarray) -> np.ndarray:
 
 
 def _tanh_profile(t: np.ndarray) -> np.ndarray:
-    return 0.5 * (1.0 + np.tanh(TANH_HALF_WIDTH * (2.0 * t - 1.0)) / _TANH_DENOMINATOR)
+    return 0.5 * (1.0 + np.tanh(TANH_HALF_WIDTH * (2.0 * t - 1.0)) / TANH_DENOMINATOR)
 
 
 def _sine_profile(t: np.ndarray) -> np.ndarray:
@@ -42,14 +42,14 @@ def _sine_profile(t: np.ndarray) -> np.ndarray:
 
 
 def _exponential_profile(t: np.ndarray) -> np.ndarray:
-    return (1.0 - np.exp(-EXPONENTIAL_RATE * t)) / _EXPONENTIAL_DENOMINATOR
+    return (1.0 - np.exp(-EXPONENTIAL_RATE * t)) / EXPONENTIAL_DENOMINATOR
 
 
 def _step_profile(t: np.ndarray) -> np.ndarray:
     return np.where(t < 0.5, 0.0, 1.0)
 
 
-_PROFILES: dict[str, Callable[[np.ndarray], np.ndarray]] = {
+PROFILES: dict[str, Callable[[np.ndarray], np.ndarray]] = {
     "erf": _erf_profile,
     "linear": _linear_profile,
     "tanh": _tanh_profile,
@@ -58,11 +58,11 @@ _PROFILES: dict[str, Callable[[np.ndarray], np.ndarray]] = {
     "step": _step_profile,
 }
 
-TRANSITION_KINDS = frozenset(_PROFILES)
+TRANSITION_KINDS = frozenset(PROFILES)
 
 
 def transition_profile(kind: str, t: np.ndarray) -> np.ndarray:
-    kernel = _PROFILES.get(kind)
+    kernel = PROFILES.get(kind)
     if kernel is None:
         raise ValueError(f"unknown transition kind: {kind}")
     return kernel(np.asarray(t, dtype=float))
