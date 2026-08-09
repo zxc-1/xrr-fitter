@@ -5,9 +5,11 @@ from math import erf, sqrt
 import numpy as np
 import pytest
 
+from xrr_fitter.model.structure import InterfaceTransition, TransitionBranch
 from xrr_fitter.physics.transitions import (
     ERF_HALF_WIDTH_SIGMAS,
     TRANSITION_KINDS,
+    transition_fractions,
     transition_profile,
     transition_slab_count,
 )
@@ -79,3 +81,36 @@ def test_kind_sets_agree_across_model_and_physics() -> None:
 def test_slab_count_rejects_nonpositive_inputs(width_a: float, microslab_max_a: float) -> None:
     with pytest.raises(ValueError):
         transition_slab_count(width_a, microslab_max_a)
+
+
+def test_transition_fractions_are_slab_centered_and_monotone() -> None:
+    transition = InterfaceTransition(
+        branches=(TransitionBranch(kind="linear", weight=1.0, thickness_a=10.0),),
+        microslab_max_a=2.5,
+    )
+    fractions = transition_fractions(transition, 4)
+    np.testing.assert_allclose(fractions, [0.125, 0.375, 0.625, 0.875])
+    assert np.all(np.diff(fractions) > 0.0)
+
+
+def test_transition_fractions_weight_branches_of_different_widths() -> None:
+    transition = InterfaceTransition(
+        branches=(
+            TransitionBranch(kind="linear", weight=0.5, thickness_a=10.0),
+            TransitionBranch(kind="linear", weight=0.5, thickness_a=5.0),
+        ),
+        microslab_max_a=2.5,
+    )
+    fractions = transition_fractions(transition, 4)
+    np.testing.assert_allclose(fractions, [0.1875, 0.5625, 0.8125, 0.9375])
+
+
+def test_transition_fractions_end_below_one_for_interior_centers() -> None:
+    transition = InterfaceTransition(
+        branches=(TransitionBranch(kind="erf", weight=1.0, thickness_a=8.0),),
+        microslab_max_a=1.0,
+    )
+    fractions = transition_fractions(transition, 8)
+    assert fractions[0] > 0.0
+    assert fractions[-1] < 1.0
+    assert np.all(np.diff(fractions) >= 0.0)

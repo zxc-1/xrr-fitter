@@ -16,6 +16,8 @@ from math import ceil, isfinite
 import numpy as np
 from scipy.special import erf
 
+from xrr_fitter.model.structure import InterfaceTransition
+
 ERF_HALF_WIDTH_SIGMAS = 2.0
 TANH_HALF_WIDTH = 2.0
 EXPONENTIAL_RATE = 4.0
@@ -74,3 +76,26 @@ def transition_slab_count(width_a: float, microslab_max_a: float) -> int:
     if not isfinite(microslab_max_a) or microslab_max_a <= 0.0:
         raise ValueError(f"microslab_max_a must be finite and positive: {microslab_max_a}")
     return max(1, int(ceil(width_a / microslab_max_a)))
+
+
+def transition_width(transition: InterfaceTransition) -> float:
+    """Return the widest branch, which sets the region every path discretizes."""
+    return max(branch.thickness_a for branch in transition.branches)
+
+
+def transition_fractions(transition: InterfaceTransition, count: int) -> np.ndarray:
+    """Blend the branch kernels at ``count`` slab centers of the widest branch.
+
+    Narrow branches saturate at ``1`` before the region ends, which is how
+    differently sized branches compose one profile. Sampling centers rather than
+    edges keeps the first and last fraction strictly inside ``(0, 1)``.
+    """
+    if count < 1:
+        raise ValueError(f"transition slab count must be positive: {count}")
+    width = transition_width(transition)
+    depths = (np.arange(count, dtype=float) + 0.5) * (width / count)
+    fractions = np.zeros(count, dtype=float)
+    for branch in transition.branches:
+        coordinate = np.clip(depths / branch.thickness_a, 0.0, 1.0)
+        fractions += branch.weight * transition_profile(branch.kind, coordinate)
+    return fractions

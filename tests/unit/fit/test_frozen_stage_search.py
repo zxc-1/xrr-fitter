@@ -166,16 +166,20 @@ def _checkpoint_identities(checkpoints) -> set[tuple[str, ...]]:
 
 
 def _assert_frozen_checkpoints(checkpoints) -> None:
-    assert tuple(checkpoint.runtime_warnings for checkpoint in checkpoints) == (
-        (
-            "stage_a_invalid_candidate_evaluation",
-            "stage_a_fringe_candidate_rejected",
-        ),
-    ) * 4
+    assert (
+        tuple(checkpoint.runtime_warnings for checkpoint in checkpoints)
+        == (
+            (
+                "stage_a_invalid_candidate_evaluation",
+                "stage_a_fringe_candidate_rejected",
+            ),
+        )
+        * 4
+    )
     assert _checkpoint_identities(checkpoints) == {
         (
             "85729258067ff1c953257f6e784b6ec5a5c9e175e92f449ae0bc04680c1e42ea",
-            "1f0681cfcc77d487b345d3739394e100597601782f7ae45f900a1cefa564a84f",
+            "f7c929f227f89fd152a81899d7b02b927d1fb7cd426b18f6a8754c812def114c",
             "2e006dff3a7e489619e37403d3e58c9afb50642a06acd3b1aff9c2f392cc9120",
             "45a3c8b3fcabaa2eb54b5497a3ee45f02d2bb12ce0f216312ab3a499819c2828",
             "bab9ebdb6b2377582c6d3e5afddbec238d6b4c427be151500cbd19c18ff076f3",
