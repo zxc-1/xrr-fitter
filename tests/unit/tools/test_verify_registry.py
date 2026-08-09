@@ -64,6 +64,7 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
                 "tests/integration/test_joint_fit_workflow.py",
                 "tests/integration/test_batch_resume.py",
                 "tests/integration/test_export_workflow.py",
+                "tests/integration/test_cli_workflow.py",
                 "tests/integration/test_gui_project_workflow.py",
                 "tests/integration/test_gui_automatic_workflow.py",
                 "-q",

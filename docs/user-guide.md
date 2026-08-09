@@ -785,3 +785,40 @@ QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
 
 追加 `XRR_GUI_E2E_SCREENSHOT_DARK=1` 得到暗色版，追加
 `XRR_GUI_E2E_SCREENSHOT_EXPERT=1` 得到专家版（专家版使用 `1600x900`）。
+
+## 14. 无头命令行
+
+图形工作台之外，`xrr_fitter.cli` 提供一个不导入 PySide6 的无头入口，供批处理
+与 CI 编排使用。它只经由 `xrr_fitter.api` 触达领域行为，与 GUI 处于同一架构层级。
+声明的 console script 为 `xrr-fitter-cli`，等价的模块入口为
+`python -m xrr_fitter.cli.main`。
+
+四个子命令：
+
+```text
+xrr-fitter-cli validate <project>
+xrr-fitter-cli fit <project> [--auto] [--output PATH] [--json-progress]
+xrr-fitter-cli mcmc <project> --dataset ID --candidate ID \
+    --walkers N --burn-in N --steps N [--output PATH] [--json-progress]
+xrr-fitter-cli export <project> <output_dir>
+```
+
+- `validate` 只读校验工程与源文件的新鲜度，并报告拟合就绪状态，不运行任何优化器。
+- `fit` 运行拟合流水线；`--auto` 走自动批次路径，`--output` 把更新后的工程写到指定
+  路径，`--json-progress` 把进度写成 stdout 的 JSON Lines，否则写成 stderr 的文本行。
+- `mcmc` 对选定候选运行采样并持久化增广后的工程。
+- `export` 原子发布已有结果，并在 stdout 打印运行目录。
+
+进程退出码构成无头编排的合同：
+
+| 退出码 | 名称 | 含义 |
+| --- | --- | --- |
+| 0 | SUCCESS | 拟合收敛到 trusted/correlated confidence，或只读操作成功 |
+| 1 | NOT_CONVERGED | 拟合完成但 confidence 为 multiple/untrusted，或运行被取消 |
+| 2 | INVALID_INPUT | 工程文件缺失、不合法，或拟合前置检查未就绪 |
+| 3 | STALE_SOURCE | 源文件相对工程记录已变化，拒绝在陈旧数据上拟合 |
+
+续跑不需要单独的子命令。`--output` 或 GUI 写出的 checkpoint 就是一份完整工程文件，
+再次对它执行 `xrr-fitter-cli fit` 会自动核对 data hash、structure、instrument、
+parameter settings、config、stage graph、candidate order、seed ledger 与 joint
+layout fingerprint，一致则从记录的 stage 继续，不一致则显式拒绝并保留原结果。
