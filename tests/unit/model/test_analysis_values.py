@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import pickle
 from dataclasses import replace
 from importlib import import_module
-import pickle
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import fit_result
+
 from xrr_fitter.model.analysis import (
     BootstrapResult,
     ConfidenceClass,
@@ -222,9 +222,7 @@ def test_published_analysis_arrays_remain_read_only_after_pickle() -> None:
         uncertainty=uncertainty,
     )
 
-    restored = pickle.loads(
-        pickle.dumps((profile, bootstrap, ensemble, mcmc, uncertainty, result))
-    )
+    restored = pickle.loads(pickle.dumps((profile, bootstrap, ensemble, mcmc, uncertainty, result)))
 
     arrays = tuple(_published_arrays(restored))
     assert arrays
@@ -278,3 +276,72 @@ def test_profile_basin_decision_is_immutable_pickle_safe_evidence() -> None:
         replace(decision, unit_vector=np.array([1.1, 0.5]))
     with pytest.raises(ValueError, match="objective"):
         replace(decision, objective=float("nan"))
+
+
+def _bands(count: int = 4) -> object:
+    from xrr_fitter.model.analysis import SldUncertaintyBands
+
+    depth = np.linspace(-10.0, 50.0, count)
+    levels = (0.025, 0.16, 0.5, 0.84, 0.975)
+    real = np.tile(np.arange(len(levels), dtype=float)[:, None], (1, count))
+    return SldUncertaintyBands(
+        depth_a=depth,
+        quantiles=levels,
+        real=real,
+        imaginary=real * 0.5,
+        align_label="基底界面",
+        sample_count=500,
+        total_samples=2000,
+        failure_rate=0.0,
+    )
+
+
+def test_sld_bands_expose_readonly_arrays_bound_to_the_quantile_axis() -> None:
+    bands = _bands()
+
+    assert bands.real.shape == (len(bands.quantiles), bands.depth_a.size)
+    assert bands.imaginary.shape == bands.real.shape
+    assert not bands.depth_a.flags.writeable
+    assert not bands.real.flags.writeable
+    assert not bands.imaginary.flags.writeable
+
+
+def test_sld_bands_reject_a_quantile_axis_that_is_not_sorted_and_unique() -> None:
+    from xrr_fitter.model.analysis import SldUncertaintyBands
+
+    with pytest.raises(ValueError, match="quantiles"):
+        SldUncertaintyBands(
+            depth_a=np.linspace(0.0, 1.0, 3),
+            quantiles=(0.5, 0.16),
+            real=np.zeros((2, 3)),
+            imaginary=np.zeros((2, 3)),
+            align_label="基底界面",
+            sample_count=10,
+            total_samples=10,
+            failure_rate=0.0,
+        )
+
+
+def test_sld_bands_reject_a_thinned_count_above_the_total() -> None:
+    from xrr_fitter.model.analysis import SldUncertaintyBands
+
+    with pytest.raises(ValueError, match="sample_count"):
+        SldUncertaintyBands(
+            depth_a=np.linspace(0.0, 1.0, 3),
+            quantiles=(0.5,),
+            real=np.zeros((1, 3)),
+            imaginary=np.zeros((1, 3)),
+            align_label="基底界面",
+            sample_count=11,
+            total_samples=10,
+            failure_rate=0.0,
+        )
+
+
+def test_sld_bands_caption_names_quantiles_alignment_and_thinning() -> None:
+    caption = _bands().caption()
+
+    assert "16–84%" in caption
+    assert "2.5–97.5%" in caption
+    assert "基底界面" in caption
+    assert "500/2000" in caption
