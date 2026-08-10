@@ -27,6 +27,7 @@ from xrr_fitter.model.analysis import (
     McmcConfig,
     McmcReport,
     ParameterProfile,
+    SldUncertaintyBands,
     UncertaintyReport,
 )
 from xrr_fitter.model.fitting import FitCheckpoint
@@ -61,10 +62,7 @@ def _mcmc_to_dict(value: McmcReport | None) -> dict[str, object] | None:
     if value is None:
         return None
     return {
-        "config": {
-            field: getattr(value.config, field)
-            for field in value.config.__dataclass_fields__
-        },
+        "config": {field: getattr(value.config, field) for field in value.config.__dataclass_fields__},
         "child_seed": value.child_seed,
         "parameter_names": list(value.parameter_names),
         "samples_physical": _real_array_to_list(value.samples_physical),
@@ -106,20 +104,59 @@ def _mcmc_from_dict(value: object) -> McmcReport | None:
     return McmcReport(
         config=config,
         child_seed=payload["child_seed"],
-        parameter_names=tuple(
-            _sequence(payload["parameter_names"], "MCMC parameter names")
-        ),
+        parameter_names=tuple(_sequence(payload["parameter_names"], "MCMC parameter names")),
         samples_physical=_real_array_from_list(payload["samples_physical"]),
         log_probability=_real_array_from_list(payload["log_probability"]),
         acceptance_fraction=_real_array_from_list(payload["acceptance_fraction"]),
         split_rhat=_real_array_from_list(payload["split_rhat"]),
         effective_sample_size=_real_array_from_list(payload["effective_sample_size"]),
-        boundary_hits=tuple(
-            _sequence(payload["boundary_hits"], "MCMC boundary hits")
-        ),
+        boundary_hits=tuple(_sequence(payload["boundary_hits"], "MCMC boundary hits")),
         label=payload["label"],
         warnings=tuple(_sequence(payload["warnings"], "MCMC warnings")),
         candidate_id=payload.get("candidate_id"),
+    )
+
+
+def _sld_bands_to_dict(
+    value: SldUncertaintyBands | None,
+) -> dict[str, object] | None:
+    if value is None:
+        return None
+    return {
+        "depth_a": _real_array_to_list(value.depth_a),
+        "quantiles": list(value.quantiles),
+        "real": _real_array_to_list(value.real),
+        "imaginary": _real_array_to_list(value.imaginary),
+        "align_label": value.align_label,
+        "sample_count": value.sample_count,
+        "total_samples": value.total_samples,
+        "failure_rate": value.failure_rate,
+    }
+
+
+def _sld_bands_from_dict(value: object) -> SldUncertaintyBands | None:
+    if value is None:
+        return None
+    required = {
+        "depth_a",
+        "quantiles",
+        "real",
+        "imaginary",
+        "align_label",
+        "sample_count",
+        "total_samples",
+        "failure_rate",
+    }
+    payload = _mapping(value, required, "SLD uncertainty bands")
+    return SldUncertaintyBands(
+        depth_a=_real_array_from_list(payload["depth_a"]),
+        quantiles=tuple(_sequence(payload["quantiles"], "SLD band quantiles")),
+        real=_real_array_from_list(payload["real"]),
+        imaginary=_real_array_from_list(payload["imaginary"]),
+        align_label=payload["align_label"],
+        sample_count=payload["sample_count"],
+        total_samples=payload["total_samples"],
+        failure_rate=payload["failure_rate"],
     )
 
 
@@ -142,6 +179,7 @@ def _uncertainty_to_dict(
         "mcmc": _mcmc_to_dict(value.mcmc),
         "candidate_id": value.candidate_id,
         "bootstrap_performed": value.bootstrap_performed,
+        "sld_bands": _sld_bands_to_dict(value.sld_bands),
     }
 
 
@@ -169,27 +207,16 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         value,
         required | {"bootstrap_performed"},
         "uncertainty report",
-        {"candidate_id"},
+        {"candidate_id", "sld_bands"},
     )
     return UncertaintyReport(
-        correlation_names=tuple(
-            _sequence(payload["correlation_names"], "correlation names")
-        ),
+        correlation_names=tuple(_sequence(payload["correlation_names"], "correlation names")),
         correlation_matrix=_real_array_from_list(payload["correlation_matrix"]),
-        profiles=tuple(
-            _profile_from_dict(item)
-            for item in _sequence(payload["profiles"], "parameter profiles")
-        ),
-        bootstrap_intervals=_rows(
-            payload["bootstrap_intervals"], "bootstrap intervals"
-        ),
+        profiles=tuple(_profile_from_dict(item) for item in _sequence(payload["profiles"], "parameter profiles")),
+        bootstrap_intervals=_rows(payload["bootstrap_intervals"], "bootstrap intervals"),
         bootstrap_failure_rate=payload["bootstrap_failure_rate"],
-        boundary_hits=tuple(
-            _sequence(payload["boundary_hits"], "boundary hits")
-        ),
-        strong_correlations=_rows(
-            payload["strong_correlations"], "strong correlations"
-        ),
+        boundary_hits=tuple(_sequence(payload["boundary_hits"], "boundary hits")),
+        strong_correlations=_rows(payload["strong_correlations"], "strong correlations"),
         systematic_residual=payload["systematic_residual"],
         diagnostics=tuple(
             _diagnostic_from_dict(item)
@@ -202,6 +229,7 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         mcmc=_mcmc_from_dict(payload["mcmc"]),
         candidate_id=payload.get("candidate_id"),
         bootstrap_performed=payload["bootstrap_performed"],
+        sld_bands=_sld_bands_from_dict(payload.get("sld_bands")),
     )
 
 
@@ -210,10 +238,7 @@ def fit_result_to_dict(value: FitResult | None) -> dict[str, object] | None:
     if value is None:
         return None
     return {
-        "parameter_definitions": [
-            _parameter_definition_to_dict(item)
-            for item in value.parameter_definitions
-        ],
+        "parameter_definitions": [_parameter_definition_to_dict(item) for item in value.parameter_definitions],
         "candidates": [_candidate_to_dict(item) for item in value.candidates],
         "best_index": value.best_index,
         "confidence": value.confidence.value,
@@ -232,9 +257,7 @@ def fit_result_to_dict(value: FitResult | None) -> dict[str, object] | None:
 
 def _classification_evidence(payload: dict[str, Any]) -> tuple[str, ...]:
     raw = payload.get("classification_evidence", [])
-    if not isinstance(raw, list) or not all(
-        isinstance(reason, str) and bool(reason) for reason in raw
-    ):
+    if not isinstance(raw, list) or not all(isinstance(reason, str) and bool(reason) for reason in raw):
         raise ProjectSchemaError("classification_evidence must contain strings")
     return tuple(raw)
 
@@ -256,10 +279,7 @@ def fit_result_from_dict(value: object) -> FitResult | None:
         "uncertainty",
     }
     payload = _mapping(value, required, "fit result", {"classification_evidence"})
-    candidates = tuple(
-        _candidate_from_dict(item)
-        for item in _sequence(payload["candidates"], "fit candidates")
-    )
+    candidates = tuple(_candidate_from_dict(item) for item in _sequence(payload["candidates"], "fit candidates"))
     return FitResult(
         parameter_definitions=tuple(
             _parameter_definition_from_dict(item)
@@ -272,9 +292,7 @@ def fit_result_from_dict(value: object) -> FitResult | None:
         best_index=payload["best_index"],
         confidence=ConfidenceClass(payload["confidence"]),
         warnings=tuple(_sequence(payload["warnings"], "fit warnings")),
-        child_seeds=tuple(
-            _sequence(payload["child_seeds"], "fit child seeds")
-        ),
+        child_seeds=tuple(_sequence(payload["child_seeds"], "fit child seeds")),
         stage_summaries=_stages_from_list(payload["stage_summaries"], candidates),
         region_labels=_real_array_from_list(payload["region_labels"], int),
         region_weights=_real_array_from_list(payload["region_weights"]),
@@ -325,26 +343,17 @@ def _checkpoint_from_dict(value: object) -> FitCheckpoint | None:
         "fit checkpoint",
         {"joint_layout_fingerprint"},
     )
-    candidates = tuple(
-        _candidate_from_dict(item)
-        for item in _sequence(payload["candidates"], "checkpoint candidates")
-    )
+    candidates = tuple(_candidate_from_dict(item) for item in _sequence(payload["candidates"], "checkpoint candidates"))
     return FitCheckpoint(
         data_sha256=payload["data_sha256"],
         structure_fingerprint=payload["structure_fingerprint"],
         config_fingerprint=payload["config_fingerprint"],
         stage=payload["stage"],
         candidates=candidates,
-        child_seeds=tuple(
-            _sequence(payload["child_seeds"], "checkpoint child seeds")
-        ),
+        child_seeds=tuple(_sequence(payload["child_seeds"], "checkpoint child seeds")),
         instrument_fingerprint=payload["instrument_fingerprint"],
-        parameter_settings_fingerprint=payload[
-            "parameter_settings_fingerprint"
-        ],
-        runtime_warnings=tuple(
-            _sequence(payload["runtime_warnings"], "runtime warnings")
-        ),
+        parameter_settings_fingerprint=payload["parameter_settings_fingerprint"],
+        runtime_warnings=tuple(_sequence(payload["runtime_warnings"], "runtime warnings")),
         stage_summaries=_stages_from_list(payload["stage_summaries"], candidates),
         joint_layout_fingerprint=payload.get("joint_layout_fingerprint", ""),
     )

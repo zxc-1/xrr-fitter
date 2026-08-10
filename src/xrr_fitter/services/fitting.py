@@ -8,12 +8,14 @@ keeps every process entry point pickle-safe at module scope.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 
 from xrr_fitter.analysis.automatic import assess_automatic_quality
 from xrr_fitter.analysis.joint import analyze_joint_ensemble
 from xrr_fitter.analysis.mcmc import run_problem_mcmc
 from xrr_fitter.analysis.profiles import recover_profile_basin
 from xrr_fitter.analysis.report import AnalysisRequest, run_analysis
+from xrr_fitter.analysis.sld_bands import sld_uncertainty_bands
 from xrr_fitter.fit.automatic import (
     candidate_from_physical_values,
     refit_from_physical_values,
@@ -382,6 +384,17 @@ def _mcmc_problem(project: XrrProject, dataset_id: str):
     )
 
 
+def _sld_bands(structure, report, wavelength_a):
+    """Replay retained samples into SLD bands, folding failures into warnings."""
+    if report is None:
+        return None, None
+    try:
+        bands = sld_uncertainty_bands(structure, report, wavelength_a=wavelength_a)
+    except ValueError as error:
+        return None, replace(report, warnings=(*report.warnings, str(error)))
+    return bands, report
+
+
 def _run_mcmc(
     project: XrrProject,
     dataset_id: str,
@@ -399,6 +412,7 @@ def _run_mcmc(
         cancelled,
         compile_dataset=_compile_dataset,
         run_problem_mcmc=run_problem_mcmc,
+        sld_bands=_sld_bands,
     )
 
 

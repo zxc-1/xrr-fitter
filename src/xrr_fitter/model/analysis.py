@@ -226,6 +226,11 @@ def _validate_bootstrap_owner(
         raise ValueError("bootstrap provenance_sha256 must be a lowercase SHA-256")
 
 
+def _validate_optional_sld_bands(value: SldUncertaintyBands | None) -> None:
+    if value is not None and not isinstance(value, SldUncertaintyBands):
+        raise TypeError("sld_bands must be a SldUncertaintyBands")
+
+
 class ConfidenceClass(StrEnum):
     """Persisted user-facing confidence categories."""
 
@@ -470,6 +475,7 @@ class UncertaintyReport:
     mcmc: McmcReport | None = None
     candidate_id: str | None = None
     bootstrap_performed: bool = True
+    sld_bands: SldUncertaintyBands | None = None
 
     def __post_init__(self) -> None:
         names = tuple(self.correlation_names)
@@ -491,6 +497,7 @@ class UncertaintyReport:
             raise ValueError("candidate_id must be a nonempty string or None")
         if not isinstance(self.bootstrap_performed, bool):
             raise TypeError("bootstrap_performed must be bool")
+        _validate_optional_sld_bands(self.sld_bands)
         object.__setattr__(self, "diagnostics", diagnostics)
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
