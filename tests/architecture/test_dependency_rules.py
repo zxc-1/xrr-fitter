@@ -62,12 +62,11 @@ public facade is therefore the only GUI domain vocabulary.
 from __future__ import annotations
 
 import ast
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-import sys
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "src" / "xrr_fitter"
@@ -108,6 +107,10 @@ PACKAGE_EDGE_EXCEPTIONS = {
 # The architecture document records the same two edges for human review.
 # The graph phase still records both real edges for cycle detection.
 # Any future exception requires its own exact mapping and three-way fixture.
+# Every model module needs a key here even when it imports no sibling at all.
+# An absent key is a model-module violation, not an implicit empty allowance.
+# So sld_bands is registered with an empty set: it depends on numpy only.
+# The analysis entry then gains sld_bands because it re-exports that value.
 MODEL_ALLOWED = {
     "data": set(),
     "instrument": set(),
@@ -115,9 +118,10 @@ MODEL_ALLOWED = {
     "structure": set(),
     "parameters": set(),
     "progress": set(),
+    "sld_bands": set(),
     "fitting": {"data", "instrument", "structure", "parameters", "progress"},
     "provenance": {"fitting"},
-    "analysis": {"data", "parameters", "fitting"},
+    "analysis": {"data", "parameters", "fitting", "sld_bands"},
     "project": {
         "automation",
         "data",
@@ -202,10 +206,7 @@ def _module_name(path: Path) -> str:
 
 
 def _production_sources(package: Path) -> dict[str, str]:
-    return {
-        _module_name(path): path.read_text(encoding="utf-8")
-        for path in sorted(package.rglob("*.py"))
-    }
+    return {_module_name(path): path.read_text(encoding="utf-8") for path in sorted(package.rglob("*.py"))}
 
 
 def _relative_base(module: str, level: int) -> str:
@@ -228,9 +229,7 @@ def _from_base(node: ast.ImportFrom, module: str) -> str | None:
     return None
 
 
-def _from_targets(
-    node: ast.ImportFrom, module: str, known_modules: set[str]
-) -> tuple[str, ...]:
+def _from_targets(node: ast.ImportFrom, module: str, known_modules: set[str]) -> tuple[str, ...]:
     base = _from_base(node, module)
     if base is None:
         return ()
@@ -246,9 +245,7 @@ def _internal_targets(tree: ast.AST, module: str, known_modules: set[str]) -> se
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             targets.update(
-                alias.name.removeprefix("xrr_fitter.")
-                for alias in node.names
-                if alias.name.startswith("xrr_fitter.")
+                alias.name.removeprefix("xrr_fitter.") for alias in node.names if alias.name.startswith("xrr_fitter.")
             )
         elif isinstance(node, ast.ImportFrom):
             targets.update(_from_targets(node, module, known_modules))
@@ -259,25 +256,17 @@ def _owner(module: str) -> str:
     return module.split(".", 1)[0]
 
 
-def _package_violations(
-    module: str, targets: set[str], node: ast.AST
-) -> list[RuleViolation]:
+def _package_violations(module: str, targets: set[str], node: ast.AST) -> list[RuleViolation]:
     owner = _owner(module)
     if owner not in ALLOWED:
         return [_violation("package-owner", module, owner, node)]
     allowed = ALLOWED[owner]
     exceptions = PACKAGE_EDGE_EXCEPTIONS.get(module, set())
-    forbidden = sorted(
-        target
-        for target in targets
-        if _owner(target) not in allowed and target not in exceptions
-    )
+    forbidden = sorted(target for target in targets if _owner(target) not in allowed and target not in exceptions)
     return [_violation("package-edge", module, target, node) for target in forbidden]
 
 
-def _model_violations(
-    module: str, targets: set[str], node: ast.AST
-) -> list[RuleViolation]:
+def _model_violations(module: str, targets: set[str], node: ast.AST) -> list[RuleViolation]:
     if _owner(module) != "model":
         return []
     source = module.split(".", 1)[1] if "." in module else "__init__"
@@ -287,26 +276,15 @@ def _model_violations(
         return [_violation("model-module", module, source, node)]
     else:
         allowed = MODEL_ALLOWED[source] | {source}
-    imported = {
-        target.split(".", 1)[1].split(".", 1)[0]
-        for target in targets
-        if target.startswith("model.")
-    }
-    return [
-        _violation("model-edge", module, target, node)
-        for target in sorted(imported - allowed)
-    ]
+    imported = {target.split(".", 1)[1].split(".", 1)[0] for target in targets if target.startswith("model.")}
+    return [_violation("model-edge", module, target, node) for target in sorted(imported - allowed)]
 
 
-def _services_violations(
-    module: str, targets: set[str], node: ast.AST
-) -> list[RuleViolation]:
+def _services_violations(module: str, targets: set[str], node: ast.AST) -> list[RuleViolation]:
     if _owner(module) != "services" or module == "services.fitting":
         return []
     forbidden = sorted(target for target in targets if _owner(target) in {"fit", "analysis"})
-    return [
-        _violation("services-composition", module, target, node) for target in forbidden
-    ]
+    return [_violation("services-composition", module, target, node) for target in forbidden]
 
 
 def _third_party_allowed(root: str, module: str) -> bool:
@@ -358,19 +336,13 @@ def _bindings(tree: ast.AST) -> dict[str, str]:
 
 def _import_bindings(node: ast.Import) -> dict[str, str]:
     return {
-        alias.asname or alias.name.split(".", 1)[0]: (
-            alias.name if alias.asname else alias.name.split(".", 1)[0]
-        )
+        alias.asname or alias.name.split(".", 1)[0]: (alias.name if alias.asname else alias.name.split(".", 1)[0])
         for alias in node.names
     }
 
 
 def _from_bindings(node: ast.ImportFrom) -> dict[str, str]:
-    return {
-        alias.asname or alias.name: f"{node.module}.{alias.name}"
-        for alias in node.names
-        if alias.name != "*"
-    }
+    return {alias.asname or alias.name: f"{node.module}.{alias.name}" for alias in node.names if alias.name != "*"}
 
 
 def _getattr_qualified_name(node: ast.AST, bindings: dict[str, str]) -> str | None:
@@ -407,11 +379,7 @@ def _multiprocessing_imports(tree: ast.AST) -> list[ast.AST]:
             isinstance(node, ast.Import)
             and any(alias.name.split(".", 1)[0] == "multiprocessing" for alias in node.names)
         )
-        or (
-            isinstance(node, ast.ImportFrom)
-            and node.module
-            and node.module.split(".", 1)[0] == "multiprocessing"
-        )
+        or (isinstance(node, ast.ImportFrom) and node.module and node.module.split(".", 1)[0] == "multiprocessing")
     ]
 
 
@@ -431,8 +399,7 @@ def _valid_main_multiprocessing(imports: list[ast.AST]) -> bool:
 def _multiprocessing_violations(module: str, tree: ast.AST) -> list[RuleViolation]:
     multiprocessing_imports = _multiprocessing_imports(tree)
     allowed = module == "services.workers" or (
-        module in FREEZE_SUPPORT_ENTRY_POINTS
-        and _valid_main_multiprocessing(multiprocessing_imports)
+        module in FREEZE_SUPPORT_ENTRY_POINTS and _valid_main_multiprocessing(multiprocessing_imports)
     )
     if not multiprocessing_imports or allowed:
         return []
@@ -447,9 +414,7 @@ def _subprocess_violations(module: str, tree: ast.AST) -> list[RuleViolation]:
     ]
 
 
-def _reference_violations(
-    module: str, tree: ast.AST, bindings: dict[str, str]
-) -> list[RuleViolation]:
+def _reference_violations(module: str, tree: ast.AST, bindings: dict[str, str]) -> list[RuleViolation]:
     violations: list[RuleViolation] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
@@ -477,9 +442,7 @@ def _wildcard_violations(module: str, tree: ast.AST) -> list[RuleViolation]:
     ]
 
 
-def _module_violations(
-    module: str, source: str, known_modules: set[str]
-) -> tuple[RuleViolation, ...]:
+def _module_violations(module: str, source: str, known_modules: set[str]) -> tuple[RuleViolation, ...]:
     tree = ast.parse(source, filename=module)
     targets = _internal_targets(tree, module, known_modules)
     violations = [
@@ -504,10 +467,7 @@ def _module_violations(
 # No production module is imported while this evidence is collected.
 def _module_graph(sources: dict[str, str]) -> dict[str, set[str]]:
     known = set(sources)
-    return {
-        module: _internal_targets(ast.parse(source), module, known) & known
-        for module, source in sources.items()
-    }
+    return {module: _internal_targets(ast.parse(source), module, known) & known for module, source in sources.items()}
 
 
 def _reachable(graph: dict[str, set[str]], start: str) -> set[str]:
@@ -569,9 +529,7 @@ def _assert_import_policy(path: Path) -> None:
     relative, owner = _package_owner(path)
     assert owner in ALLOWED, f"unregistered package owner: {relative}"
     module = ".".join(relative.with_suffix("").parts)
-    exception_owners = {
-        _owner(target) for target in PACKAGE_EDGE_EXCEPTIONS.get(module, set())
-    }
+    exception_owners = {_owner(target) for target in PACKAGE_EDGE_EXCEPTIONS.get(module, set())}
     allowed = ALLOWED[owner] | exception_owners
     assert _internal_imports(path) <= allowed, relative
 
@@ -591,8 +549,14 @@ def test_fit_and_analysis_never_import_each_other() -> None:
 
 def test_shared_evaluation_and_fit_have_one_declared_numerical_boundary() -> None:
     required = (
-        "evaluation.py", "fit/__init__.py", "fit/objective.py", "fit/parameters.py",
-        "fit/problem.py", "fit/initialization.py", "fit/screening.py", "fit/candidates.py",
+        "evaluation.py",
+        "fit/__init__.py",
+        "fit/objective.py",
+        "fit/parameters.py",
+        "fit/problem.py",
+        "fit/initialization.py",
+        "fit/screening.py",
+        "fit/candidates.py",
     )
     assert all((PACKAGE / path).is_file() for path in required)
     assert (PACKAGE / "fit" / "__init__.py").read_bytes() == b""
@@ -617,19 +581,12 @@ def test_fit_defines_no_process_queue_worker_executor_or_ipc_modules() -> None:
         module_tokens = set(path.stem.split("_"))
         assert module_tokens.isdisjoint(FIT_RUNTIME_MODULE_TOKENS), path.relative_to(PACKAGE)
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        imported_roots = {
-            name.split(".", 1)[0]
-            for node in ast.walk(tree)
-            for name in _import_names(node)
-        }
+        imported_roots = {name.split(".", 1)[0] for node in ast.walk(tree) for name in _import_names(node)}
         assert "queue" not in imported_roots, path.relative_to(PACKAGE)
 
 
 def _fixture_kinds(module: str, source: str, *known_modules: str) -> set[str]:
-    return {
-        violation.kind
-        for violation in _module_violations(module, source, set(known_modules))
-    }
+    return {violation.kind for violation in _module_violations(module, source, set(known_modules))}
 
 
 def test_fixture_checker_resolves_local_type_checking_and_aliased_internal_imports() -> None:
@@ -682,29 +639,17 @@ def test_fixture_checker_enforces_model_module_dag_and_services_composition() ->
         "services.fitting",
         "services.fitting_phases.automatic_dataset",
     }
-    assert _module_violations(
-        "model.analysis", "from xrr_fitter.model import fitting", known
-    ) == ()
-    assert _module_violations(
-        "model.provenance", "from xrr_fitter.model import fitting", known
-    ) == ()
-    assert "model-edge" in _fixture_kinds(
-        "model.fitting", "from xrr_fitter.model import analysis", *known
-    )
-    assert "model-edge" in _fixture_kinds(
-        "model.fitting", "from xrr_fitter.model import provenance", *known
-    )
-    assert _module_violations(
-        "services.fitting", "import xrr_fitter.fit\nimport xrr_fitter.analysis", known
-    ) == ()
+    assert _module_violations("model.analysis", "from xrr_fitter.model import fitting", known) == ()
+    assert _module_violations("model.provenance", "from xrr_fitter.model import fitting", known) == ()
+    assert "model-edge" in _fixture_kinds("model.fitting", "from xrr_fitter.model import analysis", *known)
+    assert "model-edge" in _fixture_kinds("model.fitting", "from xrr_fitter.model import provenance", *known)
+    assert _module_violations("services.fitting", "import xrr_fitter.fit\nimport xrr_fitter.analysis", known) == ()
     assert "services-composition" in _fixture_kinds(
         "services.fitting_phases.automatic_dataset",
         "import xrr_fitter.fit\nimport xrr_fitter.analysis",
         *known,
     )
-    assert "services-composition" in _fixture_kinds(
-        "services.batch", "from xrr_fitter import analysis", *known
-    )
+    assert "services-composition" in _fixture_kinds("services.batch", "from xrr_fitter import analysis", *known)
 
 
 def test_fixture_checker_allows_gui_domain_access_only_through_public_api() -> None:
@@ -712,9 +657,7 @@ def test_fixture_checker_allows_gui_domain_access_only_through_public_api() -> N
     public = "from xrr_fitter.api import XrrProject, set_workspace_state"
 
     assert _module_violations("gui.document", public, known) == ()
-    assert "package-edge" in _fixture_kinds(
-        "gui.document", "from xrr_fitter.model.project import XrrProject", *known
-    )
+    assert "package-edge" in _fixture_kinds("gui.document", "from xrr_fitter.model.project import XrrProject", *known)
     assert "package-edge" in _fixture_kinds(
         "gui.document", "from xrr_fitter.services.projects import new_project", *known
     )
@@ -762,9 +705,7 @@ def test_fixture_checker_accepts_exact_third_party_owners(module: str, source: s
         ("analysis.report", "import pytest"),
     ],
 )
-def test_fixture_checker_rejects_unknown_or_wrong_third_party_owner(
-    module: str, source: str
-) -> None:
+def test_fixture_checker_rejects_unknown_or_wrong_third_party_owner(module: str, source: str) -> None:
     assert "third-party" in _fixture_kinds(module, source, module)
 
 
@@ -786,9 +727,7 @@ def test_fixture_checker_rejects_unknown_or_wrong_third_party_owner(
         ("eval('1 + 1')", "dynamic-import"),
     ],
 )
-def test_fixture_checker_rejects_process_and_dynamic_import_aliases(
-    source: str, kind: str
-) -> None:
+def test_fixture_checker_rejects_process_and_dynamic_import_aliases(source: str, kind: str) -> None:
     assert kind in _fixture_kinds("fit.search", source, "fit.search")
 
 
@@ -798,9 +737,7 @@ def test_fixture_checker_allows_only_the_declared_multiprocessing_exceptions() -
     assert _module_violations("services.workers", workers, {"services.workers"}) == ()
     for entry_point in sorted(FREEZE_SUPPORT_ENTRY_POINTS):
         assert _module_violations(entry_point, main, {entry_point}) == ()
-        assert "process" in _fixture_kinds(
-            entry_point, "from multiprocessing import get_context", entry_point
-        )
+        assert "process" in _fixture_kinds(entry_point, "from multiprocessing import get_context", entry_point)
     assert "process" in _fixture_kinds("fit.search", workers, "fit.search")
     assert "process" in _fixture_kinds("fit.search", main, "fit.search")
 
@@ -827,9 +764,7 @@ def test_all_production_modules_pass_exhaustive_rules_and_have_no_cycles() -> No
     # an empty placeholder package from satisfying the release boundary.
     assert {"gui"} < {module for module in known if _owner(module) == "gui"}
     violations = tuple(
-        violation
-        for module, source in sources.items()
-        for violation in _module_violations(module, source, known)
+        violation for module, source in sources.items() for violation in _module_violations(module, source, known)
     )
     assert violations == ()
     assert _strong_components(_module_graph(sources)) == ()
