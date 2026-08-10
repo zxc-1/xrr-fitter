@@ -181,6 +181,64 @@ def _project_with_result():
     return project(dataset)
 
 
+def _sld_bands_case():
+    from xrr_fitter.model.analysis import SldUncertaintyBands
+
+    depth = np.linspace(-10.0, 50.0, 4)
+    levels = (0.025, 0.16, 0.5, 0.84, 0.975)
+    real = np.tile(np.arange(len(levels), dtype=float)[:, None], (1, depth.size))
+    return SldUncertaintyBands(
+        depth_a=depth,
+        quantiles=levels,
+        real=real,
+        imaginary=real * 0.5,
+        align_label="基底界面",
+        sample_count=500,
+        total_samples=2000,
+        failure_rate=0.0,
+    )
+
+
+def _project_with_bands():
+    result, checkpoint = _manual_result_graph()
+    uncertainty = replace(result.uncertainty, sld_bands=_sld_bands_case())
+    result = replace(result, uncertainty=uncertainty)
+    dataset = replace(
+        dataset_project("sample-1"),
+        last_valid_result=result,
+        checkpoint=checkpoint,
+    )
+    return project(dataset)
+
+
+def _bands_of(value):
+    return value.datasets[0].last_valid_result.uncertainty.sld_bands
+
+
+def test_project_roundtrip_preserves_sld_uncertainty_bands() -> None:
+    original = _project_with_bands()
+    restored = project_from_dict(project_to_dict(original))
+    before = _bands_of(original)
+    after = _bands_of(restored)
+    assert np.array_equal(after.depth_a, before.depth_a)
+    assert np.array_equal(after.real, before.real)
+    assert np.array_equal(after.imaginary, before.imaginary)
+    assert after.quantiles == before.quantiles
+    assert after.caption() == before.caption()
+
+
+def test_result_without_sld_bands_key_still_decodes() -> None:
+    payload = project_to_dict(_project_with_result())
+    for dataset in payload["datasets"]:
+        result = dataset["last_valid_result"]
+        if result is not None and result["uncertainty"] is not None:
+            result["uncertainty"].pop("sld_bands", None)
+
+    restored = project_from_dict(payload)
+
+    assert restored.datasets[0].last_valid_result.uncertainty.sld_bands is None
+
+
 def test_schema_one_migrates_automation_preset_and_bootstrap_flag() -> None:
     value = _project_with_result()
     payload = project_to_dict(value)

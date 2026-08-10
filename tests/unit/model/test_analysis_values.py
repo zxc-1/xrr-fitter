@@ -345,3 +345,33 @@ def test_sld_bands_caption_names_quantiles_alignment_and_thinning() -> None:
     assert "2.5–97.5%" in caption
     assert "基底界面" in caption
     assert "500/2000" in caption
+
+
+def _uncertainty_report(**overrides: object) -> UncertaintyReport:
+    return UncertaintyReport(
+        correlation_names=(),
+        correlation_matrix=np.empty((0, 0)),
+        profiles=(),
+        bootstrap_intervals=(),
+        bootstrap_failure_rate=0.0,
+        boundary_hits=(),
+        strong_correlations=(),
+        systematic_residual=False,
+        diagnostics=(),
+        **overrides,
+    )
+
+
+def test_uncertainty_report_defaults_sld_bands_to_none() -> None:
+    assert _uncertainty_report().sld_bands is None
+
+
+def test_uncertainty_report_retains_a_supplied_sld_band() -> None:
+    bands = _bands()
+
+    assert _uncertainty_report(sld_bands=bands).sld_bands is bands
+
+
+def test_uncertainty_report_rejects_a_wrongly_typed_sld_band() -> None:
+    with pytest.raises(TypeError, match="sld_bands"):
+        replace(_uncertainty_report(), sld_bands=object())

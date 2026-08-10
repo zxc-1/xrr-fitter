@@ -42,6 +42,7 @@ OPTIONAL_FIELDS = frozenset(
         "sample_length_mm",
         "s_hat",
         "sharing_key",
+        "sld_bands",
         "sld_override_a2",
         "structure",
         "structure_evidence",
@@ -55,12 +56,15 @@ NULLABLE_ARRAY_FIELDS = frozenset(
     {
         "acceptance_fraction",
         "correlation_matrix",
+        "depth_a",
         "effective_sample_size",
+        "imaginary",
         "log_probability",
         "log_residuals_decades",
         "model_normalized",
         "objectives",
         "qz_a_inv",
+        "real",
         "region_labels",
         "region_weights",
         "roughness_a",
@@ -89,9 +93,7 @@ def _mapping(
     missing = required - set(value)
     extra = set(value) - allowed
     if missing or extra:
-        raise ProjectSchemaError(
-            f"invalid {label} field set; missing={sorted(missing)!r}, extra={sorted(extra)!r}"
-        )
+        raise ProjectSchemaError(f"invalid {label} field set; missing={sorted(missing)!r}, extra={sorted(extra)!r}")
     return value
 
 
@@ -118,10 +120,7 @@ def _allows_null(path: tuple[str | int, ...]) -> bool:
     field = path[-1]
     if isinstance(field, str) and field in OPTIONAL_FIELDS:
         return True
-    return any(
-        isinstance(part, str) and part in NULLABLE_ARRAY_FIELDS
-        for part in path
-    )
+    return any(isinstance(part, str) and part in NULLABLE_ARRAY_FIELDS for part in path)
 
 
 def _validate_nulls(value: object, path: tuple[str | int, ...] = ()) -> None:
@@ -139,11 +138,7 @@ def _validate_nulls(value: object, path: tuple[str | int, ...] = ()) -> None:
 
 
 def _finite_number(value: object) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and isfinite(value)
-    )
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value)
 
 
 def _real_array_to_list(value: np.ndarray) -> list[Any]:
