@@ -117,6 +117,79 @@ error-function transitions whose nonnegative media weights sum to one, so a
 stack with passive input media cannot acquire negative absorption in the
 displayed profile.
 
+## Interface Transition Kernels
+
+An `InterfaceTransition` replaces the Névot-Croce roughness of one incident
+interface with an explicitly discretized composition profile. The normalized
+coordinate is `t = 0` at the incident side and `t = 1` at the layer material
+side; each kernel `f(t)` returns the fraction of the layer material, satisfies
+`f(0) = 0` and `f(1) = 1` exactly, and is monotone non-decreasing.
+
+Shape constants are fixed, not fitted: `ERF_HALF_WIDTH_SIGMAS = 2.0`,
+`TANH_HALF_WIDTH = 2.0`, `EXPONENTIAL_RATE = 4.0`. Without them "an erf
+transition" carries no numerical meaning, because the mapping from a declared
+width to a slope is exactly what these constants pin down. Each kernel is
+renormalized by its own value at the endpoints so the contract holds:
+
+| kind | `f(t)` |
+| --- | --- |
+| `erf` | `0.5 * (1 + erf(2 * (2t - 1) / sqrt(2)) / erf(2 / sqrt(2)))` |
+| `linear` | `t` |
+| `tanh` | `0.5 * (1 + tanh(2 * (2t - 1)) / tanh(2))` |
+| `sine` | `0.5 * (1 - cos(pi * t))` |
+| `exponential` | `(1 - exp(-4t)) / (1 - exp(-4))` |
+| `step` | `0` for `t < 0.5`, else `1` |
+
+### Composition Of Several Branches
+
+A transition holds one or more weighted branches, each with its own kind and
+declared width. Weights are normalized at construction time, so what is stored
+and written to disk always sums to one. The discretized region spans the widest
+branch, `W = max(b.thickness_a)`. At depth `z` each branch is evaluated at its
+own normalized coordinate `t_b = clip(z / b.thickness_a, 0, 1)` and the
+fractions are combined by weight:
+
+```
+f(z) = sum_b w_b * f_b(clip(z / b.thickness_a, 0, 1))
+```
+
+Narrower branches saturate at `1` before the region ends, which is how branches
+of different widths compose one profile. Because every kernel is exactly `0` at
+`t = 0` and exactly `1` at `t = 1`, and the weights sum to one, the composed
+profile also hits both endpoints exactly.
+
+The region is split into `N = max(1, ceil(W / microslab_max_a))` microslabs, and
+fractions are sampled at slab *centers* rather than edges, which keeps the first
+and last fraction strictly inside `(0, 1)`. Expansion emits exactly `N + 1` rows
+per graded layer: `N` microslabs plus one body slab of thickness
+`thickness_a - W`. The body slab is emitted unconditionally, even at zero
+thickness, so the row count stays predictable. `MAX_TRANSITION_SLABS = 512`
+bounds `N`: at 512 rows per interface the Parratt recursion and its analytic
+Jacobian stay well inside the cost of an ordinary multilayer, while the profile
+resolution is finer than any width a laboratory measurement can constrain.
+
+### Roughness Is Replaced, Not Added
+
+A transition and Névot-Croce describe the same physical broadening of the same
+interface. Applying both would widen it twice, so a layer that declares a
+transition must declare `roughness_a = 0` (rejected at construction), and
+`compile_fit_problem` emits that axis as locked at zero and refuses parameter
+settings that reopen it. The layer dialog disables the roughness input while the
+transition toggle is on, so the exclusion is visible before commit time rather
+than surfacing as a rejection afterwards. Microslab boundaries are numerical
+subdivisions rather than physical interfaces, so they carry zero roughness and
+stay out of the dynamic roughness limits.
+
+### Displayed Profiles Show Steps, By Design
+
+`sld_depth_profile()` takes its sharp branch when every roughness in the stack
+is zero (`physics/sld_profile.py`), which is exactly the case for a structure
+whose only interface widths come from transitions. The transition region is then
+drawn as `N` discrete steps rather than a smooth curve. That is the true
+discretization the reflectivity calculation uses, not a plotting defect — do not
+"fix" it by smoothing the display, which would show a profile the model never
+evaluated.
+
 ## Pinned Refnx Benchmark
 
 The development reference is refnx commit
