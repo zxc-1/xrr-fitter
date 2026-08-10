@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
 import xrr_fitter.api as api
 from xrr_fitter.gui.structure.dialogs import BackingDialog, LayerDialog, PeriodicDialog
 
-
 CommitStructure = Callable[[api.StructureSpec], object]
 OxideAction = Callable[[], object]
 TREE_HEADERS = ("名称", "材料", "密度", "厚度 (nm)", "粗糙度 (nm)", "重复")
@@ -38,14 +37,22 @@ def _nm(value_a: float) -> str:
     return f"{value_a / 10.0:g}"
 
 
+def _transition_text(transition: api.InterfaceTransition) -> str:
+    """Spell out the transition in the roughness column without adding one."""
+    branches = "、".join(
+        f"{branch.kind} 权重 {branch.weight:g} 宽度 {_nm(branch.thickness_a)} nm" for branch in transition.branches
+    )
+    return f"界面过渡取代粗糙度：{branches}；切片上限 {_nm(transition.microslab_max_a)} nm"
+
+
 def _oxide_identity(value: object) -> tuple[object, ...]:
-    material = getattr(value, "oxide_material")
+    material = value.oxide_material
     formula = material.formula if isinstance(material, api.MaterialSpec) else material
     return (
-        getattr(value, "base_material"),
+        value.base_material,
         formula,
-        getattr(value, "location"),
-        getattr(value, "oxide_table_version"),
+        value.location,
+        value.oxide_table_version,
     )
 
 
@@ -173,15 +180,11 @@ class StructureEditor(QWidget):
 
     def add_layer(self, layer: api.LayerSpec) -> None:
         structure = self._require_structure()
-        self._commit_structure(
-            replace(structure, components=(*structure.components, layer))
-        )
+        self._commit_structure(replace(structure, components=(*structure.components, layer)))
 
     def add_periodic_block(self, block: api.PeriodicBlock) -> None:
         structure = self._require_structure()
-        self._commit_structure(
-            replace(structure, components=(*structure.components, block))
-        )
+        self._commit_structure(replace(structure, components=(*structure.components, block)))
 
     def set_backing(self, backing: api.MaterialSpec, roughness_a: float) -> None:
         structure = self._require_structure()
@@ -253,7 +256,7 @@ class StructureEditor(QWidget):
         return item
 
     def _layer_item(self, layer: api.LayerSpec) -> QTreeWidgetItem:
-        return QTreeWidgetItem(
+        item = QTreeWidgetItem(
             (
                 layer.name,
                 _material_text(layer.material),
@@ -262,16 +265,15 @@ class StructureEditor(QWidget):
                 _nm(layer.roughness_a),
             )
         )
+        if layer.transition is not None:
+            item.setToolTip(4, _transition_text(layer.transition))
+        return item
 
     def _refresh_oxide(self) -> None:
         structure = self._require_structure()
         decided = {_oxide_identity(value) for value in self._decisions}
         self._suggestion = next(
-            (
-                value
-                for value in api.suggest_oxide_layers(structure)
-                if _oxide_identity(value) not in decided
-            ),
+            (value for value in api.suggest_oxide_layers(structure) if _oxide_identity(value) not in decided),
             None,
         )
         visible = self._suggestion is not None
