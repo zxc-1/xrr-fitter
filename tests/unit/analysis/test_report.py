@@ -13,6 +13,17 @@ Automatic fits deliberately disable bootstrap on their clean fast path while
 retaining bounded profile recovery for ambiguous evidence. The report contract
 therefore records whether work actually ran, rather than inferring it from
 default field values.
+
+Prior-conflict coverage checks that the composed uncertainty report flags each
+free parameter whose representative estimate leaves its declared prior window,
+while parameters that stay within tolerance and parameters without a locating
+prior are never reported. The comparison is performed in the coordinate space
+the prior is declared against, so a roughness-fraction prior is scored on the
+unit fraction rather than the physical roughness it expands to. The joint
+Stage-E pipeline, which owns no per-parameter prior estimate, is expected to
+leave the field empty, and reports constructed without any conflict argument
+default it to an empty tuple. A final contract proves that prior-conflict
+labels never influence which parameters are chosen for profile refinement.
 """
 
 from __future__ import annotations
@@ -41,7 +52,7 @@ from xrr_fitter.model.fitting import (
     FitStageSummary,
 )
 from xrr_fitter.model.instrument import InstrumentSpec, PhysicsDiagnostic
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterSetting, PriorSpec
 from xrr_fitter.model.provenance import (
     bootstrap_provenance_sha256,
     fit_search_provenance_sha256,
@@ -165,11 +176,7 @@ def _angle_offset_problem():
 
 
 def _legacy(candidate, *, candidate_id=...):
-    values = {
-        field: getattr(candidate, field)
-        for field in candidate.__dataclass_fields__
-        if field != "candidate_id"
-    }
+    values = {field: getattr(candidate, field) for field in candidate.__dataclass_fields__ if field != "candidate_id"}
     if candidate_id is not ...:
         values["candidate_id"] = candidate_id
     return SimpleNamespace(**values)
@@ -338,12 +345,7 @@ def test_twelve_parameter_default_profiles_use_preliminary_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _api()
-    problem = SimpleNamespace(
-        variables=tuple(
-            SimpleNamespace(name=f"parameter.{index}")
-            for index in range(12)
-        )
-    )
+    problem = SimpleNamespace(variables=tuple(SimpleNamespace(name=f"parameter.{index}") for index in range(12)))
     preliminary = object()
     observed: dict[str, object] = {}
 
@@ -568,10 +570,7 @@ def _empty_report(candidate_id: str | None) -> UncertaintyReport:
 
 
 def _analysis_candidates(problem):
-    return tuple(
-        _candidate(problem, f"E-{index}", offset)
-        for index, offset in enumerate((0.0, 0.001, -0.001, 0.002))
-    )
+    return tuple(_candidate(problem, f"E-{index}", offset) for index, offset in enumerate((0.0, 0.001, -0.001, 0.002)))
 
 
 def _empty_owned_bootstrap(problem, search) -> BootstrapResult:
@@ -627,8 +626,7 @@ def _record_classification(
 
 def _assert_diagnostic_warning(warnings: tuple[str, ...]) -> None:
     assert any(
-        warning.startswith("ideal_reflectivity_above_one:")
-        and "full_data_indices=[1,2]" in warning
+        warning.startswith("ideal_reflectivity_above_one:") and "full_data_indices=[1,2]" in warning
         for warning in warnings
     )
 
@@ -711,11 +709,7 @@ def _assert_classification_inputs(observed, report, diagnostic) -> None:
         "E-2",
         "E-3",
     )
-    winner = next(
-        candidate
-        for candidate in observed
-        if candidate.candidate_id == report.candidate_id
-    )
+    winner = next(candidate for candidate in observed if candidate.candidate_id == report.candidate_id)
     assert diagnostic in winner.diagnostics
 
 
@@ -825,8 +819,7 @@ def test_fit_dataset_runs_uncertainty_before_classifying_result(monkeypatch) -> 
             problem.config.budget.bootstrap_samples,
             problem.config.budget.bootstrap_samples,
             search.best_candidate.objective,
-            f"bootstrap {problem.config.budget.bootstrap_samples}/"
-            f"{problem.config.budget.bootstrap_samples}",
+            f"bootstrap {problem.config.budget.bootstrap_samples}/{problem.config.budget.bootstrap_samples}",
         ),
         FitProgress(
             "curve",
@@ -901,10 +894,7 @@ def test_profiles_collect_results_and_publish_progress_in_declaration_order(
 
     assert completed == list(reversed(requested))
     assert profiles == tuple(f"profile:{name}" for name in requested)
-    assert progress == [
-        (index, len(requested), name)
-        for index, name in enumerate(requested, start=1)
-    ]
+    assert progress == [(index, len(requested), name) for index, name in enumerate(requested, start=1)]
 
 
 def test_joint_result_uncertainty_uses_global_candidate_parameter_names() -> None:
@@ -917,9 +907,7 @@ def test_joint_result_uncertainty_uses_global_candidate_parameter_names() -> Non
         profile_names=(),
     )
 
-    assert report.correlation_names == tuple(
-        variable.name for variable in problem.variables
-    )
+    assert report.correlation_names == tuple(variable.name for variable in problem.variables)
     assert report.correlation_matrix.shape == (
         len(problem.variables),
         len(problem.variables),
@@ -952,3 +940,55 @@ def test_problem_objective_information_uses_robust_weights_and_scale_prior() -> 
 
     assert information.shape == (len(problem.variables), len(problem.variables))
     assert np.allclose(information, information.T)
+
+
+def _with_priors(problem, priors):
+    definitions = tuple(
+        replace(definition, prior=priors[definition.name]) if definition.name in priors else definition
+        for definition in problem.parameter_definitions
+    )
+    return replace(problem, parameter_definitions=definitions)
+
+
+def test_uncertainty_report_point_estimate_conflict() -> None:
+    problem = _with_priors(
+        _problem(),
+        {
+            "component.0.density_scale": PriorSpec("normal", (0.6, 0.05)),
+            "component.0.thickness_a": PriorSpec("normal", (20.0, 5.0)),
+        },
+    )
+    candidates = _analysis_candidates(problem)
+
+    report = _api().build_uncertainty_report(problem, candidates, profile_names=())
+
+    assert "component.0.density_scale" in report.prior_conflicts
+    assert "component.0.thickness_a" not in report.prior_conflicts
+
+
+def test_joint_report_leaves_prior_conflicts_empty() -> None:
+    joint = import_module("xrr_fitter.analysis.joint")
+
+    report, _confidence, _evidence = joint.analyze_joint_ensemble(
+        variable_names=("shared",),
+        candidate_ids=("E-0",),
+        unit_vectors=np.asarray(((0.5,),)),
+        physical_values=np.asarray(((1.0,),)),
+        objectives=(1.0,),
+        valid=(True,),
+        diagnostics=((),),
+        thresholds=FitConfig.fast(1701).confidence,
+    )
+
+    assert report.prior_conflicts == ()
+
+
+def test_reports_default_prior_conflicts_to_empty() -> None:
+    assert _empty_report(None).prior_conflicts == ()
+
+
+def test_prior_conflicts_do_not_enter_profile_selection() -> None:
+    profiles = import_module("xrr_fitter.analysis.profiles")
+    report = replace(_empty_report(None), prior_conflicts=("component.0.density_scale",))
+
+    assert profiles._reported_profile_names(report) == set()
