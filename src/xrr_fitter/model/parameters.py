@@ -1,12 +1,74 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite, log
+from math import exp, isfinite, log
 
 import numpy as np
 
-
 TRANSFORMS = frozenset({"linear", "log", "roughness_fraction"})
+
+# kind -> number of scalar parameters; PRIOR_KINDS is derived so the two never
+# drift. soft_range carries (low, high, std); normal/lognormal carry (loc, scale).
+PRIOR_ARITY: dict[str, int] = {"uniform": 0, "normal": 2, "lognormal": 2, "soft_range": 3}
+PRIOR_KINDS = frozenset(PRIOR_ARITY)
+# Per kind, the parameter indices that must be strictly positive scales.
+PRIOR_SCALE_INDICES: dict[str, tuple[int, ...]] = {
+    "uniform": (),
+    "normal": (1,),
+    "lognormal": (1,),
+    "soft_range": (2,),
+}
+
+
+def _prior_scales(kind: str, parameters: tuple[float, ...]) -> None:
+    for index in PRIOR_SCALE_INDICES[kind]:
+        if parameters[index] <= 0.0:
+            raise ValueError(f"{kind} prior scale must be positive")
+
+
+def _prior_ordering(kind: str, parameters: tuple[float, ...]) -> None:
+    if kind == "soft_range" and not parameters[0] < parameters[1]:
+        raise ValueError("soft_range prior requires low < high")
+
+
+@dataclass(frozen=True, slots=True)
+class PriorSpec:
+    kind: str
+    parameters: tuple[float, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "parameters", tuple(self.parameters))
+        if self.kind not in PRIOR_KINDS:
+            raise ValueError(f"unsupported prior kind: {self.kind}")
+        arity = PRIOR_ARITY[self.kind]
+        if len(self.parameters) != arity:
+            raise ValueError(f"{self.kind} prior requires {arity} parameters")
+        if not all(isfinite(value) for value in self.parameters):
+            raise ValueError("prior parameters must be finite")
+        _prior_scales(self.kind, self.parameters)
+        _prior_ordering(self.kind, self.parameters)
+
+
+def _prior_center(prior: PriorSpec) -> float | None:
+    # Center in physical space, comparable to a definition's [lower, upper].
+    # lognormal parameters live in log space, so its physical center is exp(loc).
+    if prior.kind == "normal":
+        return prior.parameters[0]
+    if prior.kind == "lognormal":
+        return exp(prior.parameters[0])
+    if prior.kind == "soft_range":
+        return (prior.parameters[0] + prior.parameters[1]) / 2.0
+    return None
+
+
+def _definition_prior(name: str, lower: float, upper: float, prior: PriorSpec | None) -> None:
+    if prior is None:
+        return
+    if not isinstance(prior, PriorSpec):
+        raise TypeError("prior must be a PriorSpec")
+    center = _prior_center(prior)
+    if center is not None and not lower <= center <= upper:
+        raise ValueError(f"{name} prior center must be within bounds")
 
 
 def _name(value: str, field: str) -> None:
@@ -50,6 +112,7 @@ class ParameterDefinition:
     integer: bool = False
     expert_only: bool = False
     sharing_key: str | None = None
+    prior: PriorSpec | None = None
 
     def __post_init__(self) -> None:
         _name(self.name, "parameter name")
@@ -62,6 +125,7 @@ class ParameterDefinition:
             raise TypeError("parameter flags must be bool")
         if self.sharing_key is not None:
             _name(self.sharing_key, "sharing_key")
+        _definition_prior(self.name, self.lower, self.upper, self.prior)
 
 
 def _effective_upper(
@@ -112,9 +176,7 @@ def _log_physical_to_unit(
     """
     if min(definition.lower, value) <= 0.0:
         raise PhysicalValueError(f"log parameter must be positive: {definition.name}")
-    return (log(value) - log(definition.lower)) / (
-        log(upper) - log(definition.lower)
-    )
+    return (log(value) - log(definition.lower)) / (log(upper) - log(definition.lower))
 
 
 def _validate_unit_value(definition: ParameterDefinition, unit: float) -> None:
@@ -143,9 +205,7 @@ def _log_unit_to_physical(
         return float(definition.lower)
     if unit == 1.0:
         return float(upper)
-    decoded = float(
-        np.exp(log(definition.lower) + unit * (log(upper) - log(definition.lower)))
-    )
+    decoded = float(np.exp(log(definition.lower) + unit * (log(upper) - log(definition.lower))))
     return min(max(decoded, float(definition.lower)), float(upper))
 
 
@@ -214,7 +274,11 @@ class ParameterCoordinate:
     transform: str
 
     def __post_init__(self) -> None:
-        if not isinstance(self.parameter_index, int) or isinstance(self.parameter_index, bool) or self.parameter_index < 0:
+        if (
+            not isinstance(self.parameter_index, int)
+            or isinstance(self.parameter_index, bool)
+            or self.parameter_index < 0
+        ):
             raise ValueError("parameter_index must be a nonnegative integer")
         _name(self.name, "parameter name")
         if self.transform not in TRANSFORMS:
