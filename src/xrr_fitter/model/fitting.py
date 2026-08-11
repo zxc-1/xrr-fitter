@@ -63,7 +63,7 @@ from xrr_fitter.model.parameters import (
     ParameterDefinition,
     ParameterValue,
 )
-from xrr_fitter.model.progress import FitProgress
+from xrr_fitter.model.progress import FitProgress  # noqa: F401 -- re-exported via xrr_fitter.api
 from xrr_fitter.model.structure import SlabStack, StructureSpec
 
 
@@ -117,9 +117,7 @@ def _validate_candidate_objective(candidate: FitCandidate) -> None:
     # Keeping NaN and negative infinity out makes persisted ordering decidable.
     if candidate.valid and not isfinite(candidate.objective):
         raise ValueError("valid candidate objective must be finite")
-    if not candidate.valid and not (
-        isfinite(candidate.objective) or candidate.objective == float("inf")
-    ):
+    if not candidate.valid and not (isfinite(candidate.objective) or candidate.objective == float("inf")):
         raise ValueError("invalid candidate objective must be finite or positive infinity")
     ranking = candidate.ranking_objective
     if ranking is not None and not isfinite(ranking):
@@ -172,6 +170,7 @@ class ConfidenceThresholds:
     equivalent_cost_floor: float = 1e-5
     boundary_fraction: float = 0.005
     strong_correlation: float = 0.95
+    prior_conflict_sigmas: float = 3.0
 
     def __post_init__(self) -> None:
         values = tuple(getattr(self, field) for field in self.__dataclass_fields__)
@@ -179,6 +178,11 @@ class ConfidenceThresholds:
             raise ValueError("confidence thresholds must be finite and nonnegative")
         if not 0.0 <= self.strong_correlation <= 1.0:
             raise ValueError("strong_correlation must be in [0, 1]")
+        # A zero sigma band would flag every prior-bearing parameter as in
+        # conflict, so the threshold must be strictly positive, unlike the
+        # nonnegative fractions above where zero is a meaningful setting.
+        if self.prior_conflict_sigmas <= 0.0:
+            raise ValueError("prior_conflict_sigmas must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -614,18 +618,12 @@ def _validate_best_index(
         if selectable:
             raise ValueError("best_index is required for selectable candidates")
         return
-    valid_index = (
-        isinstance(best_index, int)
-        and not isinstance(best_index, bool)
-        and 0 <= best_index < len(candidates)
-    )
+    valid_index = isinstance(best_index, int) and not isinstance(best_index, bool) and 0 <= best_index < len(candidates)
     if not valid_index:
         raise ValueError("best_index must identify a candidate")
     if best_index not in selectable:
         raise ValueError("best_index must identify a selectable candidate")
-    minimum = min(
-        candidate_selection_objective(candidates[index]) for index in selectable
-    )
+    minimum = min(candidate_selection_objective(candidates[index]) for index in selectable)
     if candidate_selection_objective(candidates[best_index]) != minimum:
         raise ValueError("best_index must identify a minimum-objective candidate")
 

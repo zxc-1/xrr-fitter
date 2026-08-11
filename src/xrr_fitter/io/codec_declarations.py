@@ -102,6 +102,20 @@ def _instrument_from_dict(value: object) -> InstrumentSpec:
     return InstrumentSpec(**payload)
 
 
+# prior_conflict_sigmas is emitted only when it departs from the default, so
+# projects written before the field existed re-encode to byte-identical
+# confidence and older readers keep loading them unchanged.
+_CONFIDENCE_DEFAULT_SIGMAS = ConfidenceThresholds().prior_conflict_sigmas
+_CONFIDENCE_FIELDS = frozenset(ConfidenceThresholds.__dataclass_fields__) - {"prior_conflict_sigmas"}
+
+
+def _confidence_to_dict(value: ConfidenceThresholds) -> dict[str, object]:
+    payload: dict[str, object] = {field: getattr(value, field) for field in _CONFIDENCE_FIELDS}
+    if value.prior_conflict_sigmas != _CONFIDENCE_DEFAULT_SIGMAS:
+        payload["prior_conflict_sigmas"] = value.prior_conflict_sigmas
+    return payload
+
+
 def _fit_config_to_dict(value: FitConfig) -> dict[str, object]:
     return {
         "master_seed": value.master_seed,
@@ -113,7 +127,7 @@ def _fit_config_to_dict(value: FitConfig) -> dict[str, object]:
         "local_workers": value.local_workers,
         "scale_prior_enabled": value.scale_prior_enabled,
         "scale_prior_tau_decades": value.scale_prior_tau_decades,
-        "confidence": {field: getattr(value.confidence, field) for field in value.confidence.__dataclass_fields__},
+        "confidence": _confidence_to_dict(value.confidence),
         "fringe_screen_threshold_version": value.fringe_screen_threshold_version,
         "budget_reclaim_threshold_version": value.budget_reclaim_threshold_version,
         "downsample_rule_version": value.downsample_rule_version,
@@ -140,9 +154,19 @@ def _fit_config_from_dict(value: object) -> FitConfig:
     }
     payload = _mapping(value, fields, "fit_config")
     budget_fields = set(SearchBudget.__dataclass_fields__)
+    # prior_conflict_sigmas is optional so projects saved before it existed
+    # decode to the dataclass default instead of failing the field-set check.
     confidence_fields = set(ConfidenceThresholds.__dataclass_fields__)
+    confidence_optional = {"prior_conflict_sigmas"}
     budget = SearchBudget(**_mapping(payload["budget"], budget_fields, "search budget"))
-    confidence = ConfidenceThresholds(**_mapping(payload["confidence"], confidence_fields, "confidence thresholds"))
+    confidence = ConfidenceThresholds(
+        **_mapping(
+            payload["confidence"],
+            confidence_fields - confidence_optional,
+            "confidence thresholds",
+            confidence_optional,
+        )
+    )
     scalar = {key: item for key, item in payload.items() if key not in {"budget", "confidence"}}
     return FitConfig(**scalar, budget=budget, confidence=confidence)
 
