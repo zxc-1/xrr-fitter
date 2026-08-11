@@ -96,7 +96,7 @@ def _gradient_values(layer: GradientLayerSpec, prefix: str) -> dict[str, float]:
     }
 
 
-_COMPONENT_VALUES: tuple[tuple[type, Callable[..., dict[str, float]]], ...] = (
+COMPONENT_VALUES: tuple[tuple[type, Callable[..., dict[str, float]]], ...] = (
     (LayerSpec, _layer_values),
     (PeriodicBlock, _periodic_values),
     (GradientLayerSpec, _gradient_values),
@@ -104,7 +104,7 @@ _COMPONENT_VALUES: tuple[tuple[type, Callable[..., dict[str, float]]], ...] = (
 
 
 def _component_values(component: StructureComponent, prefix: str) -> dict[str, float]:
-    for kind, builder in _COMPONENT_VALUES:
+    for kind, builder in COMPONENT_VALUES:
         if isinstance(component, kind):
             return builder(component, prefix)
     raise TypeError(f"unsupported structure component: {type(component).__name__}")

@@ -10,12 +10,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 
+from xrr_fitter.analysis import sld_bands as _bands
 from xrr_fitter.analysis.automatic import assess_automatic_quality
 from xrr_fitter.analysis.joint import analyze_joint_ensemble
 from xrr_fitter.analysis.mcmc import run_problem_mcmc
 from xrr_fitter.analysis.profiles import recover_profile_basin
 from xrr_fitter.analysis.report import AnalysisRequest, run_analysis
-from xrr_fitter.analysis.sld_bands import sld_uncertainty_bands
 from xrr_fitter.fit.automatic import (
     candidate_from_physical_values,
     refit_from_physical_values,
@@ -389,7 +389,7 @@ def _sld_bands(structure, report, wavelength_a):
     if report is None:
         return None, None
     try:
-        bands = sld_uncertainty_bands(structure, report, wavelength_a=wavelength_a)
+        bands = _bands.sld_uncertainty_bands(structure, report, wavelength_a=wavelength_a)
     except ValueError as error:
         return None, replace(report, warnings=(*report.warnings, str(error)))
     return bands, report
@@ -431,6 +431,11 @@ def run_mcmc(
         progress_callback,
         None,
     )
+
+
+def sld_uncertainty_bands(structure, report, *, wavelength_a, align="backing"):
+    """Recompute view-only bands for an alignment the user picked."""
+    return _bands.sld_uncertainty_bands(structure, report, wavelength_a=wavelength_a, align=align)
 
 
 def fit_worker_handler(
@@ -508,6 +513,7 @@ __all__ = (
     "prepare_dataset_fit",
     "run_mcmc",
     "service_seed_branches",
+    "sld_uncertainty_bands",
     "structure_evidence_for",
     "validate_parameter_setting_declarations",
 )

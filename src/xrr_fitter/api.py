@@ -6,6 +6,7 @@ from xrr_fitter.model.analysis import (
     McmcConfig,
     McmcReport,
     ParameterProfile,
+    SldUncertaintyBands,
     StructureEvidence,
     UncertaintyReport,
 )
@@ -77,6 +78,7 @@ from xrr_fitter.services.fitting import (
     preflight_automatic_fit,
     preflight_fit,
     run_mcmc,
+    sld_uncertainty_bands,
 )
 from xrr_fitter.services.parameters import (
     accept_source_update,
@@ -162,6 +164,7 @@ __all__ = (
     "ProjectValidation",
     "ScalePriorState",
     "SharingRule",
+    "SldUncertaintyBands",
     "SourceUpdatePreview",
     "StructureEvidence",
     "StructureSpec",
@@ -203,6 +206,7 @@ __all__ = (
     "set_sharing_rules",
     "set_structure",
     "set_workspace_state",
+    "sld_uncertainty_bands",
     "start_fit_job",
     "start_automatic_fit_job",
     "start_mcmc_job",
