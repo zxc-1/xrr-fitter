@@ -435,6 +435,7 @@ class McmcReport:
     label: str = "目标函数伪后验"
     warnings: tuple[str, ...] = ()
     candidate_id: str | None = None
+    prior_conflicts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_mcmc_identity(self)
@@ -453,6 +454,7 @@ class McmcReport:
         _set_array_fields(self, names, arrays)
         object.__setattr__(self, "boundary_hits", tuple(self.boundary_hits))
         object.__setattr__(self, "warnings", tuple(self.warnings))
+        object.__setattr__(self, "prior_conflicts", tuple(self.prior_conflicts))
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)
@@ -476,6 +478,7 @@ class UncertaintyReport:
     candidate_id: str | None = None
     bootstrap_performed: bool = True
     sld_bands: SldUncertaintyBands | None = None
+    prior_conflicts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         names = tuple(self.correlation_names)
@@ -499,6 +502,7 @@ class UncertaintyReport:
             raise TypeError("bootstrap_performed must be bool")
         _validate_optional_sld_bands(self.sld_bands)
         object.__setattr__(self, "diagnostics", diagnostics)
+        object.__setattr__(self, "prior_conflicts", tuple(self.prior_conflicts))
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)

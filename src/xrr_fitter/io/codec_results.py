@@ -61,7 +61,7 @@ def _profile_from_dict(value: object) -> ParameterProfile:
 def _mcmc_to_dict(value: McmcReport | None) -> dict[str, object] | None:
     if value is None:
         return None
-    return {
+    payload: dict[str, object] = {
         "config": {field: getattr(value.config, field) for field in value.config.__dataclass_fields__},
         "child_seed": value.child_seed,
         "parameter_names": list(value.parameter_names),
@@ -75,6 +75,11 @@ def _mcmc_to_dict(value: McmcReport | None) -> dict[str, object] | None:
         "warnings": list(value.warnings),
         "candidate_id": value.candidate_id,
     }
+    # Emitted only when nonempty so reports written before prior conflicts
+    # existed re-encode byte-identically and older readers keep loading them.
+    if value.prior_conflicts:
+        payload["prior_conflicts"] = list(value.prior_conflicts)
+    return payload
 
 
 def _mcmc_from_dict(value: object) -> McmcReport | None:
@@ -93,7 +98,7 @@ def _mcmc_from_dict(value: object) -> McmcReport | None:
         "label",
         "warnings",
     }
-    payload = _mapping(value, required, "MCMC report", {"candidate_id"})
+    payload = _mapping(value, required, "MCMC report", {"candidate_id", "prior_conflicts"})
     config = McmcConfig(
         **_mapping(
             payload["config"],
@@ -114,6 +119,7 @@ def _mcmc_from_dict(value: object) -> McmcReport | None:
         label=payload["label"],
         warnings=tuple(_sequence(payload["warnings"], "MCMC warnings")),
         candidate_id=payload.get("candidate_id"),
+        prior_conflicts=tuple(_sequence(payload.get("prior_conflicts", []), "MCMC prior conflicts")),
     )
 
 
@@ -165,7 +171,7 @@ def _uncertainty_to_dict(
 ) -> dict[str, object] | None:
     if value is None:
         return None
-    return {
+    payload: dict[str, object] = {
         "correlation_names": list(value.correlation_names),
         "correlation_matrix": _real_array_to_list(value.correlation_matrix),
         "profiles": [_profile_to_dict(item) for item in value.profiles],
@@ -181,6 +187,11 @@ def _uncertainty_to_dict(
         "bootstrap_performed": value.bootstrap_performed,
         "sld_bands": _sld_bands_to_dict(value.sld_bands),
     }
+    # Emitted only when nonempty so reports written before prior conflicts
+    # existed re-encode byte-identically and older readers keep loading them.
+    if value.prior_conflicts:
+        payload["prior_conflicts"] = list(value.prior_conflicts)
+    return payload
 
 
 def _rows(value: object, label: str) -> tuple[tuple[Any, ...], ...]:
@@ -207,7 +218,7 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         value,
         required | {"bootstrap_performed"},
         "uncertainty report",
-        {"candidate_id", "sld_bands"},
+        {"candidate_id", "sld_bands", "prior_conflicts"},
     )
     return UncertaintyReport(
         correlation_names=tuple(_sequence(payload["correlation_names"], "correlation names")),
@@ -230,6 +241,7 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         candidate_id=payload.get("candidate_id"),
         bootstrap_performed=payload["bootstrap_performed"],
         sld_bands=_sld_bands_from_dict(payload.get("sld_bands")),
+        prior_conflicts=tuple(_sequence(payload.get("prior_conflicts", []), "uncertainty prior conflicts")),
     )
 
 

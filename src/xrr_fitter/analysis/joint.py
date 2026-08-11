@@ -105,9 +105,7 @@ def _validated_ensemble(
 
 def _eligible_indices(ensemble: _JointEnsemble) -> tuple[int, ...]:
     return tuple(
-        index
-        for index in range(ensemble.count)
-        if ensemble.validity[index] and isfinite(float(ensemble.costs[index]))
+        index for index in range(ensemble.count) if ensemble.validity[index] and isfinite(float(ensemble.costs[index]))
     )
 
 
@@ -119,9 +117,7 @@ def _boundary_hits(
     if vector is None:
         return ()
     return tuple(
-        name
-        for name, value in zip(names, vector, strict=True)
-        if value <= fraction or value >= 1.0 - fraction
+        name for name, value in zip(names, vector, strict=True) if value <= fraction or value >= 1.0 - fraction
     )
 
 
@@ -130,11 +126,7 @@ def _uncertainty_report(
     thresholds: ConfidenceThresholds,
 ) -> UncertaintyReport:
     eligible = _eligible_indices(ensemble)
-    values = (
-        ensemble.physical[np.asarray(eligible, dtype=int)]
-        if eligible
-        else ensemble.physical[:0]
-    )
+    values = ensemble.physical[np.asarray(eligible, dtype=int)] if eligible else ensemble.physical[:0]
     correlation = _correlation(values, ensemble.width)
     best_index = min(
         eligible,
@@ -163,6 +155,7 @@ def _uncertainty_report(
         residual_autocorrelation=False,
         candidate_id=None if best_index is None else ensemble.identifiers[best_index],
         bootstrap_performed=False,
+        prior_conflicts=(),
     )
 
 

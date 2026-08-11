@@ -16,7 +16,13 @@ from math import isfinite
 
 import numpy as np
 
-from xrr_fitter.evaluation import problem_log_probability, values_by_name
+from xrr_fitter.evaluation import (
+    _prior_coordinate,
+    _validated_unit,
+    prior_center_and_spread,
+    problem_log_probability,
+    values_by_name,
+)
 from xrr_fitter.model.analysis import EnsembleSamples, McmcConfig, McmcReport
 from xrr_fitter.model.fitting import FitEvaluationContext
 
@@ -109,11 +115,7 @@ def _stretch_factor(rng: np.random.Generator, scale: float) -> float:
 
 
 def _valid_step(value: object, minimum: int) -> bool:
-    return (
-        not isinstance(value, bool)
-        and isinstance(value, (int, np.integer))
-        and value >= minimum
-    )
+    return not isinstance(value, bool) and isinstance(value, (int, np.integer)) and value >= minimum
 
 
 def _initial_walker_matrix(initial_walkers: np.ndarray) -> np.ndarray:
@@ -125,11 +127,7 @@ def _initial_walker_matrix(initial_walkers: np.ndarray) -> np.ndarray:
 
 def _validate_walker_geometry(walkers: np.ndarray, configured_count: object) -> None:
     walker_count, dimension = walkers.shape
-    valid = (
-        walker_count == configured_count
-        and walker_count % 2 == 0
-        and walker_count >= 2 * dimension + 2
-    )
+    valid = walker_count == configured_count and walker_count % 2 == 0 and walker_count >= 2 * dimension + 2
     if not valid:
         raise ValueError("walkers must be even and at least 2*nfree+2")
 
@@ -200,17 +198,11 @@ def _update_group(
         index = int(index_value)
         partner = int(rng.choice(complement))
         stretch = _stretch_factor(rng, config.stretch_scale)
-        proposal = state.walkers[partner] + stretch * (
-            state.walkers[index] - state.walkers[partner]
-        )
+        proposal = state.walkers[partner] + stretch * (state.walkers[index] - state.walkers[partner])
         proposal_logp = float(log_probability(proposal.copy()))
         if np.isnan(proposal_logp):
             proposal_logp = -np.inf
-        log_acceptance = (
-            (dimension - 1) * np.log(stretch)
-            + proposal_logp
-            - state.log_probability[index]
-        )
+        log_acceptance = (dimension - 1) * np.log(stretch) + proposal_logp - state.log_probability[index]
         state.attempted[index] += 1
         if np.log(rng.random()) < log_acceptance:
             state.walkers[index] = proposal
@@ -227,9 +219,7 @@ def run_affine_invariant(
     cancelled: Callable[[], bool] | None = None,
 ) -> EnsembleSamples:
     """Run the fixed two-half Goodman-Weare update schedule."""
-    walkers, log_values = _validated_initial_state(
-        log_probability, initial_walkers, config, cancelled
-    )
+    walkers, log_values = _validated_initial_state(log_probability, initial_walkers, config, cancelled)
     state = _SamplerState(
         walkers,
         log_values,
@@ -327,26 +317,18 @@ def problem_mcmc_warnings(
     names: tuple[str, ...],
 ) -> tuple[str, ...]:
     warnings: list[str] = []
-    acceptance = np.flatnonzero(
-        (ensemble.acceptance_fraction <= 0.10)
-        | (ensemble.acceptance_fraction >= 0.80)
-    )
+    acceptance = np.flatnonzero((ensemble.acceptance_fraction <= 0.10) | (ensemble.acceptance_fraction >= 0.80))
     if acceptance.size:
         warnings.append(
-            "mcmc_acceptance_outside_0.10_0.80:walkers="
-            + ",".join(str(int(index)) for index in acceptance)
+            "mcmc_acceptance_outside_0.10_0.80:walkers=" + ",".join(str(int(index)) for index in acceptance)
         )
     rhat = np.flatnonzero(ensemble.split_rhat >= 1.10)
     if rhat.size:
-        warnings.append(
-            "mcmc_split_rhat_at_least_1.10:parameters="
-            + ",".join(names[int(index)] for index in rhat)
-        )
+        warnings.append("mcmc_split_rhat_at_least_1.10:parameters=" + ",".join(names[int(index)] for index in rhat))
     ess = np.flatnonzero(ensemble.effective_sample_size < 100.0)
     if ess.size:
         warnings.append(
-            "mcmc_effective_sample_size_below_100:parameters="
-            + ",".join(names[int(index)] for index in ess)
+            "mcmc_effective_sample_size_below_100:parameters=" + ",".join(names[int(index)] for index in ess)
         )
     return tuple(warnings)
 
@@ -361,10 +343,7 @@ def _near_boundary(
         return (unit <= fraction) | (unit >= 1.0 - fraction)
     if definition.transform == "log":
         span = definition.upper - definition.lower
-        return (
-            (physical - definition.lower <= fraction * span)
-            | (definition.upper - physical <= fraction * span)
-        )
+        return (physical - definition.lower <= fraction * span) | (definition.upper - physical <= fraction * span)
     raise ValueError(f"unknown transform: {definition.transform}")
 
 
@@ -382,6 +361,49 @@ def mcmc_boundary_hits(
     return tuple(hits)
 
 
+def prior_conflicts(
+    problem: FitEvaluationContext,
+    representative_unit: np.ndarray,
+) -> tuple[str, ...]:
+    """Flag free parameters whose representative estimate departs from its prior.
+
+    The estimate and the prior center are compared in the coordinate space the
+    prior is declared against (see ``_prior_coordinate``), so a
+    ``roughness_fraction`` prior on the unit fraction never conflicts against a
+    physical roughness value. Flat (``uniform``) and priorless parameters carry
+    no location and are skipped. The tolerance is ``prior_conflict_sigmas``
+    spreads about the center.
+    """
+    unit = _validated_unit(problem, representative_unit)
+    sigmas = problem.config.confidence.prior_conflict_sigmas
+    conflicts: list[str] = []
+    for index, variable in enumerate(problem.variables):
+        definition = problem.parameter_definitions[variable.parameter_index]
+        if definition.prior is None:
+            continue
+        location = prior_center_and_spread(definition.prior)
+        if location is None:
+            continue
+        estimate, _lower, _upper = _prior_coordinate(definition, float(unit[index]))
+        center, spread = location
+        if abs(estimate - center) > sigmas * spread:
+            conflicts.append(variable.name)
+    return tuple(conflicts)
+
+
+def mcmc_prior_conflicts(
+    problem: FitEvaluationContext,
+    flat_unit: np.ndarray,
+) -> tuple[str, ...]:
+    """Flag posterior parameters whose retained median departs from its prior.
+
+    The per-parameter unit median is a monotone image of the physical median, so
+    scoring it in the prior's declared coordinate keeps the comparison consistent
+    for both physical and unit-fraction priors.
+    """
+    return prior_conflicts(problem, np.median(flat_unit, axis=0))
+
+
 def run_problem_mcmc(
     problem: FitEvaluationContext,
     candidate: object,
@@ -394,9 +416,7 @@ def run_problem_mcmc(
     """Initialize, sample, and map one converged problem candidate."""
     center = _validated_candidate(problem, candidate)
     initialization_seed, sampler_seed = _problem_seeds(child_seed)
-    walkers = _problem_walkers(
-        problem, center, config, initialization_seed, cancelled
-    )
+    walkers = _problem_walkers(problem, center, config, initialization_seed, cancelled)
     ensemble = run_affine_invariant(
         lambda unit: problem_log_probability(problem, unit),
         walkers,
@@ -419,4 +439,5 @@ def run_problem_mcmc(
         boundary_hits=mcmc_boundary_hits(problem, flat_unit, physical),
         warnings=problem_mcmc_warnings(ensemble, names),
         candidate_id=getattr(candidate, "candidate_id", None),
+        prior_conflicts=mcmc_prior_conflicts(problem, flat_unit),
     )

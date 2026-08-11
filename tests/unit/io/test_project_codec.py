@@ -1,3 +1,13 @@
+"""Round-trip contracts for fit-result, uncertainty, and checkpoint codecs.
+
+These tests encode a fully populated project graph and decode it again to prove
+that field names, array payloads, and nested reports survive a JSON round trip
+without drift. Prior-conflict labels ride along on both the MCMC report and the
+uncertainty report, are emitted only when present, and default to an empty
+tuple when an older document omits the key, so historical projects keep loading
+byte-for-byte after the field was introduced.
+"""
+
 from __future__ import annotations
 
 import json
@@ -807,3 +817,44 @@ def test_transition_payload_with_invalid_kind_is_rejected() -> None:
 
     with pytest.raises(ProjectSchemaError, match="gaussian"):
         project_from_dict(document)
+
+
+def _project_with_prior_conflicts():
+    result, checkpoint = _manual_result_graph()
+    mcmc = replace(result.uncertainty.mcmc, prior_conflicts=("layer.0.thickness_a",))
+    uncertainty = replace(
+        result.uncertainty,
+        mcmc=mcmc,
+        prior_conflicts=("layer.0.thickness_a",),
+    )
+    result = replace(result, uncertainty=uncertainty)
+    dataset = replace(
+        dataset_project("sample-1"),
+        last_valid_result=result,
+        checkpoint=checkpoint,
+    )
+    return project(dataset)
+
+
+def test_project_roundtrip_preserves_prior_conflicts() -> None:
+    original = _project_with_prior_conflicts()
+    restored = project_from_dict(project_to_dict(original))
+    report = restored.datasets[0].last_valid_result.uncertainty
+    assert report.prior_conflicts == ("layer.0.thickness_a",)
+    assert report.mcmc.prior_conflicts == ("layer.0.thickness_a",)
+
+
+def test_result_without_prior_conflicts_key_still_decodes() -> None:
+    payload = project_to_dict(_project_with_prior_conflicts())
+    for dataset in payload["datasets"]:
+        result = dataset["last_valid_result"]
+        if result is not None and result["uncertainty"] is not None:
+            result["uncertainty"].pop("prior_conflicts", None)
+            if result["uncertainty"]["mcmc"] is not None:
+                result["uncertainty"]["mcmc"].pop("prior_conflicts", None)
+
+    restored = project_from_dict(payload)
+    report = restored.datasets[0].last_valid_result.uncertainty
+
+    assert report.prior_conflicts == ()
+    assert report.mcmc.prior_conflicts == ()
