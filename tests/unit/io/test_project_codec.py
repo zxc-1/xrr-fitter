@@ -266,6 +266,34 @@ def test_only_schema_one_has_a_migration_path(version: int) -> None:
         project_from_dict(payload)
 
 
+def test_fit_config_roundtrips_prior_conflict_sigmas() -> None:
+    base = project()
+    # A non-default sigma exercises the conditional emit path; the default is
+    # elided on write (asserted by the companion test below).
+    tuned = replace(
+        base,
+        fit_config=replace(
+            base.fit_config,
+            confidence=replace(base.fit_config.confidence, prior_conflict_sigmas=2.5),
+        ),
+    )
+
+    restored = project_from_dict(project_to_dict(tuned))
+
+    assert restored.fit_config.confidence.prior_conflict_sigmas == 2.5
+
+
+def test_old_fit_config_without_sigmas_decodes_to_default() -> None:
+    # A confidence object lacking the key models a project written before the
+    # field existed; decoding must fall back to the dataclass default.
+    payload = project_to_dict(project())
+    payload["fit_config"]["confidence"].pop("prior_conflict_sigmas", None)
+
+    restored = project_from_dict(payload)
+
+    assert restored.fit_config.confidence.prior_conflict_sigmas == 3.0
+
+
 def _project_with_legal_json_sentinels():
     result, checkpoint = _manual_result_graph()
     source = result.candidates[0]
