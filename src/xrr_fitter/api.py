@@ -40,6 +40,7 @@ from xrr_fitter.model.parameters import (
     ParameterPrior,
     ParameterReference,
     ParameterSetting,
+    PriorSpec,
     SharingRule,
 )
 from xrr_fitter.model.project import (
@@ -162,6 +163,7 @@ __all__ = (
     "ParameterSetting",
     "PeriodicBlock",
     "PreparedData",
+    "PriorSpec",
     "ProjectFitResult",
     "ProjectImportResult",
     "ProjectUiState",

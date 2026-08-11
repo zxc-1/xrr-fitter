@@ -47,6 +47,7 @@ PUBLIC_NAMES = (
     "ParameterSetting",
     "PeriodicBlock",
     "PreparedData",
+    "PriorSpec",
     "ProjectFitResult",
     "ProjectImportResult",
     "ProjectUiState",
