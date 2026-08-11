@@ -105,13 +105,13 @@ def _instrument_from_dict(value: object) -> InstrumentSpec:
 # prior_conflict_sigmas is emitted only when it departs from the default, so
 # projects written before the field existed re-encode to byte-identical
 # confidence and older readers keep loading them unchanged.
-_CONFIDENCE_DEFAULT_SIGMAS = ConfidenceThresholds().prior_conflict_sigmas
-_CONFIDENCE_FIELDS = frozenset(ConfidenceThresholds.__dataclass_fields__) - {"prior_conflict_sigmas"}
+CONFIDENCE_DEFAULT_SIGMAS = ConfidenceThresholds().prior_conflict_sigmas
+CONFIDENCE_FIELDS = frozenset(ConfidenceThresholds.__dataclass_fields__) - {"prior_conflict_sigmas"}
 
 
 def _confidence_to_dict(value: ConfidenceThresholds) -> dict[str, object]:
-    payload: dict[str, object] = {field: getattr(value, field) for field in _CONFIDENCE_FIELDS}
-    if value.prior_conflict_sigmas != _CONFIDENCE_DEFAULT_SIGMAS:
+    payload: dict[str, object] = {field: getattr(value, field) for field in CONFIDENCE_FIELDS}
+    if value.prior_conflict_sigmas != CONFIDENCE_DEFAULT_SIGMAS:
         payload["prior_conflict_sigmas"] = value.prior_conflict_sigmas
     return payload
 

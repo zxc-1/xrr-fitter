@@ -8,6 +8,7 @@ from dataclasses import replace
 from xrr_fitter.io.source import dataset_index
 from xrr_fitter.model.parameters import (
     ParameterDefinition,
+    ParameterPrior,
     ParameterReference,
     ParameterSetting,
     SharingRule,
@@ -48,6 +49,25 @@ def _default_definitions(
     )
 
 
+def _with_priors(
+    definitions: tuple[ParameterDefinition, ...],
+    priors: Sequence[ParameterPrior],
+) -> tuple[ParameterDefinition, ...]:
+    """Overlay stored priors onto compiled definitions without touching bounds.
+
+    Only the ``prior`` field is replaced, so definitions without a stored prior
+    remain byte-identical and the safety net of ``parameter_priors == ()`` keeps
+    every declaration exactly as compiled.
+    """
+    if not priors:
+        return definitions
+    overlay = {value.name: value.prior for value in priors}
+    return tuple(
+        replace(definition, prior=overlay[definition.name]) if definition.name in overlay else definition
+        for definition in definitions
+    )
+
+
 def describe_parameters(
     project: XrrProject,
     dataset_id: str,
@@ -57,13 +77,14 @@ def describe_parameters(
     if dataset.structure is None:
         raise ValueError(f"dataset has no structure: {dataset_id}")
     data = _prepared_current(project, dataset)
-    return fitting.compiled_parameter_definitions(
+    definitions = fitting.compiled_parameter_definitions(
         data,
         dataset.structure,
         dataset.instrument,
         project.fit_config,
         dataset.parameter_settings,
     )
+    return _with_priors(definitions, dataset.parameter_priors)
 
 
 def validate_parameter_settings(
@@ -131,10 +152,7 @@ def _topology_changed(
 ) -> bool:
     if previous is None or len(previous.components) != len(updated.components):
         return True
-    changed = sum(
-        old is not new
-        for old, new in zip(previous.components, updated.components, strict=True)
-    )
+    changed = sum(old is not new for old, new in zip(previous.components, updated.components, strict=True))
     return changed > 1
 
 
@@ -147,9 +165,7 @@ def _reconciled_parameter_settings(
     dataset = project.datasets[index]
     data = _prepared_current(project, dataset)
     old_definitions = (
-        ()
-        if dataset.structure is None
-        else _default_definitions(project, dataset, data, dataset.structure)
+        () if dataset.structure is None else _default_definitions(project, dataset, data, dataset.structure)
     )
     new_definitions = _default_definitions(project, dataset, data, structure)
     new_by_name = {definition.name: definition for definition in new_definitions}
@@ -161,11 +177,7 @@ def _reconciled_parameter_settings(
         and (not topology_changed or not old.name.startswith("component."))
         and _role_signature(old) == _role_signature(new_by_name[old.name])
     )
-    retained = tuple(
-        setting
-        for setting in dataset.parameter_settings
-        if setting.name in compatible
-    )
+    retained = tuple(setting for setting in dataset.parameter_settings if setting.name in compatible)
     return validate_parameter_settings(new_definitions, retained), compatible
 
 
@@ -193,6 +205,52 @@ def set_parameter_settings(
     )
 
 
+def validate_parameter_priors(
+    definitions: Sequence[ParameterDefinition],
+    priors: Sequence[ParameterPrior],
+) -> tuple[ParameterPrior, ...]:
+    """Validate priors against definition metadata, rejecting unknown names.
+
+    Binding each prior with ``replace(definition, prior=...)`` reuses the
+    declaration's own center-within-bounds check, so a prior can never sit
+    outside the interval it constrains.
+    """
+    values = tuple(priors)
+    if any(not isinstance(value, ParameterPrior) for value in values):
+        raise TypeError("priors must contain ParameterPrior values")
+    by_name = {definition.name: definition for definition in definitions}
+    for value in values:
+        try:
+            definition = by_name[value.name]
+        except KeyError as error:
+            raise ValueError(f"unknown parameter name: {value.name}") from error
+        replace(definition, prior=value.prior)
+    return values
+
+
+def set_parameter_priors(
+    project: XrrProject,
+    dataset_id: str,
+    priors: Sequence[ParameterPrior],
+) -> XrrProject:
+    """Persist validated priors and invalidate their dependent fit state."""
+    index = dataset_index(project, dataset_id)
+    dataset = project.datasets[index]
+    if dataset.structure is None:
+        raise ValueError(f"dataset has no structure: {dataset_id}")
+    definitions = describe_parameters(project, dataset_id)
+    validated = validate_parameter_priors(definitions, priors)
+    if validated == dataset.parameter_priors:
+        return project
+    updated = replace(dataset, parameter_priors=validated)
+    return _replace_invalidated(
+        project,
+        index,
+        updated,
+        clear_evidence=False,
+    )
+
+
 def validate_sharing_rules(
     project: XrrProject,
     rules: Sequence[SharingRule],
@@ -212,11 +270,7 @@ def validate_sharing_rules(
 
 
 def _rule_dataset_ids(rules: Sequence[SharingRule]) -> set[str]:
-    return {
-        member.dataset_id
-        for rule in rules
-        for member in rule.members
-    }
+    return {member.dataset_id for rule in rules for member in rule.members}
 
 
 def set_sharing_rules(
@@ -231,16 +285,10 @@ def set_sharing_rules(
     if project.batch_mode == "joint" and affected:
         affected = {dataset.dataset_id for dataset in project.datasets}
     datasets = tuple(
-        _cleared(dataset, clear_evidence=False)
-        if dataset.dataset_id in affected
-        else dataset
+        _cleared(dataset, clear_evidence=False) if dataset.dataset_id in affected else dataset
         for dataset in project.datasets
     )
-    selected = tuple(
-        item
-        for item in project.ui_state.selected_candidate_ids
-        if item[0] not in affected
-    )
+    selected = tuple(item for item in project.ui_state.selected_candidate_ids if item[0] not in affected)
     return replace(
         project,
         datasets=datasets,

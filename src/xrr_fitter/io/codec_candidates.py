@@ -50,18 +50,18 @@ def _prior_from_dict(value: object) -> PriorSpec:
 # prior is omitted from the auto-derived field set: it is emitted only when
 # present so projects saved before priors existed stay byte-identical, and it
 # is read back as an optional key (a bare definition decodes prior to None).
-_DEFINITION_FIELDS = frozenset(ParameterDefinition.__dataclass_fields__) - {"prior"}
+DEFINITION_FIELDS = frozenset(ParameterDefinition.__dataclass_fields__) - {"prior"}
 
 
 def _parameter_definition_to_dict(value: ParameterDefinition) -> dict[str, object]:
-    payload: dict[str, object] = {field: getattr(value, field) for field in _DEFINITION_FIELDS}
+    payload: dict[str, object] = {field: getattr(value, field) for field in DEFINITION_FIELDS}
     if value.prior is not None:
         payload["prior"] = _prior_to_dict(value.prior)
     return payload
 
 
 def _parameter_definition_from_dict(value: object) -> ParameterDefinition:
-    payload = dict(_mapping(value, set(_DEFINITION_FIELDS), "parameter definition", optional={"prior"}))
+    payload = dict(_mapping(value, set(DEFINITION_FIELDS), "parameter definition", optional={"prior"}))
     prior = payload.pop("prior", None)
     return ParameterDefinition(**payload, prior=None if prior is None else _prior_from_dict(prior))
 

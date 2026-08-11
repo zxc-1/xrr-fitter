@@ -32,7 +32,12 @@ from xrr_fitter.model.analysis import (
 )
 from xrr_fitter.model.fitting import FitCandidate, FitCheckpoint, FitStageSummary
 from xrr_fitter.model.instrument import PhysicsDiagnostic
-from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue
+from xrr_fitter.model.parameters import (
+    ParameterDefinition,
+    ParameterPrior,
+    ParameterValue,
+    PriorSpec,
+)
 from xrr_fitter.model.project import ProjectUiState
 from xrr_fitter.model.structure import (
     InterfaceTransition,
@@ -292,6 +297,26 @@ def test_old_fit_config_without_sigmas_decodes_to_default() -> None:
     restored = project_from_dict(payload)
 
     assert restored.fit_config.confidence.prior_conflict_sigmas == 3.0
+
+
+def test_project_roundtrips_parameter_priors() -> None:
+    prior = ParameterPrior("component.0.thickness_a", PriorSpec("normal", (50.0, 5.0)))
+    value = replace(dataset_project(), parameter_priors=(prior,))
+
+    restored = project_from_dict(project_to_dict(project(value)))
+
+    assert restored.datasets[0].parameter_priors == (prior,)
+
+
+def test_old_project_without_priors_decodes_to_empty() -> None:
+    # A dataset written before the field existed carries no key; decoding must
+    # fall back to the empty default instead of failing the field-set check.
+    payload = project_to_dict(project())
+    payload["datasets"][0].pop("parameter_priors", None)
+
+    restored = project_from_dict(payload)
+
+    assert restored.datasets[0].parameter_priors == ()
 
 
 def _project_with_legal_json_sentinels():
