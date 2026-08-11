@@ -190,6 +190,24 @@ discretization the reflectivity calculation uses, not a plotting defect — do n
 "fix" it by smoothing the display, which would show a profile the model never
 evaluated.
 
+## SLD 剖面不确定度带
+
+带由 `McmcReport.samples_physical` 的每一行经 `rebuild_structure` →
+`expand_structure` → `sld_depth_profile` 重放得到，按选定界面平移对齐后插值到
+所有抽样对齐深度范围的**交集**，实部与虚部分别取 2.5/16/50/84/97.5 分位。
+
+取交集而非并集：并集边缘只有少数抽样支撑，会产生看起来收窄实则无统计意义的伪带宽。
+实虚分别取分位而非对复数取模：虚部承载吸收信息，而吸收是 XRR 密度对比的主要来源。
+
+抽样超过 500 条时按 `np.linspace` 均匀抽稀，抽稀比例写进图注。单条抽样重放失败被计数
+并跳过，失败率超过 5% 时整体失败而非给出基于少数抽样的带。
+
+默认对齐基底界面：XRR 的基底通常是已知单晶，把不确定度累积推向表面侧符合实际认知。
+界面提供切换到表面对齐，因为“带宽在哪里为零”完全取决于这个选择。切换是视图态，不写回项目。
+
+图注写成 `16–84%` 与 `2.5–97.5%` 分位区间而非 1σ/2σ：后验通常不是高斯的，σ 需要额外
+假定高斯性才有意义，分位数无歧义。
+
 ## Pinned Refnx Benchmark
 
 The development reference is refnx commit

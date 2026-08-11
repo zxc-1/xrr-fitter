@@ -33,6 +33,7 @@ def draw_sld(
     view: DiagnosticView,
     candidate: object | None,
     others: tuple[object, ...] = (),
+    bands: object | None = None,
 ) -> None:
     """Draw the selected candidate's SLD with comparison overlays from others.
 
@@ -68,8 +69,45 @@ def draw_sld(
     axes.plot(depth_nm, profile.real, label="SLD 实部")
     axes.plot(depth_nm, profile.imag, "--", label="SLD 虚部")
     axes.set(title="SLD 深度剖面", xlabel="深度 (nm)", ylabel="SLD (Å⁻²)")
+    if bands is not None:
+        _draw_bands(axes, bands)
+        axes.set_title(f"SLD 深度剖面 — {bands.caption()}", fontsize=8)
     axes.legend()
     _finish(view)
+
+
+# Credible bands mirror the exported PNG: (quantile pair, fill alpha, legend
+# label). The inner 16-84% band is more opaque than the outer 2.5-97.5% band, so
+# nesting reads correctly. Depth is converted Å→nm to match the profile curves.
+BAND_PAIRS = (
+    ((0.16, 0.84), 0.28, "16-84%"),
+    ((0.025, 0.975), 0.14, "2.5-97.5%"),
+)
+
+
+def _band_index(quantiles: tuple[float, ...], level: float) -> int | None:
+    return next((i for i, value in enumerate(quantiles) if value == level), None)
+
+
+def _draw_band_pair(
+    axes: object,
+    bands: object,
+    pair: tuple[float, float],
+    alpha: float,
+    label: str,
+) -> None:
+    lower = _band_index(bands.quantiles, pair[0])
+    upper = _band_index(bands.quantiles, pair[1])
+    if lower is None or upper is None:
+        return
+    depth_nm = np.asarray(bands.depth_a, dtype=float) / 10.0
+    axes.fill_between(depth_nm, bands.real[lower], bands.real[upper], alpha=alpha, label=label)
+    axes.fill_between(depth_nm, bands.imaginary[lower], bands.imaginary[upper], alpha=alpha)
+
+
+def _draw_bands(axes: object, bands: object) -> None:
+    for pair, alpha, label in BAND_PAIRS:
+        _draw_band_pair(axes, bands, pair, alpha, label)
 
 
 def _reset_uncertainty_axes(view: DiagnosticView) -> tuple[object, object]:

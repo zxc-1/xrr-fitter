@@ -72,7 +72,7 @@ def fit_overview_png(context: DatasetExportData) -> bytes:
 # Published credible bands: (quantile pair, fill alpha, legend label). The inner
 # 16-84% band is drawn more opaque than the outer 2.5-97.5% band so overlap reads
 # as nested intervals. The order is fixed to keep PNG output byte-deterministic.
-_BAND_PAIRS = (
+BAND_PAIRS = (
     ((0.16, 0.84), 0.28, "16-84%"),
     ((0.025, 0.975), 0.14, "2.5-97.5%"),
 )
@@ -100,7 +100,7 @@ def _draw_band_pair(
 
 
 def _draw_bands(axis: object, bands: object) -> None:
-    for pair, alpha, label in _BAND_PAIRS:
+    for pair, alpha, label in BAND_PAIRS:
         _draw_band_pair(axis, bands, pair, alpha, label)
 
 
