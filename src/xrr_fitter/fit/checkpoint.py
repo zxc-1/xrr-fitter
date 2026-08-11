@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, fields, is_dataclass
 from enum import StrEnum
 from hashlib import sha256
-import json
 
 import numpy as np
 
@@ -21,10 +21,27 @@ class CheckpointIdentity:
     parameter_settings_fingerprint: str
 
 
+PRIOR_OMITTED_DEFAULTS: dict[tuple[str, str], object] = {
+    ("ParameterDefinition", "prior"): None,
+    ("ConfidenceThresholds", "prior_conflict_sigmas"): 3.0,
+}
+
+
+def _is_unset_prior_field(type_name: str, field_name: str, current: object) -> bool:
+    # Prior-related fields joined the schema after checkpoints were frozen. When
+    # they hold their pre-prior default we omit them so an unconfigured run
+    # reproduces its historical fingerprint bit-for-bit and still resumes; a
+    # configured prior keeps the field and therefore earns a distinct identity.
+    key = (type_name, field_name)
+    return key in PRIOR_OMITTED_DEFAULTS and current == PRIOR_OMITTED_DEFAULTS[key]
+
+
 def _canonical_dataclass(value: object) -> dict[str, object]:
+    type_name = type(value).__name__
     return {
         field.name: _canonical(getattr(value, field.name))
         for field in fields(value)
+        if not _is_unset_prior_field(type_name, field.name, getattr(value, field.name))
     }
 
 
@@ -33,10 +50,7 @@ def _canonical_sequence(value: tuple[object, ...] | list[object]) -> list[object
 
 
 def _canonical_mapping(value: dict[object, object]) -> dict[str, object]:
-    return {
-        str(key): _canonical(value[key])
-        for key in sorted(value, key=lambda item: str(item))
-    }
+    return {str(key): _canonical(value[key]) for key in sorted(value, key=lambda item: str(item))}
 
 
 def _canonical(value: object) -> object:

@@ -5,14 +5,14 @@ from importlib import import_module
 from pathlib import Path
 
 import numpy as np
-
 from tests.support.model_cases import prepared_data, simple_structure
+
 from xrr_fitter.fit.candidates import candidate_from_evaluation
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, FitStageSummary, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterSetting, PriorSpec
 
 
 def _api():
@@ -158,3 +158,40 @@ def test_checkpoint_parameter_fingerprint_binds_lock_and_bounds() -> None:
         api.checkpoint_identity(locked).parameter_settings_fingerprint
         != api.checkpoint_identity(problem).parameter_settings_fingerprint
     )
+
+
+def test_prior_defaults_do_not_perturb_frozen_fingerprints() -> None:
+    api = _api()
+    identity = api.checkpoint_identity(_problem())
+
+    # 未启用先验、prior_conflict_sigmas 取默认时，config 与 parameter 指纹必须逐位
+    # 复原加入先验字段之前的冻结值，否则既有 checkpoint 无法 resume。
+    assert identity.config_fingerprint == "c01c649a4142356a1908180a212d96e933db9a87863abeb2df1abd7175bf4bee"
+    assert identity.parameter_settings_fingerprint == "ccfa57dcff3aa2ea9c07d35aba1b94f941f47fb0fd29cf44b618d7fabf3bf751"
+
+
+def test_configuring_priors_yields_a_distinct_identity() -> None:
+    api = _api()
+    problem = _problem()
+    baseline = api.checkpoint_identity(problem)
+
+    definition = problem.parameter_definitions[0]
+    center = 0.5 * (definition.lower + definition.upper)
+    std = 0.1 * (definition.upper - definition.lower)
+    with_prior = replace(
+        problem,
+        parameter_definitions=(
+            replace(definition, prior=PriorSpec("normal", (center, std))),
+            *problem.parameter_definitions[1:],
+        ),
+    )
+    with_sigmas = replace(
+        problem,
+        config=replace(
+            problem.config,
+            confidence=replace(problem.config.confidence, prior_conflict_sigmas=2.5),
+        ),
+    )
+
+    assert api.checkpoint_identity(with_prior).parameter_settings_fingerprint != baseline.parameter_settings_fingerprint
+    assert api.checkpoint_identity(with_sigmas).config_fingerprint != baseline.config_fingerprint
