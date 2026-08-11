@@ -58,8 +58,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
-from functools import partial
-from math import isfinite, log
+from functools import lru_cache, partial
+from math import exp, isfinite, log
 from threading import local
 
 import numpy as np
@@ -70,6 +70,7 @@ from xrr_fitter.model.parameters import (
     ParameterDefinition,
     ParameterValue,
     PhysicalValueError,
+    PriorSpec,
     physical_to_unit,
     unit_to_physical,
 )
@@ -183,9 +184,7 @@ def assign_fit_regions(
     if np.any(remaining):
         subset = qz[remaining]
         edges = np.linspace(subset.min(), subset.max(), min(4, subset.size) + 1)
-        labels[remaining] = next_label + np.searchsorted(
-            edges[1:-1], subset, side="right"
-        ).astype(int)
+        labels[remaining] = next_label + np.searchsorted(edges[1:-1], subset, side="right").astype(int)
     return labels
 
 
@@ -529,11 +528,7 @@ def _roughness_value_jacobian(
     interval width directly.
     """
     upper = min(definition.upper, dynamic_upper)
-    upper_jacobian = (
-        np.zeros_like(dynamic_jacobian)
-        if definition.upper <= dynamic_upper
-        else dynamic_jacobian
-    )
+    upper_jacobian = np.zeros_like(dynamic_jacobian) if definition.upper <= dynamic_upper else dynamic_jacobian
     jacobian = np.array(unit_value * upper_jacobian, dtype=float, copy=True)
     jacobian[unit_index] += upper - definition.lower
     return jacobian
@@ -786,12 +781,7 @@ def _angle_layout(
     # Full source layout is retained for result publication and diagnostic rows.
     # Only the compact positive-angle subset enters trigonometric physics.
     qz = np.full(problem.data.qz_a_inv.shape, np.nan, dtype=float)
-    qz[model_mask] = (
-        4.0
-        * np.pi
-        * np.sin(np.deg2rad(theta[model_mask]))
-        / problem.data.beam.effective_wavelength_a
-    )
+    qz[model_mask] = 4.0 * np.pi * np.sin(np.deg2rad(theta[model_mask])) / problem.data.beam.effective_wavelength_a
     return theta, model_mask, model_indices, qz
 
 
@@ -809,9 +799,7 @@ def _point_resolution_for_wavelength(
     data = problem.data
     if problem.instrument.resolution_domain == "theta":
         if data.resolution_raw is not None:
-            raise ValueError(
-                "per-point resolution columns are unsupported in theta-domain mode"
-            )
+            raise ValueError("per-point resolution columns are unsupported in theta-domain mode")
         return None
     if data.resolution_raw is None:
         return None
@@ -843,9 +831,7 @@ def _parameter_values(
             definition.upper,
         )
 
-    return tuple(
-        map(parameter_value, problem.parameter_definitions)
-    )
+    return tuple(map(parameter_value, problem.parameter_definitions))
 
 
 def _parameter_pair(parameter: ParameterValue) -> tuple[str, float]:
@@ -862,18 +848,10 @@ def _instrument_values(parameters: tuple[ParameterValue, ...]) -> dict[str, floa
     return {
         "scale": values["instrument.scale"],
         "background": values["instrument.background"],
-        "linear_background_per_a_inv": values[
-            "instrument.linear_background_per_a_inv"
-        ],
-        "powerlaw_background_amplitude": values[
-            "instrument.powerlaw_background_amplitude"
-        ],
-        "powerlaw_background_exponent": values[
-            "instrument.powerlaw_background_exponent"
-        ],
-        "footprint_spill_angle_deg": values[
-            "instrument.footprint_spill_angle_deg"
-        ],
+        "linear_background_per_a_inv": values["instrument.linear_background_per_a_inv"],
+        "powerlaw_background_amplitude": values["instrument.powerlaw_background_amplitude"],
+        "powerlaw_background_exponent": values["instrument.powerlaw_background_exponent"],
+        "footprint_spill_angle_deg": values["instrument.footprint_spill_angle_deg"],
         "relative_sigma": values["instrument.relative_sigma"],
         "absolute_sigma_a_inv": values["instrument.absolute_sigma_a_inv"],
         "sigma_theta_deg": values["instrument.sigma_theta_deg"],
@@ -908,8 +886,7 @@ def _append_nevot_croce_diagnostic(
         diagnostics.append(
             PhysicsDiagnostic(
                 "nevot_croce_applicability_exceeded",
-                "粗糙度超出 Nevot–Croce 适用范围；受影响界面索引："
-                + ",".join(map(str, affected)),
+                "粗糙度超出 Nevot–Croce 适用范围；受影响界面索引：" + ",".join(map(str, affected)),
             )
         )
 
@@ -1068,9 +1045,7 @@ def _model_evaluation(
             rebuilt,
         )
     except (ValueError, FloatingPointError, OverflowError) as error:
-        raise EvaluationConstraintError(
-            f"constraint_violation:{type(error).__name__}"
-        ) from error
+        raise EvaluationConstraintError(f"constraint_violation:{type(error).__name__}") from error
     theta, model_mask, model_indices, qz = _angle_layout(problem, values)
     if np.any(problem.data.fit_mask & ~model_mask):
         raise EvaluationConstraintError("nonpositive_fitted_incident_angle")
@@ -1204,12 +1179,7 @@ def _qz_and_jacobian(
     qz = qz_from_theta_deg(theta_deg, wavelength_a)
     # The derivative of sine is evaluated in radians while the source tangent
     # remains expressed per degree, hence the explicit pi/180 factor.
-    qz_jacobian = (
-        scale
-        * np.cos(theta_rad)[:, None]
-        * (np.pi / 180.0)
-        * theta_jacobian
-    )
+    qz_jacobian = scale * np.cos(theta_rad)[:, None] * (np.pi / 180.0) * theta_jacobian
     return qz, qz_jacobian
 
 
@@ -1247,13 +1217,7 @@ def _point_resolution_with_jacobian(
     cosine = np.cos(theta_rad)
     # The primal converter uses ``abs(cos(theta))``; its local derivative is
     # represented by sign(cosine) away from the exact cusp.
-    derivative = (
-        -(4.0 * np.pi / wavelength_a)
-        * np.sign(cosine)
-        * np.sin(theta_rad)
-        * (np.pi / 180.0)
-        * sigma_theta_rad
-    )
+    derivative = -(4.0 * np.pi / wavelength_a) * np.sign(cosine) * np.sin(theta_rad) * (np.pi / 180.0) * sigma_theta_rad
     return point_resolution, derivative[:, None] * angle_jacobian[None, :]
 
 
@@ -1285,10 +1249,7 @@ def _resolution_width_jacobian(
     point = _value_or_zeros(point_sigma, qz)
     point_jacobian = _value_or_zeros(point_sigma_jacobian, qz_jacobian)
     relative_term = relative_sigma * qz
-    relative_jacobian = (
-        qz[:, None] * relative_sigma_jacobian[None, :]
-        + relative_sigma * qz_jacobian
-    )
+    relative_jacobian = qz[:, None] * relative_sigma_jacobian[None, :] + relative_sigma * qz_jacobian
     variance = relative_term**2 + absolute_sigma**2 + point**2
     variance_jacobian = (
         2.0 * relative_term[:, None] * relative_jacobian
@@ -1300,9 +1261,7 @@ def _resolution_width_jacobian(
     widths = np.sqrt(variance)
     width_jacobian = np.zeros_like(variance_jacobian)
     positive = widths > 0.0
-    width_jacobian[positive] = (
-        variance_jacobian[positive] / (2.0 * widths[positive, None])
-    )
+    width_jacobian[positive] = variance_jacobian[positive] / (2.0 * widths[positive, None])
     return widths, width_jacobian
 
 
@@ -1519,17 +1478,10 @@ def _footprint_jacobian(
     numerator = np.sin(theta_rad)
     denominator = np.sin(spill_rad)
     ratio = numerator / denominator
-    numerator_jacobian = (
-        np.cos(theta_rad)[:, None]
-        * (np.pi / 180.0)
-        * theta_jacobian
-    )
-    denominator_jacobian = (
-        np.cos(spill_rad) * (np.pi / 180.0) * spill_angle_jacobian
-    )
+    numerator_jacobian = np.cos(theta_rad)[:, None] * (np.pi / 180.0) * theta_jacobian
+    denominator_jacobian = np.cos(spill_rad) * (np.pi / 180.0) * spill_angle_jacobian
     ratio_jacobian = (
-        numerator_jacobian * denominator
-        - numerator[:, None] * denominator_jacobian[None, :]
+        numerator_jacobian * denominator - numerator[:, None] * denominator_jacobian[None, :]
     ) / denominator**2
     # ``minimum`` creates a saturated branch whose derivative is exactly zero.
     # Strictly sub-unity points retain the full sine-ratio quotient tangent.
@@ -1564,13 +1516,8 @@ def _scaled_signal_jacobian(
     # Keep multiplication grouping aligned with the primal instrument model.
     # This order also fixes the frozen floating-point derivative artifact.
     signal = scale * smeared * footprint
-    signal_jacobian = (
-        (smeared * footprint)[:, None] * scale_jacobian[None, :]
-        + scale
-        * (
-            footprint[:, None] * smeared_jacobian
-            + smeared[:, None] * footprint_jacobian
-        )
+    signal_jacobian = (smeared * footprint)[:, None] * scale_jacobian[None, :] + scale * (
+        footprint[:, None] * smeared_jacobian + smeared[:, None] * footprint_jacobian
     )
     return signal, signal_jacobian
 
@@ -1598,33 +1545,25 @@ def _background_jacobian(
     sampled = background + linear * qz
     sampled_jacobian = (
         value_jacobians["instrument.background"][None, :]
-        + qz[:, None]
-        * value_jacobians["instrument.linear_background_per_a_inv"][None, :]
+        + qz[:, None] * value_jacobians["instrument.linear_background_per_a_inv"][None, :]
         + linear * qz_jacobian
     )
     amplitude = values["instrument.powerlaw_background_amplitude"]
-    amplitude_jacobian = value_jacobians[
-        "instrument.powerlaw_background_amplitude"
-    ]
+    amplitude_jacobian = value_jacobians["instrument.powerlaw_background_amplitude"]
     inactive = (amplitude <= 0.0, np.all(amplitude_jacobian == 0.0)) == (True, True)
     if inactive:
         return sampled, sampled_jacobian
     # Power-law differentiation includes both exponent and q-angle dependence.
     # This branch is skipped entirely when amplitude and its tangent are zero.
     exponent = values["instrument.powerlaw_background_exponent"]
-    exponent_jacobian = value_jacobians[
-        "instrument.powerlaw_background_exponent"
-    ]
+    exponent_jacobian = value_jacobians["instrument.powerlaw_background_exponent"]
     power = qz**-exponent
     power_jacobian = power[:, None] * (
-        -np.log(qz)[:, None] * exponent_jacobian[None, :]
-        - exponent * qz_jacobian / qz[:, None]
+        -np.log(qz)[:, None] * exponent_jacobian[None, :] - exponent * qz_jacobian / qz[:, None]
     )
     return (
         sampled + amplitude * power,
-        sampled_jacobian
-        + power[:, None] * amplitude_jacobian[None, :]
-        + amplitude * power_jacobian,
+        sampled_jacobian + power[:, None] * amplitude_jacobian[None, :] + amplitude * power_jacobian,
     )
 
 
@@ -1739,9 +1678,7 @@ def _model_residual_jacobian(
             value_jacobians,
         )
     except PhysicalValueError as error:
-        raise EvaluationConstraintError(
-            f"constraint_violation:{type(error).__name__}"
-        ) from error
+        raise EvaluationConstraintError(f"constraint_violation:{type(error).__name__}") from error
     theta = problem.data.two_theta_deg / 2.0 + values["instrument.angle_offset_deg"]
     model_mask = np.isfinite(theta) & (theta > 0.0)
     if np.any(problem.data.fit_mask & ~model_mask):
@@ -1759,13 +1696,11 @@ def _model_residual_jacobian(
         primary_wavelength,
     )
     if problem.data.beam.kind == "mixed_kalpha":
-        secondary_sigma, secondary_sigma_jacobian = (
-            _point_resolution_with_jacobian(
-                problem,
-                values["instrument.angle_offset_deg"],
-                angle_jacobian,
-                problem.data.beam.wavelength_2_a,
-            )
+        secondary_sigma, secondary_sigma_jacobian = _point_resolution_with_jacobian(
+            problem,
+            values["instrument.angle_offset_deg"],
+            angle_jacobian,
+            problem.data.beam.wavelength_2_a,
         )
     else:
         secondary_sigma, secondary_sigma_jacobian = None, None
@@ -1851,21 +1786,14 @@ def _scale_prior_residual(problem: object, evaluation: ModelEvaluation) -> float
     invariants. This boundary therefore does not repair a missing scale value or
     reinterpret nonpositive metadata after optimization has begun.
     """
-    scale = next(
-        value.value
-        for value in evaluation.parameters
-        if value.name == "instrument.scale"
-    )
+    scale = next(value.value for value in evaluation.parameters if value.name == "instrument.scale")
     return _scale_prior_residual_from_scale(problem, scale)
 
 
 def _scale_prior_residual_from_scale(problem: object, scale: float) -> float | None:
     if problem.scale_prior_center is None:
         return None
-    return float(
-        (np.log10(scale) - np.log10(problem.scale_prior_center))
-        / problem.scale_prior_tau_decades
-    )
+    return float((np.log10(scale) - np.log10(problem.scale_prior_center)) / problem.scale_prior_tau_decades)
 
 
 def _least_squares_row_count(problem: object) -> int:
@@ -1876,9 +1804,7 @@ def _least_squares_row_count(problem: object) -> int:
     on a candidate's validity, so sentinel residuals cannot change shape between
     calls.
     """
-    return int(np.count_nonzero(problem.data.fit_mask)) + int(
-        problem.scale_prior_center is not None
-    )
+    return int(np.count_nonzero(problem.data.fit_mask)) + int(problem.scale_prior_center is not None)
 
 
 def least_squares_residual(
@@ -1963,9 +1889,7 @@ def _empty_residual_jacobian(problem: object) -> np.ndarray:
 
 
 def _expected_derivative_value_error(error: BaseException) -> bool:
-    return isinstance(error, ValueError) and str(error) == (
-        "cannot differentiate nonpositive fitted angle"
-    )
+    return isinstance(error, ValueError) and str(error) == ("cannot differentiate nonpositive fitted angle")
 
 
 def least_squares_system(
@@ -2042,8 +1966,7 @@ def least_squares_residual_jacobian(
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
     *,
-    jacobian_evaluator: Callable[[FitEvaluationContext, np.ndarray], np.ndarray]
-    | None = None,
+    jacobian_evaluator: Callable[[FitEvaluationContext, np.ndarray], np.ndarray] | None = None,
 ) -> np.ndarray:
     """Return the analytic residual Jacobian with the optional prior row.
 
@@ -2118,9 +2041,7 @@ def least_squares_loss(
         rho = np.empty((3, values.size), dtype=float)
         data = values[:data_count]
         scaled = 1.0 + data / c_decades**2
-        rho[0, :data_count] = (
-            4.0 * weights**2 * c_decades**2 * (np.sqrt(scaled) - 1.0)
-        )
+        rho[0, :data_count] = 4.0 * weights**2 * c_decades**2 * (np.sqrt(scaled) - 1.0)
         rho[1, :data_count] = 2.0 * weights**2 / np.sqrt(scaled)
         rho[2, :data_count] = -(weights**2 / c_decades**2) * scaled ** (-1.5)
         if values.size > data_count:
@@ -2130,6 +2051,153 @@ def least_squares_loss(
         return rho
 
     return loss
+
+
+def _normal_log_density(parameters: tuple[float, ...], x: float) -> float:
+    mean, std = parameters
+    return -0.5 * ((x - mean) / std) ** 2
+
+
+def _lognormal_log_density(parameters: tuple[float, ...], x: float) -> float:
+    # Parameters live in log space; the 1/x Jacobian makes this a density in x.
+    log_mean, log_std = parameters
+    if x <= 0.0:
+        return -np.inf
+    return -0.5 * ((log(x) - log_mean) / log_std) ** 2 - log(x)
+
+
+def _soft_range_log_density(parameters: tuple[float, ...], x: float) -> float:
+    # Flat inside [low, high], Gaussian shoulders of scale std outside it.
+    low, high, std = parameters
+    distance = max(low - x, x - high, 0.0)
+    return -0.5 * (distance / std) ** 2
+
+
+def _uniform_log_density(parameters: tuple[float, ...], x: float) -> float:
+    return 0.0
+
+
+PRIOR_LOG_DENSITY: dict[str, Callable[[tuple[float, ...], float], float]] = {
+    "uniform": _uniform_log_density,
+    "normal": _normal_log_density,
+    "lognormal": _lognormal_log_density,
+    "soft_range": _soft_range_log_density,
+}
+
+
+def _unnormalized_density(kind: str, parameters: tuple[float, ...], x: float) -> float:
+    return float(np.exp(PRIOR_LOG_DENSITY[kind](parameters, x)))
+
+
+PRIOR_QUADRATURE_NODES = 2049
+
+
+@lru_cache(maxsize=256)
+def _prior_norm(
+    kind: str,
+    parameters: tuple[float, ...],
+    lower: float,
+    upper: float,
+) -> tuple[float, np.ndarray, np.ndarray]:
+    """Cache the truncation constant, grid, and cumulative mass of one prior.
+
+    Composite trapezoid on a fixed grid keeps every kind on one code path and
+    makes ``prior_cdf`` and ``prior_inverse_cdf`` exact inverses by construction.
+    Keys are immutable scalars only, so frozen ``PriorSpec`` values are never
+    retained and repeated evaluation costs one dict lookup.
+    """
+    grid = np.linspace(lower, upper, PRIOR_QUADRATURE_NODES)
+    density = np.array([_unnormalized_density(kind, parameters, float(x)) for x in grid])
+    increments = np.diff(grid) * (density[:-1] + density[1:]) / 2.0
+    cumulative = np.concatenate(([0.0], np.cumsum(increments)))
+    total = float(cumulative[-1])
+    if not (isfinite(total) and total > 0.0):
+        raise ValueError(f"{kind} prior has no mass inside the declared bounds")
+    return total, grid, cumulative / total
+
+
+def prior_log_density(spec: PriorSpec, x: float, lower: float, upper: float) -> float:
+    """Return the log density of ``spec`` truncated and renormalized on the bounds."""
+    if not lower <= x <= upper:
+        return -np.inf
+    total, _, _ = _prior_norm(spec.kind, spec.parameters, lower, upper)
+    return PRIOR_LOG_DENSITY[spec.kind](spec.parameters, x) - log(total)
+
+
+def prior_cdf(spec: PriorSpec, x: float, lower: float, upper: float) -> float:
+    """Return the truncated cumulative probability of ``spec`` at ``x``."""
+    _, grid, masses = _prior_norm(spec.kind, spec.parameters, lower, upper)
+    return float(np.interp(x, grid, masses))
+
+
+def prior_inverse_cdf(spec: PriorSpec, level: float, lower: float, upper: float) -> float:
+    """Return the truncated quantile of ``spec`` at probability ``level``."""
+    if not 0.0 <= level <= 1.0:
+        raise ValueError("prior cdf level must be within [0, 1]")
+    _, grid, masses = _prior_norm(spec.kind, spec.parameters, lower, upper)
+    return float(np.interp(level, masses, grid))
+
+
+def prior_bounds(spec: PriorSpec, lower: float, upper: float) -> tuple[float, float]:
+    """Return the support of ``spec``, which truncation pins to the declared bounds."""
+    if spec.kind not in PRIOR_LOG_DENSITY:
+        raise ValueError(f"unsupported prior kind: {spec.kind}")
+    return float(lower), float(upper)
+
+
+def prior_center_and_spread(spec: PriorSpec) -> tuple[float, float] | None:
+    """Return the physical center and spread of ``spec``, or ``None`` when flat.
+
+    ``uniform`` carries no location, so it never takes part in conflict scoring.
+    ``lognormal`` parameters are in log space; its physical spread is the
+    first-order image of the log-space sigma.
+    """
+    if spec.kind == "normal":
+        mean, std = spec.parameters
+        return float(mean), float(std)
+    if spec.kind == "lognormal":
+        log_mean, log_std = spec.parameters
+        center = exp(log_mean)
+        return float(center), float(center * log_std)
+    if spec.kind == "soft_range":
+        low, high, std = spec.parameters
+        return float((low + high) / 2.0), float((high - low) / 2.0 + std)
+    return None
+
+
+def _prior_coordinate(
+    definition: ParameterDefinition,
+    unit_value: float,
+) -> tuple[float, float, float]:
+    """Return the value and bounds a prior is declared against for one definition.
+
+    ``roughness_fraction`` priors live on the dimensionless unit fraction in
+    ``[0, 1]`` because the physical roughness depends on a geometry snapshot this
+    scalar path does not own.
+    """
+    if definition.transform == "roughness_fraction":
+        return float(unit_value), 0.0, 1.0
+    value = float(unit_to_physical(definition, unit_value))
+    return value, float(definition.lower), float(definition.upper)
+
+
+def _parameter_prior_log_density(
+    problem: FitEvaluationContext,
+    unit: np.ndarray,
+) -> float:
+    """Return the summed parameter prior log density, exactly ``0.0`` when unused.
+
+    Returning the literal zero keeps ``problem_log_probability`` bitwise
+    identical for priorless problems, since IEEE 754 addition of ``0.0`` is exact.
+    """
+    total = 0.0
+    for index, variable in enumerate(problem.variables):
+        definition = problem.parameter_definitions[variable.parameter_index]
+        if definition.prior is None:
+            continue
+        value, lower, upper = _prior_coordinate(definition, float(unit[index]))
+        total += prior_log_density(definition.prior, value, lower, upper)
+    return total
 
 
 def problem_log_probability(
@@ -2175,15 +2243,11 @@ def problem_log_probability(
     # the robust scale. Replacing this with mean * count changes retained log
     # probabilities by a few ULPs even though the expressions are algebraically
     # equivalent, which breaks deterministic checkpoint and reference replay.
-    data_loss = np.sum(
-        weights**2
-        * 2.0
-        * c_decades**2
-        * (np.sqrt(1.0 + (residual / c_decades) ** 2) - 1.0)
-    )
+    data_loss = np.sum(weights**2 * 2.0 * c_decades**2 * (np.sqrt(1.0 + (residual / c_decades) ** 2) - 1.0))
     log_probability = -float(data_loss) / (2.0 * c_decades**2)
     if problem.scale_prior_center is not None:
         prior = _scale_prior_residual(problem, observed)
         assert prior is not None
         log_probability -= 0.5 * prior**2
+    log_probability += _parameter_prior_log_density(problem, unit)
     return float(log_probability)
