@@ -99,6 +99,24 @@ class ParameterSetting:
 
 
 @dataclass(frozen=True, slots=True)
+class ParameterPrior:
+    """A per-parameter prior override stored separately from its declaration.
+
+    A prior binds only a parameter ``name`` to a ``PriorSpec``; it never carries
+    bounds or lock state. Keeping it apart from ``ParameterSetting`` lets a
+    "restore defaults" action clear settings while leaving priors intact.
+    """
+
+    name: str
+    prior: PriorSpec
+
+    def __post_init__(self) -> None:
+        _name(self.name, "parameter name")
+        if not isinstance(self.prior, PriorSpec):
+            raise TypeError("prior must be a PriorSpec")
+
+
+@dataclass(frozen=True, slots=True)
 class ParameterDefinition:
     name: str
     display_name: str

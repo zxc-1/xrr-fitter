@@ -45,9 +45,8 @@ from xrr_fitter.model.automation import DatasetAutomation, MeasurementPreset
 from xrr_fitter.model.data import BeamSpec, DataColumnMapping
 from xrr_fitter.model.fitting import FitCheckpoint, FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting, SharingRule
+from xrr_fitter.model.parameters import ParameterPrior, ParameterSetting, SharingRule
 from xrr_fitter.model.structure import StructureSpec
-
 
 SCHEMA_VERSION = 2
 ALGORITHM_VERSION = "xrr-fit-v1"
@@ -194,6 +193,7 @@ class DatasetProject:
     checkpoint: FitCheckpoint | None = None
     display_name: str | None = None
     automation: DatasetAutomation = DatasetAutomation()
+    parameter_priors: tuple[ParameterPrior, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_dataset_header(self)
@@ -204,6 +204,7 @@ class DatasetProject:
         object.__setattr__(self, "fit_range_two_theta_deg", fit_range)
         object.__setattr__(self, "oxide_decisions", tuple(self.oxide_decisions))
         object.__setattr__(self, "parameter_settings", tuple(self.parameter_settings))
+        object.__setattr__(self, "parameter_priors", tuple(self.parameter_priors))
         object.__setattr__(self, "display_name", self.display_name or self.dataset_id)
 
 
@@ -292,6 +293,7 @@ class DatasetSourceValidation:
     def user_message(self) -> str:
         return self.message
 
+
 @dataclass(frozen=True, slots=True)
 class ValidationIssue:
     """A stable project-validation problem suitable for user-facing reports."""
@@ -359,12 +361,7 @@ def _positive_finite(value: float | None) -> bool:
 def _unresolved_scale_prior(state: ScalePriorState) -> bool:
     # Unresolved means compilation has not yet made either a positive estimate
     # or an explicit disabled decision.
-    return (
-        not state.enabled
-        and state.s_hat is None
-        and state.tau_s_decades is None
-        and state.reason is None
-    )
+    return not state.enabled and state.s_hat is None and state.tau_s_decades is None and state.reason is None
 
 
 def _inactive_scale_prior(state: ScalePriorState) -> bool:
@@ -432,11 +429,7 @@ def _fit_mask(values: object) -> tuple[bool, ...]:
 
 def _fit_range(values: object) -> tuple[float, float]:
     fit_range = tuple(values)
-    valid = (
-        len(fit_range) == 2
-        and all(isfinite(value) for value in fit_range)
-        and fit_range[0] <= fit_range[1]
-    )
+    valid = len(fit_range) == 2 and all(isfinite(value) for value in fit_range) and fit_range[0] <= fit_range[1]
     if not valid:
         raise ValueError("fit_range_two_theta_deg must be a finite ordered pair")
     return fit_range
@@ -457,6 +450,11 @@ def _validate_parameter_settings(values: object) -> None:
         raise TypeError("parameter_settings must contain ParameterSetting values")
 
 
+def _validate_parameter_priors(values: object) -> None:
+    if any(not isinstance(value, ParameterPrior) for value in values):
+        raise TypeError("parameter_priors must contain ParameterPrior values")
+
+
 def _validate_dataset_attachments(dataset: DatasetProject) -> None:
     # Attachments are independently immutable; this boundary also resolves
     # uncertainty ownership against the candidate graph being attached.
@@ -465,6 +463,7 @@ def _validate_dataset_attachments(dataset: DatasetProject) -> None:
     _validate_scale_prior(dataset.scale_prior)
     _validate_oxide_decisions(dataset.oxide_decisions)
     _validate_parameter_settings(dataset.parameter_settings)
+    _validate_parameter_priors(dataset.parameter_priors)
     if not isinstance(dataset.automation, DatasetAutomation):
         raise TypeError("automation must be DatasetAutomation")
     _optional_attachment(dataset.last_valid_result, FitResult, "last_valid_result")
@@ -589,11 +588,7 @@ def _validate_joint_results(datasets: tuple[DatasetProject, ...]) -> None:
     """
     # Joint publication is atomic: either every dataset has a projection or none
     # does. Partial results would make best_index and UI selection ambiguous.
-    results = tuple(
-        dataset.last_valid_result
-        for dataset in datasets
-        if dataset.last_valid_result is not None
-    )
+    results = tuple(dataset.last_valid_result for dataset in datasets if dataset.last_valid_result is not None)
     if results and len(results) != len(datasets):
         raise ValueError("joint results must exist for every dataset")
     if not results:

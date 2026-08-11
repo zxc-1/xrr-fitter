@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import replace
 import json
 import os
-from pathlib import Path
 import tempfile
+from copy import deepcopy
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
+from xrr_fitter.io.codec_candidates import (
+    _prior_from_dict,
+    _prior_to_dict,
+)
 from xrr_fitter.io.codec_common import (
     ProjectSchemaError,
     ProjectVersionError,
@@ -45,6 +49,7 @@ from xrr_fitter.model.automation import (
     MeasurementPreset,
 )
 from xrr_fitter.model.parameters import (
+    ParameterPrior,
     ParameterReference,
     ParameterSetting,
     SharingRule,
@@ -82,9 +87,7 @@ def _evidence_from_dict(value: object) -> StructureEvidence | None:
         m_data=payload["m_data"],
         m_model=payload["m_model"],
         warning=payload["warning"],
-        peak_positions_a=tuple(
-            _sequence(payload["peak_positions_a"], "peak positions")
-        ),
+        peak_positions_a=tuple(_sequence(payload["peak_positions_a"], "peak positions")),
     )
 
 
@@ -136,9 +139,7 @@ def _sharing_to_dict(value: SharingRule) -> dict[str, object]:
 def _sharing_from_dict(value: object) -> SharingRule:
     payload = _mapping(value, {"sharing_key", "members"}, "sharing rule")
     members = tuple(
-        ParameterReference(
-            **_mapping(item, {"dataset_id", "parameter_name"}, "sharing member")
-        )
+        ParameterReference(**_mapping(item, {"dataset_id", "parameter_name"}, "sharing member"))
         for item in _sequence(payload["members"], "sharing members")
     )
     return SharingRule(payload["sharing_key"], members)
@@ -188,9 +189,7 @@ def _ui_from_dict(value: object) -> ProjectUiState:
                 "workspace splitter sizes",
             )
         ),
-        left_splitter_sizes=tuple(
-            _sequence(payload["left_splitter_sizes"], "left splitter sizes")
-        ),
+        left_splitter_sizes=tuple(_sequence(payload["left_splitter_sizes"], "left splitter sizes")),
         plot_tab_index=payload["plot_tab_index"],
         dock_state=payload.get("dock_state", ""),
     )
@@ -259,6 +258,15 @@ def _automation_from_dict(value: object) -> DatasetAutomation:
     )
 
 
+def _parameter_prior_to_dict(value: ParameterPrior) -> dict[str, object]:
+    return {"name": value.name, "prior": _prior_to_dict(value.prior)}
+
+
+def _parameter_prior_from_dict(value: object) -> ParameterPrior:
+    payload = _mapping(value, {"name", "prior"}, "parameter prior override")
+    return ParameterPrior(payload["name"], _prior_from_dict(payload["prior"]))
+
+
 def _dataset_to_dict(value: DatasetProject) -> dict[str, object]:
     payload = {
         "dataset_id": value.dataset_id,
@@ -273,16 +281,14 @@ def _dataset_to_dict(value: DatasetProject) -> dict[str, object]:
         "instrument": _instrument_to_dict(value.instrument),
         "structure_evidence": _evidence_to_dict(value.structure_evidence),
         "scale_prior": _scale_prior_to_dict(value.scale_prior),
-        "oxide_decisions": [
-            _oxide_to_dict(item) for item in value.oxide_decisions
-        ],
-        "parameter_settings": [
-            _setting_to_dict(item) for item in value.parameter_settings
-        ],
+        "oxide_decisions": [_oxide_to_dict(item) for item in value.oxide_decisions],
+        "parameter_settings": [_setting_to_dict(item) for item in value.parameter_settings],
         "last_valid_result": fit_result_to_dict(value.last_valid_result),
         "checkpoint": _checkpoint_to_dict(value.checkpoint),
         "automation": _automation_to_dict(value.automation),
     }
+    if value.parameter_priors:
+        payload["parameter_priors"] = [_parameter_prior_to_dict(item) for item in value.parameter_priors]
     if value.display_name != value.dataset_id:
         payload["display_name"] = value.display_name
     return payload
@@ -311,7 +317,7 @@ def _dataset_fields() -> set[str]:
 
 
 def _dataset_from_dict(value: object) -> DatasetProject:
-    payload = _mapping(value, _dataset_fields(), "dataset", {"display_name"})
+    payload = _mapping(value, _dataset_fields(), "dataset", {"display_name", "parameter_priors"})
     return DatasetProject(
         dataset_id=payload["dataset_id"],
         source_path=payload["source_path"],
@@ -320,16 +326,13 @@ def _dataset_from_dict(value: object) -> DatasetProject:
         import_angle_offset_deg=payload["import_angle_offset_deg"],
         column_mapping=_column_mapping_from_dict(payload["column_mapping"]),
         fit_mask=tuple(_sequence(payload["fit_mask"], "fit mask")),
-        fit_range_two_theta_deg=tuple(
-            _sequence(payload["fit_range_two_theta_deg"], "fit range")
-        ),
+        fit_range_two_theta_deg=tuple(_sequence(payload["fit_range_two_theta_deg"], "fit range")),
         structure=_structure_from_dict(payload["structure"]),
         instrument=_instrument_from_dict(payload["instrument"]),
         structure_evidence=_evidence_from_dict(payload["structure_evidence"]),
         scale_prior=_scale_prior_from_dict(payload["scale_prior"]),
         oxide_decisions=tuple(
-            _oxide_from_dict(item)
-            for item in _sequence(payload["oxide_decisions"], "oxide decisions")
+            _oxide_from_dict(item) for item in _sequence(payload["oxide_decisions"], "oxide decisions")
         ),
         parameter_settings=tuple(
             _setting_from_dict(item)
@@ -342,6 +345,10 @@ def _dataset_from_dict(value: object) -> DatasetProject:
         checkpoint=_checkpoint_from_dict(payload["checkpoint"]),
         display_name=payload.get("display_name"),
         automation=_automation_from_dict(payload["automation"]),
+        parameter_priors=tuple(
+            _parameter_prior_from_dict(item)
+            for item in _sequence(payload.get("parameter_priors", []), "parameter priors")
+        ),
     )
 
 
@@ -370,13 +377,9 @@ def project_to_dict(project: XrrProject) -> dict[str, object]:
         "input_angle_kind": project.input_angle_kind,
         "batch_mode": project.batch_mode,
         "datasets": [_dataset_to_dict(item) for item in project.datasets],
-        "sharing_rules": [
-            _sharing_to_dict(item) for item in project.sharing_rules
-        ],
+        "sharing_rules": [_sharing_to_dict(item) for item in project.sharing_rules],
         "ui_state": _ui_to_dict(project.ui_state),
-        "measurement_preset": _measurement_preset_to_dict(
-            project.measurement_preset
-        ),
+        "measurement_preset": _measurement_preset_to_dict(project.measurement_preset),
     }
 
 
@@ -409,14 +412,8 @@ def _candidate_ids(result: dict[str, Any]) -> tuple[str, ...]:
     candidates = result.get("candidates", ())
     if not isinstance(candidates, list):
         raise ProjectSchemaError("fit candidates must be a JSON array")
-    candidate_ids = tuple(
-        item.get("candidate_id") if isinstance(item, dict) else None
-        for item in candidates
-    )
-    valid = all(
-        isinstance(candidate_id, str) and bool(candidate_id)
-        for candidate_id in candidate_ids
-    )
+    candidate_ids = tuple(item.get("candidate_id") if isinstance(item, dict) else None for item in candidates)
+    valid = all(isinstance(candidate_id, str) and bool(candidate_id) for candidate_id in candidate_ids)
     if not valid or len(candidate_ids) != len(set(candidate_ids)):
         raise ProjectSchemaError("candidate_id values must be unique and nonempty")
     return candidate_ids
@@ -425,9 +422,7 @@ def _candidate_ids(result: dict[str, Any]) -> tuple[str, ...]:
 def _validate_best_index(result: dict[str, Any], candidate_count: int) -> None:
     best_index = result.get("best_index")
     valid = best_index is None or (
-        isinstance(best_index, int)
-        and not isinstance(best_index, bool)
-        and 0 <= best_index < candidate_count
+        isinstance(best_index, int) and not isinstance(best_index, bool) and 0 <= best_index < candidate_count
     )
     if not valid:
         raise ProjectSchemaError("best_index does not identify a candidate")
@@ -453,11 +448,7 @@ def _validated_document(value: object) -> dict[str, Any]:
 
 
 def _migrate_v1_document(value: object) -> object:
-    if (
-        not isinstance(value, dict)
-        or type(value.get("schema_version")) is not int
-        or value.get("schema_version") != 1
-    ):
+    if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value.get("schema_version") != 1:
         return value
     payload = deepcopy(value)
     payload["schema_version"] = 2
@@ -492,9 +483,7 @@ def project_from_dict(value: object) -> XrrProject:
             fit_config=_fit_config_from_dict(payload["fit_config"]),
             input_angle_kind=payload["input_angle_kind"],
             batch_mode=payload["batch_mode"],
-            datasets=tuple(
-                _dataset_from_dict(item) for item in payload["datasets"]
-            ),
+            datasets=tuple(_dataset_from_dict(item) for item in payload["datasets"]),
             sharing_rules=tuple(
                 _sharing_from_dict(item)
                 for item in _sequence(
@@ -503,9 +492,7 @@ def project_from_dict(value: object) -> XrrProject:
                 )
             ),
             ui_state=_ui_from_dict(payload["ui_state"]),
-            measurement_preset=_measurement_preset_from_dict(
-                payload["measurement_preset"]
-            ),
+            measurement_preset=_measurement_preset_from_dict(payload["measurement_preset"]),
         )
     except ProjectSchemaError:
         raise

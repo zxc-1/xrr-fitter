@@ -37,6 +37,7 @@ from xrr_fitter.model.operations import (
 from xrr_fitter.model.parameters import (
     JointFitLayout,
     ParameterDefinition,
+    ParameterPrior,
     ParameterReference,
     ParameterSetting,
     SharingRule,
@@ -83,8 +84,10 @@ from xrr_fitter.services.fitting import (
 from xrr_fitter.services.parameters import (
     accept_source_update,
     describe_parameters,
+    set_parameter_priors,
     set_parameter_settings,
     set_sharing_rules,
+    validate_parameter_priors,
     validate_parameter_settings,
     validate_sharing_rules,
 )
@@ -153,6 +156,7 @@ __all__ = (
     "OxideDecision",
     "OxideSuggestion",
     "ParameterDefinition",
+    "ParameterPrior",
     "ParameterProfile",
     "ParameterReference",
     "ParameterSetting",
@@ -202,6 +206,7 @@ __all__ = (
     "set_expert_mode",
     "set_fit_mask",
     "set_instrument",
+    "set_parameter_priors",
     "set_parameter_settings",
     "set_sharing_rules",
     "set_structure",
@@ -212,6 +217,7 @@ __all__ = (
     "start_mcmc_job",
     "suggest_oxide_layers",
     "summarize_automatic_results",
+    "validate_parameter_priors",
     "validate_parameter_settings",
     "validate_sharing_rules",
     "validate_structure",
