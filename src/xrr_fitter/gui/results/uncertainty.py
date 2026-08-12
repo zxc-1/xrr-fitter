@@ -85,6 +85,10 @@ def _joined(values: object) -> str:
     return "、".join(str(value) for value in values)
 
 
+def _joined_or(values: object, default: str) -> str:
+    return _joined(values) or default
+
+
 def _display_value(name: str, value: float) -> float:
     return value / 10.0 if name.endswith(LENGTH_SUFFIXES) else value
 
@@ -112,7 +116,7 @@ def _profile_text(profile: object) -> str:
 
 
 def _report_lines(report: object) -> list[str]:
-    boundaries = _joined(report.boundary_hits) or "无"
+    boundaries = _joined_or(report.boundary_hits, "无")
     correlations = (
         _joined(f"{left}/{right}={value:.3g}" for left, right, value in report.strong_correlations) or "无强相关"
     )
@@ -121,6 +125,7 @@ def _report_lines(report: object) -> list[str]:
     lines = [
         f"Bootstrap 失败率：{report.bootstrap_failure_rate:.3g}",
         f"边界命中：{boundaries}",
+        f"先验冲突：{_joined_or(report.prior_conflicts, '无')}",
         f"强相关：{correlations}",
         f"profile 区间：{profiles or '不可用'}",
         f"bootstrap 区间：{intervals or '不可用'}",
@@ -208,7 +213,8 @@ def _mcmc_lines(report: object, candidate_id: str) -> list[str]:
         f"接受率范围：{_acceptance_text(mcmc.acceptance_fraction)}",
         f"最大 split-Rhat：{_metric_extreme(mcmc.split_rhat, max)}",
         f"最小 ESS：{_metric_extreme(mcmc.effective_sample_size, min)}",
-        f"MCMC 边界命中：{_joined(mcmc.boundary_hits) or '无'}",
+        f"MCMC 边界命中：{_joined_or(mcmc.boundary_hits, '无')}",
+        f"MCMC 先验冲突：{_joined_or(mcmc.prior_conflicts, '无')}",
     ]
     lines.extend(_quantile_lines(mcmc))
     lines.extend(f"MCMC 警告：{warning}" for warning in mcmc.warnings)
