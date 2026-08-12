@@ -519,13 +519,18 @@ to the parameter definition, not when the `PriorSpec` alone is built; if a
 kernel still integrates to a non-positive or non-finite mass, `_prior_norm`
 raises rather than returning a degenerate normalization.
 
-**Where the prior enters.** Parameter priors are summed by
+**Where the prior enters.** The context compiled for deterministic search stays
+prior-free. Persisted priors cross the service boundary as an analysis sidecar;
+only then does `with_parameter_priors` copy the parameter definitions into a
+temporary analysis context. Parameter priors are summed by
 `_parameter_prior_log_density` and added as `+log p(theta)` to
 `problem_log_probability`, the robust pseudo-posterior that uncertainty MCMC
-samples — they do **not** enter the deterministic least-squares objective, which
-carries only the data loss and the optional scale prior. A parameter with no
-prior contributes the literal `0.0`, which is why `parameter_priors == ()`
-leaves `problem_log_probability` bitwise unchanged.
+samples — they do **not** enter the deterministic least-squares objective, fit
+provenance, checkpoint fingerprint, or joint layout, which retain only the data
+loss and optional scale prior. The MCMC service first validates the retained fit
+against the original context, then supplies the overlaid context to
+`run_problem_mcmc`. An empty sidecar returns the original context and contributes
+the literal `0.0`, leaving `problem_log_probability` bitwise unchanged.
 
 **Fraction-space priors.** A parameter carrying the `roughness_fraction`
 transform is sampled as a fraction of its neighboring thickness, not as an
@@ -540,16 +545,23 @@ well-specified prior places roughly 99.7% of its mass within three sigma, so a
 posterior beyond that line signals genuine tension between the data and the
 prior rather than ordinary sampling scatter, while staying loose enough not to
 fire on mild, expected disagreement. The point-estimate path in `report.py`
-compares the single best `unit_vector` against the center; the MCMC path in
-`mcmc.py` runs the same test against the posterior median instead.
+validates ownership and performs bootstrap, profiles, residual analysis, and
+confidence classification with the original context; only the final report
+annotation compares the winning `unit_vector` through the sidecar overlay. The
+MCMC path in `mcmc.py` runs the same test against the posterior median instead.
+`prior_conflicts` is informational: it is not profile-selection evidence and
+does not change confidence or automatic quality decisions.
 
-**Joint path carries no prior conflicts this round.** The joint analysis builds
-its uncertainty report from a `_JointEnsemble` that retains parameter names,
-per-candidate vectors, costs, and validity — but not the problem or its priors.
-It therefore reports `prior_conflicts=()` unconditionally: the conservative
-choice never misreports a conflict it cannot compute, at the cost of not
-warning on the joint path. Threading priors through the ensemble construction
-is a separate future change.
+**Joint prior-conflict union.** Joint confidence is first computed from the
+unaltered global Stage-E ensemble. Once its `candidate_id` is fixed, each
+dataset evaluates that candidate's local `unit_vector` against its own sidecar
+priors. `JointVariable.members` maps every conflicting
+`(dataset_id, parameter_name)` back to the global variable name; duplicates are
+removed and the union is emitted in `global_variables` order. This local-first
+step is required for shared roughness, whose global
+`shared_roughness_physical` coordinate is not any one dataset's prior
+coordinate. The report is then copied with the union while the already-computed
+confidence and classification evidence remain unchanged.
 
 ## Exact Service Objective
 

@@ -37,7 +37,7 @@ from xrr_fitter.analysis.diagnostics import (
     ordered_fit_residuals,
     residual_autocorrelation_flag,
 )
-from xrr_fitter.analysis.mcmc import prior_conflicts
+from xrr_fitter.analysis.mcmc import prior_conflicts, with_parameter_priors
 from xrr_fitter.analysis.profiles import (
     _evidence_focused_layout,
     build_problem_profiles,
@@ -51,6 +51,7 @@ from xrr_fitter.model.fitting import (
     FitStageSummary,
     candidate_selection_objective,
 )
+from xrr_fitter.model.parameters import ParameterPrior
 from xrr_fitter.model.provenance import (
     bootstrap_provenance_sha256,
     fit_search_provenance_sha256,
@@ -95,9 +96,21 @@ def _validate_analysis_members(
         raise TypeError("bootstrap must be a BootstrapResult or None")
 
 
+def _analysis_parameter_priors(values: object) -> tuple[ParameterPrior, ...]:
+    priors = tuple(values)
+    if any(not isinstance(value, ParameterPrior) for value in priors):
+        raise TypeError("parameter_priors must contain ParameterPrior values")
+    return priors
+
+
 @dataclass(frozen=True, slots=True)
 class AnalysisRequest:
-    """Pickle-safe data handoff for a service-owned analysis worker."""
+    """Pickle-safe data handoff for a service-owned analysis worker.
+
+    ``parameter_priors`` is an analysis sidecar. Ownership is always validated
+    against the unmodified fit problem and search result before the sidecar is
+    used only for the final prior-conflict annotation.
+    """
 
     dataset_id: str | None
     problem: FitEvaluationContext
@@ -105,6 +118,7 @@ class AnalysisRequest:
     profile_names: tuple[str, ...] | None = None
     bootstrap: BootstrapResult | None = None
     bootstrap_enabled: bool = True
+    parameter_priors: tuple[ParameterPrior, ...] = ()
 
     def __post_init__(self) -> None:
         dataset_id = _analysis_dataset_id(self.dataset_id)
@@ -113,8 +127,10 @@ class AnalysisRequest:
         _validate_analysis_ownership(self.problem, self.search_result, self.bootstrap)
         if not isinstance(self.bootstrap_enabled, bool):
             raise TypeError("bootstrap_enabled must be bool")
+        priors = _analysis_parameter_priors(self.parameter_priors)
         object.__setattr__(self, "dataset_id", dataset_id)
         object.__setattr__(self, "profile_names", names)
+        object.__setattr__(self, "parameter_priors", priors)
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), (
@@ -124,6 +140,7 @@ class AnalysisRequest:
             self.profile_names,
             self.bootstrap,
             self.bootstrap_enabled,
+            self.parameter_priors,
         )
 
 
@@ -236,8 +253,10 @@ def build_uncertainty_report(
     cancelled: Callable[[], bool] | None = None,
     progress: Callable[[int, int, str], None] | None = None,
     task_runner: TaskRunner | None = None,
+    parameter_priors: tuple[ParameterPrior, ...] = (),
 ) -> UncertaintyReport:
     """Build covariance, profile, bootstrap, and residual evidence."""
+    parameter_priors = _analysis_parameter_priors(parameter_priors)
     _check_cancelled(cancelled)
     values = tuple(candidates)
     best = _select_candidate(problem, values)
@@ -273,7 +292,10 @@ def build_uncertainty_report(
         residual_autocorrelation=autocorrelation,
         candidate_id=_candidate_id(values, best),
         bootstrap_performed=bootstrap is not None,
-        prior_conflicts=prior_conflicts(problem, unit),
+        prior_conflicts=prior_conflicts(
+            with_parameter_priors(problem, parameter_priors),
+            unit,
+        ),
     )
 
 
@@ -449,10 +471,12 @@ def analyze_search_result(
     dataset_id: str | None = None,
     progress: Callable[[FitProgress], None] | None = None,
     task_runner: TaskRunner | None = None,
+    parameter_priors: tuple[ParameterPrior, ...] = (),
 ) -> FitResult:
     """Finalize a fitting-only search with deterministic uncertainty evidence."""
     _validate_analysis_members(problem, search_result, bootstrap)
     _validate_analysis_ownership(problem, search_result, bootstrap)
+    parameter_priors = _analysis_parameter_priors(parameter_priors)
     candidates = _stage_e_candidates(search_result)
     best = search_result.best_candidate
     if best is None:
@@ -516,6 +540,7 @@ def analyze_search_result(
         cancelled=cancelled,
         progress=profile_progress,
         task_runner=task_runner,
+        parameter_priors=parameter_priors,
     )
     publish("finalizing", 0, 1, "finalizing")
     enriched = _enrich_search_result(problem, search_result, report)
@@ -559,4 +584,5 @@ def run_analysis(
         dataset_id=request.dataset_id,
         progress=progress,
         task_runner=task_runner,
+        parameter_priors=request.parameter_priors,
     )

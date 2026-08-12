@@ -10,8 +10,8 @@ importing fitting orchestration.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from math import isfinite
 
 import numpy as np
@@ -25,11 +25,59 @@ from xrr_fitter.evaluation import (
 )
 from xrr_fitter.model.analysis import EnsembleSamples, McmcConfig, McmcReport
 from xrr_fitter.model.fitting import FitEvaluationContext
+from xrr_fitter.model.parameters import ParameterDefinition, ParameterPrior, PriorSpec
 
 
 def _poll(cancelled: Callable[[], bool] | None) -> None:
     if cancelled is not None and cancelled():
         raise InterruptedError("cancelled")
+
+
+def _prior_overlay(priors: Sequence[ParameterPrior]) -> dict[str, PriorSpec]:
+    values = tuple(priors)
+    if any(not isinstance(value, ParameterPrior) for value in values):
+        raise TypeError("priors must contain ParameterPrior values")
+    overlay = {value.name: value.prior for value in values}
+    if len(overlay) != len(values):
+        raise ValueError("parameter prior names must be unique")
+    return overlay
+
+
+def _overlay_definitions(
+    problem: FitEvaluationContext,
+    overlay: dict[str, PriorSpec],
+) -> tuple[ParameterDefinition, ...]:
+    names = {definition.name for definition in problem.parameter_definitions}
+    unknown = set(overlay).difference(names)
+    if unknown:
+        raise ValueError(f"unknown parameter name: {min(unknown)}")
+    return tuple(
+        replace(definition, prior=overlay.get(definition.name, definition.prior))
+        for definition in problem.parameter_definitions
+    )
+
+
+def with_parameter_priors(
+    problem: FitEvaluationContext,
+    priors: Sequence[ParameterPrior],
+) -> FitEvaluationContext:
+    """Return an analysis context with sidecar priors overlaid on definitions.
+
+    The fitted ``problem`` remains untouched, so search provenance, checkpoint
+    identity, and candidate coordinates continue to describe the prior-free fit.
+    Empty priors preserve object identity as well as numerical behavior.
+    """
+    if not priors:
+        return problem
+    definitions = _overlay_definitions(problem, _prior_overlay(priors))
+    return (
+        problem
+        if definitions == problem.parameter_definitions
+        else replace(
+            problem,
+            parameter_definitions=definitions,
+        )
+    )
 
 
 def split_rhat(samples: np.ndarray) -> np.ndarray:

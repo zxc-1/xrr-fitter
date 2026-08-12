@@ -88,11 +88,7 @@ def _prepared(
 
 
 def _rule_with_suffix(rules, suffix: str):
-    return next(
-        rule
-        for rule in rules
-        if any(member.parameter_name.endswith(suffix) for member in rule.members)
-    )
+    return next(rule for rule in rules if any(member.parameter_name.endswith(suffix) for member in rule.members))
 
 
 def _fit_result(
@@ -184,7 +180,28 @@ def _stub_joint_searches(request, **_kwargs):
 
 
 def _constant_joint_analysis(results):
-    return lambda _problem, _searches: results
+    return lambda _problem, _searches, _priors: results
+
+
+class _JointProjectionHarness:
+    def __init__(self, searches, global_results, local_results):
+        self.searches = searches
+        self.global_results = global_results
+        self.local_results = local_results
+        self.requests = []
+        self.analysis_requests = []
+
+    def run_joint(self, request, **_kwargs):
+        self.requests.append(request)
+        return self.searches[len(self.requests) - 1]
+
+    def run_analysis(self, request, **_kwargs):
+        self.analysis_requests.append(request)
+        run, index = divmod(len(self.analysis_requests) - 1, 2)
+        return self.local_results[run][index]
+
+    def analyze_joint(self, _problem, _searches, _priors):
+        return self.global_results[len(self.requests) - 1]
 
 
 def _raising_retry(error: Exception):
@@ -226,13 +243,9 @@ def _fit_joint_group(
 
 def _objective_outlier_group():
     prepared = tuple(
-        _prepared(dataset_id, index, released_imag=())
-        for index, dataset_id in enumerate(("left", "middle", "outlier"))
+        _prepared(dataset_id, index, released_imag=()) for index, dataset_id in enumerate(("left", "middle", "outlier"))
     )
-    prefits = tuple(
-        _prefit(item, objective)
-        for item, objective in zip(prepared, (1.0, 1.1, 100.0), strict=True)
-    )
+    prefits = tuple(_prefit(item, objective) for item, objective in zip(prepared, (1.0, 1.1, 100.0), strict=True))
     joint_results = (
         _fit_result(prepared[0], 0.8, density_scale=0.77),
         _fit_result(prepared[1], 0.9, density_scale=0.77),
@@ -251,19 +264,14 @@ def test_automatic_sharing_groups_material_occurrences_and_selected_roughness() 
 
     density = next(rule for rule in rules if "density_scale:Zr" in rule.sharing_key)
     real_sld = next(rule for rule in rules if "sld_real_a2:CrSiC" in rule.sharing_key)
-    first_roughness = next(
-        rule
-        for rule in rules
-        if "roughness_a:component.0" in rule.sharing_key
-    )
+    first_roughness = next(rule for rule in rules if "roughness_a:component.0" in rule.sharing_key)
     assert (
         density.members,
         real_sld.members,
         first_roughness.members,
         all(FIT_GROUP_ID in rule.sharing_key for rule in rules),
         not any(
-            member.parameter_name.endswith("thickness_a")
-            or member.parameter_name.startswith("instrument.")
+            member.parameter_name.endswith("thickness_a") or member.parameter_name.startswith("instrument.")
             for rule in rules
             for member in rule.members
         ),
@@ -293,11 +301,7 @@ def test_automatic_sharing_groups_material_occurrences_and_selected_roughness() 
         FIT_GROUP_ID,
         share_roughness=False,
     )
-    assert not any(
-        member.parameter_name.endswith("roughness_a")
-        for rule in material_only
-        for member in rule.members
-    )
+    assert not any(member.parameter_name.endswith("roughness_a") for rule in material_only for member in rule.members)
 
 
 def test_absorption_sharing_requires_release_evidence_for_every_occurrence() -> None:
@@ -335,9 +339,7 @@ def test_absorption_sharing_requires_release_evidence_for_every_occurrence() -> 
     )
     assert joint.global_variables
     assert not any(
-        member.parameter_name.endswith("sld_imag_a2")
-        for rule in incomplete_rules
-        for member in rule.members
+        member.parameter_name.endswith("sld_imag_a2") for rule in incomplete_rules for member in rule.members
     )
 
 
@@ -396,7 +398,7 @@ def test_joint_conflict_releases_roughness_once_and_restarts_from_projection() -
         requests.append(request)
         return tuple(object() for _item in request.problem.dataset_ids)
 
-    def analyze(_problem, _searches):
+    def analyze(_problem, _searches, _priors):
         return first_joint if len(requests) == 1 else second_joint
 
     results = _fit_joint_group(
@@ -440,17 +442,7 @@ def test_joint_projection_uses_dataset_local_quality_for_release_and_status() ->
         _prefit(prepared[0], 1.0),
         _prefit(prepared[1], 1.0),
     )
-    first_searches = (object(), object())
-    second_searches = (object(), object())
-    first_global = (
-        _fit_result(prepared[0], 0.8),
-        _fit_result(prepared[1], 0.9),
-    )
-    second_global = (
-        _fit_result(prepared[0], 0.7),
-        _fit_result(prepared[1], 0.8),
-    )
-    first_local = (
+    local_results = (
         SimpleNamespace(
             uncertainty=SimpleNamespace(systematic_residual=False),
         ),
@@ -458,22 +450,14 @@ def test_joint_projection_uses_dataset_local_quality_for_release_and_status() ->
             uncertainty=SimpleNamespace(systematic_residual=True),
         ),
     )
-    second_local = first_local
-    requests = []
-    analysis_requests = []
-    joint_calls = 0
-
-    def run_joint(request, **_kwargs):
-        nonlocal joint_calls
-        joint_calls += 1
-        requests.append(request)
-        return first_searches if joint_calls == 1 else second_searches
-
-    def run_analysis(request, **_kwargs):
-        analysis_requests.append(request)
-        run = (len(analysis_requests) - 1) // 2
-        index = (len(analysis_requests) - 1) % 2
-        return (first_local, second_local)[run][index]
+    harness = _JointProjectionHarness(
+        ((object(), object()), (object(), object())),
+        (
+            (_fit_result(prepared[0], 0.8), _fit_result(prepared[1], 0.9)),
+            (_fit_result(prepared[0], 0.7), _fit_result(prepared[1], 0.8)),
+        ),
+        (local_results, local_results),
+    )
 
     decisions = iter(
         (
@@ -502,19 +486,18 @@ def test_joint_projection_uses_dataset_local_quality_for_release_and_status() ->
     results = _fit_joint_group(
         prepared,
         prefits,
-        run_joint_fit=run_joint,
-        run_analysis=run_analysis,
+        run_joint_fit=harness.run_joint,
+        run_analysis=harness.run_analysis,
         assess_automatic_quality=lambda *_args: next(decisions),
-        analyze_joint_searches=lambda _problem, _searches: (
-            first_global if joint_calls == 1 else second_global
-        ),
+        analyze_joint_searches=harness.analyze_joint,
     )
 
-    assert len(requests) == 2
-    assert len(analysis_requests) == 4
-    assert all(request.profile_names == () for request in analysis_requests)
-    assert all(request.bootstrap_enabled is False for request in analysis_requests)
-    assert tuple(request.dataset_id for request in analysis_requests) == (
+    assert len(harness.requests) == 2
+    assert len(harness.analysis_requests) == 4
+    assert all(request.profile_names == () for request in harness.analysis_requests)
+    assert all(request.bootstrap_enabled is False for request in harness.analysis_requests)
+    assert all(request.parameter_priors == () for request in harness.analysis_requests)
+    assert tuple(request.dataset_id for request in harness.analysis_requests) == (
         "left",
         "right",
         "left",
@@ -547,10 +530,7 @@ def test_objective_outlier_retries_with_joint_material_values_locked() -> None:
     )
 
     assert tuple(item.dataset_id for item in retried) == ("outlier",)
-    retry_settings = {
-        setting.name: setting
-        for setting in retried[0].updated_dataset.parameter_settings
-    }
+    retry_settings = {setting.name: setting for setting in retried[0].updated_dataset.parameter_settings}
     assert tuple(
         (retry_settings[name].initial, retry_settings[name].locked)
         for name in (
@@ -638,9 +618,7 @@ def test_isolated_retry_exception_returns_an_unpublishable_failure() -> None:
         prefits,
         run_joint_fit=_stub_joint_searches,
         analyze_joint_searches=_constant_joint_analysis(joint_results),
-        fit_automatic_prepared_dataset=_raising_retry(
-            RuntimeError("isolated solver failed")
-        ),
+        fit_automatic_prepared_dataset=_raising_retry(RuntimeError("isolated solver failed")),
     )
 
     assert results[2].fit_result.best_candidate is None
@@ -698,12 +676,6 @@ def test_insufficient_qualified_points_keep_prefits_for_review_without_joint() -
     )
 
     assert all(not item.passed for item in results)
-    assert {item.reason for item in results} == {
-        "insufficient qualified points for joint refinement"
-    }
-    assert results[1].prepared.updated_dataset.automation.role is (
-        AutomaticRole.ISOLATED_RETRY
-    )
-    assert "systematic residual" in (
-        results[1].prepared.updated_dataset.automation.reason
-    )
+    assert {item.reason for item in results} == {"insufficient qualified points for joint refinement"}
+    assert results[1].prepared.updated_dataset.automation.role is (AutomaticRole.ISOLATED_RETRY)
+    assert "systematic residual" in (results[1].prepared.updated_dataset.automation.reason)

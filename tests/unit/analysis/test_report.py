@@ -19,11 +19,12 @@ free parameter whose representative estimate leaves its declared prior window,
 while parameters that stay within tolerance and parameters without a locating
 prior are never reported. The comparison is performed in the coordinate space
 the prior is declared against, so a roughness-fraction prior is scored on the
-unit fraction rather than the physical roughness it expands to. The joint
-Stage-E pipeline, which owns no per-parameter prior estimate, is expected to
-leave the field empty, and reports constructed without any conflict argument
-default it to an empty tuple. A final contract proves that prior-conflict
-labels never influence which parameters are chosen for profile refinement.
+unit fraction rather than the physical roughness it expands to. The low-level
+joint ensemble report has no per-dataset sidecars and leaves the field empty;
+the fitting service maps local conflicts onto global joint names afterward.
+Reports constructed without any conflict argument default to an empty tuple. A
+final contract proves that prior-conflict labels never influence which
+parameters are chosen for profile refinement.
 """
 
 from __future__ import annotations
@@ -252,10 +253,12 @@ def _assert_analysis_pickle_contract(api, request, restored) -> None:
         "profile_names",
         "bootstrap",
         "bootstrap_enabled",
+        "parameter_priors",
     )
     assert restored.dataset_id == "curve"
     assert restored.problem.data.qz_a_inv.flags.writeable is False
     assert restored.search_result.region_weights.flags.writeable is False
+    assert restored.parameter_priors == ()
     assert pickle.loads(pickle.dumps(api.run_analysis)) is api.run_analysis
 
 
@@ -270,6 +273,7 @@ def _assert_analysis_handler_call(
     assert observed["search"] is restored.search_result
     assert observed["dataset_id"] == "curve"
     assert observed["profile_names"] == ()
+    assert observed["parameter_priors"] == ()
     assert observed["progress"] is _ignore_progress
 
 

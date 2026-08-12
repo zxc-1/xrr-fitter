@@ -19,7 +19,6 @@ from .common import (
     PreparedDatasetFit,
     ProgressCallback,
 )
-from .sharing import automatic_sharing_rules
 from .joint_analysis import _joint_checkpoints
 from .joint_selection import (
     _accepted_material_values,
@@ -34,6 +33,8 @@ from .joint_selection import (
     _unlocked_joint_prepared,
     _validated_automatic_joint_inputs,
 )
+from .sharing import automatic_sharing_rules
+
 
 def _qualified_joint_refinement(
     prepared: tuple[PreparedDatasetFit, ...],
@@ -70,11 +71,35 @@ def _qualified_joint_refinement(
         compile_fit_problem=compile_fit_problem,
     )
     prefit_results = tuple(prefit.fit_result for prefit in prefits)
-    _problem, joint_results, local_results, decisions = (
-        _run_automatic_joint_refinement(
+    _problem, joint_results, local_results, decisions = _run_automatic_joint_refinement(
+        joint_prepared,
+        initial_rules,
+        _best_candidates_by_dataset(joint_prepared, prefit_results),
+        progress=progress,
+        cancelled=cancelled,
+        checkpoint=checkpoint,
+        compile_joint_problem=compile_joint_problem,
+        consensus_joint_vector=consensus_joint_vector,
+        joint_fit_request=joint_fit_request,
+        run_joint_fit=run_joint_fit,
+        analysis_request=analysis_request,
+        run_analysis=run_analysis,
+        assess_automatic_quality=assess_automatic_quality,
+        analyze_joint_searches=analyze_joint_searches,
+    )
+    if len(joint_results) != len(joint_prepared):
+        raise ValueError("automatic joint result batch size mismatch")
+    material_rules = _material_only_rules(initial_rules)
+    if _joint_result_conflicts(
+        joint_prepared,
+        prefits,
+        joint_results,
+        local_results,
+    ):
+        _problem, joint_results, _local_results, decisions = _run_automatic_joint_refinement(
             joint_prepared,
-            initial_rules,
-            _best_candidates_by_dataset(joint_prepared, prefit_results),
+            material_rules,
+            _best_candidates_by_dataset(joint_prepared, joint_results),
             progress=progress,
             cancelled=cancelled,
             checkpoint=checkpoint,
@@ -86,34 +111,6 @@ def _qualified_joint_refinement(
             run_analysis=run_analysis,
             assess_automatic_quality=assess_automatic_quality,
             analyze_joint_searches=analyze_joint_searches,
-        )
-    )
-    if len(joint_results) != len(joint_prepared):
-        raise ValueError("automatic joint result batch size mismatch")
-    material_rules = _material_only_rules(initial_rules)
-    if _joint_result_conflicts(
-        joint_prepared,
-        prefits,
-        joint_results,
-        local_results,
-    ):
-        _problem, joint_results, _local_results, decisions = (
-            _run_automatic_joint_refinement(
-                joint_prepared,
-                material_rules,
-                _best_candidates_by_dataset(joint_prepared, joint_results),
-                progress=progress,
-                cancelled=cancelled,
-                checkpoint=checkpoint,
-                compile_joint_problem=compile_joint_problem,
-                consensus_joint_vector=consensus_joint_vector,
-                joint_fit_request=joint_fit_request,
-                run_joint_fit=run_joint_fit,
-                analysis_request=analysis_request,
-                run_analysis=run_analysis,
-                assess_automatic_quality=assess_automatic_quality,
-                analyze_joint_searches=analyze_joint_searches,
-            )
         )
     return joint_prepared, joint_results, decisions, material_rules
 
@@ -158,10 +155,7 @@ def _isolated_retry_result(
     except cancellation_exceptions:
         raise
     except Exception as error:
-        reason = (
-            f"{isolation_reason}; isolated retry failed: "
-            f"{type(error).__name__}: {error}"
-        )
+        reason = f"{isolation_reason}; isolated retry failed: {type(error).__name__}: {error}"
         return AutomaticPreparedResult(
             isolated,
             FitResult(
@@ -181,9 +175,7 @@ def _isolated_retry_result(
         )
     if result.passed:
         return result
-    reasons = tuple(
-        dict.fromkeys((isolation_reason, result.reason))
-    )
+    reasons = tuple(dict.fromkeys((isolation_reason, result.reason)))
     return replace(
         result,
         reason="; ".join(reason for reason in reasons if reason),
@@ -251,11 +243,7 @@ def fit_automatic_joint_group(
         fit_group_id,
     )
     isolation_reasons = _automatic_isolation_reasons(prefit_values)
-    qualified_indices = tuple(
-        index
-        for index, reason in enumerate(isolation_reasons)
-        if reason is None
-    )
+    qualified_indices = tuple(index for index, reason in enumerate(isolation_reasons) if reason is None)
     if len(qualified_indices) < 2:
         return _insufficient_joint_results(
             values,
@@ -270,24 +258,22 @@ def fit_automatic_joint_group(
         qualified_indices,
         len(values),
     )
-    joint_prepared, joint_results, decisions, material_rules = (
-        _qualified_joint_refinement(
-            qualified,
-            qualified_prefits,
-            fit_group_id,
-            progress=progress,
-            cancelled=cancelled,
-            checkpoint=qualified_checkpoint,
-            compile_fit_problem=compile_fit_problem,
-            compile_joint_problem=compile_joint_problem,
-            consensus_joint_vector=consensus_joint_vector,
-            joint_fit_request=joint_fit_request,
-            run_joint_fit=run_joint_fit,
-            analysis_request=analysis_request,
-            run_analysis=run_analysis,
-            assess_automatic_quality=assess_automatic_quality,
-            analyze_joint_searches=analyze_joint_searches,
-        )
+    joint_prepared, joint_results, decisions, material_rules = _qualified_joint_refinement(
+        qualified,
+        qualified_prefits,
+        fit_group_id,
+        progress=progress,
+        cancelled=cancelled,
+        checkpoint=qualified_checkpoint,
+        compile_fit_problem=compile_fit_problem,
+        compile_joint_problem=compile_joint_problem,
+        consensus_joint_vector=consensus_joint_vector,
+        joint_fit_request=joint_fit_request,
+        run_joint_fit=run_joint_fit,
+        analysis_request=analysis_request,
+        run_analysis=run_analysis,
+        assess_automatic_quality=assess_automatic_quality,
+        analyze_joint_searches=analyze_joint_searches,
     )
     accepted = {
         index: _automatic_joint_result(item, result, decision)
@@ -356,7 +342,11 @@ def fit_joint_datasets(
                 "finalizing joint fit",
             )
         )
-    results = analyze_joint_searches(problem, searches)
+    results = analyze_joint_searches(
+        problem,
+        searches,
+        tuple(item.updated_dataset.parameter_priors for item in values),
+    )
     if progress is not None:
         progress(FitProgress(None, "finalizing", 1, 1, objective, "completed"))
     return results

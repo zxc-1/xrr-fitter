@@ -18,6 +18,7 @@ from xrr_fitter.services.parallel import OrderedTaskRunner
 
 from .common import CancellationProbe, PreparedDatasetFit, ProgressCallback
 
+
 def _scale_prior(problem: FitEvaluationContext) -> ScalePriorState:
     return ScalePriorState(
         enabled=problem.scale_prior_center is not None,
@@ -98,11 +99,7 @@ def validate_parameter_setting_declarations(
 
 def _dataset_index(project: XrrProject, dataset_id: str) -> int:
     try:
-        return next(
-            index
-            for index, dataset in enumerate(project.datasets)
-            if dataset.dataset_id == dataset_id
-        )
+        return next(index for index, dataset in enumerate(project.datasets) if dataset.dataset_id == dataset_id)
     except StopIteration as error:
         raise ValueError(f"unknown dataset_id: {dataset_id}") from error
 
@@ -274,6 +271,7 @@ def fit_prepared_dataset(
                 prepared.problem,
                 search,
                 profile_names=profile_names,
+                parameter_priors=prepared.updated_dataset.parameter_priors,
             ),
             cancelled=cancelled,
             progress=progress,
