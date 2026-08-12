@@ -13,7 +13,11 @@ from dataclasses import replace
 from xrr_fitter.analysis import sld_bands as _bands
 from xrr_fitter.analysis.automatic import assess_automatic_quality
 from xrr_fitter.analysis.joint import analyze_joint_ensemble
-from xrr_fitter.analysis.mcmc import run_problem_mcmc
+from xrr_fitter.analysis.mcmc import (
+    prior_conflicts,
+    run_problem_mcmc,
+    with_parameter_priors,
+)
 from xrr_fitter.analysis.profiles import recover_profile_basin
 from xrr_fitter.analysis.report import AnalysisRequest, run_analysis
 from xrr_fitter.fit.automatic import (
@@ -236,12 +240,15 @@ def fit_automatic_prepared_dataset(
     )
 
 
-def _analyze_joint_searches(problem, searches) -> tuple[FitResult, ...]:
+def _analyze_joint_searches(problem, searches, priors) -> tuple[FitResult, ...]:
     return _joint_analysis._analyze_joint_searches(
         problem,
         searches,
+        priors,
         joint_candidate_vectors=joint_candidate_vectors,
         analyze_joint_ensemble=analyze_joint_ensemble,
+        with_parameter_priors=with_parameter_priors,
+        prior_conflicts=prior_conflicts,
     )
 
 
@@ -411,6 +418,7 @@ def _run_mcmc(
         progress_callback,
         cancelled,
         compile_dataset=_compile_dataset,
+        with_parameter_priors=with_parameter_priors,
         run_problem_mcmc=run_problem_mcmc,
         sld_bands=_sld_bands,
     )

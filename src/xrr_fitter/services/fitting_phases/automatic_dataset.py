@@ -8,7 +8,6 @@ from xrr_fitter.model.analysis import ConfidenceClass, FitResult
 from xrr_fitter.model.fitting import FitCheckpoint, FitSearchResult
 from xrr_fitter.services.parallel import OrderedTaskRunner
 
-
 from .common import (
     AutomaticPreparedResult,
     CancellationProbe,
@@ -83,11 +82,13 @@ def _automatic_fast_analysis(
             search,
             profile_names=(),
             bootstrap_enabled=False,
+            parameter_priors=prepared.updated_dataset.parameter_priors,
         ),
         cancelled=cancelled,
         progress=progress,
         task_runner=task_runner,
     )
+
 
 def _automatic_profile_recovery(
     prepared: PreparedDatasetFit,
@@ -212,6 +213,7 @@ def fit_automatic_prepared_dataset(
                 search,
                 profile_names=decision.profile_names,
                 bootstrap_enabled=False,
+                parameter_priors=prepared.updated_dataset.parameter_priors,
             ),
             cancelled=cancelled,
             progress=progress,

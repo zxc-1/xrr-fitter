@@ -142,12 +142,13 @@ def _stage_e_search(problem) -> FitSearchResult:
     )
 
 
-def _automatic_prepared(problem):
+def _automatic_prepared(problem, *, parameter_priors=()):
     dataset = replace(
         dataset_project("curve"),
         structure=problem.structure,
         instrument=problem.instrument,
         parameter_settings=(),
+        parameter_priors=parameter_priors,
     )
     return fitting.PreparedDatasetFit("curve", 0, dataset, problem)
 
@@ -228,8 +229,25 @@ class _FittingHarness:
         )
         return self.continued_search
 
-    def analysis_request(self, dataset_id, problem, search, *, profile_names=None):
-        self.calls.append(("analysis-request", dataset_id, problem, search, profile_names))
+    def analysis_request(
+        self,
+        dataset_id,
+        problem,
+        search,
+        *,
+        profile_names=None,
+        parameter_priors=(),
+    ):
+        self.calls.append(
+            (
+                "analysis-request",
+                dataset_id,
+                problem,
+                search,
+                profile_names,
+                parameter_priors,
+            )
+        )
         return "analysis-request"
 
     def run_analysis(self, request, **kwargs):
@@ -457,7 +475,10 @@ def test_automatic_absorption_replaces_winner_and_preserves_stage_e_lineage() ->
 
 def test_automatic_clean_evidence_skips_recovery_bootstrap_and_profiles() -> None:
     problem = _automatic_problem()
-    prepared = _automatic_prepared(problem)
+    from xrr_fitter.model.parameters import ParameterPrior, PriorSpec
+
+    priors = (ParameterPrior("component.0.density_scale", PriorSpec("normal", (0.6, 0.05))),)
+    prepared = _automatic_prepared(problem, parameter_priors=priors)
     search = _stage_e_search(problem)
     analyzed = final_fit_result()
     requests = []
@@ -494,6 +515,7 @@ def test_automatic_clean_evidence_skips_recovery_bootstrap_and_profiles() -> Non
     assert len(requests) == 2
     assert all(request.bootstrap_enabled is False for request in requests)
     assert all(request.profile_names == () for request in requests)
+    assert all(request.parameter_priors == priors for request in requests)
 
 
 def test_automatic_search_upgrade_runs_profile_recovery_at_most_once() -> None:
@@ -646,6 +668,7 @@ def test_fitting_forwards_explicit_profile_names_to_analysis_request(
         prepared.problem,
         search,
         requested,
+        (),
     )
 
 
@@ -654,12 +677,12 @@ def test_joint_fit_reports_finalizing_after_stage_e() -> None:
         SimpleNamespace(
             dataset_id="first",
             problem=object(),
-            updated_dataset=SimpleNamespace(checkpoint=None),
+            updated_dataset=SimpleNamespace(checkpoint=None, parameter_priors=()),
         ),
         SimpleNamespace(
             dataset_id="second",
             problem=object(),
-            updated_dataset=SimpleNamespace(checkpoint=None),
+            updated_dataset=SimpleNamespace(checkpoint=None, parameter_priors=()),
         ),
     )
     searches = (SimpleNamespace(best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None)),)
@@ -673,7 +696,7 @@ def test_joint_fit_reports_finalizing_after_stage_e() -> None:
         compile_joint_problem=lambda *_args: object(),
         joint_fit_request=lambda problem, checkpoints: (problem, checkpoints),
         run_joint_fit=lambda *_args, **_kwargs: searches,
-        analyze_joint_searches=lambda _problem, _searches: analyzed,
+        analyze_joint_searches=lambda _problem, _searches, _priors: analyzed,
     )
 
     assert result is analyzed

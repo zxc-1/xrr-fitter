@@ -217,6 +217,7 @@ def _run_mcmc(
     cancelled: CancellationProbe | None,
     *,
     compile_dataset: Callable,
+    with_parameter_priors: Callable,
     run_problem_mcmc: Callable,
     sld_bands: Callable,
 ) -> XrrProject:
@@ -255,8 +256,12 @@ def _run_mcmc(
                 )
             )
 
-    report = run_problem_mcmc(
+    analysis_problem = with_parameter_priors(
         prepared.problem,
+        prepared.updated_dataset.parameter_priors,
+    )
+    report = run_problem_mcmc(
+        analysis_problem,
         candidate,
         config,
         child_seed=seed,
@@ -287,6 +292,7 @@ def run_mcmc(
     progress_callback: ProgressCallback | None = None,
     *,
     compile_dataset: Callable,
+    with_parameter_priors: Callable,
     run_problem_mcmc: Callable,
 ) -> XrrProject:
     return _run_mcmc(
@@ -297,6 +303,7 @@ def run_mcmc(
         progress_callback,
         None,
         compile_dataset=compile_dataset,
+        with_parameter_priors=with_parameter_priors,
         run_problem_mcmc=run_problem_mcmc,
     )
 
@@ -358,6 +365,7 @@ def mcmc_worker_handler(
     cancelled: CancellationProbe | None,
     *,
     compile_dataset: Callable,
+    with_parameter_priors: Callable,
     run_problem_mcmc: Callable,
 ) -> XrrProject:
     return _run_mcmc(
@@ -368,5 +376,6 @@ def mcmc_worker_handler(
         progress_callback,
         cancelled,
         compile_dataset=compile_dataset,
+        with_parameter_priors=with_parameter_priors,
         run_problem_mcmc=run_problem_mcmc,
     )

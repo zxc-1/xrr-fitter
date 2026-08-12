@@ -14,7 +14,7 @@ from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.analysis import EnsembleSamples, McmcConfig
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting, PriorSpec
+from xrr_fitter.model.parameters import ParameterPrior, ParameterSetting, PriorSpec
 
 
 def _api():
@@ -378,6 +378,25 @@ def test_fit_dataset_never_runs_expert_mcmc() -> None:
 
     assert "run_problem_mcmc" not in pipeline.__dict__
     assert not any(name.startswith("xrr_fitter.analysis") for name in pipeline.__dict__)
+
+
+def test_parameter_prior_overlay_preserves_empty_context_and_original_definitions() -> None:
+    module = _api()
+    problem = _problem()
+    prior = ParameterPrior(
+        "component.0.density_scale",
+        PriorSpec("normal", (0.6, 0.05)),
+    )
+
+    overlaid = module.with_parameter_priors(problem, (prior,))
+
+    assert module.with_parameter_priors(problem, ()) is problem
+    assert all(definition.prior is None for definition in problem.parameter_definitions)
+    assert overlaid is not problem
+    assert (
+        next(definition for definition in overlaid.parameter_definitions if definition.name == prior.name).prior
+        == prior.prior
+    )
 
 
 def _inject_priors(problem, priors):
