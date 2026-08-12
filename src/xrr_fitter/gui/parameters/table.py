@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from math import exp
+
 from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
 
 import xrr_fitter.api as api
 
-
-HEADERS = ("参数", "初值", "下限", "上限", "单位", "锁定")
+HEADERS = ("参数", "初值", "下限", "上限", "单位", "锁定", "先验")
 
 
 def _uses_nm(definition: api.ParameterDefinition) -> bool:
@@ -21,6 +22,28 @@ def _display_scale(definition: api.ParameterDefinition) -> float:
 
 def _number(value: float) -> str:
     return f"{value:.12g}"
+
+
+def _prior_body(prior: api.PriorSpec, scale: float) -> str:
+    values = prior.parameters
+    if prior.kind == "normal":
+        return f"μ={_number(values[0] * scale)}, σ={_number(values[1] * scale)}"
+    if prior.kind == "lognormal":
+        # loc/scale live in log space: the physical center is exp(loc) and takes
+        # the display scale, but the log-space spread is dimensionless and is
+        # shown as stored so the summary never implies a length it lacks.
+        return f"μ={_number(exp(values[0]) * scale)}, σ={_number(values[1])}"
+    if prior.kind == "soft_range":
+        low, high, std = values
+        return f"[{_number(low * scale)}, {_number(high * scale)}], σ={_number(std * scale)}"
+    return ""  # uniform carries no scalar parameters
+
+
+def _prior_summary(definition: api.ParameterDefinition) -> str:
+    prior = definition.prior
+    if prior is None:
+        return ""
+    return f"{prior.kind}({_prior_body(prior, _display_scale(definition))})"
 
 
 class ParameterTable(QTableWidget):
@@ -47,11 +70,7 @@ class ParameterTable(QTableWidget):
         *,
         expert_mode: bool,
     ) -> None:
-        visible = tuple(
-            definition
-            for definition in definitions
-            if expert_mode or not definition.expert_only
-        )
+        visible = tuple(definition for definition in definitions if expert_mode or not definition.expert_only)
         blocker = QSignalBlocker(self)
         self.clearContents()
         self.setRowCount(len(visible))
@@ -73,10 +92,7 @@ class ParameterTable(QTableWidget):
     def display_values(self, name: str) -> tuple[float, float, float]:
         definition = self.definition(name)
         scale = _display_scale(definition)
-        return tuple(
-            value * scale
-            for value in (definition.initial, definition.lower, definition.upper)
-        )
+        return tuple(value * scale for value in (definition.initial, definition.lower, definition.upper))
 
     def display_unit(self, name: str) -> str:
         definition = self.definition(name)
@@ -111,15 +127,12 @@ class ParameterTable(QTableWidget):
                 item.setToolTip(definition.name)
             self.setItem(row, column, item)
         locked = QTableWidgetItem()
-        locked.setFlags(
-            Qt.ItemFlag.ItemIsEnabled
-            | Qt.ItemFlag.ItemIsSelectable
-            | Qt.ItemFlag.ItemIsUserCheckable
-        )
-        locked.setCheckState(
-            Qt.CheckState.Checked if definition.locked else Qt.CheckState.Unchecked
-        )
+        locked.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable)
+        locked.setCheckState(Qt.CheckState.Checked if definition.locked else Qt.CheckState.Unchecked)
         self.setItem(row, 5, locked)
+        prior = QTableWidgetItem(_prior_summary(definition))
+        prior.setFlags(prior.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.setItem(row, 6, prior)
 
     def _display_values(
         self,

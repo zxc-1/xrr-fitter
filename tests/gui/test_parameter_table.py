@@ -8,7 +8,6 @@ from PySide6.QtWidgets import QTableWidget
 
 import xrr_fitter.api as api
 
-
 AIR = api.MaterialSpec("Air", None, None, 0.0j)
 SI = api.MaterialSpec("Si", "Si", 2.329)
 SIO2 = api.MaterialSpec("SiO2", "SiO2", 2.20)
@@ -16,11 +15,7 @@ SIO2 = api.MaterialSpec("SiO2", "SiO2", 2.20)
 
 def _write_curve(path: Path) -> Path:
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}"
-            for index in range(64)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}" for index in range(64)) + "\n",
         encoding="utf-8",
     )
     return path
@@ -61,6 +56,7 @@ def test_parameter_table_shows_required_fields(qtbot, tmp_path) -> None:
         "上限",
         "单位",
         "锁定",
+        "先验",
     ]
     assert "component.0.thickness_a" in panel.row_names
     assert "instrument.scale" in panel.row_names
@@ -101,11 +97,7 @@ def test_user_edit_in_parameter_table_commits_display_value_and_lock(
     table.item(row, 1).setText("4.5")
     table.item(row, 5).setCheckState(Qt.CheckState.Checked)
 
-    setting = next(
-        value
-        for value in panel.document.project.datasets[0].parameter_settings
-        if value.name == name
-    )
+    setting = next(value for value in panel.document.project.datasets[0].parameter_settings if value.name == name)
     assert setting.initial == pytest.approx(45.0)
     assert setting.locked is True
 
@@ -253,16 +245,74 @@ def test_reset_parameter_removes_override_and_restores_default(qtbot, tmp_path) 
 
     # Establish a user override, then confirm it is persisted.
     panel.set_display_parameter(name, initial=6.0, lower=2.0, upper=10.0, locked=True)
-    assert any(
-        value.name == name
-        for value in panel.document.project.datasets[0].parameter_settings
-    )
+    assert any(value.name == name for value in panel.document.project.datasets[0].parameter_settings)
 
     # Resetting drops the persisted setting so the declared default reasserts.
     assert panel.reset_parameter(name) is True
-    assert not any(
-        value.name == name
-        for value in panel.document.project.datasets[0].parameter_settings
-    )
+    assert not any(value.name == name for value in panel.document.project.datasets[0].parameter_settings)
     # Resetting an already-default parameter is a no-op, not an error.
     assert panel.reset_parameter(name) is False
+
+
+def _definition(name: str, **changes) -> api.ParameterDefinition:
+    base = {
+        "name": name,
+        "display_name": name,
+        "unit": "Å",
+        "category": "structure",
+        "initial": 40.0,
+        "lower": 1.0,
+        "upper": 100.0,
+        "transform": "linear",
+        "locked": False,
+    }
+    base.update(changes)
+    return api.ParameterDefinition(**base)
+
+
+def _table(qtbot, *definitions: api.ParameterDefinition):
+    from xrr_fitter.gui.parameters.table import ParameterTable
+
+    table = ParameterTable()
+    qtbot.addWidget(table)
+    table.load(definitions, expert_mode=True)
+    return table
+
+
+def test_prior_column_header_and_readonly(qtbot) -> None:
+    table = _table(qtbot, _definition("component.0.thickness_a"))
+
+    assert table.horizontalHeaderItem(6).text() == "先验"
+    prior_cell = table.item(0, 6)
+    assert prior_cell is not None
+    assert not (prior_cell.flags() & Qt.ItemFlag.ItemIsEditable)
+
+
+def test_prior_column_renders_summary(qtbot) -> None:
+    with_prior = _definition(
+        "instrument.scale",
+        unit="1",
+        initial=1.0,
+        lower=0.5,
+        upper=1.5,
+        prior=api.PriorSpec("normal", (1.0, 0.2)),
+    )
+    without_prior = _definition("instrument.scale.other", unit="1", initial=1.0, lower=0.5, upper=1.5)
+    table = _table(qtbot, with_prior, without_prior)
+
+    assert "normal" in table.item(0, 6).text()
+    assert table.item(1, 6).text() == ""
+
+
+def test_prior_column_respects_nm_toggle(qtbot) -> None:
+    # A length parameter shows its Å-space center (40.0) as nm (4.0) so the
+    # prior summary agrees with the initial/lower/upper columns above it.
+    definition = _definition(
+        "component.0.thickness_a",
+        prior=api.PriorSpec("normal", (40.0, 5.0)),
+    )
+    table = _table(qtbot, definition)
+
+    text = table.item(0, 6).text()
+    assert "4" in text
+    assert "40" not in text
