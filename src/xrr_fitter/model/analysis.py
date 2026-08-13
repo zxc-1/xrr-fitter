@@ -479,6 +479,7 @@ class UncertaintyReport:
     bootstrap_performed: bool = True
     sld_bands: SldUncertaintyBands | None = None
     prior_conflicts: tuple[str, ...] = ()
+    parameter_sigma: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         names = tuple(self.correlation_names)
@@ -503,6 +504,11 @@ class UncertaintyReport:
         _validate_optional_sld_bands(self.sld_bands)
         object.__setattr__(self, "diagnostics", diagnostics)
         object.__setattr__(self, "prior_conflicts", tuple(self.prior_conflicts))
+        if self.parameter_sigma is not None:
+            sigma = _readonly(self.parameter_sigma, float, "parameter_sigma", 1)
+            if sigma.shape != (len(names),):
+                raise ValueError("parameter_sigma length must match correlation names")
+            object.__setattr__(self, "parameter_sigma", sigma)
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)

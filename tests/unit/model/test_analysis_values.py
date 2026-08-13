@@ -348,7 +348,7 @@ def test_sld_bands_caption_names_quantiles_alignment_and_thinning() -> None:
 
 
 def _uncertainty_report(**overrides: object) -> UncertaintyReport:
-    return UncertaintyReport(
+    defaults = dict(
         correlation_names=(),
         correlation_matrix=np.empty((0, 0)),
         profiles=(),
@@ -358,8 +358,8 @@ def _uncertainty_report(**overrides: object) -> UncertaintyReport:
         strong_correlations=(),
         systematic_residual=False,
         diagnostics=(),
-        **overrides,
     )
+    return UncertaintyReport(**{**defaults, **overrides})
 
 
 def test_uncertainty_report_defaults_sld_bands_to_none() -> None:
@@ -375,3 +375,30 @@ def test_uncertainty_report_retains_a_supplied_sld_band() -> None:
 def test_uncertainty_report_rejects_a_wrongly_typed_sld_band() -> None:
     with pytest.raises(TypeError, match="sld_bands"):
         replace(_uncertainty_report(), sld_bands=object())
+
+
+def test_uncertainty_report_defaults_parameter_sigma_to_none() -> None:
+    assert _uncertainty_report().parameter_sigma is None
+
+
+def test_uncertainty_report_retains_supplied_parameter_sigma() -> None:
+    sigma = np.array([1.5])
+    report = _uncertainty_report(
+        correlation_names=("thickness",),
+        correlation_matrix=np.eye(1),
+        parameter_sigma=sigma,
+    )
+
+    sigma[0] = 99.0
+
+    assert report.parameter_sigma[0] == 1.5
+    assert report.parameter_sigma.flags.writeable is False
+
+
+def test_uncertainty_report_rejects_parameter_sigma_length_mismatch() -> None:
+    with pytest.raises(ValueError, match="parameter_sigma"):
+        _uncertainty_report(
+            correlation_names=("a", "b"),
+            correlation_matrix=np.eye(2),
+            parameter_sigma=np.array([1.0]),
+        )
