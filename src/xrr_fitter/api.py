@@ -6,7 +6,6 @@ from xrr_fitter.model.analysis import (
     McmcConfig,
     McmcReport,
     ParameterProfile,
-    SldUncertaintyBands,
     StructureEvidence,
     UncertaintyReport,
 )
@@ -53,13 +52,11 @@ from xrr_fitter.model.project import (
 )
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
-    InterfaceTransition,
     LayerSpec,
     MaterialSpec,
     OxideSuggestion,
     PeriodicBlock,
     StructureSpec,
-    TransitionBranch,
 )
 from xrr_fitter.services.datasets import (
     add_dataset,
@@ -78,7 +75,6 @@ from xrr_fitter.services.fitting import (
     preflight_automatic_fit,
     preflight_fit,
     run_mcmc,
-    sld_uncertainty_bands,
 )
 from xrr_fitter.services.parameters import (
     accept_source_update,
@@ -139,7 +135,6 @@ __all__ = (
     "ImportFilePreview",
     "ImportFailure",
     "InstrumentSpec",
-    "InterfaceTransition",
     "JointFitLayout",
     "LayerSpec",
     "LayerUniformitySummary",
@@ -164,11 +159,9 @@ __all__ = (
     "ProjectValidation",
     "ScalePriorState",
     "SharingRule",
-    "SldUncertaintyBands",
     "SourceUpdatePreview",
     "StructureEvidence",
     "StructureSpec",
-    "TransitionBranch",
     "UncertaintyReport",
     "ValidationIssue",
     "XrrProject",
@@ -206,7 +199,6 @@ __all__ = (
     "set_sharing_rules",
     "set_structure",
     "set_workspace_state",
-    "sld_uncertainty_bands",
     "start_fit_job",
     "start_automatic_fit_job",
     "start_mcmc_job",

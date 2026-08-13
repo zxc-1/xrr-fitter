@@ -27,7 +27,6 @@ PUBLIC_NAMES = (
     "ImportFilePreview",
     "ImportFailure",
     "InstrumentSpec",
-    "InterfaceTransition",
     "JointFitLayout",
     "LayerSpec",
     "LayerUniformitySummary",
@@ -52,11 +51,9 @@ PUBLIC_NAMES = (
     "ProjectValidation",
     "ScalePriorState",
     "SharingRule",
-    "SldUncertaintyBands",
     "SourceUpdatePreview",
     "StructureEvidence",
     "StructureSpec",
-    "TransitionBranch",
     "UncertaintyReport",
     "ValidationIssue",
     "XrrProject",
@@ -94,7 +91,6 @@ PUBLIC_NAMES = (
     "set_sharing_rules",
     "set_structure",
     "set_workspace_state",
-    "sld_uncertainty_bands",
     "start_fit_job",
     "start_automatic_fit_job",
     "start_mcmc_job",
@@ -149,7 +145,6 @@ SIGNATURES = {
     "start_mcmc_job": "(project: 'XrrProject', dataset_id: 'str', candidate_id: 'str', config: 'McmcConfig') -> 'OperationJob'",
     "export_result": "(result: 'XrrProject | ProjectFitResult', output_dir: 'str | Path') -> 'ExportManifest'",
     "summarize_automatic_results": "(project: 'XrrProject', import_batch_id: 'str | None' = None) -> 'AutomaticResultSummary'",
-    "sld_uncertainty_bands": "(structure, report, *, wavelength_a, align='backing')",
 }
 
 
