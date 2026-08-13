@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import warnings
 from dataclasses import replace
+from hashlib import sha256
 
 import matplotlib
 import numpy as np
@@ -16,6 +18,7 @@ from tests.support.model_cases import (
 )
 
 from xrr_fitter.io.export_plots import (
+    BAND_PAIRS,
     fit_overview_png,
     parameter_trends_png,
     residuals_png,
@@ -261,12 +264,28 @@ def _context_with_bands() -> DatasetExportData:
     )
 
 
-def test_sld_profile_png_without_bands_matches_the_committed_bandless_render() -> None:
+# Frozen from the three renderers at ``bb5f253^`` in the locked Matplotlib
+# environment, before SLD-band drawing existed.  A fresh render is compared to
+# both size and digest so this is not the former same-function self-comparison.
+BANDLESS_PNG_BASELINES = {
+    fit_overview_png: (24674, "6c4d698235b052044b8d8502439c526fc4a59411ba15519cc13c57c107ced107"),
+    sld_profile_png: (28382, "2a344e8e2d86aa0a392d3a0111c543d6d916013e1b980101c8c86f485f223d0e"),
+    residuals_png: (27318, "3962537e44db0923454d7d79db3fac0c31e25678c13309be5ddf3c325f3a17d1"),
+}
+
+
+@pytest.mark.parametrize(("render", "committed"), BANDLESS_PNG_BASELINES.items())
+def test_export_png_without_bands_matches_the_committed_render(render, committed) -> None:
     context = _context()
     assert context.result.uncertainty is None or context.result.uncertainty.sld_bands is None
-    baseline = sld_profile_png(context)
-    assert sld_profile_png(context) == baseline
-    assert baseline.startswith(b"\x89PNG\r\n\x1a\n")
+
+    payload = render(context)
+
+    assert (len(payload), sha256(payload).hexdigest()) == committed
+
+
+def test_export_band_legend_uses_the_published_quantile_labels() -> None:
+    assert tuple(label for _pair, _alpha, label in BAND_PAIRS) == ("16–84%", "2.5–97.5%")
 
 
 def test_sld_profile_png_with_bands_differs_and_stays_deterministic() -> None:
@@ -287,3 +306,19 @@ def test_sld_profile_png_takes_its_caption_from_the_band_object(monkeypatch) -> 
     )
     sld_profile_png(banded)
     assert len(calls) == 1
+
+
+def test_sld_profile_png_renders_cjk_caption_without_missing_glyphs(caplog) -> None:
+    # 导出的 SLD 剖面用 set_title 打上中文可信带说明；默认字体 DejaVu Sans 没有
+    # CJK 字形，导出层又不能复用 GUI 的字体助手（架构禁止 io->gui），所以它必须自行
+    # 解析 CJK 字族。镜像 GUI 的字形守卫：warnings 与 matplotlib 日志两条通道都不得
+    # 出现 "Glyph ... missing"，否则中文说明在导出 PNG 里会渲染成豆腐块。
+    banded = _context_with_bands()
+    caplog.set_level(logging.WARNING)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        payload = sld_profile_png(banded)
+
+    assert payload.startswith(b"\x89PNG\r\n\x1a\n")
+    assert not [warning for warning in caught if "Glyph" in str(warning.message)]
+    assert "glyph" not in caplog.text.lower()
