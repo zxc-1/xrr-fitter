@@ -323,11 +323,11 @@ def test_uncertainty_projection_only_shows_current_candidate_evidence(qtbot) -> 
     other_text = panel.uncertainty_text()
     assert "当前候选 candidate-b 暂无不确定度证据" in other_text
     assert "现有证据属于 candidate-a" in other_text
-    assert "边界命中：scale" not in other_text
+    assert "边界命中（可疑）：scale" not in other_text
 
     panel.select_candidate("candidate-a")
 
-    assert "边界命中：scale" in panel.uncertainty_text()
+    assert "边界命中（可疑）：scale" in panel.uncertainty_text()
 
 
 @pytest.mark.parametrize(
@@ -491,7 +491,7 @@ def test_unowned_uncertainty_remains_inspection_only(qtbot) -> None:
     panel = _panel(qtbot, _project_with_result(result, expert=True))
 
     assert "未归属" in panel.uncertainty_text()
-    assert "边界命中：scale" not in panel.uncertainty_text()
+    assert "边界命中（可疑）：scale" not in panel.uncertainty_text()
     assert panel.mcmc_button.isEnabled() is False
 
 
