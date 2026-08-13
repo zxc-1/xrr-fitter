@@ -66,7 +66,7 @@
 - Preserves: every existing entry in `ALLOWED`, `PACKAGE_EDGE_EXCEPTIONS`, `PUBLIC_NAMES`, and `SIGNATURES`.
 - Removes: nothing.
 
-- [ ] **Step 1: Write the failing architecture expectations**
+- [x] **Step 1: Write the failing architecture expectations**
 
 In `tests/architecture/test_dependency_rules.py`, add a fixture test next to the existing `test_fixture_checker_allows_gui_domain_access_only_through_public_api`:
 
@@ -94,7 +94,7 @@ def run(path):
 
 In `tests/architecture/test_public_api.py`, insert `"ConfidenceClass"` into `PUBLIC_NAMES` in alphabetical position — between `"BeamSpec"` and `"DataColumnMapping"`.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -o addopts= --import-mode=importlib -p tests.outcome_gate tests/architecture/test_dependency_rules.py::test_fixture_checker_allows_cli_domain_access_only_through_public_api tests/architecture/test_public_api.py::test_api_exports_only_the_complete_supported_surface -q
@@ -102,7 +102,7 @@ PYTHONDONTWRITEBYTECODE=1 python -m pytest -o addopts= --import-mode=importlib -
 
 Expected RED: the dependency fixture fails with `unregistered package owner` or an unexpected `package-edge` for `cli`; the api test fails because `tuple(api.__all__) != PUBLIC_NAMES`.
 
-- [ ] **Step 3: Open the two edges**
+- [x] **Step 3: Open the two edges**
 
 In `tests/architecture/test_dependency_rules.py`, change the `ALLOWED` table to add one row and extend one:
 
@@ -122,13 +122,13 @@ Create `src/xrr_fitter/cli/__init__.py` as an empty file:
 : > src/xrr_fitter/cli/__init__.py
 ```
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run the exact command from Step 2.
 
 Expected: `2 passed`.
 
-- [ ] **Step 5: Commit the boundary change**
+- [x] **Step 5: Commit the boundary change**
 
 ```bash
 git add src/xrr_fitter/api.py src/xrr_fitter/cli/__init__.py tests/architecture/test_dependency_rules.py tests/architecture/test_public_api.py
@@ -151,7 +151,7 @@ git commit -m "feat: open cli architecture edge and export ConfidenceClass"
 - Preserves: `ProjectFitResult.datasets[i].fit_result.confidence` semantics; no re-derivation of confidence.
 - Removes: nothing.
 
-- [ ] **Step 1: Write the failing exit-code contract**
+- [x] **Step 1: Write the failing exit-code contract**
 
 Create `tests/unit/cli/test_exit_codes.py`:
 
@@ -276,7 +276,7 @@ def test_json_rendering_survives_a_missing_dataset_id() -> None:
 
 `best_objective` starts at `inf` in practice and `json.dumps` would emit bare `Infinity`, which is not valid JSON for strict parsers. Mapping non-finite values to `null` keeps the stream consumable by any JSON Lines reader.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -o addopts= --import-mode=importlib -p tests.outcome_gate tests/unit/cli -q
@@ -284,7 +284,7 @@ PYTHONDONTWRITEBYTECODE=1 python -m pytest -o addopts= --import-mode=importlib -
 
 Expected RED: `ModuleNotFoundError: No module named 'xrr_fitter.cli.exit_codes'`.
 
-- [ ] **Step 3: Implement the two leaf modules**
+- [x] **Step 3: Implement the two leaf modules**
 
 Create `src/xrr_fitter/cli/exit_codes.py`. Keep the mapping an explicit dict over enum members so a new member raises `KeyError` instead of defaulting:
 
@@ -378,13 +378,13 @@ def render_json(progress: api.FitProgress) -> str:
     )
 ```
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run the exact command from Step 2.
 
 Expected: all tests in `tests/unit/cli` pass, and `tests/outcome_gate.py` reports no skipped outcome.
 
-- [ ] **Step 5: Commit the contract modules**
+- [x] **Step 5: Commit the contract modules**
 
 ```bash
 git add src/xrr_fitter/cli/exit_codes.py src/xrr_fitter/cli/progress.py tests/unit/cli/test_exit_codes.py tests/unit/cli/test_progress.py
@@ -406,7 +406,7 @@ git commit -m "feat: add cli exit-code contract and progress rendering"
 - Preserves: every consumed signature exactly as locked in `tests/architecture/test_public_api.py`.
 - Removes: nothing.
 
-- [ ] **Step 1: Write the failing dispatch contract**
+- [x] **Step 1: Write the failing dispatch contract**
 
 Create `tests/unit/cli/test_dispatch.py`. Monkeypatch at the `api` module the CLI imports, so no fit actually runs:
 
@@ -493,7 +493,7 @@ def test_cli_package_never_imports_pyside6() -> None:
 
 The stale-source test distinguishes exit code `3` from `2`: a project that parses but whose sources moved is a different operational failure than a malformed project, and an orchestrator needs to tell them apart.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -o addopts= --import-mode=importlib -p tests.outcome_gate tests/unit/cli/test_dispatch.py -q
@@ -501,7 +501,7 @@ PYTHONDONTWRITEBYTECODE=1 python -m pytest -o addopts= --import-mode=importlib -
 
 Expected RED: `ModuleNotFoundError: No module named 'xrr_fitter.cli.main'`.
 
-- [ ] **Step 3: Implement the handlers**
+- [x] **Step 3: Implement the handlers**
 
 Create `src/xrr_fitter/cli/commands.py`. Import the api module as `api` so tests can monkeypatch `commands.api.<name>`, and keep every handler under the Radon block limit by extracting the shared load-and-validate step:
 
@@ -697,13 +697,13 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run the exact command from Step 2.
 
 Expected: every dispatch test passes, including the AST check that no CLI module imports PySide6.
 
-- [ ] **Step 5: Register the new unit directory**
+- [x] **Step 5: Register the new unit directory**
 
 In `tools/verify_registry.py`, add `"tests/unit/cli"` to the `unit` mode tuple, keeping the existing order convention with the new entry after `"tests/unit/services"`. Apply the identical edit to `_expected_registry` in `tests/unit/tools/test_verify_registry.py` — `test_registry_is_exact_for_completed_suites` asserts exact equality, so the two must change together.
 
@@ -714,7 +714,7 @@ PYTHONDONTWRITEBYTECODE=1 python tools/verify.py unit
 
 Expected: both exit 0, and the `unit` run now collects `tests/unit/cli`.
 
-- [ ] **Step 6: Commit the CLI surface**
+- [x] **Step 6: Commit the CLI surface**
 
 ```bash
 git add src/xrr_fitter/cli/commands.py src/xrr_fitter/cli/main.py tests/unit/cli/test_dispatch.py tools/verify_registry.py tests/unit/tools/test_verify_registry.py
@@ -736,7 +736,7 @@ git commit -m "feat: add headless cli subcommands"
 - Preserves: `[project.gui-scripts] xrr-fitter` exactly as it is today.
 - Removes: nothing.
 
-- [ ] **Step 1: Write the failing distribution expectation**
+- [x] **Step 1: Write the failing distribution expectation**
 
 In `tests/architecture/test_distribution.py`, extend the entry-point assertion next to the existing `gui-scripts` check:
 
@@ -770,7 +770,7 @@ def test_release_spec_renders_both_script_tables() -> None:
 
 Match the real helper name and call convention in `tools/build_release_spec.py` when writing this test; the assertion content is what matters, not the exact private name used here.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -o addopts= --import-mode=importlib -p tests.outcome_gate tests/architecture/test_distribution.py -q
@@ -778,7 +778,7 @@ PYTHONDONTWRITEBYTECODE=1 python -m pytest -o addopts= --import-mode=importlib -
 
 Expected RED: `KeyError: 'scripts'` or a missing `[project.scripts]` section, because `tools/build_release_spec.py:217` reads only `gui-scripts`.
 
-- [ ] **Step 3: Declare the entry point and generalize the renderer**
+- [x] **Step 3: Declare the entry point and generalize the renderer**
 
 In `pyproject.toml`, add the table directly after the existing one:
 
@@ -807,7 +807,7 @@ Update `_expected_generated_metadata` so `entry_points.txt` is expected when eit
         return GENERATED_METADATA
 ```
 
-- [ ] **Step 4: Confirm GREEN and regenerate the release spec**
+- [x] **Step 4: Confirm GREEN and regenerate the release spec**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -o addopts= --import-mode=importlib -p tests.outcome_gate tests/architecture/test_distribution.py -q
@@ -816,7 +816,7 @@ PYTHONDONTWRITEBYTECODE=1 python tools/verify.py distribution
 
 Expected: both exit 0. If `tools/build_release_spec.py` writes `verification/release-spec.json`, regenerate it in the same commit so the fixture cannot drift from `pyproject.toml`; inspect the diff and confirm the only change is the added `scripts` table.
 
-- [ ] **Step 5: Confirm the installed console script actually runs**
+- [x] **Step 5: Confirm the installed console script actually runs**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m xrr_fitter.cli.main --help
@@ -824,7 +824,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m xrr_fitter.cli.main --help
 
 Expected: exit 0 and `usage: xrr-fitter-cli` on stdout. This is the module path the console script wraps; the packaged-script check happens in `distribution` mode above.
 
-- [ ] **Step 6: Commit the packaging change**
+- [x] **Step 6: Commit the packaging change**
 
 ```bash
 git add pyproject.toml tools/build_release_spec.py tests/architecture/test_distribution.py verification/release-spec.json
@@ -847,7 +847,7 @@ git commit -m "feat: declare xrr-fitter-cli console entry point"
 - Preserves: `SERVICE_SEED_TREE_VERSION` determinism as an asserted fact rather than a claim.
 - Removes: nothing.
 
-- [ ] **Step 1: Write the failing integration contract**
+- [x] **Step 1: Write the failing integration contract**
 
 Create `tests/integration/test_cli_workflow.py`, reusing the PySide6 guard idiom from `tests/integration/test_entrypoints.py`:
 
@@ -956,7 +956,7 @@ def test_cli_fit_matches_the_in_process_api_fit(tmp_path: Path) -> None:
 
 Write `_write_example_project` using whichever example-project helper the neighbouring integration tests already use, so this file introduces no new fixture format. If the fastest available example still makes the equivalence test slow, shrink its fit budget through the project's own `FitConfig` rather than adding a marker — every mode in `pr-verify.yml` runs on every PR, and a `skip` would trip `tests/outcome_gate.py`.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -o addopts= --import-mode=importlib -p tests.outcome_gate tests/integration/test_cli_workflow.py -q
@@ -964,11 +964,11 @@ PYTHONDONTWRITEBYTECODE=1 python -m pytest -o addopts= --import-mode=importlib -
 
 Expected RED: the runs fail before the assertions because `xrr_fitter.cli.main` is not yet reachable under the guarded environment, or the equivalence comparison differs.
 
-- [ ] **Step 3: Register the integration module**
+- [x] **Step 3: Register the integration module**
 
 In `tools/verify_registry.py`, add `"tests/integration/test_cli_workflow.py"` to the `integration` mode's explicit file list, and mirror the edit in `_expected_registry` in `tests/unit/tools/test_verify_registry.py`.
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -o addopts= --import-mode=importlib -p tests.outcome_gate tests/integration/test_cli_workflow.py -q
@@ -977,7 +977,7 @@ PYTHONDONTWRITEBYTECODE=1 python tools/verify.py tools
 
 Expected: both exit 0. If the equivalence test fails, do not loosen it to a tolerance comparison — a mismatch means the CLI is not going through the same seeded path, which is the defect this test exists to catch.
 
-- [ ] **Step 5: Document the CLI**
+- [x] **Step 5: Document the CLI**
 
 Add a new `## 14. 无头命令行` section to `docs/user-guide.md` after section 13. Cover the four subcommands, the exit-code table, and one paragraph on resume that matches the design:
 
@@ -988,7 +988,7 @@ parameter settings、config、stage graph、candidate order、seed ledger 与 jo
 layout fingerprint，一致则从记录的 stage 继续，不一致则显式拒绝并保留原结果。
 ```
 
-- [ ] **Step 6: Run the full affected gate set**
+- [x] **Step 6: Run the full affected gate set**
 
 Run each command separately:
 
@@ -1005,7 +1005,7 @@ git diff --check
 
 Expected: every command exits 0. `quality` covers the architecture suite including the new `cli` allowlist row and the `PUBLIC_NAMES` change; `check_radon.py` covers the new modules; `check_hygiene.py` confirms no stray root-level artifacts.
 
-- [ ] **Step 7: Commit the verification layer**
+- [x] **Step 7: Commit the verification layer**
 
 ```bash
 git add tests/integration/test_cli_workflow.py tools/verify_registry.py tests/unit/tools/test_verify_registry.py docs/user-guide.md
