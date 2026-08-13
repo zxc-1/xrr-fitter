@@ -61,14 +61,31 @@ def _prior_center(prior: PriorSpec) -> float | None:
     return None
 
 
-def _definition_prior(name: str, lower: float, upper: float, prior: PriorSpec | None) -> None:
+def _definition_prior(
+    name: str,
+    transform: str,
+    lower: float,
+    upper: float,
+    prior: PriorSpec | None,
+) -> None:
     if prior is None:
         return
     if not isinstance(prior, PriorSpec):
         raise TypeError("prior must be a PriorSpec")
     center = _prior_center(prior)
-    if center is not None and not lower <= center <= upper:
+    if center is None:
+        return
+    # roughness_fraction 先验在消费侧(evaluation._prior_coordinate)恒落在无量纲单位
+    # 分数 [0,1] 上,因为物理粗糙度上界依赖此标量路径并不持有的几何快照。构造期校验
+    # 必须匹配同一坐标系,否则合法分数中心会被 Å 下界误拒、Å 量级的伪中心会被误纳。
+    low, high = (0.0, 1.0) if transform == "roughness_fraction" else (lower, upper)
+    if not low <= center <= high:
         raise ValueError(f"{name} prior center must be within bounds")
+    # A lognormal prior is valid only on a declaration whose entire support is
+    # strictly positive.  Reject a zero endpoint as well as a negative one so
+    # the persisted declaration cannot claim density where log(x) is undefined.
+    if prior.kind == "lognormal" and low <= 0.0:
+        raise ValueError(f"{name} lognormal prior requires a positive lower bound")
 
 
 def _name(value: str, field: str) -> None:
@@ -143,7 +160,7 @@ class ParameterDefinition:
             raise TypeError("parameter flags must be bool")
         if self.sharing_key is not None:
             _name(self.sharing_key, "sharing_key")
-        _definition_prior(self.name, self.lower, self.upper, self.prior)
+        _definition_prior(self.name, self.transform, self.lower, self.upper, self.prior)
 
 
 def _effective_upper(

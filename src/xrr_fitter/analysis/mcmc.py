@@ -423,6 +423,23 @@ def prior_conflicts(
     spreads about the center.
     """
     unit = _validated_unit(problem, representative_unit)
+    estimates = np.asarray(
+        [
+            _prior_coordinate(
+                problem.parameter_definitions[variable.parameter_index],
+                float(unit[index]),
+            )[0]
+            for index, variable in enumerate(problem.variables)
+        ],
+        dtype=float,
+    )
+    return _prior_conflict_names(problem, estimates)
+
+
+def _prior_conflict_names(
+    problem: FitEvaluationContext,
+    estimates: np.ndarray,
+) -> tuple[str, ...]:
     sigmas = problem.config.confidence.prior_conflict_sigmas
     conflicts: list[str] = []
     for index, variable in enumerate(problem.variables):
@@ -432,9 +449,8 @@ def prior_conflicts(
         location = prior_center_and_spread(definition.prior)
         if location is None:
             continue
-        estimate, _lower, _upper = _prior_coordinate(definition, float(unit[index]))
         center, spread = location
-        if abs(estimate - center) > sigmas * spread:
+        if abs(float(estimates[index]) - center) > sigmas * spread:
             conflicts.append(variable.name)
     return tuple(conflicts)
 
@@ -442,14 +458,22 @@ def prior_conflicts(
 def mcmc_prior_conflicts(
     problem: FitEvaluationContext,
     flat_unit: np.ndarray,
+    physical: np.ndarray,
 ) -> tuple[str, ...]:
     """Flag posterior parameters whose retained median departs from its prior.
 
-    The per-parameter unit median is a monotone image of the physical median, so
-    scoring it in the prior's declared coordinate keeps the comparison consistent
-    for both physical and unit-fraction priors.
+    Physical priors use the median of the mapped physical samples. Fractional
+    roughness priors remain in their declared unit coordinate. This distinction
+    matters for an even retained sample count because NumPy averages the two
+    central values and nonlinear transforms do not preserve that average.
     """
-    return prior_conflicts(problem, np.median(flat_unit, axis=0))
+    estimates = np.median(physical, axis=0)
+    unit_medians = np.median(flat_unit, axis=0)
+    for index, variable in enumerate(problem.variables):
+        definition = problem.parameter_definitions[variable.parameter_index]
+        if definition.transform == "roughness_fraction":
+            estimates[index] = unit_medians[index]
+    return _prior_conflict_names(problem, estimates)
 
 
 def run_problem_mcmc(
@@ -487,5 +511,5 @@ def run_problem_mcmc(
         boundary_hits=mcmc_boundary_hits(problem, flat_unit, physical),
         warnings=problem_mcmc_warnings(ensemble, names),
         candidate_id=getattr(candidate, "candidate_id", None),
-        prior_conflicts=mcmc_prior_conflicts(problem, flat_unit),
+        prior_conflicts=mcmc_prior_conflicts(problem, flat_unit, physical),
     )

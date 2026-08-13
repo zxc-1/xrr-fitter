@@ -21,19 +21,21 @@ class CheckpointIdentity:
     parameter_settings_fingerprint: str
 
 
-PRIOR_OMITTED_DEFAULTS: dict[tuple[str, str], object] = {
+POST_FREEZE_OMITTED_DEFAULTS: dict[tuple[str, str], object] = {
     ("ParameterDefinition", "prior"): None,
     ("ConfidenceThresholds", "prior_conflict_sigmas"): 3.0,
+    ("LayerSpec", "transition"): None,
 }
 
 
-def _is_unset_prior_field(type_name: str, field_name: str, current: object) -> bool:
-    # Prior-related fields joined the schema after checkpoints were frozen. When
-    # they hold their pre-prior default we omit them so an unconfigured run
-    # reproduces its historical fingerprint bit-for-bit and still resumes; a
-    # configured prior keeps the field and therefore earns a distinct identity.
+def _is_unset_post_freeze_field(type_name: str, field_name: str, current: object) -> bool:
+    # These fields (priors, confidence sigmas, interface transitions) joined the
+    # schema after checkpoints were frozen. When one still holds its pre-existing
+    # default we omit it so an unconfigured run reproduces its historical
+    # fingerprint bit-for-bit and still resumes; a configured value keeps the
+    # field and therefore earns a distinct identity.
     key = (type_name, field_name)
-    return key in PRIOR_OMITTED_DEFAULTS and current == PRIOR_OMITTED_DEFAULTS[key]
+    return key in POST_FREEZE_OMITTED_DEFAULTS and current == POST_FREEZE_OMITTED_DEFAULTS[key]
 
 
 def _canonical_dataclass(value: object) -> dict[str, object]:
@@ -41,7 +43,7 @@ def _canonical_dataclass(value: object) -> dict[str, object]:
     return {
         field.name: _canonical(getattr(value, field.name))
         for field in fields(value)
-        if not _is_unset_prior_field(type_name, field.name, getattr(value, field.name))
+        if not _is_unset_post_freeze_field(type_name, field.name, getattr(value, field.name))
     }
 
 

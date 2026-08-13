@@ -237,7 +237,12 @@ class ParametersPanel(QWidget):
     def _edit_prior_row(self, name: str) -> None:
         from xrr_fitter.gui.parameters.dialogs import PriorDialog
 
-        dialog = PriorDialog(self)
+        definition = self._definition(name)
+        dialog = PriorDialog(
+            definition,
+            self,
+            existing_prior=definition.prior,
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         spec = dialog.spec()

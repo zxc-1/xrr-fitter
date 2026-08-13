@@ -188,3 +188,79 @@ def test_parameter_definition_rejects_prior_center_outside_bounds() -> None:
             locked=False,
             prior=PriorSpec("normal", (500.0, 2.0)),
         )
+
+
+def test_roughness_fraction_prior_center_is_validated_in_unit_fraction() -> None:
+    # roughness_fraction 先验在消费侧(evaluation._prior_coordinate)恒落在无量纲单位
+    # 分数 [0,1] 上,而非定义里以 Å 计的物理界 [lower, upper]。构造期校验必须用同一
+    # 坐标系:一个看似落在 Å 界内(25.0∈[0,50] Å)的中心其实是非法分数(>1),必须被拒,
+    # 否则它会在 fit/MCMC 时落到 [0,1] 截断先验之外(先验无质量)而在运行期才炸。
+    with pytest.raises(ValueError, match="prior center must be within bounds"):
+        ParameterDefinition(
+            name="component.0.roughness_a",
+            display_name="Roughness",
+            unit="Å",
+            category="interface",
+            initial=10.0,
+            lower=0.0,
+            upper=50.0,
+            transform="roughness_fraction",
+            locked=False,
+            prior=PriorSpec("normal", (25.0, 1.0)),
+        )
+
+
+def test_roughness_fraction_prior_accepts_fractional_center_below_physical_lower() -> None:
+    # 反向:物理 Å 下界 > 1 时,一个合法的分数中心(0.3∈[0,1])不得因 0.3 < 2.0 Å 被误拒
+    # ——先验坐标系是单位分数,与 Å 下界无关。
+    definition = ParameterDefinition(
+        name="component.0.roughness_a",
+        display_name="Roughness",
+        unit="Å",
+        category="interface",
+        initial=10.0,
+        lower=2.0,
+        upper=50.0,
+        transform="roughness_fraction",
+        locked=False,
+        prior=PriorSpec("normal", (0.3, 0.1)),
+    )
+
+    assert definition.prior == PriorSpec("normal", (0.3, 0.1))
+
+
+def test_lognormal_prior_rejects_a_negative_lower_bound() -> None:
+    # lognormal 支撑集是 (0, ∞);挂到会取负值的参数(如 sld_real,下界 <0)上时,负半轴
+    # 被静默赋零先验概率——用户以为设了先验,实则禁掉了半个物理域。构造期必须直接拒绝,
+    # 而不是让 _prior_norm 在运行期对负区密度取 0 后悄悄误归一化。
+    with pytest.raises(ValueError, match="lognormal prior requires a positive lower bound"):
+        ParameterDefinition(
+            name="component.0.sld_real_a2",
+            display_name="SLD real",
+            unit="Å⁻²",
+            category="material",
+            initial=0.0,
+            lower=-150e-6,
+            upper=150e-6,
+            transform="linear",
+            locked=False,
+            prior=PriorSpec("lognormal", (log(50e-6), 0.25)),
+        )
+
+
+def test_lognormal_prior_rejects_a_zero_lower_bound() -> None:
+    # The frozen prior contract rejects any declaration whose support may
+    # include zero: lognormal density is defined only for strictly positive x.
+    with pytest.raises(ValueError, match="lognormal prior requires a positive lower bound"):
+        ParameterDefinition(
+            name="component.0.roughness_a",
+            display_name="Roughness",
+            unit="Å",
+            category="interface",
+            initial=10.0,
+            lower=0.0,
+            upper=50.0,
+            transform="roughness_fraction",
+            locked=False,
+            prior=PriorSpec("lognormal", (log(0.3), 0.25)),
+        )

@@ -20,6 +20,12 @@ def _display_scale(definition: api.ParameterDefinition) -> float:
     return 0.1 if _uses_nm(definition) else 1.0
 
 
+def _prior_display_scale(definition: api.ParameterDefinition) -> float:
+    # Roughness-fraction priors live on [0, 1], even though the corresponding
+    # physical-value columns display the decoded roughness in nm.
+    return 1.0 if definition.transform == "roughness_fraction" else _display_scale(definition)
+
+
 def _number(value: float) -> str:
     return f"{value:.12g}"
 
@@ -43,7 +49,7 @@ def _prior_summary(definition: api.ParameterDefinition) -> str:
     prior = definition.prior
     if prior is None:
         return ""
-    return f"{prior.kind}({_prior_body(prior, _display_scale(definition))})"
+    return f"{prior.kind}({_prior_body(prior, _prior_display_scale(definition))})"
 
 
 class ParameterTable(QTableWidget):

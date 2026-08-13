@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from types import MappingProxyType
-from typing import Mapping
 
 from xrr_fitter.io.source import dataset_index
 from xrr_fitter.model.analysis import StructureEvidence
@@ -20,14 +20,13 @@ from xrr_fitter.model.structure import (
     StructureSpec,
 )
 from xrr_fitter.physics.stack import expand_structure
-from xrr_fitter.services.datasets import _prepared_current, _replace_invalidated
 from xrr_fitter.services import fitting
+from xrr_fitter.services.datasets import _prepared_current, _replace_invalidated
 from xrr_fitter.services.parameters import (
     _reconciled_parameter_settings,
     describe_parameters,
     validate_parameter_settings,
 )
-
 
 OXIDE_TABLE_VERSION = "oxide-table-v1"
 OXIDE_TABLE: Mapping[str, tuple[str, float]] = MappingProxyType(
@@ -47,11 +46,7 @@ def validate_structure(structure: StructureSpec, beam: BeamSpec) -> None:
         raise TypeError("structure must be a StructureSpec")
     if not isinstance(beam, BeamSpec):
         raise TypeError("beam must be a BeamSpec")
-    wavelengths = (
-        (beam.wavelength_a,)
-        if beam.kind == "monochromatic"
-        else (beam.wavelength_1_a, beam.wavelength_2_a)
-    )
+    wavelengths = (beam.wavelength_a,) if beam.kind == "monochromatic" else (beam.wavelength_1_a, beam.wavelength_2_a)
     for wavelength in wavelengths:
         expand_structure(structure, wavelength)
 
@@ -152,8 +147,7 @@ def _reconciled_sharing(
         members = tuple(
             member
             for member in rule.members
-            if member.dataset_id != dataset_id
-            or member.parameter_name in compatible_names
+            if member.dataset_id != dataset_id or member.parameter_name in compatible_names
         )
         if len(members) >= 2:
             retained.append(replace(rule, members=members))
@@ -170,7 +164,7 @@ def _set_dataset_structure(
     validate_structure(structure, dataset.beam)
     if structure == dataset.structure:
         return project
-    settings, compatible = _reconciled_parameter_settings(
+    settings, priors, compatible = _reconciled_parameter_settings(
         project,
         dataset_id,
         structure,
@@ -180,6 +174,7 @@ def _set_dataset_structure(
         structure=structure,
         structure_evidence=None,
         parameter_settings=settings,
+        parameter_priors=priors,
     )
     invalidated = _replace_invalidated(
         project,
@@ -205,9 +200,7 @@ def set_structure(
     """Persist one structure, propagating its topology across a joint batch."""
     dataset_index(project, dataset_id)
     target_ids = (
-        tuple(dataset.dataset_id for dataset in project.datasets)
-        if project.batch_mode == "joint"
-        else (dataset_id,)
+        tuple(dataset.dataset_id for dataset in project.datasets) if project.batch_mode == "joint" else (dataset_id,)
     )
     updated = project
     for target_id in target_ids:
@@ -236,11 +229,7 @@ def _with_decision(
 ) -> XrrProject:
     dataset = project.datasets[index]
     identity = _oxide_identity(decision)
-    decisions = tuple(
-        item
-        for item in dataset.oxide_decisions
-        if _oxide_identity(item) != identity
-    )
+    decisions = tuple(item for item in dataset.oxide_decisions if _oxide_identity(item) != identity)
     datasets = list(project.datasets)
     datasets[index] = replace(dataset, oxide_decisions=(*decisions, decision))
     return replace(project, datasets=tuple(datasets))
@@ -319,11 +308,7 @@ def accept_oxide_suggestion(
         f"{prefix}.density_scale",
         f"{prefix}.roughness_a",
     }
-    retained = tuple(
-        setting
-        for setting in dataset.parameter_settings
-        if setting.name not in inserted_names
-    )
+    retained = tuple(setting for setting in dataset.parameter_settings if setting.name not in inserted_names)
     settings = validate_parameter_settings(
         describe_parameters(updated, dataset_id),
         (

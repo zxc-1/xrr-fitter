@@ -4,6 +4,22 @@ The suite covers readiness, seed allocation, adaptive search, recovery analysis,
 absorption release, and project publication through the service boundary. Tests
 keep search provenance and immutable project transitions visible while replacing
 expensive numerical work with deterministic collaborators where appropriate.
+
+The orchestration cases deliberately retain their call-sequence assertions:
+they distinguish service composition defects from numerical fitting defects.
+Prepared-dataset, automatic, joint, recovery, absorption, checkpoint, and
+sidecar contracts share the same helpers so every phase is tested against one
+consistent immutable problem shape.  Lightweight harnesses replace only the
+expensive calculation boundary; source loading, request construction,
+publication, invalidation, and error translation continue through production
+service code.  This keeps failures attributable while preserving the complete
+end-to-end ownership contract.
+
+Seed and provenance assertions remain exact rather than approximate.  Error
+cases likewise assert the owning service message so an invalid declaration
+cannot be mistaken for a failed optimizer run.  Sidecar tests compile the
+effective retained settings before judging priors, matching the runtime order.
+The suite therefore records both the decisive input and published output.
 """
 
 from __future__ import annotations
@@ -40,6 +56,7 @@ from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.fitting import FitConfig, FitSearchResult, FitStageSummary
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.operations import ProjectFitResult
+from xrr_fitter.model.parameters import ParameterPrior, ParameterSetting, PriorSpec
 from xrr_fitter.model.provenance import fit_search_provenance_sha256
 from xrr_fitter.model.structure import MaterialSpec
 from xrr_fitter.services import fitting
@@ -595,6 +612,54 @@ def test_preflight_loads_current_sources_and_compiles_declared_structure(
     assert ready.message == "ready"
     assert missing_structure.ready is False
     assert "structure" in missing_structure.message
+
+
+def test_preflight_rejects_stale_parameter_priors(tmp_path: Path) -> None:
+    value = _project(tmp_path)
+    stale = ParameterPrior("component.99.thickness_a", PriorSpec("uniform"))
+    value = replace(
+        value,
+        datasets=(replace(value.datasets[0], parameter_priors=(stale,)),),
+    )
+
+    readiness = fitting.preflight_fit(value)
+
+    assert readiness.ready is False
+    assert "unknown parameter name" in readiness.message
+
+
+def test_reconcile_parameter_sidecars_validates_priors_against_retained_settings(
+    tmp_path: Path,
+) -> None:
+    value = _project(tmp_path)
+    prepared = fitting.prepare_dataset_fit(value, "curve", value.master_seed)
+    thickness = next(
+        definition
+        for definition in prepared.problem.parameter_definitions
+        if definition.name == "component.0.thickness_a"
+    )
+    retained_setting = ParameterSetting(
+        thickness.name,
+        thickness.initial,
+        10.0,
+        30.0,
+    )
+    stale_prior = ParameterPrior(thickness.name, PriorSpec("normal", (50.0, 5.0)))
+    value = replace(
+        value,
+        datasets=(
+            replace(
+                value.datasets[0],
+                parameter_settings=(retained_setting,),
+                parameter_priors=(stale_prior,),
+            ),
+        ),
+    )
+
+    reconciled = fitting._reconcile_parameter_sidecars(value, "curve")
+
+    assert reconciled.datasets[0].parameter_settings == (retained_setting,)
+    assert reconciled.datasets[0].parameter_priors == ()
 
 
 def test_fitting_composes_search_profile_recovery_and_analysis_in_order(

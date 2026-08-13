@@ -2092,6 +2092,132 @@ def _unnormalized_density(kind: str, parameters: tuple[float, ...], x: float) ->
 PRIOR_QUADRATURE_NODES = 2049
 
 
+PRIOR_GRID_NODES: dict[str, Callable[[tuple[float, ...]], np.ndarray]] = {
+    "normal": lambda values: values[0] + values[1] * np.linspace(-12.0, 12.0, 1025),
+    "lognormal": lambda values: np.exp(values[0] + values[1] * np.linspace(-12.0, 12.0, 1025)),
+    "soft_range": lambda values: np.concatenate(
+        (
+            values[0] + values[2] * np.linspace(-12.0, 12.0, 513),
+            values[1] + values[2] * np.linspace(-12.0, 12.0, 513),
+        )
+    ),
+}
+
+
+def _prior_grid(
+    kind: str,
+    parameters: tuple[float, ...],
+    lower: float,
+    upper: float,
+) -> np.ndarray:
+    """Return a deterministic grid refined around every narrow feature.
+
+    The original 2049 evenly spaced nodes remain the common integration grid.
+    They preserve the established uniform-prior path and provide complete hard
+    support coverage for every distribution.
+
+    Normal and lognormal kernels can be much narrower than one base interval.
+    Each therefore contributes 1025 nodes spanning twelve standard deviations
+    on either side of its center.  Twelve sigmas include essentially all mass
+    while retaining deterministic, finite work independent of the hard-box
+    width.
+
+    Lognormal nodes are spaced in the distribution's native log coordinate and
+    exponentiated only after refinement.  This prevents a narrow positive-space
+    peak from disappearing when the physical hard box spans several decades.
+
+    Soft ranges have two independently sharp shoulders.  Both edges receive
+    513 nodes across the same twelve-sigma window, so each transition is
+    resolved without biasing the flat interior toward either edge.
+
+    Nodes outside the declared box and non-finite exponentiation results are
+    removed before the union.  The hard endpoints are inserted explicitly;
+    sorting and duplicate removal are delegated to ``np.unique`` so cumulative
+    integration always sees a strictly increasing coordinate vector.
+
+    Uniform priors have no local feature and use the base grid unchanged.  The
+    dispatch table keeps distribution-specific geometry out of this shared
+    assembly path and avoids a branch ladder as future prior kinds are added.
+
+    Refinement changes only numerical resolution.  It does not widen support,
+    alter log kernels, change the cached normalization key, or affect problems
+    with no parameter priors.
+
+    The generated nodes are deterministic functions of immutable prior
+    parameters.  No random generator, mutable cache entry, fitted vector, or
+    platform path participates in their construction.
+
+    The normal window is affine in physical coordinates.  Translating its mean
+    translates every local node by the same amount; scaling its sigma scales
+    every offset without moving the declared hard endpoints.
+
+    The lognormal window applies that same affine construction before the
+    exponential map.  Positive support follows from exponentiation, while an
+    overflowed tail is discarded by the common finite-node filter.
+
+    The soft-range window treats its lower and upper shoulder symmetrically.
+    Concatenation order is irrelevant after sorting, but constructing both with
+    one shared offset vector guarantees matching resolution.
+
+    Base and local nodes may coincide at centers, shoulders, or hard endpoints.
+    Duplicate removal prevents zero-width trapezoids and therefore avoids a
+    distribution-specific special case in cumulative integration.
+
+    Clipping happens before the union rather than after integration.  Thus no
+    probability mass is sampled outside the conditioned interval and every CDF
+    entry corresponds to a coordinate that is legal for the parameter.
+
+    Keeping the base grid for narrow priors is intentional.  Local nodes resolve
+    the peak while base nodes retain tails, broad shoulders, and both support
+    endpoints in the same cumulative array.
+
+    Returning the untouched base array for a uniform prior preserves its exact
+    historical spacing and cumulative interpolation behavior.
+
+    The cached normalization remains keyed by kind, parameters, and bounds, so
+    repeated density and quantile calls reuse this complete refined grid.
+
+    CDF and inverse-CDF interpolation consume the identical returned axes.
+    Refinement therefore improves both directions together rather than letting
+    density, probability, and quantile calculations drift onto separate grids.
+
+    Endpoint insertion is retained even though the base grid already contains
+    both bounds.  It makes the local-grid contract explicit and robust if the
+    base construction is later replaced by another deterministic mesh.
+
+    A missing dispatch entry means that the prior has no localized feature.
+    Falling back to the base grid is preferable to fabricating arbitrary anchor
+    points or silently changing that prior's kernel.
+
+    Twelve-sigma windows are deliberately much wider than conventional display
+    intervals.  The extra tail nodes cost little after caching and prevent the
+    truncated normalization from depending on one coarse interval around a very
+    narrow center.
+
+    All arrays use NumPy's default floating dtype, matching the surrounding
+    evaluation boundary and avoiding hidden precision conversions between the
+    grid, density, trapezoid, and interpolation stages.
+
+    The helper returns a newly owned array for every uncached construction.
+    Callers normalize and retain it without mutating shared module constants.
+
+    Sorted finite nodes also make monotonic CDF construction an invariant rather
+    than an assumption left to each prior-specific node generator.
+
+    This single assembly function is the only place that combines global hard
+    support with local distribution geometry.
+
+    Its output is ready for direct trapezoidal integration.
+    """
+    base = np.linspace(lower, upper, PRIOR_QUADRATURE_NODES)
+    nodes = PRIOR_GRID_NODES.get(kind)
+    if nodes is None:
+        return base
+    local = nodes(parameters)
+    local = local[np.isfinite(local) & (local >= lower) & (local <= upper)]
+    return np.unique(np.concatenate((base, local, (lower, upper))))
+
+
 @lru_cache(maxsize=256)
 def _prior_norm(
     kind: str,
@@ -2106,7 +2232,7 @@ def _prior_norm(
     Keys are immutable scalars only, so frozen ``PriorSpec`` values are never
     retained and repeated evaluation costs one dict lookup.
     """
-    grid = np.linspace(lower, upper, PRIOR_QUADRATURE_NODES)
+    grid = _prior_grid(kind, parameters, lower, upper)
     density = np.array([_unnormalized_density(kind, parameters, float(x)) for x in grid])
     increments = np.diff(grid) * (density[:-1] + density[1:]) / 2.0
     cumulative = np.concatenate(([0.0], np.cumsum(increments)))
