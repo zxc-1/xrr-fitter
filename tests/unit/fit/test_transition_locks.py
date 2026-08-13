@@ -10,9 +10,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import numpy as np
 import pytest
 from tests.support.model_cases import prepared_data, simple_structure
 
+from xrr_fitter.evaluation import encode_physical_vector
+from xrr_fitter.fit.local_search import local_jacobian, solve_local
 from xrr_fitter.fit.problem import compile_fit_problem, compile_stage_problem
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
@@ -83,6 +86,49 @@ def test_layer_without_transition_keeps_free_roughness() -> None:
     assert definition.locked is False
     assert definition.lower == 0.0
     assert definition.upper == max(50.0, 0.49 * thickness.initial)
+
+
+def test_transition_thickness_lower_bound_covers_declared_width() -> None:
+    problem = _problem(_transition_structure())
+
+    definition = _definition(problem, "component.0.thickness_a")
+
+    assert definition.lower == 8.0
+
+
+def test_transition_thickness_setting_cannot_reopen_values_below_width() -> None:
+    settings = (ParameterSetting("component.0.thickness_a", 20.0, 2.0, 45.0, locked=False),)
+
+    with pytest.raises(ValueError, match="过渡.*厚度"):
+        _problem(_transition_structure(), settings)
+
+
+def _transition_lower_bound_unit(problem) -> np.ndarray:
+    unit = np.array(encode_physical_vector(problem, {}), copy=True)
+    index = next(
+        index for index, coordinate in enumerate(problem.variables) if coordinate.name == "component.0.thickness_a"
+    )
+    unit[index] = 0.0
+    return unit
+
+
+def test_transition_jacobian_accepts_thickness_at_declared_width() -> None:
+    problem = _problem(_transition_structure())
+    unit = _transition_lower_bound_unit(problem)
+
+    jacobian = local_jacobian(problem, unit)
+
+    assert jacobian.shape == (np.count_nonzero(problem.data.fit_mask), len(problem.variables))
+    assert np.all(np.isfinite(jacobian))
+
+
+def test_transition_local_solver_accepts_thickness_at_declared_width() -> None:
+    problem = _problem(_transition_structure())
+    unit = _transition_lower_bound_unit(problem)
+
+    result = solve_local(problem, unit, max_nfev=2)
+
+    assert result.evaluation.valid
 
 
 def test_unlocking_transition_roughness_is_rejected_at_compile_time() -> None:
