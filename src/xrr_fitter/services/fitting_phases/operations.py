@@ -15,6 +15,7 @@ from xrr_fitter.services.projects import inspect_sources
 
 from .common import CancellationProbe, CheckpointCallback, ProgressCallback
 
+
 def _source_failure(validation) -> str | None:
     if validation.valid:
         return None
@@ -39,8 +40,7 @@ def _compile_preflight_fit(
 ) -> None:
     seeds = _preflight_seeds(project)
     prepared = tuple(
-        prepare_dataset_fit(project, dataset.dataset_id, seeds[dataset.dataset_id])
-        for dataset in project.datasets
+        prepare_dataset_fit(project, dataset.dataset_id, seeds[dataset.dataset_id]) for dataset in project.datasets
     )
     if project.batch_mode == "joint":
         compile_joint_problem(
@@ -74,9 +74,7 @@ def preflight_fit(
     return FitReadiness(True, "ready")
 
 
-AUTOMATIC_RUNNABLE = frozenset(
-    {AutomaticStatus.PENDING, AutomaticStatus.REFINING, AutomaticStatus.REVIEW}
-)
+AUTOMATIC_RUNNABLE = frozenset({AutomaticStatus.PENDING, AutomaticStatus.REFINING, AutomaticStatus.REVIEW})
 
 
 def _automatic_dataset_ids(
@@ -88,10 +86,7 @@ def _automatic_dataset_ids(
         for dataset in project.datasets
         if dataset.automation.role is not AutomaticRole.MANUAL
         and dataset.automation.status in AUTOMATIC_RUNNABLE
-        and (
-            import_batch_id is None
-            or dataset.automation.import_batch_id == import_batch_id
-        )
+        and (import_batch_id is None or dataset.automation.import_batch_id == import_batch_id)
     )
 
 
@@ -108,10 +103,7 @@ def preflight_automatic_fit(
     if not dataset_ids:
         return FitReadiness(False, "no runnable automatic datasets")
     try:
-        records = {
-            record.dataset_id: record
-            for record in inspect_sources(project).datasets
-        }
+        records = {record.dataset_id: record for record in inspect_sources(project).datasets}
         seeds, _joint_seed, _mcmc_seed = service_seed_branches(project)
         for dataset_id in dataset_ids:
             record = records[dataset_id]
@@ -226,6 +218,7 @@ def _run_mcmc(
     *,
     compile_dataset: Callable,
     run_problem_mcmc: Callable,
+    sld_bands: Callable,
 ) -> XrrProject:
     validation = inspect_sources(project)
     failure = _source_failure(validation)
@@ -270,14 +263,17 @@ def _run_mcmc(
         progress=progress,
         cancelled=cancelled,
     )
+    bands, report = sld_bands(
+        prepared.problem.structure,
+        report,
+        prepared.problem.data.beam.effective_wavelength_a,
+    )
     updated_result = replace(
         result,
-        uncertainty=replace(result.uncertainty, mcmc=report),
+        uncertainty=replace(result.uncertainty, mcmc=report, sld_bands=bands),
     )
     datasets = tuple(
-        replace(dataset, last_valid_result=updated_result)
-        if dataset.dataset_id == dataset_id
-        else dataset
+        replace(dataset, last_valid_result=updated_result) if dataset.dataset_id == dataset_id else dataset
         for dataset in project.datasets
     )
     return replace(project, datasets=datasets)
