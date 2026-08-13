@@ -62,12 +62,11 @@ public facade is therefore the only GUI domain vocabulary.
 from __future__ import annotations
 
 import ast
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-import sys
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "src" / "xrr_fitter"
@@ -108,6 +107,10 @@ PACKAGE_EDGE_EXCEPTIONS = {
 # The architecture document records the same two edges for human review.
 # The graph phase still records both real edges for cycle detection.
 # Any future exception requires its own exact mapping and three-way fixture.
+# Every model module needs a key here even when it imports no sibling at all.
+# An absent key is a model-module violation, not an implicit empty allowance.
+# So sld_bands is registered with an empty set: it depends on numpy only.
+# The analysis entry then gains sld_bands because it re-exports that value.
 MODEL_ALLOWED = {
     "data": set(),
     "instrument": set(),
@@ -115,9 +118,10 @@ MODEL_ALLOWED = {
     "structure": set(),
     "parameters": set(),
     "progress": set(),
+    "sld_bands": set(),
     "fitting": {"data", "instrument", "structure", "parameters", "progress"},
     "provenance": {"fitting"},
-    "analysis": {"data", "parameters", "fitting"},
+    "analysis": {"data", "parameters", "fitting", "sld_bands"},
     "project": {
         "automation",
         "data",

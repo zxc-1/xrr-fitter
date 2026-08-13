@@ -32,6 +32,7 @@ from xrr_fitter.gui.plots.diagnostics import (
     TAB_SPECS,
     VIEW_SPECS,
     DiagnosticView,
+    apply_figure_font,
     build_scratch_views,
     build_tabs,
     draw_batch_trends,
@@ -573,6 +574,7 @@ class PlotPanel(QWidget):
                 label="搜索中模型",
             )[0]
             view.axes.legend()
+            apply_figure_font(view.figure)
         else:
             self._preview_line.set_data(angles, values)
         view.canvas.draw_idle()
@@ -587,6 +589,7 @@ class PlotPanel(QWidget):
         line.remove()
         view = self._views["log"]
         view.axes.legend()
+        apply_figure_font(view.figure)
         view.canvas.draw_idle()
 
     def _transact(self, projection: _Projection) -> None:
