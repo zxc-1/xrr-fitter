@@ -10,6 +10,7 @@ teardown has one explicit callback and figure release boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import numpy as np
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -29,6 +30,7 @@ from xrr_fitter.gui.plots.diagnostics import (
     TAB_SPECS,
     VIEW_SPECS,
     DiagnosticView,
+    apply_figure_font,
     build_scratch_views,
     build_tabs,
     draw_batch_trends,
@@ -53,7 +55,6 @@ from xrr_fitter.gui.plots.reflectivity import (
     validate_result,
 )
 from xrr_fitter.gui.plots.sld import draw_sld, draw_uncertainty
-
 
 BatchTrends = tuple[tuple[str, ...], tuple[float, ...], tuple[float, ...]]
 
@@ -490,6 +491,7 @@ class PlotPanel(QWidget):
                 label="搜索中模型",
             )[0]
             view.axes.legend()
+            apply_figure_font(view.figure)
         else:
             self._preview_line.set_data(angles, values)
         view.canvas.draw_idle()
@@ -504,6 +506,7 @@ class PlotPanel(QWidget):
         line.remove()
         view = self._views["log"]
         view.axes.legend()
+        apply_figure_font(view.figure)
         view.canvas.draw_idle()
 
     def _transact(self, projection: _Projection) -> None:
