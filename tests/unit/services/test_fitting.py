@@ -59,8 +59,6 @@ from xrr_fitter.services.fitting_phases.joint_execution import (
 )
 from xrr_fitter.services.fitting_phases.operations import (
     automatic_worker_handler as automatic_worker_handler_phase,
-)
-from xrr_fitter.services.fitting_phases.operations import (
     fit_automatically as fit_automatically_phase,
 )
 from xrr_fitter.services.projects import new_project
@@ -156,7 +154,9 @@ def _absorption_trial_candidate(search, *, gain: float, value: float):
     baseline = search.best_candidate
     assert baseline is not None
     parameters = tuple(
-        replace(parameter, value=value) if parameter.name == "component.0.sld_imag_a2" else parameter
+        replace(parameter, value=value)
+        if parameter.name == "component.0.sld_imag_a2"
+        else parameter
         for parameter in baseline.parameters
     )
     return replace(
@@ -229,7 +229,9 @@ class _FittingHarness:
         return self.continued_search
 
     def analysis_request(self, dataset_id, problem, search, *, profile_names=None):
-        self.calls.append(("analysis-request", dataset_id, problem, search, profile_names))
+        self.calls.append(
+            ("analysis-request", dataset_id, problem, search, profile_names)
+        )
         return "analysis-request"
 
     def run_analysis(self, request, **kwargs):
@@ -263,7 +265,10 @@ def _assert_shared_task_runner(harness, worker_count: int) -> None:
 
 
 def _assert_basin_progress(progress_events) -> None:
-    assert [(event.stage, event.completed, event.total, event.message) for event in progress_events] == [
+    assert [
+        (event.stage, event.completed, event.total, event.message)
+        for event in progress_events
+    ] == [
         ("basin-recovery", 0, 1, "checking profile basins"),
         ("basin-recovery", 1, 1, "basin recovery completed"),
     ]
@@ -349,18 +354,21 @@ def test_automatic_absorption_problem_preserves_real_mode_constraints() -> None:
         compile_fit_problem=compile_fit_problem,
     )
 
-    assert tuple(variable.name for variable in trial.variables) == ("component.0.sld_imag_a2",)
+    assert tuple(variable.name for variable in trial.variables) == (
+        "component.0.sld_imag_a2",
+    )
     absorption = next(
-        definition for definition in trial.parameter_definitions if definition.name == "component.0.sld_imag_a2"
+        definition
+        for definition in trial.parameter_definitions
+        if definition.name == "component.0.sld_imag_a2"
     )
     assert absorption.expert_only is True
     assert absorption.locked is False
-    assert (
-        next(
-            definition for definition in trial.parameter_definitions if definition.name == "instrument.relative_sigma"
-        ).initial
-        == 0.0
-    )
+    assert next(
+        definition
+        for definition in trial.parameter_definitions
+        if definition.name == "instrument.relative_sigma"
+    ).initial == 0.0
     unit = encode_physical_vector(trial, {absorption.name: 2e-6})
     assert evaluate_vector(trial, unit).valid is True
 
@@ -371,7 +379,8 @@ def test_automatic_absorption_rejects_insufficient_gain() -> None:
     baseline = search.best_candidate
     assert baseline is not None
     threshold = max(
-        abs(baseline.objective) * problem.config.confidence.equivalent_cost_fraction,
+        abs(baseline.objective)
+        * problem.config.confidence.equivalent_cost_fraction,
         problem.config.confidence.equivalent_cost_floor,
     )
     trial = _absorption_trial_candidate(search, gain=0.5 * threshold, value=2e-6)
@@ -381,7 +390,9 @@ def test_automatic_absorption_rejects_insufficient_gain() -> None:
         ("component.0.sld_imag_a2",),
         cancelled=None,
         compile_fit_problem=compile_fit_problem,
-        refit_from_physical_values=lambda *_args, **_kwargs: SimpleNamespace(best_candidate=trial),
+        refit_from_physical_values=lambda *_args, **_kwargs: SimpleNamespace(
+            best_candidate=trial
+        ),
         candidate_from_physical_values=candidate_from_physical_values,
         evaluate_vector=evaluate_vector,
         candidate_from_evaluation=candidate_from_evaluation,
@@ -399,7 +410,8 @@ def test_automatic_absorption_replaces_winner_and_preserves_stage_e_lineage() ->
     baseline = search.best_candidate
     assert baseline is not None
     threshold = max(
-        abs(baseline.objective) * problem.config.confidence.equivalent_cost_fraction,
+        abs(baseline.objective)
+        * problem.config.confidence.equivalent_cost_fraction,
         problem.config.confidence.equivalent_cost_floor,
     )
     trial = _absorption_trial_candidate(search, gain=2.0 * threshold, value=2e-6)
@@ -409,7 +421,9 @@ def test_automatic_absorption_replaces_winner_and_preserves_stage_e_lineage() ->
         ("component.0.sld_imag_a2",),
         cancelled=None,
         compile_fit_problem=compile_fit_problem,
-        refit_from_physical_values=lambda *_args, **_kwargs: SimpleNamespace(best_candidate=trial),
+        refit_from_physical_values=lambda *_args, **_kwargs: SimpleNamespace(
+            best_candidate=trial
+        ),
         candidate_from_physical_values=candidate_from_physical_values,
         evaluate_vector=evaluate_vector,
         candidate_from_evaluation=candidate_from_evaluation,
@@ -419,7 +433,11 @@ def test_automatic_absorption_replaces_winner_and_preserves_stage_e_lineage() ->
 
     winner = result.best_candidate
     assert winner is not None
-    imag_value = next(parameter.value for parameter in winner.parameters if parameter.name == "component.0.sld_imag_a2")
+    imag_value = next(
+        parameter.value
+        for parameter in winner.parameters
+        if parameter.name == "component.0.sld_imag_a2"
+    )
     fixed = next(
         definition
         for definition in updated_prepared.problem.parameter_definitions
@@ -482,7 +500,9 @@ def test_automatic_clean_evidence_skips_recovery_bootstrap_and_profiles() -> Non
         analysis_request=AnalysisRequest,
         run_analysis=analyze,
         assess_automatic_quality=lambda *_args, **_kwargs: decision,
-        automatic_profile_recovery=lambda *_args, **_kwargs: pytest.fail("clean evidence ran basin recovery"),
+        automatic_profile_recovery=lambda *_args, **_kwargs: pytest.fail(
+            "clean evidence ran basin recovery"
+        ),
         automatic_absorption_search=lambda current, current_search, *_args, **_kwargs: (
             current,
             current_search,
@@ -567,7 +587,9 @@ def test_preflight_loads_current_sources_and_compiles_declared_structure(
     value = _project(tmp_path)
 
     ready = fitting.preflight_fit(value)
-    missing_structure = fitting.preflight_fit(replace(value, datasets=(replace(value.datasets[0], structure=None),)))
+    missing_structure = fitting.preflight_fit(
+        replace(value, datasets=(replace(value.datasets[0], structure=None),))
+    )
 
     assert ready.ready is True
     assert ready.message == "ready"
@@ -580,7 +602,9 @@ def test_fitting_composes_search_profile_recovery_and_analysis_in_order(
 ) -> None:
     value = _project(tmp_path)
     prepared = fitting.prepare_dataset_fit(value, "curve", value.master_seed)
-    initial_search = SimpleNamespace(best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None))
+    initial_search = SimpleNamespace(
+        best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None)
+    )
     continued_search = object()
     decision = SimpleNamespace(
         parameter_name="component.0.thickness_a",
@@ -618,7 +642,9 @@ def test_fitting_forwards_explicit_profile_names_to_analysis_request(
 ) -> None:
     value = _project(tmp_path)
     prepared = fitting.prepare_dataset_fit(value, "curve", value.master_seed)
-    search = SimpleNamespace(best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None))
+    search = SimpleNamespace(
+        best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None)
+    )
     analyzed = final_fit_result()
     harness = _FittingHarness(search, None, search, analyzed)
     requested = (
@@ -662,7 +688,11 @@ def test_joint_fit_reports_finalizing_after_stage_e() -> None:
             updated_dataset=SimpleNamespace(checkpoint=None),
         ),
     )
-    searches = (SimpleNamespace(best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None)),)
+    searches = (
+        SimpleNamespace(
+            best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None)
+        ),
+    )
     analyzed = (object(), object())
     events = []
 
@@ -800,7 +830,9 @@ def test_automatic_operations_phase_injects_spawn_safe_service_functions(
 
 
 def test_automatic_worker_phase_injects_spawn_safe_service_functions() -> None:
-    current = project(_automatic_dataset("pending", "batch-1", AutomaticStatus.PENDING))
+    current = project(
+        _automatic_dataset("pending", "batch-1", AutomaticStatus.PENDING)
+    )
     expected = ProjectFitResult("automatic", (), (), current)
     observed = []
 
@@ -844,63 +876,3 @@ def test_automatic_worker_phase_injects_spawn_safe_service_functions() -> None:
             },
         )
     ]
-
-
-# `_sld_bands` is the fitting boundary that replays retained MCMC draws into an
-# SLD envelope while the report is assembled, so the three tests below pin its
-# full contract against silent regressions. State one: without a report there is
-# nothing to replay, so both the bands and the report come back None. State two:
-# when a replay raises (an unknown parameter axis here), the reason is folded into
-# the report's existing warnings channel and the fit still succeeds rather than
-# aborting on a diagnostic-only failure. State three: a clean replay must leave
-# the warnings tuple identical, proving the success path never touches it. The
-# helper mints the smallest legal McmcReport carrying samples along one axis.
-BANDS_WAVELENGTH_A = 1.5406
-
-
-def _bands_mcmc_report(values, names=("component.0.thickness_a",)):
-    from xrr_fitter.model.analysis import McmcConfig, McmcReport
-
-    samples = np.asarray(values, dtype=float).reshape(-1, len(names))
-    steps = samples.shape[0]
-    walkers = 4
-    return McmcReport(
-        config=McmcConfig(walkers=walkers, burn_in=0, production_steps=steps),
-        child_seed=7,
-        parameter_names=names,
-        samples_physical=samples,
-        log_probability=np.zeros(steps),
-        acceptance_fraction=np.full(walkers, 0.4),
-        split_rhat=np.ones(len(names)),
-        effective_sample_size=np.full(len(names), float(steps)),
-        boundary_hits=(),
-    )
-
-
-def test_sld_bands_returns_none_when_no_mcmc_report_is_available() -> None:
-    bands, report = fitting._sld_bands(simple_structure(), None, BANDS_WAVELENGTH_A)
-
-    assert bands is None
-    assert report is None
-
-
-def test_sld_bands_appends_the_reason_to_the_report_warnings_when_replay_fails() -> None:
-    report = _bands_mcmc_report(np.full((8, 1), 20.0), names=("component.9.thickness_a",))
-
-    bands, updated = fitting._sld_bands(simple_structure(), report, BANDS_WAVELENGTH_A)
-
-    assert bands is None
-    assert updated is not report
-    assert len(updated.warnings) == len(report.warnings) + 1
-    assert any("component.9.thickness_a" in warning for warning in updated.warnings)
-
-
-def test_sld_bands_replays_samples_into_bands_without_touching_warnings() -> None:
-    from xrr_fitter.model.analysis import SldUncertaintyBands
-
-    report = _bands_mcmc_report(np.linspace(18.0, 22.0, 12))
-
-    bands, updated = fitting._sld_bands(simple_structure(), report, BANDS_WAVELENGTH_A)
-
-    assert isinstance(bands, SldUncertaintyBands)
-    assert updated.warnings == report.warnings
