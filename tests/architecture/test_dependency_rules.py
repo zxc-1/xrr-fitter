@@ -142,6 +142,7 @@ THIRD_PARTY_ROOTS = {
     "xlsxwriter",
     "matplotlib",
     "PySide6",
+    "orsopy",
 }
 THIRD_PARTY_OWNER_ALLOWLIST = {
     "numpy": {"model", "io", "physics", "evaluation", "fit", "analysis"},
@@ -154,6 +155,7 @@ THIRD_PARTY_MODULE_ALLOWLIST = {
     "pandas": {"io.export_tables"},
     "xlsxwriter": {"io.export_tables"},
     "matplotlib": {"io.export_plots", "gui.plots"},
+    "orsopy": {"io.orso"},
 }
 THIRD_PARTY_PREFIX_ALLOWLIST = {
     "numpy": ("gui.plots.",),
@@ -687,6 +689,7 @@ def test_fixture_checker_allows_cli_domain_access_only_through_public_api() -> N
         ("gui.plots", "import matplotlib\nfrom PySide6 import QtWidgets"),
         ("gui.plots.reflectivity", "import numpy"),
         ("services.datasets", "import numpy"),
+        ("io.orso", "import orsopy"),
     ],
 )
 def test_fixture_checker_accepts_exact_third_party_owners(module: str, source: str) -> None:
@@ -703,6 +706,7 @@ def test_fixture_checker_accepts_exact_third_party_owners(module: str, source: s
         ("physics.reflectivity", "import matplotlib"),
         ("fit.search", "import refnx"),
         ("analysis.report", "import pytest"),
+        ("fit.search", "import orsopy"),
     ],
 )
 def test_fixture_checker_rejects_unknown_or_wrong_third_party_owner(module: str, source: str) -> None:
