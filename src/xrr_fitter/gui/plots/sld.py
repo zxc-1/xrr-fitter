@@ -80,8 +80,8 @@ def draw_sld(
 # label). The inner 16-84% band is more opaque than the outer 2.5-97.5% band, so
 # nesting reads correctly. Depth is converted Å→nm to match the profile curves.
 BAND_PAIRS = (
-    ((0.16, 0.84), 0.28, "16-84%"),
-    ((0.025, 0.975), 0.14, "2.5-97.5%"),
+    ((0.16, 0.84), 0.28, "16–84%"),
+    ((0.025, 0.975), 0.14, "2.5–97.5%"),
 )
 
 

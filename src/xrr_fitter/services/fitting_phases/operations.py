@@ -37,11 +37,17 @@ def _compile_preflight_fit(
     *,
     prepare_dataset_fit: Callable,
     compile_joint_problem: Callable,
+    validate_parameter_priors: Callable,
 ) -> None:
     seeds = _preflight_seeds(project)
     prepared = tuple(
         prepare_dataset_fit(project, dataset.dataset_id, seeds[dataset.dataset_id]) for dataset in project.datasets
     )
+    for item in prepared:
+        validate_parameter_priors(
+            item.problem.parameter_definitions,
+            item.updated_dataset.parameter_priors,
+        )
     if project.batch_mode == "joint":
         compile_joint_problem(
             tuple(item.dataset_id for item in prepared),
@@ -55,6 +61,7 @@ def preflight_fit(
     *,
     prepare_dataset_fit: Callable,
     compile_joint_problem: Callable,
+    validate_parameter_priors: Callable,
 ) -> FitReadiness:
     """Load and compile the complete declared fit without mutating the project."""
     if not project.datasets:
@@ -68,6 +75,7 @@ def preflight_fit(
             project,
             prepare_dataset_fit=prepare_dataset_fit,
             compile_joint_problem=compile_joint_problem,
+            validate_parameter_priors=validate_parameter_priors,
         )
     except Exception as error:
         return FitReadiness(False, str(error) or type(error).__name__)
@@ -217,6 +225,7 @@ def _run_mcmc(
     cancelled: CancellationProbe | None,
     *,
     compile_dataset: Callable,
+    with_parameter_priors: Callable,
     run_problem_mcmc: Callable,
     sld_bands: Callable,
 ) -> XrrProject:
@@ -255,8 +264,12 @@ def _run_mcmc(
                 )
             )
 
-    report = run_problem_mcmc(
+    analysis_problem = with_parameter_priors(
         prepared.problem,
+        prepared.updated_dataset.parameter_priors,
+    )
+    report = run_problem_mcmc(
+        analysis_problem,
         candidate,
         config,
         child_seed=seed,
@@ -287,6 +300,7 @@ def run_mcmc(
     progress_callback: ProgressCallback | None = None,
     *,
     compile_dataset: Callable,
+    with_parameter_priors: Callable,
     run_problem_mcmc: Callable,
 ) -> XrrProject:
     return _run_mcmc(
@@ -297,6 +311,7 @@ def run_mcmc(
         progress_callback,
         None,
         compile_dataset=compile_dataset,
+        with_parameter_priors=with_parameter_priors,
         run_problem_mcmc=run_problem_mcmc,
     )
 
@@ -358,6 +373,7 @@ def mcmc_worker_handler(
     cancelled: CancellationProbe | None,
     *,
     compile_dataset: Callable,
+    with_parameter_priors: Callable,
     run_problem_mcmc: Callable,
 ) -> XrrProject:
     return _run_mcmc(
@@ -368,5 +384,6 @@ def mcmc_worker_handler(
         progress_callback,
         cancelled,
         compile_dataset=compile_dataset,
+        with_parameter_priors=with_parameter_priors,
         run_problem_mcmc=run_problem_mcmc,
     )

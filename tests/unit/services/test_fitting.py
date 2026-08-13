@@ -4,6 +4,22 @@ The suite covers readiness, seed allocation, adaptive search, recovery analysis,
 absorption release, and project publication through the service boundary. Tests
 keep search provenance and immutable project transitions visible while replacing
 expensive numerical work with deterministic collaborators where appropriate.
+
+The orchestration cases deliberately retain their call-sequence assertions:
+they distinguish service composition defects from numerical fitting defects.
+Prepared-dataset, automatic, joint, recovery, absorption, checkpoint, and
+sidecar contracts share the same helpers so every phase is tested against one
+consistent immutable problem shape.  Lightweight harnesses replace only the
+expensive calculation boundary; source loading, request construction,
+publication, invalidation, and error translation continue through production
+service code.  This keeps failures attributable while preserving the complete
+end-to-end ownership contract.
+
+Seed and provenance assertions remain exact rather than approximate.  Error
+cases likewise assert the owning service message so an invalid declaration
+cannot be mistaken for a failed optimizer run.  Sidecar tests compile the
+effective retained settings before judging priors, matching the runtime order.
+The suite therefore records both the decisive input and published output.
 """
 
 from __future__ import annotations
@@ -40,6 +56,7 @@ from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.fitting import FitConfig, FitSearchResult, FitStageSummary
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.operations import ProjectFitResult
+from xrr_fitter.model.parameters import ParameterPrior, ParameterSetting, PriorSpec
 from xrr_fitter.model.provenance import fit_search_provenance_sha256
 from xrr_fitter.model.structure import MaterialSpec
 from xrr_fitter.services import fitting
@@ -142,12 +159,13 @@ def _stage_e_search(problem) -> FitSearchResult:
     )
 
 
-def _automatic_prepared(problem):
+def _automatic_prepared(problem, *, parameter_priors=()):
     dataset = replace(
         dataset_project("curve"),
         structure=problem.structure,
         instrument=problem.instrument,
         parameter_settings=(),
+        parameter_priors=parameter_priors,
     )
     return fitting.PreparedDatasetFit("curve", 0, dataset, problem)
 
@@ -228,8 +246,25 @@ class _FittingHarness:
         )
         return self.continued_search
 
-    def analysis_request(self, dataset_id, problem, search, *, profile_names=None):
-        self.calls.append(("analysis-request", dataset_id, problem, search, profile_names))
+    def analysis_request(
+        self,
+        dataset_id,
+        problem,
+        search,
+        *,
+        profile_names=None,
+        parameter_priors=(),
+    ):
+        self.calls.append(
+            (
+                "analysis-request",
+                dataset_id,
+                problem,
+                search,
+                profile_names,
+                parameter_priors,
+            )
+        )
         return "analysis-request"
 
     def run_analysis(self, request, **kwargs):
@@ -457,7 +492,10 @@ def test_automatic_absorption_replaces_winner_and_preserves_stage_e_lineage() ->
 
 def test_automatic_clean_evidence_skips_recovery_bootstrap_and_profiles() -> None:
     problem = _automatic_problem()
-    prepared = _automatic_prepared(problem)
+    from xrr_fitter.model.parameters import ParameterPrior, PriorSpec
+
+    priors = (ParameterPrior("component.0.density_scale", PriorSpec("normal", (0.6, 0.05))),)
+    prepared = _automatic_prepared(problem, parameter_priors=priors)
     search = _stage_e_search(problem)
     analyzed = final_fit_result()
     requests = []
@@ -494,6 +532,7 @@ def test_automatic_clean_evidence_skips_recovery_bootstrap_and_profiles() -> Non
     assert len(requests) == 2
     assert all(request.bootstrap_enabled is False for request in requests)
     assert all(request.profile_names == () for request in requests)
+    assert all(request.parameter_priors == priors for request in requests)
 
 
 def test_automatic_search_upgrade_runs_profile_recovery_at_most_once() -> None:
@@ -575,6 +614,54 @@ def test_preflight_loads_current_sources_and_compiles_declared_structure(
     assert "structure" in missing_structure.message
 
 
+def test_preflight_rejects_stale_parameter_priors(tmp_path: Path) -> None:
+    value = _project(tmp_path)
+    stale = ParameterPrior("component.99.thickness_a", PriorSpec("uniform"))
+    value = replace(
+        value,
+        datasets=(replace(value.datasets[0], parameter_priors=(stale,)),),
+    )
+
+    readiness = fitting.preflight_fit(value)
+
+    assert readiness.ready is False
+    assert "unknown parameter name" in readiness.message
+
+
+def test_reconcile_parameter_sidecars_validates_priors_against_retained_settings(
+    tmp_path: Path,
+) -> None:
+    value = _project(tmp_path)
+    prepared = fitting.prepare_dataset_fit(value, "curve", value.master_seed)
+    thickness = next(
+        definition
+        for definition in prepared.problem.parameter_definitions
+        if definition.name == "component.0.thickness_a"
+    )
+    retained_setting = ParameterSetting(
+        thickness.name,
+        thickness.initial,
+        10.0,
+        30.0,
+    )
+    stale_prior = ParameterPrior(thickness.name, PriorSpec("normal", (50.0, 5.0)))
+    value = replace(
+        value,
+        datasets=(
+            replace(
+                value.datasets[0],
+                parameter_settings=(retained_setting,),
+                parameter_priors=(stale_prior,),
+            ),
+        ),
+    )
+
+    reconciled = fitting._reconcile_parameter_sidecars(value, "curve")
+
+    assert reconciled.datasets[0].parameter_settings == (retained_setting,)
+    assert reconciled.datasets[0].parameter_priors == ()
+
+
 def test_fitting_composes_search_profile_recovery_and_analysis_in_order(
     tmp_path: Path,
 ) -> None:
@@ -646,6 +733,7 @@ def test_fitting_forwards_explicit_profile_names_to_analysis_request(
         prepared.problem,
         search,
         requested,
+        (),
     )
 
 
@@ -654,12 +742,12 @@ def test_joint_fit_reports_finalizing_after_stage_e() -> None:
         SimpleNamespace(
             dataset_id="first",
             problem=object(),
-            updated_dataset=SimpleNamespace(checkpoint=None),
+            updated_dataset=SimpleNamespace(checkpoint=None, parameter_priors=()),
         ),
         SimpleNamespace(
             dataset_id="second",
             problem=object(),
-            updated_dataset=SimpleNamespace(checkpoint=None),
+            updated_dataset=SimpleNamespace(checkpoint=None, parameter_priors=()),
         ),
     )
     searches = (SimpleNamespace(best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None)),)
@@ -673,7 +761,7 @@ def test_joint_fit_reports_finalizing_after_stage_e() -> None:
         compile_joint_problem=lambda *_args: object(),
         joint_fit_request=lambda problem, checkpoints: (problem, checkpoints),
         run_joint_fit=lambda *_args, **_kwargs: searches,
-        analyze_joint_searches=lambda _problem, _searches: analyzed,
+        analyze_joint_searches=lambda _problem, _searches, _priors: analyzed,
     )
 
     assert result is analyzed
