@@ -33,7 +33,12 @@ from xrr_fitter.model.automation import (
 )
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterReference, SharingRule
+from xrr_fitter.model.parameters import (
+    ParameterPrior,
+    ParameterReference,
+    PriorSpec,
+    SharingRule,
+)
 from xrr_fitter.model.project import ProjectUiState, ScalePriorState
 from xrr_fitter.services import projects as project_service
 from xrr_fitter.services.datasets import add_dataset
@@ -544,6 +549,25 @@ def test_batch_mode_change_invalidates_the_complete_result_graph() -> None:
     assert all(dataset.last_valid_result is None for dataset in updated.datasets)
     assert all(dataset.checkpoint is None for dataset in updated.datasets)
     assert updated.ui_state.selected_candidate_ids == ()
+
+
+def test_entering_joint_mode_clears_priors_when_filling_a_missing_structure() -> None:
+    stale = ParameterPrior("instrument.scale", PriorSpec("uniform"))
+    template = dataset_project("template")
+    missing = replace(
+        dataset_project("missing"),
+        structure=None,
+        parameter_priors=(stale,),
+    )
+    value = replace(
+        project(template, missing),
+        ui_state=ProjectUiState(active_dataset_id="template"),
+    )
+
+    updated = set_batch_mode(value, "joint")
+
+    assert updated.datasets[1].structure == template.structure
+    assert updated.datasets[1].parameter_priors == ()
 
 
 def test_describe_joint_layout_reports_datasets_and_shared_parameters() -> None:
