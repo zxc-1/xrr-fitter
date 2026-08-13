@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import replace
+from importlib import import_module
 from pathlib import Path
 
 import numpy as np
 import pytest
-from tests.support.model_cases import dataset_project, project
+from tests.support.model_cases import dataset_project, project, simple_structure
 
 from xrr_fitter.io.project_codec import (
     ProjectSchemaError,
@@ -33,7 +34,12 @@ from xrr_fitter.model.fitting import FitCandidate, FitCheckpoint, FitStageSummar
 from xrr_fitter.model.instrument import PhysicsDiagnostic
 from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue
 from xrr_fitter.model.project import ProjectUiState
-from xrr_fitter.model.structure import PeriodicSpan, SlabStack
+from xrr_fitter.model.structure import (
+    InterfaceTransition,
+    PeriodicSpan,
+    SlabStack,
+    TransitionBranch,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 REFERENCE_INPUTS = ROOT / "examples"
@@ -572,3 +578,121 @@ def test_project_rejects_duplicate_json_keys_and_extra_fields(tmp_path: Path) ->
     _rewrite(path, lambda payload: payload.update(extra=True))
     with pytest.raises(ProjectSchemaError, match="project.*field"):
         load_project(path)
+
+
+def _graded_structure():
+    base = simple_structure()
+    film = base.components[0]
+    single = replace(
+        film,
+        name="graded",
+        roughness_a=0.0,
+        transition=InterfaceTransition((TransitionBranch("erf", 1.0, 8.0),), microslab_max_a=2.0),
+    )
+    double = replace(
+        film,
+        name="composed",
+        roughness_a=0.0,
+        transition=InterfaceTransition(
+            (TransitionBranch("tanh", 3.0, 6.0), TransitionBranch("linear", 1.0, 12.0)),
+            microslab_max_a=3.0,
+        ),
+    )
+    return replace(base, components=(single, double))
+
+
+def _graded_project():
+    dataset = replace(dataset_project("graded-1"), structure=_graded_structure())
+    return project(dataset)
+
+
+def _restored_components(value):
+    restored = project_from_bytes(project_to_bytes(value))
+    return restored.datasets[0].structure.components
+
+
+def test_transition_layer_round_trips() -> None:
+    original = _graded_structure().components
+
+    restored = _restored_components(_graded_project())
+
+    assert len(restored) == len(original)
+    for source, target in zip(original, restored, strict=True):
+        assert target.transition is not None
+        assert target.transition.microslab_max_a == source.transition.microslab_max_a
+        assert len(target.transition.branches) == len(source.transition.branches)
+        for expected, actual in zip(source.transition.branches, target.transition.branches, strict=True):
+            assert actual.kind == expected.kind
+            assert actual.weight == expected.weight
+            assert actual.thickness_a == expected.thickness_a
+
+
+def test_layer_without_transition_omits_the_key() -> None:
+    declarations = import_module("xrr_fitter.io.codec_declarations")
+    film = simple_structure().components[0]
+
+    payload = declarations._layer_to_dict(film)
+
+    assert set(payload) == {
+        "kind",
+        "name",
+        "material",
+        "thickness_a",
+        "density_scale",
+        "roughness_a",
+    }
+
+
+def test_saving_a_project_without_transitions_passes_null_validation() -> None:
+    payload = project_to_bytes(_simple_project())
+
+    assert project_from_bytes(payload).datasets[0].structure.components[0].transition is None
+
+
+def test_legacy_layer_payload_without_transition_still_loads() -> None:
+    declarations = import_module("xrr_fitter.io.codec_declarations")
+    legacy = declarations._layer_to_dict(simple_structure().components[0])
+
+    restored = declarations._layer_from_dict(legacy)
+
+    assert restored.transition is None
+
+
+def test_transition_payload_with_unknown_key_is_rejected() -> None:
+    document = project_to_dict(_graded_project())
+    layer = document["datasets"][0]["structure"]["components"][0]
+    layer["transition"]["sigma"] = 1.0
+
+    with pytest.raises(ProjectSchemaError, match="sigma"):
+        project_from_dict(document)
+
+
+def test_transition_weights_round_trip_idempotently() -> None:
+    base = simple_structure()
+    film = base.components[0]
+    equal = replace(
+        film,
+        roughness_a=0.0,
+        transition=InterfaceTransition(
+            (TransitionBranch("erf", 2.0, 8.0), TransitionBranch("tanh", 2.0, 8.0)),
+            microslab_max_a=2.0,
+        ),
+    )
+    structure = replace(base, components=(equal,))
+
+    once = _restored_components(project(replace(dataset_project("equal"), structure=structure)))
+    twice = _restored_components(
+        project(replace(dataset_project("equal"), structure=replace(structure, components=once)))
+    )
+
+    assert [branch.weight for branch in once[0].transition.branches] == [0.5, 0.5]
+    assert [branch.weight for branch in twice[0].transition.branches] == [0.5, 0.5]
+
+
+def test_transition_payload_with_invalid_kind_is_rejected() -> None:
+    document = project_to_dict(_graded_project())
+    layer = document["datasets"][0]["structure"]["components"][0]
+    layer["transition"]["branches"][0]["kind"] = "gaussian"
+
+    with pytest.raises(ProjectSchemaError, match="gaussian"):
+        project_from_dict(document)

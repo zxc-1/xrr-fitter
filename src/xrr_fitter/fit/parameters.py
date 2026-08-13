@@ -18,6 +18,7 @@ from xrr_fitter.model.structure import (
     PeriodicBlock,
     StructureSpec,
 )
+from xrr_fitter.physics.transitions import transition_width
 
 
 def _definition(
@@ -89,15 +90,28 @@ def _material_definitions(prefix: str, material: MaterialSpec) -> list[Parameter
     ]
 
 
+def _roughness_axis(layer: LayerSpec) -> tuple[float, float, float, bool]:
+    """Resolve the incident roughness axis as ``(initial, lower, upper, locked)``.
+
+    A transition already sets the interface width by microslab blending, so
+    leaving Névot-Croce free here would broaden the same interface twice.
+    """
+    if layer.transition is not None:
+        return 0.0, 0.0, 0.0, True
+    return layer.roughness_a, 0.0, max(50.0, 0.49 * layer.thickness_a), False
+
+
 def _layer_definitions(
     prefix: str,
     layer: LayerSpec,
     bounds: tuple[float, float],
 ) -> list[ParameterDefinition]:
-    lower = max(2.0, min(bounds[0], layer.thickness_a))
+    transition_lower = transition_width(layer.transition) if layer.transition is not None else 2.0
+    lower = max(2.0, min(bounds[0], layer.thickness_a), transition_lower)
     upper = min(2e5, max(bounds[1], layer.thickness_a))
     direct_sld = layer.material.sld_override_a2 is not None
     density_initial = 1.0 if direct_sld else layer.density_scale
+    roughness_initial, roughness_lower, roughness_upper, roughness_locked = _roughness_axis(layer)
     definitions = [
         _definition(
             f"{prefix}.thickness_a",
@@ -126,11 +140,11 @@ def _layer_definitions(
             f"{layer.name} 入射侧粗糙度",
             "Å",
             "interface",
-            layer.roughness_a,
-            0.0,
-            max(50.0, 0.49 * layer.thickness_a),
+            roughness_initial,
+            roughness_lower,
+            roughness_upper,
             "roughness_fraction",
-            False,
+            roughness_locked,
         ),
     ]
     definitions.extend(_material_definitions(prefix, layer.material))
@@ -145,11 +159,7 @@ def _periodic_definitions(
     definitions: list[ParameterDefinition] = []
     for index, layer in enumerate(block.layers):
         definitions.extend(_layer_definitions(f"{prefix}.layer.{index}", layer, bounds))
-    top_initial = (
-        block.layers[0].roughness_a
-        if block.top_roughness_a is None
-        else block.top_roughness_a
-    )
+    top_initial = block.layers[0].roughness_a if block.top_roughness_a is None else block.top_roughness_a
     definitions.extend(
         (
             _definition(
@@ -586,6 +596,30 @@ def validate_instrument_modes(
         )
 
 
+def validate_transition_modes(
+    definitions: tuple[ParameterDefinition, ...],
+    structure: StructureSpec,
+) -> None:
+    """Reject settings that violate geometry owned by a transition.
+
+    Periodic blocks need no handling: their layers already refuse transitions at
+    construction time.
+    """
+    by_name = {definition.name: definition for definition in definitions}
+    for index, component in enumerate(structure.components):
+        if isinstance(component, LayerSpec) and component.transition is not None:
+            thickness = by_name[f"component.{index}.thickness_a"]
+            width = transition_width(component.transition)
+            if thickness.lower < width or thickness.initial < width:
+                raise ValueError("带过渡的层厚度初值和下界不得小于过渡宽度")
+            _require_locked_value(
+                by_name,
+                f"component.{index}.roughness_a",
+                0.0,
+                "带过渡的界面粗糙度必须锁定在 0",
+            )
+
+
 def _validate_compiled_definition(definition: ParameterDefinition) -> None:
     values = (definition.initial, definition.lower, definition.upper)
     if not all(isfinite(value) for value in values):
@@ -633,10 +667,7 @@ def stage_parameter_is_free(stage: str, definition: ParameterDefinition) -> bool
         return True
     if stage not in STAGE_CATEGORIES:
         raise ValueError(f"unsupported fit stage: {stage}")
-    return (
-        definition.category == STAGE_CATEGORIES[stage]
-        or definition.name in STAGE_INSTRUMENT_NAMES[stage]
-    )
+    return definition.category == STAGE_CATEGORIES[stage] or definition.name in STAGE_INSTRUMENT_NAMES[stage]
 
 
 def stage_parameter_settings(
@@ -645,9 +676,7 @@ def stage_parameter_settings(
     current_values: dict[str, float],
 ) -> tuple[ParameterSetting, ...]:
     missing = tuple(
-        definition.name
-        for definition in definitions
-        if not definition.locked and definition.name not in current_values
+        definition.name for definition in definitions if not definition.locked and definition.name not in current_values
     )
     if missing:
         raise ValueError("missing current stage values: " + ", ".join(missing))

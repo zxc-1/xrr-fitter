@@ -8,17 +8,25 @@ from typing import get_type_hints
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data, simple_structure
+
 import xrr_fitter.evaluation as evaluation
 from xrr_fitter.evaluation import EvaluationConstraintError, encode_physical_vector
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, FitEvaluationContext
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting
-from xrr_fitter.model.structure import LayerSpec, PeriodicBlock, StructureSpec
+from xrr_fitter.model.parameters import ParameterDefinition, ParameterSetting
+from xrr_fitter.model.structure import (
+    InterfaceTransition,
+    LayerSpec,
+    PeriodicBlock,
+    StructureSpec,
+    TransitionBranch,
+)
+from xrr_fitter.physics.geometry import expand_geometry, expand_structure_with_jacobian
 from xrr_fitter.physics.resolution import GaussHermiteConvergenceWarning
+from xrr_fitter.physics.stack import expand_structure, rebuild_structure
 
 
 def test_model_evaluation_recomputes_qz_and_shared_periodic_layers() -> None:
@@ -40,9 +48,7 @@ def test_model_evaluation_recomputes_qz_and_shared_periodic_layers() -> None:
         InstrumentSpec(footprint_mode="none"),
         replace(FitConfig.fast(master_seed=17), scale_prior_enabled=False),
     )
-    physical = {
-        definition.name: definition.initial for definition in problem.parameter_definitions
-    }
+    physical = {definition.name: definition.initial for definition in problem.parameter_definitions}
     physical.update(
         {
             "component.0.layer.0.thickness_a": 27.0,
@@ -57,9 +63,7 @@ def test_model_evaluation_recomputes_qz_and_shared_periodic_layers() -> None:
     expected_qz = (
         4.0
         * np.pi
-        * np.sin(
-            np.deg2rad(problem.data.two_theta_deg / 2.0 + physical["instrument.angle_offset_deg"])
-        )
+        * np.sin(np.deg2rad(problem.data.two_theta_deg / 2.0 + physical["instrument.angle_offset_deg"]))
         / problem.data.beam.effective_wavelength_a
     )
     assert evaluation.valid
@@ -119,10 +123,7 @@ def test_fit_evaluation_keeps_unconverged_resolution_as_structured_diagnostic() 
         InstrumentSpec(footprint_mode="none"),
         replace(FitConfig.fast(master_seed=1802), scale_prior_enabled=False),
     )
-    physical = {
-        definition.name: definition.initial
-        for definition in problem.parameter_definitions
-    }
+    physical = {definition.name: definition.initial for definition in problem.parameter_definitions}
     physical["instrument.relative_sigma"] = 0.08
     unit = encode_physical_vector(problem, physical)
 
@@ -131,13 +132,8 @@ def test_fit_evaluation_keeps_unconverged_resolution_as_structured_diagnostic() 
         result = evaluation.evaluate_model(problem, unit)
 
     assert result.valid
-    assert not any(
-        item.category is GaussHermiteConvergenceWarning for item in caught
-    )
-    assert any(
-        diagnostic.code == "gauss_hermite_unconverged"
-        for diagnostic in result.diagnostics
-    )
+    assert not any(item.category is GaussHermiteConvergenceWarning for item in caught)
+    assert any(diagnostic.code == "gauss_hermite_unconverged" for diagnostic in result.diagnostics)
 
 
 def test_joint_solver_system_matches_separate_residual_and_jacobian_paths() -> None:
@@ -216,9 +212,7 @@ def test_shared_problem_log_probability_uses_the_soft_l1_data_likelihood() -> No
     residual = evaluation.least_squares_residual(problem, unit)
     weights = problem.weights[problem.data.fit_mask]
     c = problem.config.c_decades
-    expected = -float(
-        np.sum(weights**2 * 2.0 * c**2 * (np.sqrt(1.0 + (residual / c) ** 2) - 1.0))
-    ) / (2.0 * c**2)
+    expected = -float(np.sum(weights**2 * 2.0 * c**2 * (np.sqrt(1.0 + (residual / c) ** 2) - 1.0))) / (2.0 * c**2)
 
     assert evaluation.problem_log_probability(problem, unit) == expected
 
@@ -287,3 +281,123 @@ def test_analytic_stack_roughness_failure_is_a_candidate_constraint() -> None:
         jacobian,
         np.zeros((np.count_nonzero(problem.data.fit_mask), len(problem.variables))),
     )
+
+
+def transition_problem() -> FitEvaluationContext:
+    base = simple_structure()
+    film = base.components[0]
+    assert isinstance(film, LayerSpec)
+    layer = replace(
+        film,
+        thickness_a=30.0,
+        roughness_a=0.0,
+        transition=InterfaceTransition(
+            branches=(TransitionBranch(kind="erf", weight=1.0, thickness_a=12.0),),
+            microslab_max_a=3.0,
+        ),
+    )
+    structure = StructureSpec(
+        base.fronting,
+        (layer,),
+        base.backing,
+        backing_roughness_a=3.0,
+    )
+    config = replace(FitConfig.fast(master_seed=91), scale_prior_enabled=False)
+    initial = compile_fit_problem(
+        prepared_data(size=48),
+        structure,
+        InstrumentSpec(footprint_mode="none"),
+        config,
+    )
+    bounds = {"component.0.thickness_a": (20.0, 45.0)}
+    settings = tuple(_transition_setting(definition, bounds) for definition in initial.parameter_definitions)
+    return compile_fit_problem(
+        initial.data,
+        structure,
+        initial.instrument,
+        config,
+        settings,
+    )
+
+
+def _transition_setting(
+    definition: ParameterDefinition,
+    bounds: dict[str, tuple[float, float]],
+) -> ParameterSetting:
+    """Lock every roughness to zero and pin thickness to a log-symmetric range."""
+    if definition.name.endswith("roughness_a"):
+        return ParameterSetting(
+            definition.name,
+            definition.initial,
+            definition.initial,
+            definition.initial,
+            locked=True,
+        )
+    lower, upper = bounds.get(definition.name, (definition.lower, definition.upper))
+    return ParameterSetting(
+        definition.name,
+        definition.initial,
+        lower,
+        upper,
+        locked=definition.locked,
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["component.0.thickness_a", "component.0.density_scale"],
+)
+def test_transition_jacobian_matches_finite_differences(name: str) -> None:
+    problem = transition_problem()
+    index = next(position for position, coordinate in enumerate(problem.variables) if coordinate.name == name)
+    unit = np.full(len(problem.variables), 0.5)
+    stack = evaluation.expanded_structure_jacobian(problem, unit)
+    assert stack.stack.thickness_a.size == 7
+
+    step = 1e-6
+    forward = unit.copy()
+    forward[index] += step
+    backward = unit.copy()
+    backward[index] -= step
+    high = evaluation.expanded_structure_jacobian(problem, forward).stack
+    low = evaluation.expanded_structure_jacobian(problem, backward).stack
+
+    np.testing.assert_allclose(
+        stack.thickness_jacobian[:, index],
+        (high.thickness_a - low.thickness_a) / (2.0 * step),
+        rtol=1e-6,
+        atol=1e-9,
+    )
+    np.testing.assert_allclose(
+        stack.sld_jacobian[:, index],
+        (high.sld_a2 - low.sld_a2) / (2.0 * step),
+        rtol=1e-6,
+        atol=1e-16,
+    )
+
+
+def test_transition_expansion_aligns_across_all_three_paths() -> None:
+    problem = transition_problem()
+    unit = np.full(len(problem.variables), 0.5)
+    expected_media = 7  # fronting + four transition slabs + layer body + backing
+    values, value_jacobians = evaluation.values_and_jacobians(problem, unit)
+    rebuilt = rebuild_structure(problem.structure, values)
+    wavelength = problem.data.beam.effective_wavelength_a
+
+    primal = expand_structure(rebuilt, wavelength)
+    differentiable = expand_structure_with_jacobian(
+        problem.structure,
+        values,
+        value_jacobians,
+        wavelength,
+        len(problem.variables),
+    )
+    geometry = expand_geometry(rebuilt, len(problem.variables), value_jacobians)
+
+    assert primal.thickness_a.size == expected_media
+    np.testing.assert_array_equal(primal.thickness_a, differentiable.stack.thickness_a)
+    np.testing.assert_array_equal(primal.thickness_a, geometry.thickness_a)
+    assert differentiable.thickness_jacobian.shape[0] == expected_media
+    assert geometry.thickness_jacobian is not None
+    assert geometry.thickness_jacobian.shape[0] == expected_media
+    assert len(geometry.interface_names) == primal.thickness_a.size - 1

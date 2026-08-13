@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -31,12 +32,17 @@ def _number(name: str, minimum: float, value: float = 0.0) -> QDoubleSpinBox:
 
 
 def _buttons(name: str) -> QDialogButtonBox:
-    buttons = QDialogButtonBox(
-        QDialogButtonBox.StandardButton.Ok
-        | QDialogButtonBox.StandardButton.Cancel
-    )
+    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
     buttons.setObjectName(name)
     return buttons
+
+
+def _table_cell(table: QTableWidget, row: int, column: int, label: str) -> str:
+    item: QTableWidgetItem | None = table.item(row, column)
+    value = "" if item is None else item.text().strip()
+    if not value:
+        raise ValueError(f"{label} row {row + 1} is incomplete")
+    return value
 
 
 class LayerDialog(QDialog):
@@ -62,6 +68,14 @@ class LayerDialog(QDialog):
         self.density_editor = _number("layerDensityInput", 0.000001, 1.0)
         self.thickness_editor = _number("layerThicknessInput", 0.2, 1.0)
         self.roughness_editor = _number("layerRoughnessInput", 0.0)
+        self.transition_toggle = QCheckBox()
+        self.transition_toggle.setObjectName("layerTransitionToggle")
+        self.transition_toggle.setAccessibleName("启用界面过渡")
+        self.transition_toggle.setToolTip("用可归一化的过渡函数族替代 Névot-Croce 粗糙度")
+        self.microslab_editor = _number("layerMicroslabInput", 0.001, 0.1)
+        self.branch_table = QTableWidget(2, 3)
+        self.branch_table.setObjectName("layerTransitionTable")
+        self.branch_table.setHorizontalHeaderLabels(("过渡类型", "权重", "宽度 (nm)"))
         self.error_label = QLabel()
         self.error_label.setObjectName("layerDialogError")
         self.error_label.setWordWrap(True)
@@ -69,7 +83,9 @@ class LayerDialog(QDialog):
         self.buttons = _buttons("layerDialogButtons")
         self.buttons.accepted.connect(self._accept_fields)
         self.buttons.rejected.connect(self.reject)
+        self.transition_toggle.toggled.connect(self._sync_transition_inputs)
         self._arrange()
+        self._sync_transition_inputs(False)
 
     def _arrange(self) -> None:
         form = QFormLayout()
@@ -78,10 +94,36 @@ class LayerDialog(QDialog):
         form.addRow("密度 (g/cm³)", self.density_editor)
         form.addRow("厚度 (nm)", self.thickness_editor)
         form.addRow("粗糙度 (nm)", self.roughness_editor)
+        form.addRow("界面过渡", self.transition_toggle)
+        form.addRow("切片上限 (nm)", self.microslab_editor)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+        layout.addWidget(self.branch_table)
         layout.addWidget(self.error_label)
         layout.addWidget(self.buttons)
+
+    def _sync_transition_inputs(self, enabled: bool) -> None:
+        """Make the roughness/transition exclusion visible before commit time.
+
+        A transition already sets the interface width, so leaving the roughness
+        editable would let the user fill a field the model then rejects with an
+        English message pointing at ``roughness_a``.
+        """
+        self.roughness_editor.setEnabled(not enabled)
+        if enabled:
+            self.roughness_editor.setValue(0.0)
+        self.microslab_editor.setEnabled(enabled)
+        self.branch_table.setEnabled(enabled)
+
+    def _branch_at(self, row: int) -> api.TransitionBranch:
+        kind, weight, width = (_table_cell(self.branch_table, row, column, "transition branch") for column in range(3))
+        return api.TransitionBranch(kind, float(weight), float(width) * 10.0)
+
+    def _transition(self) -> api.InterfaceTransition | None:
+        if not self.transition_toggle.isChecked():
+            return None
+        branches = tuple(self._branch_at(row) for row in range(self.branch_table.rowCount()))
+        return api.InterfaceTransition(branches, self.microslab_editor.value() * 10.0)
 
     def _accept_fields(self) -> None:
         try:
@@ -92,6 +134,7 @@ class LayerDialog(QDialog):
                 material,
                 self.thickness_editor.value() * 10.0,
                 roughness_a=self.roughness_editor.value() * 10.0,
+                transition=self._transition(),
             )
             if self._commit_layer is not None:
                 self._commit_layer(candidate)
@@ -211,9 +254,7 @@ class PeriodicDialog(QDialog):
         self.repeats_editor.setValue(2)
         self.table = QTableWidget(2, 5)
         self.table.setObjectName("periodicLayerTable")
-        self.table.setHorizontalHeaderLabels(
-            ("名称", "化学式", "密度", "厚度 (nm)", "粗糙度 (nm)")
-        )
+        self.table.setHorizontalHeaderLabels(("名称", "化学式", "密度", "厚度 (nm)", "粗糙度 (nm)"))
         self.error_label = QLabel()
         self.error_label.setObjectName("periodicDialogError")
         self.error_label.setWordWrap(True)
@@ -265,11 +306,7 @@ class PeriodicDialog(QDialog):
         )
 
     def _cell(self, row: int, column: int) -> str:
-        item: QTableWidgetItem | None = self.table.item(row, column)
-        value = "" if item is None else item.text().strip()
-        if not value:
-            raise ValueError(f"periodic layer row {row + 1} is incomplete")
-        return value
+        return _table_cell(self.table, row, column, "periodic layer")
 
     def block(self) -> api.PeriodicBlock:
         if self._block is None:

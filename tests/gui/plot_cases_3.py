@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from tests.gui.plot_support import *  # noqa: F403
 
+
 def test_mask_rolls_back_when_plot_commit_fails(qtbot, tmp_path, monkeypatch) -> None:
     from xrr_fitter.gui.document import ProjectDocument
     from xrr_fitter.gui.main_window import MainWindow
@@ -293,6 +294,25 @@ def test_plot_panel_matplotlib_text_has_no_missing_cjk_glyphs(
 
     assert not [warning for warning in caught if "Glyph" in str(warning.message)]
     assert "glyph" not in caplog.text.lower()
+
+
+def test_live_preview_legend_draws_without_missing_cjk_glyphs(qtbot) -> None:
+    data = prepared_data(size=4)
+    panel = _panel(qtbot, data=data, result=_result(data))
+
+    assert panel.set_preview_curve(data.qz_a_inv, np.full(data.qz_a_inv.size, 0.5))
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "error",
+            message=r"Glyph .* missing from font.*",
+            category=UserWarning,
+        )
+        panel.view("log").canvas.draw()
+
+        panel.clear_preview_curve()
+        panel.view("log").canvas.draw()
+
 
 def test_plot_panel_no_best_redraw_failure_restores_previous_candidate(
     qtbot,
