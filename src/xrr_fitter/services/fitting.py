@@ -13,11 +13,7 @@ from dataclasses import replace
 from xrr_fitter.analysis import sld_bands as _bands
 from xrr_fitter.analysis.automatic import assess_automatic_quality
 from xrr_fitter.analysis.joint import analyze_joint_ensemble
-from xrr_fitter.analysis.mcmc import (
-    prior_conflicts,
-    run_problem_mcmc,
-    with_parameter_priors,
-)
+from xrr_fitter.analysis.mcmc import run_problem_mcmc
 from xrr_fitter.analysis.profiles import recover_profile_basin
 from xrr_fitter.analysis.report import AnalysisRequest, run_analysis
 from xrr_fitter.fit.automatic import (
@@ -51,7 +47,6 @@ from xrr_fitter.model.project import XrrProject
 from xrr_fitter.model.provenance import fit_search_provenance_sha256
 from xrr_fitter.services.datasets import (
     SERVICE_SEED_TREE_VERSION,
-    _prepared_current,
     service_seed_branches,
 )
 from xrr_fitter.services.fitting_phases import automatic_absorption as _absorption
@@ -68,119 +63,6 @@ from xrr_fitter.services.fitting_phases.common import (
     ProgressCallback,
 )
 from xrr_fitter.services.fitting_phases.sharing import automatic_sharing_rules
-
-
-def _validate_parameter_priors(definitions, priors) -> None:
-    """Reject stale/duplicate prior sidecars during fit preflight."""
-    if len({prior.name for prior in priors}) != len(priors):
-        raise ValueError("parameter prior names must be unique")
-    by_name = {definition.name: definition for definition in definitions}
-    for prior in priors:
-        definition = by_name.get(prior.name)
-        if definition is None:
-            raise ValueError(f"unknown parameter name: {prior.name}")
-        replace(definition, prior=prior.prior)
-
-
-def _dataset_index(project: XrrProject, dataset_id: str) -> int:
-    try:
-        return next(index for index, dataset in enumerate(project.datasets) if dataset.dataset_id == dataset_id)
-    except StopIteration as error:
-        raise ValueError(f"unknown dataset_id: {dataset_id}") from error
-
-
-def _project_without_parameter_sidecars(
-    project: XrrProject,
-    index: int,
-) -> XrrProject:
-    datasets = list(project.datasets)
-    datasets[index] = replace(
-        datasets[index],
-        parameter_settings=(),
-        parameter_priors=(),
-    )
-    return replace(project, datasets=tuple(datasets))
-
-
-def _reconciled_settings(
-    project: XrrProject,
-    index: int,
-    settings,
-) -> tuple:
-    dataset = project.datasets[index]
-    retained = []
-    seen: set[str] = set()
-    for setting in settings:
-        if setting.name in seen:
-            continue
-        candidate = (*retained, setting)
-        try:
-            compiled_parameter_definitions(
-                _prepared_current(project, dataset),
-                dataset.structure,
-                dataset.instrument,
-                project.fit_config,
-                candidate,
-            )
-        except ValueError:
-            continue
-        retained.append(setting)
-        seen.add(setting.name)
-    return tuple(retained)
-
-
-def _reconciled_priors(definitions, priors) -> tuple:
-    by_name = {definition.name: definition for definition in definitions}
-    retained = []
-    seen: set[str] = set()
-    for prior in priors:
-        if prior.name in seen:
-            continue
-        definition = by_name.get(prior.name)
-        if definition is None or definition.locked:
-            continue
-        try:
-            replace(definition, prior=prior.prior)
-        except ValueError:
-            continue
-        retained.append(prior)
-        seen.add(prior.name)
-    return tuple(retained)
-
-
-def _reconcile_parameter_sidecars(project: XrrProject, dataset_id: str) -> XrrProject:
-    """Keep only sidecars that compile against current dataset declarations."""
-    index = _dataset_index(project, dataset_id)
-    dataset = project.datasets[index]
-    if dataset.structure is None:
-        reconciled = replace(dataset, parameter_settings=(), parameter_priors=())
-    elif not dataset.parameter_settings and not dataset.parameter_priors:
-        return project
-    else:
-        clean = _project_without_parameter_sidecars(project, index)
-        settings = _reconciled_settings(
-            clean,
-            index,
-            dataset.parameter_settings,
-        )
-        definitions = compiled_parameter_definitions(
-            _prepared_current(clean, clean.datasets[index]),
-            dataset.structure,
-            dataset.instrument,
-            project.fit_config,
-            settings,
-        )
-        reconciled = replace(
-            dataset,
-            parameter_settings=settings,
-            parameter_priors=_reconciled_priors(
-                definitions,
-                dataset.parameter_priors,
-            ),
-        )
-    datasets = list(project.datasets)
-    datasets[index] = reconciled
-    return replace(project, datasets=tuple(datasets))
 
 
 def structure_evidence_for(data, structure) -> StructureEvidence:
@@ -228,11 +110,6 @@ def validate_parameter_setting_declarations(definitions, settings) -> None:
         settings,
         apply_parameter_settings=apply_parameter_settings,
     )
-
-
-def effective_parameter_definitions(definitions, settings):
-    """Apply valid setting overrides without invoking dataset preflight."""
-    return apply_parameter_settings(tuple(definitions), tuple(settings))
 
 
 def _compile_dataset(
@@ -359,15 +236,12 @@ def fit_automatic_prepared_dataset(
     )
 
 
-def _analyze_joint_searches(problem, searches, priors) -> tuple[FitResult, ...]:
+def _analyze_joint_searches(problem, searches) -> tuple[FitResult, ...]:
     return _joint_analysis._analyze_joint_searches(
         problem,
         searches,
-        priors,
         joint_candidate_vectors=joint_candidate_vectors,
         analyze_joint_ensemble=analyze_joint_ensemble,
-        with_parameter_priors=with_parameter_priors,
-        prior_conflicts=prior_conflicts,
     )
 
 
@@ -430,7 +304,6 @@ def preflight_fit(project: XrrProject) -> FitReadiness:
         project,
         prepare_dataset_fit=prepare_dataset_fit,
         compile_joint_problem=compile_joint_problem,
-        validate_parameter_priors=_validate_parameter_priors,
     )
 
 
@@ -538,7 +411,6 @@ def _run_mcmc(
         progress_callback,
         cancelled,
         compile_dataset=_compile_dataset,
-        with_parameter_priors=with_parameter_priors,
         run_problem_mcmc=run_problem_mcmc,
         sld_bands=_sld_bands,
     )

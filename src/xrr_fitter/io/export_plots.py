@@ -8,54 +8,14 @@ from io import BytesIO
 from typing import ParamSpec
 
 import numpy as np
-from matplotlib import font_manager, rc_context, rcParamsDefault
+from matplotlib import rc_context, rcParamsDefault
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
-from matplotlib.text import Text
 
 from xrr_fitter.io.export_tables import DatasetExportData, _contexts
 
 PNG_SOFTWARE = "Matplotlib version3.11.0, https://matplotlib.org/"
 P = ParamSpec("P")
-
-# io cannot import the GUI font helper (the dependency contract forbids io->gui
-# and there is no shared layer between them), so the export path resolves a CJK
-# family independently. The list mirrors gui.plots.diagnostics.CJK_FONT_FAMILIES;
-# without it every Chinese caption/title renders as tofu under DejaVu Sans.
-CJK_FONT_FAMILIES = (
-    "PingFang SC",
-    "Hiragino Sans GB",
-    "Heiti SC",
-    "Noto Sans CJK SC",
-    "Source Han Sans SC",
-    "Microsoft YaHei",
-    "Arial Unicode MS",
-)
-
-
-def _cjk_font_families() -> tuple[str, ...]:
-    # Return the first installed CJK family ahead of DejaVu Sans so Latin axis
-    # text still falls back cleanly; if none is installed, sans-serif keeps the
-    # historical behaviour rather than forcing a missing family.
-    for family in CJK_FONT_FAMILIES:
-        try:
-            font_manager.findfont(
-                font_manager.FontProperties(family=family),
-                fallback_to_default=False,
-            )
-        except ValueError:
-            continue
-        return (family, "DejaVu Sans")
-    return ("sans-serif",)
-
-
-def _apply_cjk_font(figure: Figure) -> None:
-    # Swap only the family on every text artist so each artist keeps its own size
-    # (e.g. the fontsize=8 band caption); the explicit family overrides the
-    # rcParamsDefault DejaVu font that the style isolation forces.
-    families = list(_cjk_font_families())
-    for artist in figure.findobj(match=Text):
-        artist.set_fontfamily(families)
 
 
 def _default_matplotlib_style(render: Callable[P, bytes]) -> Callable[P, bytes]:  # noqa: UP047
@@ -73,11 +33,9 @@ def _context(value: DatasetExportData) -> DatasetExportData:
     return value
 
 
-def _png(figure: Figure, *, cjk_text: bool = False) -> bytes:
+def _png(figure: Figure) -> bytes:
     buffer = BytesIO()
     try:
-        if cjk_text:
-            _apply_cjk_font(figure)
         canvas = FigureCanvasAgg(figure)
         canvas.print_png(buffer, metadata={"Software": PNG_SOFTWARE})
         return buffer.getvalue()
@@ -115,8 +73,8 @@ def fit_overview_png(context: DatasetExportData) -> bytes:
 # 16-84% band is drawn more opaque than the outer 2.5-97.5% band so overlap reads
 # as nested intervals. The order is fixed to keep PNG output byte-deterministic.
 BAND_PAIRS = (
-    ((0.16, 0.84), 0.28, "16–84%"),
-    ((0.025, 0.975), 0.14, "2.5–97.5%"),
+    ((0.16, 0.84), 0.28, "16-84%"),
+    ((0.025, 0.975), 0.14, "2.5-97.5%"),
 )
 
 
@@ -171,7 +129,7 @@ def sld_profile_png(context: DatasetExportData) -> bytes:
     axis.set_xlabel("Depth (Angstrom)")
     axis.set_ylabel("SLD (1/Angstrom^2)")
     axis.legend()
-    return _png(figure, cjk_text=bands is not None)
+    return _png(figure)
 
 
 def _excluded_intervals(

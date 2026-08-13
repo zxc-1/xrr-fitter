@@ -131,19 +131,14 @@ def _baseline_values(structure: StructureSpec) -> dict[str, float]:
 
 
 def _value_map(baseline: dict[str, float], names: Sequence[str], row: np.ndarray) -> dict[str, float]:
-    """Overlay structural samples onto the baseline, matching by name.
+    """Overlay one sample onto the baseline, matching coordinates by name.
 
     Names rather than positions carry the association: retained columns follow
     the sampler's free-parameter order, which has no reason to agree with the
-    declaration order the baseline was built from. Instrument coordinates are
-    deliberately ignored because they cannot change an SLD depth profile; an
-    unknown structural coordinate still fails so a stale structure/report pair
-    is never replayed by position or with a silent default.
+    declaration order the baseline was built from.
     """
     values = dict(baseline)
     for name, value in zip(names, row, strict=True):
-        if name.startswith("instrument."):
-            continue
         if name not in values:
             raise ValueError(f"sample parameter {name} is not a structure coordinate")
         values[name] = float(value)
@@ -236,15 +231,6 @@ def _validated_align(align: str) -> str:
     return align
 
 
-def _validate_inputs(wavelength_a: float, step_a: float, max_samples: int) -> None:
-    if not isfinite(wavelength_a) or wavelength_a <= 0.0:
-        raise ValueError("wavelength_a must be finite and positive")
-    if not isfinite(step_a) or step_a <= 0.0:
-        raise ValueError("step_a must be finite and positive")
-    if not isinstance(max_samples, int) or isinstance(max_samples, bool) or max_samples <= 0:
-        raise ValueError("max_samples must be a positive integer")
-
-
 def _validated_failure_rate(attempted: int, succeeded: int) -> float:
     if succeeded == 0:
         raise ValueError("no retained sample replayed into a usable SLD profile")
@@ -264,7 +250,6 @@ def sld_uncertainty_bands(
     max_samples: int = MAX_REPLAY_SAMPLES,
 ) -> SldUncertaintyBands:
     """Replay retained samples into aligned real and imaginary SLD bands."""
-    _validate_inputs(wavelength_a, step_a, max_samples)
     chosen = _validated_align(align)
     total = int(report.samples_physical.shape[0])
     indices = _thinned_indices(total, max_samples)
