@@ -31,6 +31,8 @@ random-number generators.
 Uncertainty reports combine those immutable values with covariance, residual,
 diagnostic, boundary, and correlation evidence for one candidate identity.
 Classification stays explicit rather than being inferred from display text.
+SLD uncertainty bands are defined in ``model/sld_bands`` and re-exported here,
+so importers still reach every analysis value through this one module.
 
 ``FitResult`` flattens the fitting-only search schema for the supported public
 result while attaching uncertainty and classification evidence. It reconstructs
@@ -60,6 +62,10 @@ from xrr_fitter.model.fitting import (
     PhysicsDiagnostic,
 )
 from xrr_fitter.model.parameters import ParameterDefinition
+
+# Re-exported so analysis values keep one import entry point; the band lives in
+# its own module only to keep both files inside the maintainability gate.
+from xrr_fitter.model.sld_bands import SldUncertaintyBands as SldUncertaintyBands
 
 
 def _readonly(value: object, dtype: type, field: str, ndim: int) -> np.ndarray:
@@ -165,36 +171,24 @@ def _bootstrap_intervals(
     intervals = tuple(values)
     if not intervals:
         return ()
-    valid_rows = all(
-        isinstance(value, (tuple, list)) and len(value) == 3
-        for value in intervals
-    )
+    valid_rows = all(isinstance(value, (tuple, list)) and len(value) == 3 for value in intervals)
     if not valid_rows:
         raise ValueError("bootstrap intervals must contain name, lower, and upper")
     interval_names = tuple(value[0] for value in intervals)
     if interval_names != names:
         raise ValueError("bootstrap interval names must match parameter names in order")
     bounds = _bootstrap_interval_bounds(intervals)
-    return tuple(
-        (name, lower, upper)
-        for name, (lower, upper) in zip(interval_names, bounds, strict=True)
-    )
+    return tuple((name, lower, upper) for name, (lower, upper) in zip(interval_names, bounds, strict=True))
 
 
 def _bootstrap_interval_bounds(
     intervals: tuple[object, ...],
 ) -> tuple[tuple[float, float], ...]:
     try:
-        bounds = tuple(
-            (float(value[1]), float(value[2]))
-            for value in intervals
-        )
+        bounds = tuple((float(value[1]), float(value[2])) for value in intervals)
     except (TypeError, ValueError, OverflowError) as error:
         raise ValueError("bootstrap interval bounds must be finite numbers") from error
-    invalid = any(
-        not isfinite(lower) or not isfinite(upper) or lower > upper
-        for lower, upper in bounds
-    )
+    invalid = any(not isfinite(lower) or not isfinite(upper) or lower > upper for lower, upper in bounds)
     if invalid:
         raise ValueError("bootstrap interval bounds must be finite and ordered")
     return bounds
@@ -227,11 +221,14 @@ def _validate_bootstrap_owner(
         raise ValueError("bootstrap candidate_id must be nonempty or None")
     if not isinstance(provenance_sha256, str):
         raise ValueError("bootstrap provenance_sha256 must be a lowercase SHA-256")
-    valid = len(provenance_sha256) == 64 and all(
-        value in "0123456789abcdef" for value in provenance_sha256
-    )
+    valid = len(provenance_sha256) == 64 and all(value in "0123456789abcdef" for value in provenance_sha256)
     if not valid:
         raise ValueError("bootstrap provenance_sha256 must be a lowercase SHA-256")
+
+
+def _validate_optional_sld_bands(value: SldUncertaintyBands | None) -> None:
+    if value is not None and not isinstance(value, SldUncertaintyBands):
+        raise TypeError("sld_bands must be a SldUncertaintyBands")
 
 
 class ConfidenceClass(StrEnum):
@@ -303,7 +300,11 @@ class McmcConfig:
 
     @classmethod
     def standard(cls, free_parameter_count: int) -> McmcConfig:
-        if not isinstance(free_parameter_count, int) or isinstance(free_parameter_count, bool) or free_parameter_count < 0:
+        if (
+            not isinstance(free_parameter_count, int)
+            or isinstance(free_parameter_count, bool)
+            or free_parameter_count < 0
+        ):
             raise ValueError("free_parameter_count must be a nonnegative integer")
         walkers = max(32, 2 * free_parameter_count + 2)
         if walkers % 2:
@@ -474,6 +475,7 @@ class UncertaintyReport:
     mcmc: McmcReport | None = None
     candidate_id: str | None = None
     bootstrap_performed: bool = True
+    sld_bands: SldUncertaintyBands | None = None
 
     def __post_init__(self) -> None:
         names = tuple(self.correlation_names)
@@ -495,6 +497,7 @@ class UncertaintyReport:
             raise ValueError("candidate_id must be a nonempty string or None")
         if not isinstance(self.bootstrap_performed, bool):
             raise TypeError("bootstrap_performed must be bool")
+        _validate_optional_sld_bands(self.sld_bands)
         object.__setattr__(self, "diagnostics", diagnostics)
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:

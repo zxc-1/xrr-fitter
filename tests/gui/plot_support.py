@@ -13,11 +13,11 @@ visible figures and the immutable project snapshot unchanged.
 from __future__ import annotations
 
 import gc
+import warnings
+import weakref
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-import warnings
-import weakref
 
 import numpy as np
 import pytest
@@ -25,16 +25,13 @@ from matplotlib.backend_bases import MouseEvent
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtWidgets import QApplication, QLineEdit, QToolButton, QTreeWidget, QVBoxLayout, QWidget
 from shiboken6 import isValid
-
-import xrr_fitter.api as api
 from tests.support.model_cases import (
-    dataset_project,
     final_fit_result,
     fit_candidate,
     prepared_data,
-    project,
 )
 
+import xrr_fitter.api as api
 
 # The SLD profile left the tab bar for a permanent companion pane, so these are
 # the switchable diagnostic tabs only, with the log view leading.
@@ -89,13 +86,15 @@ def _result(data, *, uncertainty=True):
     return value
 
 
-def _panel(qtbot, *, data=None, result=None):
+def _panel(qtbot, *, data=None, result=None, bands=None):
     from xrr_fitter.gui.plots.panel import PlotPanel
 
     panel = PlotPanel()
     qtbot.addWidget(panel)
     if data is not None:
         panel.set_dataset("curve", data)
+    if bands is not None and result is None:
+        result = replace(_result(data), uncertainty=replace(_uncertainty(), sld_bands=bands))
     if result is not None:
         panel.set_result(result, "candidate-a")
     return panel
@@ -153,12 +152,62 @@ def _drag_range(panel, lower: float, upper: float) -> None:
     canvas.callbacks.process("motion_notify_event", _mouse_event("motion_notify_event", panel, upper))
     canvas.callbacks.process("button_release_event", _mouse_event("button_release_event", panel, upper))
 
+
+def _zero_width_bands():
+    """A degenerate band: five identical quantile faces on one depth grid.
+
+    Mirrors the io-side export fixture so the on-screen caption and the exported
+    caption are pinned to the same ``SldUncertaintyBands.caption()`` text.
+    """
+    depth = np.linspace(0.0, 40.0, 4)
+    levels = (0.025, 0.16, 0.5, 0.84, 0.975)
+    real = np.tile(np.arange(len(levels), dtype=float)[:, None], (1, depth.size))
+    return api.SldUncertaintyBands(
+        depth_a=depth,
+        quantiles=levels,
+        real=real,
+        imaginary=real * 0.5,
+        align_label="基底界面",
+        sample_count=500,
+        total_samples=2000,
+        failure_rate=0.0,
+    )
+
+
 __all__ = (
-    "gc", "replace", "Path", "SimpleNamespace", "warnings", "weakref",
-    "np", "pytest", "MouseEvent", "QCoreApplication", "QEvent", "Qt",
-    "QApplication", "QLineEdit", "QToolButton", "QTreeWidget",
-    "QVBoxLayout", "QWidget", "isValid", "api", "final_fit_result",
-    "fit_candidate", "prepared_data", "TAB_TITLES", "_candidate",
-    "_uncertainty", "_result", "_panel", "_line_y", "_artist_snapshot",
-    "_write_curve", "_project_with_curves", "_mouse_event", "_drag_range",
+    "gc",
+    "replace",
+    "Path",
+    "SimpleNamespace",
+    "warnings",
+    "weakref",
+    "np",
+    "pytest",
+    "MouseEvent",
+    "QCoreApplication",
+    "QEvent",
+    "Qt",
+    "QApplication",
+    "QLineEdit",
+    "QToolButton",
+    "QTreeWidget",
+    "QVBoxLayout",
+    "QWidget",
+    "isValid",
+    "api",
+    "final_fit_result",
+    "fit_candidate",
+    "prepared_data",
+    "TAB_TITLES",
+    "_candidate",
+    "_uncertainty",
+    "_result",
+    "_panel",
+    "_line_y",
+    "_artist_snapshot",
+    "_write_curve",
+    "_project_with_curves",
+    "_mouse_event",
+    "_drag_range",
+    "_zero_width_bands",
 )
