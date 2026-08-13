@@ -1,26 +1,22 @@
 """Transactional Qt projection of prepared data and fit diagnostics.
 
-Every mutation validates a complete scratch projection before changing live
-artists. A failed live draw restores the committed projection and all SLD view
-state. SLD bands are persisted evidence; alternate alignments are view-only
-cache entries owned by one dataset and one MCMC report. Dataset or report
-changes invalidate that cache, while ordinary redraws reuse it.
-
-The panel publishes Python state only after a successful draw. Project and
-legacy dataset transitions therefore restore their dictionaries, structure,
-selector, toggle, and cache together. Preview artists remain outside this
-transaction and are discarded by the next full projection; teardown owns the
-figures and callbacks idempotently.
+Every public mutation renders a complete Agg scratch projection before it
+touches the live Qt canvases.  Python state is committed only after the live
+draw succeeds; a live failure redraws the previous projection.  Matplotlib
+event ownership is delegated to one composed interaction controller so panel
+teardown has one explicit callback and figure release boundary.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass
 
 import numpy as np
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -32,10 +28,10 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 from xrr_fitter.gui.plots.diagnostics import (
+    COMPANION_SPEC,
     TAB_SPECS,
     VIEW_SPECS,
     DiagnosticView,
-    apply_figure_font,
     build_scratch_views,
     build_tabs,
     draw_batch_trends,
@@ -60,29 +56,22 @@ from xrr_fitter.gui.plots.reflectivity import (
     validate_result,
 )
 from xrr_fitter.gui.plots.sld import draw_sld, draw_uncertainty
-from xrr_fitter.gui.plots.sld_state import (
-    ALIGN_KEYS,
-    BatchTrends,
-    Projection,
-    SldBandReplay,
-    SldViewState,
-    alignment_index_from_cache,
-    build_sld_companion_pane,
-    cache_matches,
-    candidate_for_result,
-    capture_sld_view_state,
-    committed_projection,
-    comparison_candidates,
-    current_projection,
-    project_structure,
-    projection_bands,
-    projection_mcmc,
-    reset_band_view,
-    restore_sld_view_state,
-    set_alignment_index,
-    sync_band_controls,
-    visible_bands,
-)
+
+BatchTrends = tuple[tuple[str, ...], tuple[float, ...], tuple[float, ...]]
+
+# The alignment selector shows Chinese labels; these are the matching algorithm
+# keys in the same order the combo box items are added.
+ALIGN_KEYS = ("backing", "surface")
+
+
+@dataclass(frozen=True, slots=True)
+class _Projection:
+    data: api.PreparedData | None
+    mask: np.ndarray | None
+    result: object | None
+    candidate_id: str | None
+    trends: BatchTrends | None
+    visible_range: tuple[float, float] | None
 
 
 def _empty_state_widget(panel: PlotPanel) -> QWidget:
@@ -136,19 +125,13 @@ class PlotPanel(QWidget):
         self._result: object | None = None
         self._candidate_id: str | None = None
         self._structure: object | None = None
-        self._sld_band_cache: SldBandReplay | None = None
         self._trends: BatchTrends | None = None
         self._visible_range: tuple[float, float] | None = None
         self._preview_line: object | None = None
         self._released = False
         self.toolbar = PlotInteractionToolbar(self)
         self.tabs, self._views = build_tabs()
-        self.sld_pane, self.sld_bands_toggle, self.sld_align_selector = build_sld_companion_pane(
-            self,
-            self._views,
-            self._on_bands_toggled,
-            self._on_align_changed,
-        )
+        self.sld_pane = self._build_sld_pane()
         # Reflectivity above, depth profile below: a fit is judged on curve
         # agreement and structural plausibility at once, so neither may hide
         # the other behind a tab.
@@ -172,6 +155,50 @@ class PlotPanel(QWidget):
         self._sync_pages()
         self._interactions = PlotInteractionController(self, self.toolbar)
         self._install_view_shortcuts()
+
+    def _build_sld_pane(self) -> QWidget:
+        """Wrap the companion SLD canvas with its own heading."""
+        key, title, description = COMPANION_SPEC
+        pane = QWidget(self)
+        pane.setObjectName("sldPane")
+        pane.setAccessibleName(title)
+        pane.setAccessibleDescription(description)
+        heading = QLabel(title, pane)
+        heading.setObjectName("sldPaneHeader")
+        heading.setProperty("sectionHeader", True)
+        layout = QVBoxLayout(pane)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(heading)
+        layout.addLayout(self._build_sld_band_controls(pane))
+        layout.addWidget(self._views[key].canvas, 1)
+        return pane
+
+    def _build_sld_band_controls(self, pane: QWidget) -> QHBoxLayout:
+        """Build the credible-band toggle and alignment selector control strip."""
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(6)
+        # Both controls start disabled: bands only exist once MCMC has produced a
+        # report, so an enabled control here would promise something the panel
+        # cannot draw yet. The tooltip states that precondition.
+        self.sld_bands_toggle = QCheckBox("显示不确定度带", pane)
+        self.sld_bands_toggle.setObjectName("sldBandsToggle")
+        self.sld_bands_toggle.setEnabled(False)
+        self.sld_bands_toggle.setToolTip("需要先运行 MCMC")
+        self.sld_bands_toggle.toggled.connect(self._on_bands_toggled)
+        self.sld_align_selector = QComboBox(pane)
+        self.sld_align_selector.setObjectName("sldAlignSelector")
+        # Populate before connecting: addItems moves the current index off -1 and
+        # would otherwise fire the recompute handler while the panel is still
+        # being constructed, before any dataset exists.
+        self.sld_align_selector.addItems(("基底界面", "表面界面"))
+        self.sld_align_selector.setEnabled(False)
+        self.sld_align_selector.currentIndexChanged.connect(self._on_align_changed)
+        controls.addWidget(self.sld_bands_toggle)
+        controls.addWidget(self.sld_align_selector)
+        controls.addStretch(1)
+        return controls
 
     def _install_view_shortcuts(self) -> None:
         """Bind Alt+1..Alt+8 to the diagnostic tabs by visible position.
@@ -258,89 +285,30 @@ class PlotPanel(QWidget):
         if not isinstance(data, api.PreparedData):
             raise TypeError("data must be PreparedData")
         mask = validate_plot_data(data, data.fit_mask)
-        projection = Projection(
-            data,
-            mask,
-            None,
-            None,
-            self._trends,
-            self._visible_range,
-            dataset_id,
-            None,
-        )
-        previous_context = (
-            self._datasets,
-            self._masks,
-            self._dataset_id,
-            self._result,
-            self._candidate_id,
-            self._structure,
-            self._sld_band_cache,
-            self.sld_align_selector.currentIndex(),
-        )
-        self._reset_sld_band_view(projection)
-        try:
-            self._transact(projection)
-        except Exception:
-            (
-                self._datasets,
-                self._masks,
-                self._dataset_id,
-                self._result,
-                self._candidate_id,
-                self._structure,
-                self._sld_band_cache,
-                alignment_index,
-            ) = previous_context
-            set_alignment_index(self.sld_align_selector, alignment_index)
-            raise
-        self._datasets = {**self._datasets, dataset_id: data}
-        self._masks = {**self._masks, dataset_id: mask}
+        projection = _Projection(data, mask, None, None, self._trends, self._visible_range)
+        self._transact(projection)
+        self._datasets[dataset_id] = data
+        self._masks[dataset_id] = mask
         self._dataset_id = dataset_id
         self._result = None
         self._candidate_id = None
-        self._structure = None
         self._sync_pages()
 
     def select_dataset(self, dataset_id: str) -> None:
         if dataset_id not in self._datasets:
             raise KeyError(f"unknown dataset: {dataset_id}")
-        projection = Projection(
+        projection = _Projection(
             self._datasets[dataset_id],
             self._masks[dataset_id],
             None,
             None,
             self._trends,
             self._visible_range,
-            dataset_id,
-            None,
         )
-        previous = (
-            self._dataset_id,
-            self._result,
-            self._candidate_id,
-            self._structure,
-            self._sld_band_cache,
-            self.sld_align_selector.currentIndex(),
-        )
-        self._reset_sld_band_view(projection)
-        try:
-            self._transact(projection)
-        except Exception:
-            (
-                self._dataset_id,
-                self._result,
-                self._candidate_id,
-                self._structure,
-                self._sld_band_cache,
-                alignment_index,
-            ) = previous
-            set_alignment_index(self.sld_align_selector, alignment_index)
-            raise
+        self._transact(projection)
         self._dataset_id = dataset_id
         self._result = None
         self._candidate_id = None
-        self._structure = None
         self._sync_pages()
 
     def update_mask(self, dataset_id: str, mask: object) -> None:
@@ -350,15 +318,13 @@ class PlotPanel(QWidget):
         if dataset_id != self._dataset_id:
             self._masks[dataset_id] = converted
             return
-        projection = Projection(
+        projection = _Projection(
             self._datasets[dataset_id],
             converted,
             self._result,
             self._candidate_id,
             self._trends,
             self._visible_range,
-            dataset_id,
-            self._structure,
         )
         self._transact(projection)
         self._masks[dataset_id] = converted
@@ -366,32 +332,16 @@ class PlotPanel(QWidget):
     def set_result(self, result: object, candidate_id: str | None) -> None:
         data = self._active_data()
         validate_result(data, result)
-        candidate_for_result(result, candidate_id)
-        previous_projection = self._current_projection()
-        projection = Projection(
+        self._candidate(result, candidate_id)
+        projection = _Projection(
             data,
             self._active_mask(),
             result,
             candidate_id,
             self._trends,
             self._visible_range,
-            self._dataset_id,
-            self._structure,
         )
-        current_report = projection_mcmc(self._result)
-        report_changed = projection_mcmc(projection.result) is not current_report
-        previous_sld_state = capture_sld_view_state(
-            self._sld_band_cache,
-            self.sld_bands_toggle,
-            self.sld_align_selector,
-        )
-        if report_changed:
-            self._reset_sld_band_view(projection)
-        self._transact(
-            projection,
-            rollback_projection=previous_projection,
-            rollback_sld_state=previous_sld_state,
-        )
+        self._transact(projection)
         self._result = result
         self._candidate_id = candidate_id
 
@@ -473,59 +423,20 @@ class PlotPanel(QWidget):
 
     def project_project(self, project: api.XrrProject) -> None:
         prepared = prepare_project_plots(project)
-        candidate_for_result(prepared.result, prepared.candidate_id)
-        projection = Projection(
+        self._candidate(prepared.result, prepared.candidate_id)
+        projection = _Projection(
             prepared.data,
             prepared.mask,
             prepared.result,
             prepared.candidate_id,
             self._trends,
             self._visible_range,
-            prepared.dataset_id,
-            project_structure(project, prepared.dataset_id),
         )
-        previous_dataset_id = self._dataset_id
-        previous_report = projection_mcmc(self._result)
-        previous_context = (
-            self._datasets,
-            self._masks,
-            self._dataset_id,
-            self._result,
-            self._candidate_id,
-            self._structure,
-            self._sld_band_cache,
-            self.sld_align_selector.currentIndex(),
-        )
-        previous_projection = self._committed_projection()
-        previous_sld_state = capture_sld_view_state(
-            self._sld_band_cache,
-            self.sld_bands_toggle,
-            self.sld_align_selector,
-        )
-        self._datasets, self._masks = prepared.datasets, prepared.masks
+        self._transact(projection)
+        self._datasets = prepared.datasets
+        self._masks = prepared.masks
         self._dataset_id = prepared.dataset_id
-        self._structure = projection.structure
-        if prepared.dataset_id != previous_dataset_id or projection_mcmc(projection.result) is not previous_report:
-            self._reset_sld_band_view(projection)
-        try:
-            self._transact(
-                projection,
-                rollback_projection=previous_projection,
-                rollback_sld_state=previous_sld_state,
-            )
-        except Exception:
-            (
-                self._datasets,
-                self._masks,
-                self._dataset_id,
-                self._result,
-                self._candidate_id,
-                self._structure,
-                self._sld_band_cache,
-                alignment_index,
-            ) = previous_context
-            set_alignment_index(self.sld_align_selector, alignment_index)
-            raise
+        self._structure = self._active_structure(project)
         self._result = prepared.result
         self._candidate_id = prepared.candidate_id
         self._sync_pages()
@@ -544,74 +455,94 @@ class PlotPanel(QWidget):
             raise RuntimeError("no active plot dataset")
         return self._masks[self._dataset_id]
 
-    def _reset_sld_band_view(self, projection: Projection) -> None:
-        """Drop a view-only replay when its dataset or MCMC owner changes."""
-        self._sld_band_cache = None
-        reset_band_view(projection_bands(projection.result), self.sld_align_selector)
+    def _candidate(self, result: object | None, candidate_id: str | None) -> object | None:
+        if result is None or candidate_id is None:
+            return None
+        matches = tuple(candidate for candidate in result.candidates if candidate.candidate_id == candidate_id)
+        if len(matches) != 1:
+            raise KeyError(f"unknown candidate: {candidate_id}")
+        return matches[0]
+
+    def _comparison_candidates(self, projection: _Projection) -> tuple[object, ...]:
+        """Return the other candidates whose SLD profiles overlay the selected one."""
+        result = projection.result
+        if result is None or projection.candidate_id is None:
+            return ()
+        return tuple(candidate for candidate in result.candidates if candidate.candidate_id != projection.candidate_id)
+
+    def _projection_bands(self, projection: _Projection) -> object | None:
+        """Return the credible bands the committed MCMC evidence carries, if any."""
+        # Bands hang off the result's uncertainty report, not off a candidate: one
+        # sampling run produces one band set for the candidate it sampled.
+        result = projection.result
+        report = None if result is None else result.uncertainty
+        return None if report is None else report.sld_bands
+
+    def _sync_band_controls(self, bands: object | None) -> None:
+        """Enable the band controls once evidence exists, opting in on first arrival."""
+        enabled = bands is not None
+        toggle = self.sld_bands_toggle
+        was_enabled = toggle.isEnabled()
+        toggle.setEnabled(enabled)
+        toggle.setToolTip("" if enabled else "需要先运行 MCMC")
+        # The selector needs the structure to replay samples at another alignment;
+        # a projection pushed without one leaves the checkbox usable on its own.
+        self.sld_align_selector.setEnabled(enabled and self._structure is not None)
+        if enabled and not was_enabled:
+            # Show the bands the moment the first sampling run lands, but suppress
+            # the toggled signal: this runs inside _draw, and letting it fire would
+            # re-enter _transact and redraw recursively.
+            toggle.blockSignals(True)
+            toggle.setChecked(True)
+            toggle.blockSignals(False)
+
+    def _active_structure(self, project: api.XrrProject) -> object | None:
+        # Taken from the project rather than the prepared plot data, which carries
+        # curves only; replaying samples needs the structure the fit was built on.
+        for dataset in project.datasets:
+            if dataset.dataset_id == self._dataset_id:
+                return dataset.structure
+        return None
 
     def _on_bands_toggled(self) -> None:
         if self._released or self._dataset_id is None:
             return
-        if self.sld_bands_toggle.isChecked():
-            self._on_align_changed(self.sld_align_selector.currentIndex())
-            return
         self._transact(self._current_projection())
 
     def _on_align_changed(self, index: int) -> None:
-        """Recompute the bands for the picked alignment as a view-only overlay."""
-        if self._released or self._dataset_id is None or self._structure is None or not 0 <= index < len(ALIGN_KEYS):
+        """Recompute the bands for the picked alignment as a view-only overlay.
+
+        The selector never writes back: the stored evidence keeps the alignment
+        the sampler produced, and a missing structure or report simply leaves the
+        current drawing alone.
+        """
+        if self._released or self._dataset_id is None or self._structure is None:
             return
-        projection = self._current_projection()
-        report = projection_mcmc(projection.result)
+        result = self._result
+        report = None if result is None else result.uncertainty.mcmc
         if report is None or not self.sld_bands_toggle.isChecked():
             return
-        alignment = ALIGN_KEYS[index]
-        if cache_matches(self._sld_band_cache, self._dataset_id, report, alignment):
-            self._transact(projection)
-            return
-        previous_index = alignment_index_from_cache(
-            self._sld_band_cache,
-            projection_bands(projection.result),
-            self.sld_align_selector.itemText(1),
-        )
-        previous_sld_state = capture_sld_view_state(
-            self._sld_band_cache,
-            self.sld_bands_toggle,
-            self.sld_align_selector,
-        )
-        rollback_sld_state = replace(previous_sld_state, alignment_index=previous_index)
-        try:
-            bands = api.sld_uncertainty_bands(
-                self._structure,
-                report,
-                wavelength_a=self._active_data().beam.effective_wavelength_a,
-                align=alignment,
-            )
-            self._sld_band_cache = SldBandReplay(self._dataset_id, report, alignment, bands)
-            self._transact(
-                projection,
-                rollback_projection=self._committed_projection(),
-                rollback_sld_state=rollback_sld_state,
-            )
-        except (ArithmeticError, RuntimeError, TypeError, ValueError):
-            self._sld_band_cache = restore_sld_view_state(
-                rollback_sld_state,
-                self.sld_bands_toggle,
-                self.sld_align_selector,
-            )
-
-    def _current_projection(self, **changes: object) -> Projection:
-        return current_projection(
-            self._datasets,
-            self._masks,
-            self._dataset_id,
-            self._result,
-            self._candidate_id,
-            self._trends,
-            self._visible_range,
+        bands = api.sld_uncertainty_bands(
             self._structure,
-            changes,
+            report,
+            wavelength_a=self._active_data().beam.effective_wavelength_a,
+            align=ALIGN_KEYS[index],
         )
+        projection = self._current_projection()
+        candidate = self._candidate(projection.result, projection.candidate_id)
+        draw_sld(self._views["sld"], candidate, self._comparison_candidates(projection), bands)
+
+    def _current_projection(self, **changes: object) -> _Projection:
+        values = {
+            "data": None if self._dataset_id is None else self._active_data(),
+            "mask": None if self._dataset_id is None else self._active_mask(),
+            "result": self._result,
+            "candidate_id": self._candidate_id,
+            "trends": self._trends,
+            "visible_range": self._visible_range,
+        }
+        values.update(changes)
+        return _Projection(**values)
 
     def set_preview_curve(
         self,
@@ -642,7 +573,6 @@ class PlotPanel(QWidget):
                 label="搜索中模型",
             )[0]
             view.axes.legend()
-            apply_figure_font(view.figure)
         else:
             self._preview_line.set_data(angles, values)
         view.canvas.draw_idle()
@@ -657,16 +587,9 @@ class PlotPanel(QWidget):
         line.remove()
         view = self._views["log"]
         view.axes.legend()
-        apply_figure_font(view.figure)
         view.canvas.draw_idle()
 
-    def _transact(
-        self,
-        projection: Projection,
-        *,
-        rollback_projection: Projection | None = None,
-        rollback_sld_state: SldViewState | None = None,
-    ) -> None:
+    def _transact(self, projection: _Projection) -> None:
         if self._released:
             raise RuntimeError("plot panel resources have been released")
         # A full projection clears every axes, so the preview artist it owned
@@ -677,41 +600,18 @@ class PlotPanel(QWidget):
             self._draw(scratch, projection)
         finally:
             release_scratch_views(scratch)
-        previous = self._committed_projection() if rollback_projection is None else rollback_projection
+        previous = self._current_projection()
         try:
             self._draw(self._views, projection)
         except Exception:
-            if rollback_sld_state is not None:
-                self._sld_band_cache = restore_sld_view_state(
-                    rollback_sld_state,
-                    self.sld_bands_toggle,
-                    self.sld_align_selector,
-                )
             self._draw(self._views, previous)
             raise
 
-    def _committed_projection(self) -> Projection:
-        return committed_projection(
-            self._datasets,
-            self._masks,
-            self._dataset_id,
-            self._result,
-            self._candidate_id,
-            self._trends,
-            self._visible_range,
-            self._structure,
-        )
-
-    def _draw(self, views: dict[str, DiagnosticView], projection: Projection) -> None:
+    def _draw(self, views: dict[str, DiagnosticView], projection: _Projection) -> None:
         data = projection.data
-        candidate = candidate_for_result(projection.result, projection.candidate_id)
-        bands = projection_bands(projection.result)
-        sync_band_controls(
-            self.sld_bands_toggle,
-            self.sld_align_selector,
-            bands=bands,
-            has_structure=projection.structure is not None,
-        )
+        candidate = self._candidate(projection.result, projection.candidate_id)
+        bands = self._projection_bands(projection)
+        self._sync_band_controls(bands)
         if data is None or projection.mask is None:
             for key in ("raw", "log", "qz4", "residual", "sld"):
                 title = next(title for name, title, _description in VIEW_SPECS if name == key)
@@ -721,16 +621,8 @@ class PlotPanel(QWidget):
             draw_log(views["log"], data, candidate)
             draw_qz4(views["qz4"], data, candidate)
             draw_residual(views["residual"], candidate)
-            shown = visible_bands(
-                checked=self.sld_bands_toggle.isChecked(),
-                cache=self._sld_band_cache,
-                persisted=projection_bands(projection.result),
-                dataset_id=projection.dataset_id,
-                report=projection_mcmc(projection.result),
-                alignment=ALIGN_KEYS[self.sld_align_selector.currentIndex()],
-                surface_label=self.sld_align_selector.itemText(1),
-            )
-            draw_sld(views["sld"], candidate, comparison_candidates(projection.result, projection.candidate_id), shown)
+            shown = bands if self.sld_bands_toggle.isChecked() else None
+            draw_sld(views["sld"], candidate, self._comparison_candidates(projection), shown)
             self._draw_range(views, projection.visible_range)
         draw_candidate_comparison(views["candidates"], projection.result, projection.candidate_id)
         draw_uncertainty(views["uncertainty"], projection.result, projection.candidate_id)
@@ -760,8 +652,6 @@ class PlotPanel(QWidget):
         self._masks.clear()
         self._result = None
         self._candidate_id = None
-        self._structure = None
-        self._sld_band_cache = None
 
     def closeEvent(self, event: object) -> None:
         self.release_resources()
