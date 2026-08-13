@@ -132,6 +132,7 @@ SIGNATURES = {
     "set_sharing_rules": "(project: 'XrrProject', rules: 'Sequence[SharingRule]') -> 'XrrProject'",
     "set_structure": "(project: 'XrrProject', dataset_id: 'str', structure: 'StructureSpec') -> 'XrrProject'",
     "set_workspace_state": "(project: 'XrrProject', state: 'ProjectUiState') -> 'XrrProject'",
+    "sld_uncertainty_bands": "(structure, report, *, wavelength_a, align='backing')",
     "suggest_oxide_layers": "(structure: 'StructureSpec') -> 'tuple[OxideSuggestion, ...]'",
     "validate_parameter_settings": "(definitions: 'Sequence[ParameterDefinition]', settings: 'Sequence[ParameterSetting]') -> 'tuple[ParameterSetting, ...]'",
     "validate_sharing_rules": "(project: 'XrrProject', rules: 'Sequence[SharingRule]') -> 'tuple[SharingRule, ...]'",
