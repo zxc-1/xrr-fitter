@@ -78,11 +78,7 @@ def _affected_source_ids(
     project: XrrProject,
     records: dict[str, object],
 ) -> set[str]:
-    invalid = {
-        dataset_id
-        for dataset_id, record in records.items()
-        if record.status is not SourceStatus.OK
-    }
+    invalid = {dataset_id for dataset_id, record in records.items() if record.status is not SourceStatus.OK}
     return _dependent_fit_ids(project, invalid)
 
 
@@ -95,16 +91,10 @@ def _invalidated_sources(
     if not affected:
         return project
     datasets = tuple(
-        _cleared(dataset, clear_evidence=True)
-        if dataset.dataset_id in affected
-        else dataset
+        _cleared(dataset, clear_evidence=True) if dataset.dataset_id in affected else dataset
         for dataset in project.datasets
     )
-    selected = tuple(
-        item
-        for item in project.ui_state.selected_candidate_ids
-        if item[0] not in affected
-    )
+    selected = tuple(item for item in project.ui_state.selected_candidate_ids if item[0] not in affected)
     return replace(
         project,
         datasets=datasets,
@@ -150,10 +140,7 @@ def _prepare_source_snapshots(project: XrrProject) -> XrrProject:
         fresh = validate_sources(current)
         if attempt == SOURCE_RESTORE_ATTEMPTS - 1:
             records = _source_records(fresh)
-            if all(
-                records[dataset_id].status is not SourceStatus.OK
-                for dataset_id in raced
-            ):
+            if all(records[dataset_id].status is not SourceStatus.OK for dataset_id in raced):
                 return _invalidated_sources(current, fresh)
             raise RuntimeError("source changed repeatedly during project restore")
         validation = fresh
@@ -162,11 +149,7 @@ def _prepare_source_snapshots(project: XrrProject) -> XrrProject:
 
 def _rebased_project(project: XrrProject, target_directory: Path) -> XrrProject:
     target = target_directory.resolve()
-    source_base = (
-        Path(project.base_directory).resolve()
-        if project.base_directory is not None
-        else Path.cwd().resolve()
-    )
+    source_base = Path(project.base_directory).resolve() if project.base_directory is not None else Path.cwd().resolve()
     if source_base == target:
         return replace(project, base_directory=str(target))
     datasets = tuple(
@@ -198,14 +181,10 @@ def select_candidate(
     candidate_id: str | None,
 ) -> XrrProject:
     dataset = dataset_by_id(project, dataset_id)
-    selected = tuple(
-        item for item in project.ui_state.selected_candidate_ids if item[0] != dataset_id
-    )
+    selected = tuple(item for item in project.ui_state.selected_candidate_ids if item[0] != dataset_id)
     if candidate_id is not None:
         result = dataset.last_valid_result
-        if result is None or candidate_id not in {
-            candidate.candidate_id for candidate in result.candidates
-        }:
+        if result is None or candidate_id not in {candidate.candidate_id for candidate in result.candidates}:
             raise ValueError("candidate_id is absent from the persisted result")
         selected = (*selected, (dataset_id, candidate_id))
     return replace(
@@ -249,11 +228,7 @@ def _joint_structure_template(
     active_id: str | None,
 ) -> DatasetProject | None:
     active = next(
-        (
-            dataset
-            for dataset in datasets
-            if dataset.dataset_id == active_id and dataset.structure is not None
-        ),
+        (dataset for dataset in datasets if dataset.dataset_id == active_id and dataset.structure is not None),
         None,
     )
     if active is not None:
@@ -277,6 +252,7 @@ def _fill_missing_joint_structures(
             structure=template.structure,
             structure_evidence=None,
             parameter_settings=(),
+            parameter_priors=(),
         )
         if dataset.structure is None
         else dataset
@@ -297,16 +273,10 @@ def clear_fit_results(
         raise ValueError(f"unknown dataset_id: {sorted(unknown)[0]}")
     affected = _dependent_fit_ids(project, set(requested))
     datasets = tuple(
-        _cleared(dataset, clear_evidence=False)
-        if dataset.dataset_id in affected
-        else dataset
+        _cleared(dataset, clear_evidence=False) if dataset.dataset_id in affected else dataset
         for dataset in project.datasets
     )
-    selected = tuple(
-        item
-        for item in project.ui_state.selected_candidate_ids
-        if item[0] not in affected
-    )
+    selected = tuple(item for item in project.ui_state.selected_candidate_ids if item[0] not in affected)
     return replace(
         project,
         datasets=datasets,
@@ -324,9 +294,7 @@ def set_batch_mode(
         raise ValueError("joint batch mode requires at least two datasets")
     if mode == project.batch_mode:
         return project
-    datasets = tuple(
-        _cleared(dataset, clear_evidence=False) for dataset in project.datasets
-    )
+    datasets = tuple(_cleared(dataset, clear_evidence=False) for dataset in project.datasets)
     if mode == "joint":
         datasets = _fill_missing_joint_structures(
             datasets,
