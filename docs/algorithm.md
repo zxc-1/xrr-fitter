@@ -509,8 +509,10 @@ dimensionless. `soft_range` requires `a < b` and `s > 0`.
 
 **Truncation and renormalization.** Every prior is conditioned on the
 parameter's admissible `[lower, upper]` box. `_prior_norm` integrates the
-unnormalized kernel over that interval with a fixed 2049-node composite
-trapezoid rule and caches the total mass `Z`; the truncated log density is then
+unnormalized kernel over that interval with a deterministic composite
+trapezoid grid: every prior gets the same 2049-node base mesh, while localized
+normal/lognormal/soft-range features add distribution-aware refinement nodes.
+It caches the total mass `Z`; the truncated log density is then
 `log k(theta) - log Z` for `theta` in `[lower, upper]` and `-inf` outside. Doing
 the normalization numerically on one grid keeps every kind on a single code path
 and makes `prior_cdf`/`prior_inverse_cdf` exact inverses by construction. A
@@ -548,7 +550,12 @@ fire on mild, expected disagreement. The point-estimate path in `report.py`
 validates ownership and performs bootstrap, profiles, residual analysis, and
 confidence classification with the original context; only the final report
 annotation compares the winning `unit_vector` through the sidecar overlay. The
-MCMC path in `mcmc.py` runs the same test against the posterior median instead.
+MCMC path in `mcmc.py` runs the same test against the median of the retained
+physical samples. `roughness_fraction` is the exception because its prior is
+declared in unit-fraction space, so its retained unit samples are summarized
+there instead. Computing the median after mapping matters for even sample
+counts: nonlinear transforms do not preserve the average of the two central
+values.
 `prior_conflicts` is informational: it is not profile-selection evidence and
 does not change confidence or automatic quality decisions.
 

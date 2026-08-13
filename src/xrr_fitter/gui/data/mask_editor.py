@@ -68,11 +68,7 @@ class MaskEditor(QObject):
         )
 
     def _dataset(self, dataset_id: str) -> api.DatasetProject:
-        matches = tuple(
-            dataset
-            for dataset in self._document.project.datasets
-            if dataset.dataset_id == dataset_id
-        )
+        matches = tuple(dataset for dataset in self._document.project.datasets if dataset.dataset_id == dataset_id)
         if len(matches) != 1:
             raise KeyError(f"unknown dataset: {dataset_id}")
         return matches[0]

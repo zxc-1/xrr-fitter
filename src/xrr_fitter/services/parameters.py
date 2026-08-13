@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from xrr_fitter.io.source import dataset_index
@@ -98,30 +98,28 @@ def validate_parameter_settings(
     return setting_values
 
 
-def _reconciled_source_settings(
+def _reconciled_source_sidecars(
     project: XrrProject,
     index: int,
     updated: DatasetProject,
-) -> tuple[ParameterSetting, ...]:
+) -> tuple[tuple[ParameterSetting, ...], tuple[ParameterPrior, ...]]:
     settings = updated.parameter_settings
-    if not settings or updated.structure is None:
-        return () if updated.structure is None else settings
+    priors = updated.parameter_priors
+    if updated.structure is None:
+        return (), ()
+    if not settings and not priors:
+        return (), ()
     datasets = list(project.datasets)
-    datasets[index] = replace(updated, parameter_settings=())
+    datasets[index] = replace(updated, parameter_settings=(), parameter_priors=())
     definition_project = replace(project, datasets=tuple(datasets))
-    definitions = describe_parameters(definition_project, updated.dataset_id)
-    retained = []
-    seen: set[str] = set()
-    for setting in settings:
-        if setting.name in seen:
-            continue
-        try:
-            validate_parameter_settings(definitions, (setting,))
-        except ValueError:
-            continue
-        seen.add(setting.name)
-        retained.append(setting)
-    return validate_parameter_settings(definitions, retained)
+    data = _prepared_current(definition_project, updated)
+    definitions = _default_definitions(
+        definition_project,
+        updated,
+        data,
+        updated.structure,
+    )
+    return _reconciled_parameter_sidecars(definitions, settings, priors)
 
 
 def accept_source_update(
@@ -130,10 +128,8 @@ def accept_source_update(
 ) -> XrrProject:
     """Accept previewed bytes and retain only compatible parameter settings."""
     index, updated = _accepted_source_dataset(project, preview)
-    reconciled = replace(
-        updated,
-        parameter_settings=_reconciled_source_settings(project, index, updated),
-    )
+    settings, priors = _reconciled_source_sidecars(project, index, updated)
+    reconciled = replace(updated, parameter_settings=settings, parameter_priors=priors)
     return _replace_invalidated(
         project,
         index,
@@ -156,29 +152,81 @@ def _topology_changed(
     return changed > 1
 
 
+def _compatible_definition_names(
+    old_definitions: Sequence[ParameterDefinition],
+    new_definitions: Sequence[ParameterDefinition],
+    *,
+    topology_changed: bool,
+) -> frozenset[str]:
+    new_by_name = {definition.name: definition for definition in new_definitions}
+    return frozenset(
+        old.name
+        for old in old_definitions
+        if _definition_is_compatible(
+            old,
+            new_by_name,
+            topology_changed=topology_changed,
+        )
+    )
+
+
+def _definition_is_compatible(
+    old: ParameterDefinition,
+    new_by_name: Mapping[str, ParameterDefinition],
+    *,
+    topology_changed: bool,
+) -> bool:
+    updated = new_by_name.get(old.name)
+    return (
+        updated is not None
+        and _topology_allows_parameter(old.name, topology_changed)
+        and _role_signature(old) == _role_signature(updated)
+    )
+
+
+def _topology_allows_parameter(name: str, topology_changed: bool) -> bool:
+    return not topology_changed or not name.startswith("component.")
+
+
+def _retained_named(values, compatible: frozenset[str]) -> tuple:
+    return tuple(value for value in values if value.name in compatible)
+
+
+def _default_definitions_for_existing_structure(
+    project: XrrProject,
+    dataset,
+    data,
+) -> tuple[ParameterDefinition, ...]:
+    if dataset.structure is None:
+        return ()
+    return _default_definitions(project, dataset, data, dataset.structure)
+
+
 def _reconciled_parameter_settings(
     project: XrrProject,
     dataset_id: str,
     structure: StructureSpec,
-) -> tuple[tuple[ParameterSetting, ...], frozenset[str]]:
+) -> tuple[
+    tuple[ParameterSetting, ...],
+    tuple[ParameterPrior, ...],
+    frozenset[str],
+]:
     index = dataset_index(project, dataset_id)
     dataset = project.datasets[index]
     data = _prepared_current(project, dataset)
-    old_definitions = (
-        () if dataset.structure is None else _default_definitions(project, dataset, data, dataset.structure)
-    )
+    old_definitions = _default_definitions_for_existing_structure(project, dataset, data)
     new_definitions = _default_definitions(project, dataset, data, structure)
-    new_by_name = {definition.name: definition for definition in new_definitions}
-    topology_changed = _topology_changed(dataset.structure, structure)
-    compatible = frozenset(
-        old.name
-        for old in old_definitions
-        if old.name in new_by_name
-        and (not topology_changed or not old.name.startswith("component."))
-        and _role_signature(old) == _role_signature(new_by_name[old.name])
+    compatible = _compatible_definition_names(
+        old_definitions,
+        new_definitions,
+        topology_changed=_topology_changed(dataset.structure, structure),
     )
-    retained = tuple(setting for setting in dataset.parameter_settings if setting.name in compatible)
-    return validate_parameter_settings(new_definitions, retained), compatible
+    settings, priors = _reconciled_parameter_sidecars(
+        new_definitions,
+        _retained_named(dataset.parameter_settings, compatible),
+        _retained_named(dataset.parameter_priors, compatible),
+    )
+    return settings, priors, compatible
 
 
 def set_parameter_settings(
@@ -194,9 +242,19 @@ def set_parameter_settings(
     data = _prepared_current(project, dataset)
     definitions = _default_definitions(project, dataset, data, dataset.structure)
     validated = validate_parameter_settings(definitions, settings)
-    if validated == dataset.parameter_settings:
+    effective = fitting.effective_parameter_definitions(definitions, validated)
+    _, priors = _reconciled_parameter_sidecars(
+        effective,
+        (),
+        dataset.parameter_priors,
+    )
+    if validated == dataset.parameter_settings and priors == dataset.parameter_priors:
         return project
-    updated = replace(dataset, parameter_settings=validated)
+    updated = replace(
+        dataset,
+        parameter_settings=validated,
+        parameter_priors=priors,
+    )
     return _replace_invalidated(
         project,
         index,
@@ -218,6 +276,8 @@ def validate_parameter_priors(
     values = tuple(priors)
     if any(not isinstance(value, ParameterPrior) for value in values):
         raise TypeError("priors must contain ParameterPrior values")
+    if len({value.name for value in values}) != len(values):
+        raise ValueError("parameter prior names must be unique")
     by_name = {definition.name: definition for definition in definitions}
     for value in values:
         try:
@@ -226,6 +286,47 @@ def validate_parameter_priors(
             raise ValueError(f"unknown parameter name: {value.name}") from error
         replace(definition, prior=value.prior)
     return values
+
+
+def _reconciled_parameter_sidecars(
+    definitions: Sequence[ParameterDefinition],
+    settings: Sequence[ParameterSetting],
+    priors: Sequence[ParameterPrior],
+) -> tuple[tuple[ParameterSetting, ...], tuple[ParameterPrior, ...]]:
+    """Keep the first valid sidecar for each still-compatible declaration."""
+    retained_settings: list[ParameterSetting] = []
+    seen_settings: set[str] = set()
+    for setting in settings:
+        if setting.name in seen_settings:
+            continue
+        try:
+            validate_parameter_settings(definitions, (setting,))
+        except ValueError:
+            continue
+        seen_settings.add(setting.name)
+        retained_settings.append(setting)
+
+    prior_definitions = fitting.effective_parameter_definitions(
+        definitions,
+        retained_settings,
+    )
+
+    retained_priors: list[ParameterPrior] = []
+    seen_priors: set[str] = set()
+    for prior in priors:
+        if prior.name in seen_priors:
+            continue
+        try:
+            validate_parameter_priors(prior_definitions, (prior,))
+        except ValueError:
+            continue
+        seen_priors.add(prior.name)
+        retained_priors.append(prior)
+
+    return (
+        validate_parameter_settings(definitions, retained_settings),
+        validate_parameter_priors(prior_definitions, retained_priors),
+    )
 
 
 def set_parameter_priors(

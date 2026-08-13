@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from tests.gui.plot_support import *  # noqa: F403
 
+
 def test_mask_rolls_back_when_plot_commit_fails(qtbot, tmp_path, monkeypatch) -> None:
     from xrr_fitter.gui.document import ProjectDocument
     from xrr_fitter.gui.main_window import MainWindow
@@ -32,6 +33,7 @@ def test_mask_rolls_back_when_plot_commit_fails(qtbot, tmp_path, monkeypatch) ->
     assert window.document.is_dirty is False
     assert events == []
 
+
 def test_mask_updates_active_and_nonactive_diagnostic_views(qtbot) -> None:
     first = prepared_data(size=4)
     second = prepared_data(size=4, intensity_raw=np.array([90.0, 70.0, 50.0, 30.0]))
@@ -47,6 +49,7 @@ def test_mask_updates_active_and_nonactive_diagnostic_views(qtbot) -> None:
     panel.select_dataset("second")
     assert _line_y(panel.view("raw"), "排除点").size == 1
 
+
 def test_nonactive_mask_update_does_not_switch_plot_dataset(qtbot) -> None:
     panel = _panel(qtbot)
     panel.set_dataset("first", prepared_data(size=4))
@@ -58,6 +61,7 @@ def test_nonactive_mask_update_does_not_switch_plot_dataset(qtbot) -> None:
 
     assert panel.selected_dataset_id() == "first"
     assert _artist_snapshot(panel) == before
+
 
 def test_persisted_dock_and_plot_tab_changes_mark_project_dirty(
     qtbot,
@@ -83,6 +87,7 @@ def test_persisted_dock_and_plot_tab_changes_mark_project_dirty(
     window.docks["resultsDock"].hide()
     QApplication.processEvents()
     assert window.document.project.ui_state.dock_state != ""
+
 
 @pytest.mark.parametrize(
     ("expert_mode", "operation"),
@@ -120,6 +125,7 @@ def test_plot_panel_candidate_redraw_failure_restores_all_views(
     assert panel.selected_candidate_id() == "candidate-a"
     assert _artist_snapshot(panel) == before
 
+
 def test_plot_panel_close_cancels_pending_draws_and_releases_plot_resources(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
     canvases = tuple(panel.view(key).canvas for key in panel.view_keys())
@@ -132,6 +138,7 @@ def test_plot_panel_close_cancels_pending_draws_and_releases_plot_resources(qtbo
     assert all(not canvas._draw_timer.isActive() for canvas in canvases)
     assert all(not panel.view(key).figure.axes for key in panel.view_keys())
 
+
 def test_plot_panel_close_releases_agg_renderer_buffers(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
     view = panel.view("raw")
@@ -143,6 +150,7 @@ def test_plot_panel_close_releases_agg_renderer_buffers(qtbot) -> None:
     panel.close()
 
     assert not hasattr(view.canvas, "renderer")
+
 
 def test_hidden_plot_canvas_defers_queued_draw_until_visible(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
@@ -157,19 +165,18 @@ def test_hidden_plot_canvas_defers_queued_draw_until_visible(qtbot) -> None:
     qtbot.waitExposed(panel)
     qtbot.waitUntil(lambda: hasattr(canvas, "renderer"))
 
+
 def test_scratch_plot_views_are_bounded_and_unrendered_until_projection() -> None:
     from xrr_fitter.gui.plots.diagnostics import build_scratch_views, release_scratch_views
 
     views = build_scratch_views()
     try:
         assert all(not hasattr(view.canvas, "renderer") for view in views.values())
-        assert all(
-            tuple(view.figure.get_size_inches()) == pytest.approx((0.8, 0.6))
-            for view in views.values()
-        )
+        assert all(tuple(view.figure.get_size_inches()) == pytest.approx((0.8, 0.6)) for view in views.values())
         assert all(view.figure.dpi == pytest.approx(25.0) for view in views.values())
     finally:
         release_scratch_views(views)
+
 
 def test_scratch_plot_views_reuse_figures_without_retaining_renderers() -> None:
     from xrr_fitter.gui.plots.diagnostics import build_scratch_views, release_scratch_views
@@ -185,6 +192,7 @@ def test_scratch_plot_views_reuse_figures_without_retaining_renderers() -> None:
     finally:
         release_scratch_views(second)
 
+
 def test_plot_panel_python_collection_does_not_invoke_destroyed_child_slot(qapp) -> None:
     from xrr_fitter.gui.plots.panel import PlotPanel
 
@@ -198,6 +206,7 @@ def test_plot_panel_python_collection_does_not_invoke_destroyed_child_slot(qapp)
 
     remaining = panel_ref()
     assert remaining is None or not isValid(remaining)
+
 
 def test_plot_panel_create_redraw_close_releases_qt_and_matplotlib_objects(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
@@ -214,6 +223,7 @@ def test_plot_panel_create_redraw_close_releases_qt_and_matplotlib_objects(qtbot
     assert panel_ref() is None
     assert canvas_ref() is None
     assert figure_ref() is None
+
 
 def test_plot_panel_escape_cancels_only_from_panel_descendants(qtbot) -> None:
     from xrr_fitter.gui.plots.panel import PlotPanel
@@ -242,6 +252,7 @@ def test_plot_panel_escape_cancels_only_from_panel_descendants(qtbot) -> None:
     assert panel.interaction_mode() == "range"
     assert panel.visible_range() == (0.5, 2.5)
 
+
 def test_plot_panel_keyboard_activates_modes_and_canvases_are_accessible(qtbot) -> None:
     panel = _panel(qtbot)
     button = panel.mode_buttons()["mask"]
@@ -254,6 +265,7 @@ def test_plot_panel_keyboard_activates_modes_and_canvases_are_accessible(qtbot) 
         assert canvas.accessibleName()
         assert canvas.accessibleDescription()
         assert canvas.focusPolicy() == Qt.FocusPolicy.StrongFocus
+
 
 def test_plot_panel_mask_mode_click_requests_prepared_point(qtbot) -> None:
     data = prepared_data(size=4)
@@ -269,6 +281,7 @@ def test_plot_panel_mask_mode_click_requests_prepared_point(qtbot) -> None:
     )
 
     assert emitted == [2]
+
 
 def test_plot_panel_matplotlib_text_has_no_missing_cjk_glyphs(
     qtbot,
@@ -293,6 +306,25 @@ def test_plot_panel_matplotlib_text_has_no_missing_cjk_glyphs(
 
     assert not [warning for warning in caught if "Glyph" in str(warning.message)]
     assert "glyph" not in caplog.text.lower()
+
+
+def test_live_preview_legend_draws_without_missing_cjk_glyphs(qtbot) -> None:
+    data = prepared_data(size=4)
+    panel = _panel(qtbot, data=data, result=_result(data))
+
+    assert panel.set_preview_curve(data.qz_a_inv, np.full(data.qz_a_inv.size, 0.5))
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "error",
+            message=r"Glyph .* missing from font.*",
+            category=UserWarning,
+        )
+        panel.view("log").canvas.draw()
+
+        panel.clear_preview_curve()
+        panel.view("log").canvas.draw()
+
 
 def test_plot_panel_no_best_redraw_failure_restores_previous_candidate(
     qtbot,
@@ -327,6 +359,7 @@ def test_plot_panel_no_best_redraw_failure_restores_previous_candidate(
 
     assert panel.selected_candidate_id() == "candidate-a"
 
+
 def test_plot_panel_parent_destroy_breaks_python_cycles_without_gc(qapp) -> None:
     from xrr_fitter.gui.plots.panel import PlotPanel
 
@@ -345,6 +378,7 @@ def test_plot_panel_parent_destroy_breaks_python_cycles_without_gc(qapp) -> None
     remaining = panel_ref()
     assert remaining is None or not isValid(remaining)
 
+
 def test_plot_panel_parent_destroy_releases_diagnostic_views(qtbot) -> None:
     from xrr_fitter.gui.plots.panel import PlotPanel
 
@@ -359,6 +393,7 @@ def test_plot_panel_parent_destroy_releases_diagnostic_views(qtbot) -> None:
     assert not isValid(panel)
     assert all(not figure.axes for figure in figures)
 
+
 def test_plot_panel_range_drag_remains_visible_after_dataset_redraw(qtbot) -> None:
     data = prepared_data(size=4)
     panel = _panel(qtbot, data=data)
@@ -370,6 +405,7 @@ def test_plot_panel_range_drag_remains_visible_after_dataset_redraw(qtbot) -> No
     assert panel.visible_range() == pytest.approx((0.5, 2.5))
     assert panel.view("raw").axes.patches
 
+
 def test_plot_panel_range_mode_drag_emits_stored_two_theta(qtbot) -> None:
     data = prepared_data(size=4)
     panel = _panel(qtbot, data=data)
@@ -380,6 +416,7 @@ def test_plot_panel_range_mode_drag_emits_stored_two_theta(qtbot) -> None:
     _drag_range(panel, 0.5, 2.5)
 
     assert emitted == [pytest.approx((0.5, 2.5), abs=1e-6)]
+
 
 def test_plot_panel_repeated_candidate_redraw_keeps_artists_axes_and_callbacks(qtbot) -> None:
     data = prepared_data(size=4)
@@ -394,6 +431,7 @@ def test_plot_panel_repeated_candidate_redraw_keeps_artists_axes_and_callbacks(q
     assert tuple(id(panel.view(key).axes) for key in panel.view_keys()) == axes_ids
     assert panel.callback_counts() == callback_counts
     assert max(len(panel.view(key).axes.lines) for key in panel.view_keys()) <= 4
+
 
 def test_plot_panel_replaces_stale_candidate_with_untrusted_no_best_result(qtbot) -> None:
     data = prepared_data(size=4)
@@ -410,11 +448,10 @@ def test_plot_panel_replaces_stale_candidate_with_untrusted_no_best_result(qtbot
     panel.set_result(no_best, None)
 
     assert panel.selected_candidate_id() is None
-    assert "暂无当前候选" in "\n".join(
-        text.get_text() for text in panel.view("qz4").axes.texts
-    )
+    assert "暂无当前候选" in "\n".join(text.get_text() for text in panel.view("qz4").axes.texts)
     labels = tuple(line.get_label() for line in panel.view("candidates").axes.lines)
     assert any("candidate-invalid" in label and "仅供检查" in label for label in labels)
+
 
 def test_plot_panel_teardown_does_not_leave_deleted_canvas_traceback(
     qtbot,

@@ -316,3 +316,17 @@ def test_prior_column_respects_nm_toggle(qtbot) -> None:
     text = table.item(0, 6).text()
     assert "4" in text
     assert "40" not in text
+
+
+def test_roughness_fraction_prior_summary_remains_an_unscaled_fraction(qtbot) -> None:
+    definition = _definition(
+        "component.0.roughness_a",
+        initial=3.0,
+        lower=0.0,
+        upper=50.0,
+        transform="roughness_fraction",
+        prior=api.PriorSpec("normal", (0.5, 0.1)),
+    )
+    table = _table(qtbot, definition)
+
+    assert table.item(0, 6).text() == "normal(μ=0.5, σ=0.1)"

@@ -454,3 +454,37 @@ def test_mcmc_report_no_conflict_when_posterior_agrees_with_prior(monkeypatch) -
     report = run_problem_mcmc(problem, candidate, config, child_seed=441)
 
     assert report.prior_conflicts == ()
+
+
+def test_mcmc_prior_conflicts_use_the_physical_sample_median_for_log_parameters(monkeypatch) -> None:
+    module = _api()
+    problem = _problem("component.0.thickness_a")
+    definition = next(
+        definition for definition in problem.parameter_definitions if definition.name == "component.0.thickness_a"
+    )
+    physical_center = (definition.lower + definition.upper) / 2.0
+    problem = _inject_priors(
+        problem,
+        {definition.name: PriorSpec("normal", (physical_center, 10.0))},
+    )
+    candidate = _candidate(problem)
+    config = McmcConfig(walkers=4, burn_in=2, production_steps=2, thin=1)
+    samples_unit = np.asarray(
+        (
+            ((0.0,), (0.0,), (1.0,), (1.0,)),
+            ((0.0,), (0.0,), (1.0,), (1.0,)),
+        )
+    )
+    ensemble = EnsembleSamples(
+        samples_unit,
+        np.zeros((2, 4)),
+        np.full(4, 0.5),
+        np.ones(1),
+        np.full(1, 200.0),
+    )
+    monkeypatch.setattr(module, "run_affine_invariant", lambda *args, **kwargs: ensemble)
+
+    report = run_problem_mcmc(problem, candidate, config, child_seed=441)
+
+    assert np.median(report.samples_physical[:, 0]) == physical_center
+    assert report.prior_conflicts == ()

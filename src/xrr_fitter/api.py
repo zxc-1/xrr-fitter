@@ -1,5 +1,9 @@
 """The complete supported Python API for XRR project workflows."""
 
+from __future__ import annotations
+
+from functools import wraps
+
 from xrr_fitter.model.analysis import (
     ConfidenceClass,
     FitResult,
@@ -70,11 +74,16 @@ from xrr_fitter.services.datasets import (
     preview_import_batch,
     preview_source_update,
     remove_dataset,
-    set_fit_mask,
-    set_instrument,
+)
+from xrr_fitter.services.datasets import (
+    set_fit_mask as _set_fit_mask,
+)
+from xrr_fitter.services.datasets import (
+    set_instrument as _set_instrument,
 )
 from xrr_fitter.services.exports import export_result
 from xrr_fitter.services.fitting import (
+    _reconcile_parameter_sidecars,
     fit_automatically,
     fit_project,
     preflight_automatic_fit,
@@ -121,6 +130,28 @@ from xrr_fitter.services.workers import (
     start_fit_job,
     start_mcmc_job,
 )
+
+
+@wraps(_set_fit_mask)
+def set_fit_mask(project, dataset_id, mask):
+    """Persist a fit mask and reconcile all declaration-bound sidecars."""
+    return _reconcile_parameter_sidecars(
+        _set_fit_mask(project, dataset_id, mask),
+        dataset_id,
+    )
+
+
+def set_instrument(
+    project: XrrProject,
+    dataset_id: str,
+    instrument: InstrumentSpec,
+) -> XrrProject:
+    """Persist an instrument and reconcile all declaration-bound sidecars."""
+    return _reconcile_parameter_sidecars(
+        _set_instrument(project, dataset_id, instrument),
+        dataset_id,
+    )
+
 
 __all__ = (
     "AutomaticDatasetSummary",

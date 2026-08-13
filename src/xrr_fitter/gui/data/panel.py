@@ -131,20 +131,14 @@ class DataPanel(QWidget):
         self.details_label.setObjectName("datasetDetails")
         self.details_label.setProperty("mutedText", True)
         self.details_label.setWordWrap(True)
-        self.details_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
+        self.details_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.details_label.hide()
         self.failure_table = QTableWidget(0, 3)
         self.failure_table.setObjectName("importFailureTable")
         self.failure_table.setHorizontalHeaderLabels(("文件", "问题", "恢复操作"))
         self.failure_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.failure_table.setSelectionBehavior(
-            QTableWidget.SelectionBehavior.SelectRows
-        )
-        self.failure_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
+        self.failure_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.failure_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.failure_table.horizontalHeader().setStretchLastSection(True)
         self.failure_table.hide()
         top = QHBoxLayout()
@@ -225,11 +219,7 @@ class DataPanel(QWidget):
         entries = root.rglob("*") if recursive else root.glob("*")
         paths = tuple(
             sorted(
-                (
-                    path
-                    for path in entries
-                    if path.is_file() and path.suffix.casefold() in SUPPORTED_SUFFIXES
-                ),
+                (path for path in entries if path.is_file() and path.suffix.casefold() in SUPPORTED_SUFFIXES),
                 key=lambda path: path.relative_to(root).as_posix().casefold(),
             )
         )
@@ -256,11 +246,7 @@ class DataPanel(QWidget):
             raise ValueError("automatic import requires a measurement preset")
         preview = api.preview_import_batch(sources, selected_preset)
         substrate_choices = self._substrate_choices(preview)
-        mappings = (
-            None
-            if column_mapping is None
-            else {row.source_path: column_mapping for row in preview.files}
-        )
+        mappings = None if column_mapping is None else {row.source_path: column_mapping for row in preview.files}
         before_active = self.active_dataset_id
         result = api.import_dataset_batch(
             self.document.project,
@@ -353,9 +339,7 @@ class DataPanel(QWidget):
         total = len(datasets)
         if total == 0:
             return ""
-        fittable = sum(
-            1 for dataset in datasets if self.status_text(dataset.dataset_id) == "可拟合"
-        )
+        fittable = sum(1 for dataset in datasets if self.status_text(dataset.dataset_id) == "可拟合")
         attention = total - fittable
         if attention == 0:
             return f"共 {total} 个数据集 · 全部可拟合"
@@ -394,8 +378,7 @@ class DataPanel(QWidget):
         if beam.kind == "monochromatic":
             return f"单色 λ={beam.wavelength_a:g} Å"
         return (
-            f"混合 Kα λ₁={beam.wavelength_1_a:g} Å / "
-            f"λ₂={beam.wavelength_2_a:g} Å · I₂/I₁={beam.intensity_ratio_21:g}"
+            f"混合 Kα λ₁={beam.wavelength_1_a:g} Å / λ₂={beam.wavelength_2_a:g} Å · I₂/I₁={beam.intensity_ratio_21:g}"
         )
 
     def instrument_text(self, dataset_id: str) -> str:
@@ -403,27 +386,17 @@ class DataPanel(QWidget):
         identity = instrument.instrument_id or "默认仪器"
         footprint = self._footprint_text(instrument)
         domain = "θ" if instrument.resolution_domain == "theta" else "q"
-        return (
-            f"{identity} · {footprint} · 背景 {instrument.background_kind} · "
-            f"分辨率 {domain}"
-        )
+        return f"{identity} · {footprint} · 背景 {instrument.background_kind} · 分辨率 {domain}"
 
     def _footprint_text(self, instrument: api.InstrumentSpec) -> str:
         if instrument.footprint_mode == "geometry":
-            return (
-                f"几何换算 {instrument.sample_length_mm:g}×"
-                f"{instrument.beam_width_mm:g} mm"
-            )
+            return f"几何换算 {instrument.sample_length_mm:g}×{instrument.beam_width_mm:g} mm"
         if instrument.footprint_mode == "none":
             return "无足迹修正"
         return "拟合足迹"
 
     def _dataset(self, dataset_id: str) -> api.DatasetProject:
-        matches = tuple(
-            dataset
-            for dataset in self.document.project.datasets
-            if dataset.dataset_id == dataset_id
-        )
+        matches = tuple(dataset for dataset in self.document.project.datasets if dataset.dataset_id == dataset_id)
         if len(matches) != 1:
             raise KeyError(f"unknown dataset: {dataset_id}")
         return matches[0]
@@ -445,9 +418,7 @@ class DataPanel(QWidget):
             active_item.setFont(0, font)
             self.tree.setCurrentItem(active_item)
         del blocker
-        self.change_preset_button.setVisible(
-            self.document.project.ui_state.expert_mode
-        )
+        self.change_preset_button.setVisible(self.document.project.ui_state.expert_mode)
         summary = self.import_summary_text()
         self.summary_label.setText(summary)
         self.summary_label.setVisible(bool(summary))
@@ -456,8 +427,7 @@ class DataPanel(QWidget):
     def _render_details(self) -> None:
         dataset_id = self.active_dataset_id
         if dataset_id is None or not any(
-            dataset.dataset_id == dataset_id
-            for dataset in self.document.project.datasets
+            dataset.dataset_id == dataset_id for dataset in self.document.project.datasets
         ):
             self.details_label.clear()
             self.details_label.hide()
@@ -469,14 +439,11 @@ class DataPanel(QWidget):
                     f"源文件：{Path(dataset.source_path).name}",
                     f"光路：{self.beam_text(dataset_id)}",
                     f"仪器：{self.instrument_text(dataset_id)}",
-                    f"状态：{self.status_text(dataset_id)} · "
-                    f"SHA-256 {dataset.source_sha256[:12]}…",
+                    f"状态：{self.status_text(dataset_id)} · SHA-256 {dataset.source_sha256[:12]}…",
                 )
             )
         )
-        self.details_label.setToolTip(
-            f"{dataset.source_path}\nSHA-256：{dataset.source_sha256}"
-        )
+        self.details_label.setToolTip(f"{dataset.source_path}\nSHA-256：{dataset.source_sha256}")
         self.details_label.show()
 
     def _tree_item(self, dataset: api.DatasetProject) -> QTreeWidgetItem:
@@ -585,11 +552,7 @@ class DataPanel(QWidget):
         entries = folder.rglob("*") if recursive else folder.glob("*")
         return tuple(
             sorted(
-                (
-                    path
-                    for path in entries
-                    if path.is_file() and path.suffix.casefold() in SUPPORTED_SUFFIXES
-                ),
+                (path for path in entries if path.is_file() and path.suffix.casefold() in SUPPORTED_SUFFIXES),
                 key=lambda path: path.relative_to(folder).as_posix().casefold(),
             )
         )

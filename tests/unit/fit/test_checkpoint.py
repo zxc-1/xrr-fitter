@@ -13,6 +13,7 @@ from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, FitStageSummary, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import ParameterSetting, PriorSpec
+from xrr_fitter.model.structure import InterfaceTransition, TransitionBranch
 
 
 def _api():
@@ -195,3 +196,27 @@ def test_configuring_priors_yields_a_distinct_identity() -> None:
 
     assert api.checkpoint_identity(with_prior).parameter_settings_fingerprint != baseline.parameter_settings_fingerprint
     assert api.checkpoint_identity(with_sigmas).config_fingerprint != baseline.config_fingerprint
+
+
+def test_configuring_a_layer_transition_yields_a_distinct_identity() -> None:
+    api = _api()
+    problem = _problem()
+    baseline = api.checkpoint_identity(problem)
+
+    # transition 默认值被省略以复原冻结指纹（见 test_frozen_stage_search 的 1f0681cf），
+    # 但省略必须仅限默认值：真正声明了界面过渡的结构必须换取不同的 resume 身份，
+    # 否则两个物理上不同的结构会共用同一 checkpoint。
+    layer = problem.structure.components[0]
+    transition = InterfaceTransition((TransitionBranch("erf", 1.0, 5.0),))
+    configured = replace(
+        problem,
+        structure=replace(
+            problem.structure,
+            components=(
+                replace(layer, roughness_a=0.0, transition=transition),
+                *problem.structure.components[1:],
+            ),
+        ),
+    )
+
+    assert api.checkpoint_identity(configured).structure_fingerprint != baseline.structure_fingerprint

@@ -18,6 +18,7 @@ from xrr_fitter.model.structure import (
     PeriodicBlock,
     StructureSpec,
 )
+from xrr_fitter.physics.transitions import transition_width
 
 
 def _definition(
@@ -105,7 +106,8 @@ def _layer_definitions(
     layer: LayerSpec,
     bounds: tuple[float, float],
 ) -> list[ParameterDefinition]:
-    lower = max(2.0, min(bounds[0], layer.thickness_a))
+    transition_lower = transition_width(layer.transition) if layer.transition is not None else 2.0
+    lower = max(2.0, min(bounds[0], layer.thickness_a), transition_lower)
     upper = min(2e5, max(bounds[1], layer.thickness_a))
     direct_sld = layer.material.sld_override_a2 is not None
     density_initial = 1.0 if direct_sld else layer.density_scale
@@ -598,7 +600,7 @@ def validate_transition_modes(
     definitions: tuple[ParameterDefinition, ...],
     structure: StructureSpec,
 ) -> None:
-    """Reject settings that reopen a roughness axis owned by a transition.
+    """Reject settings that violate geometry owned by a transition.
 
     Periodic blocks need no handling: their layers already refuse transitions at
     construction time.
@@ -606,6 +608,10 @@ def validate_transition_modes(
     by_name = {definition.name: definition for definition in definitions}
     for index, component in enumerate(structure.components):
         if isinstance(component, LayerSpec) and component.transition is not None:
+            thickness = by_name[f"component.{index}.thickness_a"]
+            width = transition_width(component.transition)
+            if thickness.lower < width or thickness.initial < width:
+                raise ValueError("带过渡的层厚度初值和下界不得小于过渡宽度")
             _require_locked_value(
                 by_name,
                 f"component.{index}.roughness_a",

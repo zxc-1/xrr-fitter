@@ -62,6 +62,25 @@ def _validate_band_counts(value: object) -> None:
         raise ValueError("failure_rate must be in [0, 1]")
 
 
+def _validate_depth_axis(depth: np.ndarray) -> None:
+    if np.any(~np.isfinite(depth)):
+        raise ValueError("depth_a must contain only finite values")
+    if depth.size < 2 or np.any(np.diff(depth) <= 0.0):
+        raise ValueError("depth_a must be strictly increasing")
+
+
+def _validate_curves(real: np.ndarray, imaginary: np.ndarray) -> None:
+    if np.any(~np.isfinite(real)):
+        raise ValueError("real must contain only finite values")
+    if np.any(~np.isfinite(imaginary)):
+        raise ValueError("imaginary must contain only finite values")
+
+
+def _validate_align_label(value: object) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("align_label must not be empty")
+
+
 @dataclass(frozen=True, slots=True)
 class SldUncertaintyBands:
     """Depth-aligned SLD quantile envelopes replayed from retained samples."""
@@ -84,6 +103,9 @@ class SldUncertaintyBands:
         expected = (len(levels), depth.size)
         if real.shape != expected or imaginary.shape != expected:
             raise ValueError("band arrays must be quantile-by-depth")
+        _validate_depth_axis(depth)
+        _validate_curves(real, imaginary)
+        _validate_align_label(self.align_label)
         _validate_band_counts(self)
         object.__setattr__(self, "quantiles", levels)
         object.__setattr__(self, "depth_a", depth)
