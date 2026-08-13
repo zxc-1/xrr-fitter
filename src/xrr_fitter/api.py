@@ -53,11 +53,13 @@ from xrr_fitter.model.project import (
 )
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
+    InterfaceTransition,
     LayerSpec,
     MaterialSpec,
     OxideSuggestion,
     PeriodicBlock,
     StructureSpec,
+    TransitionBranch,
 )
 from xrr_fitter.services.datasets import (
     add_dataset,
@@ -137,6 +139,7 @@ __all__ = (
     "ImportFilePreview",
     "ImportFailure",
     "InstrumentSpec",
+    "InterfaceTransition",
     "JointFitLayout",
     "LayerSpec",
     "LayerUniformitySummary",
@@ -165,6 +168,7 @@ __all__ = (
     "SourceUpdatePreview",
     "StructureEvidence",
     "StructureSpec",
+    "TransitionBranch",
     "UncertaintyReport",
     "ValidationIssue",
     "XrrProject",
