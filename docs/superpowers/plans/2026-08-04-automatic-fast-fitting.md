@@ -73,7 +73,7 @@
 - Changes: append `UncertaintyReport.bootstrap_performed: bool = True` after the existing `candidate_id` field so old positional construction is not reinterpreted; v1 documents migrate this field to `True`.
 - Changes: persisted `SCHEMA_VERSION` from 1 to 2; only schema 1 is migrated, all other unsupported versions still fail closed.
 
-- [ ] **Step 1: Write failing value and migration tests**
+- [x] **Step 1: Write failing value and migration tests**
 
 Add the following focused cases. The codec test deliberately derives a v1 fixture from current output so it proves every newly required v2 field is restored without maintaining a second codec.
 
@@ -179,7 +179,7 @@ def test_only_schema_one_has_a_migration_path(version: int) -> None:
         project_from_dict(payload)
 ```
 
-- [ ] **Step 2: Run tests and record RED**
+- [x] **Step 2: Run tests and record RED**
 
 Run:
 
@@ -189,7 +189,7 @@ python -m pytest -o addopts= tests/unit/model/test_automation_values.py tests/un
 
 Expected: collection fails with `ModuleNotFoundError: No module named 'xrr_fitter.model.automation'` or construction fails because the new fields are absent.
 
-- [ ] **Step 3: Add immutable model contracts**
+- [x] **Step 3: Add immutable model contracts**
 
 Create enums and values with the following exact persisted strings and validation rules. Result values use plain tuples/floats so the model does not add a NumPy dependency.
 
@@ -397,7 +397,7 @@ MODEL_ALLOWED.update(
 )
 ```
 
-- [ ] **Step 4: Persist v2 and migrate v1 in one codec**
+- [x] **Step 4: Persist v2 and migrate v1 in one codec**
 
 Set `SCHEMA_VERSION = 2`, encode `measurement_preset`, `automation`, and `bootstrap_performed`, and run this migration before exact v2 field validation:
 
@@ -444,7 +444,7 @@ def project_from_dict(value: object) -> XrrProject:
 
 Do not make `_validate_version()` accept a range. It must still require the single current version after migration.
 
-- [ ] **Step 5: Run GREEN and architecture checks**
+- [x] **Step 5: Run GREEN and architecture checks**
 
 Run:
 
@@ -454,7 +454,7 @@ python -m pytest -o addopts= tests/unit/model/test_automation_values.py tests/un
 
 Expected: all selected tests pass; v2 round trips byte-stably and the derived v1 fixture loads with `bootstrap_performed=True`.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 ```bash
 git add src/xrr_fitter/model/automation.py src/xrr_fitter/model/project.py src/xrr_fitter/model/analysis.py src/xrr_fitter/model/operations.py src/xrr_fitter/io/project_codec.py src/xrr_fitter/io/codec_results.py tests/unit/model/test_automation_values.py tests/unit/model/test_analysis_values.py tests/unit/io/test_project_codec.py tests/integration/test_project_roundtrip.py tests/architecture/test_dependency_rules.py && git commit -m "feat: persist automatic fitting state"
@@ -474,7 +474,7 @@ git add src/xrr_fitter/model/automation.py src/xrr_fitter/model/project.py src/x
 - Keeps: `material_from_initial_density()` as the strict known-material helper for callers that explicitly require a table-backed formula and density.
 - Known table retains only audited formula+density entries; `CrSiC` and `SiCMo` are no longer formula-density declarations.
 
-- [ ] **Step 1: Write RED material/oxide tests**
+- [x] **Step 1: Write RED material/oxide tests**
 
 ```python
 # tests/unit/services/test_automatic_materials.py
@@ -516,7 +516,7 @@ def test_unknown_direct_sld_density_scale_is_locked_to_one() -> None:
     assert (density.initial, density.lower, density.upper, density.locked) == (1.0, 1.0, 1.0, True)
 ```
 
-- [ ] **Step 2: Run tests and record RED**
+- [x] **Step 2: Run tests and record RED**
 
 Run:
 
@@ -526,7 +526,7 @@ python -m pytest -o addopts= tests/unit/services/test_automatic_materials.py tes
 
 Expected: import fails because `automatic_structure` and `material_from_token` do not exist; the old table would also make the unknown-token assertions fail.
 
-- [ ] **Step 3: Implement the single material classification boundary**
+- [x] **Step 3: Implement the single material classification boundary**
 
 Use these exact constants and policies in `services.materials`:
 
@@ -637,7 +637,7 @@ def automatic_structure(
 
 The exact `SiO2` comparison remains case-sensitive and formula-based. Do not broaden it to fuzzy name matching.
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 Run:
 
@@ -647,7 +647,7 @@ python -m pytest -o addopts= tests/unit/services/test_automatic_materials.py tes
 
 Expected: all selected tests pass; existing manual oxide suggestions remain unchanged and unknown aliases have no fake density.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 ```bash
 git add src/xrr_fitter/services/materials.py tests/unit/services/test_automatic_materials.py tests/unit/services/test_datasets.py && git commit -m "feat: model unknown materials with direct SLD"
@@ -668,7 +668,7 @@ git add src/xrr_fitter/services/materials.py tests/unit/services/test_automatic_
 - Consumes: `automatic_structure()` and Task 1 import values.
 - A preview never mutates a project; import commits each valid file independently in preview order.
 
-- [ ] **Step 1: Write strict parsing and partial-success tests**
+- [x] **Step 1: Write strict parsing and partial-success tests**
 
 ```python
 # tests/unit/services/test_automatic_import.py
@@ -746,7 +746,7 @@ def test_bad_filename_and_bad_data_do_not_block_valid_files(tmp_path: Path) -> N
     }
 ```
 
-- [ ] **Step 2: Run tests and record RED**
+- [x] **Step 2: Run tests and record RED**
 
 Run:
 
@@ -756,7 +756,7 @@ python -m pytest -o addopts= tests/unit/services/test_automatic_import.py -q
 
 Expected: collection fails because both batch functions are absent.
 
-- [ ] **Step 3: Implement strict filename preview**
+- [x] **Step 3: Implement strict filename preview**
 
 Use `rsplit(maxsplit=1)` for the last segment, but do not require a plus sign:
 
@@ -809,7 +809,7 @@ def preview_import_batch(
     return ImportBatchPreview(batch_id, preset, tuple(files))
 ```
 
-- [ ] **Step 4: Implement per-file transactional import**
+- [x] **Step 4: Implement per-file transactional import**
 
 For every valid preview row, choose `Si` unless the row requires an explicit group choice, reverse tokens exactly once, call `automatic_structure`, read the source with that file's optional mapping, and append one immutable dataset. A caught file error becomes:
 
@@ -838,7 +838,7 @@ parameter_settings=automatic_settings,
 
 Return `ProjectImportResult` even when all rows fail. Set `updated_project.measurement_preset` to the preview preset only after at least one successful import, preserve input order, allocate duplicate IDs with `_dataset_id()`, and select the first imported dataset only when there was no active dataset before the call.
 
-- [ ] **Step 5: Add exact public API signatures and run GREEN**
+- [x] **Step 5: Add exact public API signatures and run GREEN**
 
 Add these strings to `tests/architecture/test_public_api.py` and export their types/functions from `api.py`:
 
@@ -859,7 +859,7 @@ python -m pytest -o addopts= tests/unit/services/test_automatic_import.py tests/
 
 Expected: all selected tests pass, including a mixed good/bad batch with one committed dataset.
 
-- [ ] **Step 6: Commit Task 3**
+- [x] **Step 6: Commit Task 3**
 
 ```bash
 git add src/xrr_fitter/services/datasets.py src/xrr_fitter/api.py tests/unit/services/test_automatic_import.py tests/unit/services/test_datasets.py tests/architecture/test_public_api.py && git commit -m "feat: import filename batches transactionally"
@@ -880,7 +880,7 @@ git add src/xrr_fitter/services/datasets.py src/xrr_fitter/api.py tests/unit/ser
 - Produces: `critical_sld_candidates(data, structure) -> tuple[float, ...]` and `direct_sld_start_rows(structure, candidates) -> tuple[tuple[tuple[str, float], ...], ...]`.
 - Keeps: formula-density definitions and all expert parameter overrides unchanged.
 
-- [ ] **Step 1: Write RED compilation and determinism tests**
+- [x] **Step 1: Write RED compilation and determinism tests**
 
 ```python
 # tests/unit/fit/test_direct_sld_initialization.py
@@ -938,7 +938,7 @@ def test_direct_sld_candidate_rows_are_seed_independent_and_layer_distinct() -> 
     assert any(len({value for _name, value in row}) > 1 for row in first_sld if row)
 ```
 
-- [ ] **Step 2: Run tests and record RED**
+- [x] **Step 2: Run tests and record RED**
 
 Run:
 
@@ -948,7 +948,7 @@ python -m pytest -o addopts= tests/unit/fit/test_direct_sld_initialization.py te
 
 Expected: the real SLD assertion fails because both direct components are currently locked, and candidate starts contain no `sld_real_a2` values.
 
-- [ ] **Step 3: Compile physically fixed bounds**
+- [x] **Step 3: Compile physically fixed bounds**
 
 Replace `_material_definitions()` direct-SLD policy with:
 
@@ -983,7 +983,7 @@ def _material_definitions(prefix: str, material: MaterialSpec) -> list[Parameter
     ]
 ```
 
-- [ ] **Step 4: Add deterministic SLD rows to Stage A**
+- [x] **Step 4: Add deterministic SLD rows to Stage A**
 
 Derive one critical-edge estimate using `rho = qc**2 / (16*pi)`, clamp it to the compiled bounds, merge it with fixed anchors `(-20, 0, 10, 20, 40, 80, 120) * 1e-6`, and deduplicate in numeric order. Enumerate every direct-SLD path in stable structure order, including ordinary layers, periodic-cell layers, and a direct-SLD backing, but never the Air fronting. Build at most eight rows: declared values first, the data estimate applied to all direct materials second, then cyclic rotations of the fixed anchors across material paths. This is deterministic and grows linearly rather than taking a Cartesian product.
 
@@ -1001,7 +1001,7 @@ Protect direct-SLD coverage before the RNG-capped product is sampled. The pool o
 
 Add the selected direct-SLD row as one dimension immediately after geometry in the generated combinations. Reserve the protected rows before computing `generated_limit`; never put them inside the randomly truncated Cartesian product. In `_material_and_interface_values()`, emit `density_scale=1.0` for a direct-SLD layer and use the density hypothesis only for formula-density layers. This makes the first six SLD-bearing starts identical for different RNG seeds while later mixed hypotheses remain random but replayable.
 
-- [ ] **Step 5: Run GREEN and numerical unit tests**
+- [x] **Step 5: Run GREEN and numerical unit tests**
 
 Run:
 
@@ -1011,7 +1011,7 @@ python -m pytest -o addopts= tests/unit/fit/test_direct_sld_initialization.py te
 
 Expected: all selected tests pass; the direct real SLD appears in deterministic starts and formula-density reference tests are unchanged.
 
-- [ ] **Step 6: Commit Task 4**
+- [x] **Step 6: Commit Task 4**
 
 ```bash
 git add src/xrr_fitter/fit/parameters.py src/xrr_fitter/fit/initialization.py src/xrr_fitter/fit/candidates.py tests/unit/fit/test_direct_sld_initialization.py tests/unit/fit/test_candidate_initialization.py tests/unit/fit/test_problem_compilation.py && git commit -m "feat: seed direct SLD fitting deterministically"
@@ -1038,7 +1038,7 @@ git add src/xrr_fitter/fit/parameters.py src/xrr_fitter/fit/initialization.py sr
 - Produces: `fit_automatic_prepared_dataset(prepared, *, progress=None, cancelled=None, checkpoint=None, local_workers=None) -> AutomaticPreparedResult` in `services.fitting`.
 - Changes: `AnalysisRequest.bootstrap_enabled: bool = True`; expert construction keeps `True`, automatic construction passes `False`.
 
-- [ ] **Step 1: Write RED quality-policy tests**
+- [x] **Step 1: Write RED quality-policy tests**
 
 ```python
 # tests/unit/analysis/test_automatic_quality.py
@@ -1145,7 +1145,7 @@ def test_existing_open_primary_profile_code_requests_review_not_search_replay() 
 
 Add to `tests/unit/analysis/test_report.py` a spy proving `AnalysisRequest(..., profile_names=(), bootstrap_enabled=False)` calls neither `bootstrap_problem_local` nor profile construction and returns `bootstrap_performed=False`.
 
-- [ ] **Step 2: Run tests and record RED**
+- [x] **Step 2: Run tests and record RED**
 
 Run:
 
@@ -1155,7 +1155,7 @@ python -m pytest -o addopts= tests/unit/analysis/test_automatic_quality.py tests
 
 Expected: the new module/request field is missing; current `run_analysis()` would call bootstrap unconditionally.
 
-- [ ] **Step 3: Implement the evidence decision without running solvers**
+- [x] **Step 3: Implement the evidence decision without running solvers**
 
 Use existing report fields and preserve compiled parameter order:
 
@@ -1244,7 +1244,7 @@ def assess_automatic_quality(problem, result, profile_limit: int = 4) -> Automat
 
 Do not invent aliases for classification evidence. The automatic policy consumes the stable codes already emitted by `analysis.classification`: `distinct_equivalent_clusters`, `profile_path_merge_failed`, `insufficient_cluster_support`, and `primary_profile_open`.
 
-- [ ] **Step 4: Make bootstrap optional but auditable**
+- [x] **Step 4: Make bootstrap optional but auditable**
 
 Add `bootstrap_enabled` to `AnalysisRequest`, and change the branch in `run_analysis()` to:
 
@@ -1263,7 +1263,7 @@ if bootstrap is None and request.bootstrap_enabled:
 
 Set `bootstrap_performed=bootstrap is not None` in `build_uncertainty_report()`. An explicitly empty `profile_names=()` continues to mean no profile; `None` retains expert automatic profile selection.
 
-- [ ] **Step 5: Add fit-owned bounded local refit**
+- [x] **Step 5: Add fit-owned bounded local refit**
 
 `fit.automatic` must import only `evaluation`, `fit`, and `model` modules. It encodes each supplied physical mapping, runs analytic `solve_local`, publishes candidates with IDs `automatic-refit-0`, `automatic-refit-1`, selects the minimum valid objective, creates one `FitStageSummary("automatic-refit", ...)`, and binds `fit_search_provenance_sha256`. Reject an empty start list and cap `max_nfev` to a positive integer.
 
@@ -1278,7 +1278,7 @@ required = max(
 accepted = trial.valid and gain > required
 ```
 
-- [ ] **Step 6: Compose the single-point automatic path in services.fitting**
+- [x] **Step 6: Compose the single-point automatic path in services.fitting**
 
 Add the service-owned handoff value before composing the stages:
 
@@ -1313,7 +1313,7 @@ Implement this fixed order:
 
 Do not call the expert `_search_with_profile_recovery()` or expert `run_analysis()` defaults from this new function.
 
-- [ ] **Step 7: Run GREEN**
+- [x] **Step 7: Run GREEN**
 
 Run:
 
@@ -1323,7 +1323,7 @@ python -m pytest -o addopts= tests/unit/analysis/test_automatic_quality.py tests
 
 Expected: clean evidence performs zero bootstrap and zero profile work; abnormal evidence runs no more than four profiles; expert report/profile-basin regressions remain unchanged.
 
-- [ ] **Step 8: Commit Task 5**
+- [x] **Step 8: Commit Task 5**
 
 ```bash
 git add src/xrr_fitter/analysis/automatic.py src/xrr_fitter/fit/automatic.py src/xrr_fitter/analysis/report.py src/xrr_fitter/model/analysis.py src/xrr_fitter/services/fitting.py tests/unit/analysis/test_automatic_quality.py tests/unit/analysis/test_report.py tests/unit/fit/test_automatic_refit.py tests/unit/services/test_fitting.py && git commit -m "feat: add adaptive automatic quality analysis"
@@ -1348,7 +1348,7 @@ git add src/xrr_fitter/analysis/automatic.py src/xrr_fitter/fit/automatic.py src
 - Produces: `fit_automatic_transaction(project, import_batch_id, progress, checkpoint_callback, cancelled, *, seed_branches, prepare_dataset, fit_dataset) -> ProjectFitResult`.
 - Produces: `preflight_automatic_fit()` and `fit_automatically()` in `services.fitting`.
 
-- [ ] **Step 1: Write RED completion-order and routing tests**
+- [x] **Step 1: Write RED completion-order and routing tests**
 
 ```python
 # append to tests/unit/services/test_parallel.py
@@ -1529,7 +1529,7 @@ def test_project_fit_result_accepts_only_the_three_declared_modes() -> None:
         ProjectFitResult("parallel", (), (), current)
 ```
 
-- [ ] **Step 2: Run tests and record RED**
+- [x] **Step 2: Run tests and record RED**
 
 Run:
 
@@ -1539,11 +1539,11 @@ python -m pytest -o addopts= tests/unit/model/test_operations.py tests/unit/serv
 
 Expected: `OrderedTaskRunner.run()` rejects `completed`, and the automatic transaction is absent.
 
-- [ ] **Step 3: Implement caller-thread completion callbacks**
+- [x] **Step 3: Implement caller-thread completion callbacks**
 
 For threaded execution, submit all futures, map each future to its input index, iterate `concurrent.futures.as_completed`, call `future.result()` on the caller thread, store it into a pre-sized list, and invoke `completed(index, value)` immediately. On the first exception, cancel every unfinished future and re-raise. For `max_workers=1`, invoke the callback after each task. Return `tuple(results)` in input order.
 
-- [ ] **Step 4: Implement canonical physical grouping**
+- [x] **Step 4: Implement canonical physical grouping**
 
 Hash canonical JSON containing only behavior-changing values:
 
@@ -1582,7 +1582,7 @@ payload = {
 
 Do not include source path, dataset ID, display name, thickness values, roughness values, import order, or prior fit results in the physical signature. In `fit_automatic_transaction()`, group by `(dataset.automation.import_batch_id, automatic_physical_signature(...))`, never by the physical signature alone. Derive `fit_group_id` by hashing canonical JSON containing both values so identical structures from different import batches cannot share parameters.
 
-- [ ] **Step 5: Run every point under one CPU budget and publish completions**
+- [x] **Step 5: Run every point under one CPU budget and publish completions**
 
 Use existing `_worker_allocations(total_workers, count)`. Before starting, assign singleton roles to `SINGLE`, multi-member roles to `JOINT`, `fit_group_id` to the signature hash, and status `REFINING`. Each completed prefit must immediately update that dataset's `last_valid_result`, checkpoint, parameter settings, and automation reason, then call `checkpoint_callback(working)` before another input-order result is awaited.
 
@@ -1595,7 +1595,7 @@ if self.mode not in {"independent", "joint", "automatic"}:
     raise ValueError("mode must be independent, joint, or automatic")
 ```
 
-- [ ] **Step 6: Add synchronous service entrypoints**
+- [x] **Step 6: Add synchronous service entrypoints**
 
 Use exact signatures:
 
@@ -1671,7 +1671,7 @@ def fit_automatically(
 
 The implementation represented by these signatures must select only automatic datasets with status `PENDING`, `REFINING`, or `REVIEW`; when `import_batch_id` is provided it must additionally require an exact batch match. It delegates to `fit_automatic_transaction` with top-level pickle-safe fitting functions.
 
-- [ ] **Step 7: Run GREEN**
+- [x] **Step 7: Run GREEN**
 
 Run:
 
@@ -1681,7 +1681,7 @@ python -m pytest -o addopts= tests/unit/model/test_operations.py tests/unit/serv
 
 Expected: callback order follows completion order, returned results remain ordered, and a mixed batch creates one joint group plus one singleton without cross-group failure.
 
-- [ ] **Step 8: Commit Task 6**
+- [x] **Step 8: Commit Task 6**
 
 ```bash
 git add src/xrr_fitter/services/parallel.py src/xrr_fitter/services/batch.py src/xrr_fitter/services/fitting.py src/xrr_fitter/model/operations.py tests/unit/model/test_operations.py tests/unit/services/test_parallel.py tests/unit/services/test_automatic_batch.py tests/unit/services/test_independent_batch.py && git commit -m "feat: route automatic fit groups in parallel"
@@ -1711,7 +1711,7 @@ git add src/xrr_fitter/services/parallel.py src/xrr_fitter/services/batch.py src
 - Changes: `fit_automatic_transaction(...)` adds the injected keyword-only `fit_joint` callable and invokes it only for qualified multi-member groups.
 - Consumes: Task 6 prefit results and returns final joint projections plus isolated retries.
 
-- [ ] **Step 1: Write RED sharing and consensus tests**
+- [x] **Step 1: Write RED sharing and consensus tests**
 
 First extend Task 6's `RecordingAutomaticFits`, replace the transaction call, and replace its `REFINING` assertion so the final transaction exercises its now-required joint callback:
 
@@ -1808,7 +1808,7 @@ def test_joint_request_schema_includes_optional_initial_vector() -> None:
     ]
 ```
 
-- [ ] **Step 2: Run tests and record RED**
+- [x] **Step 2: Run tests and record RED**
 
 Run:
 
@@ -1818,7 +1818,7 @@ python -m pytest -o addopts= tests/unit/fit/test_joint_problem.py tests/unit/fit
 
 Expected: same-dataset sharing raises `sharing group may contain at most one member per dataset`, and `JointFitRequest` rejects `initial_unit_vector`.
 
-- [ ] **Step 3: Allow distinct same-dataset references and build consensus**
+- [x] **Step 3: Allow distinct same-dataset references and build consensus**
 
 Remove only the duplicate dataset-ID rejection in both `services.parameters.validate_sharing_rules()` and `fit.joint_sharing._rule_definitions()`. Keep duplicate `ParameterReference`, multiple ownership, family/bounds compatibility and missing/free-coordinate checks unchanged.
 
@@ -1826,7 +1826,7 @@ Implement consensus by reading every `JointVariable.members` reference from its 
 
 Validate `JointFitRequest.initial_unit_vector` as a copied, read-only vector with shape `(len(problem.global_variables),)`, finite values and `[0,1]` bounds. `_fresh_state()` uses it when provided; resume requests must reject a simultaneous explicit initial vector.
 
-- [ ] **Step 4: Generate automatic sharing rules**
+- [x] **Step 4: Generate automatic sharing rules**
 
 Use these rule families:
 
@@ -1837,13 +1837,13 @@ Use these rule families:
 
 Rule keys must include `fit_group_id`, family and material/path so they cannot collide with expert rules.
 
-- [ ] **Step 5: Isolate outliers before joint consensus**
+- [x] **Step 5: Isolate outliers before joint consensus**
 
 Exclude a prefit when it has no valid candidate, non-finite objective, physical diagnostics that make the candidate invalid, or failed automatic quality. For groups of at least three valid prefit points, also isolate objective outliers above `median + 3 * max(MAD, equivalent_cost_floor)`; do not apply this objective-outlier rule to a two-point group. Persist role `ISOLATED_RETRY`, status `REFINING`, `statistics_member=False`, and an auditable reason.
 
 If fewer than two points remain, do not claim joint success: keep each available independent result, mark it `REVIEW` with reason `insufficient qualified points for joint refinement`, and continue other groups.
 
-- [ ] **Step 6: Joint refine, release roughness once, then retry isolated points**
+- [x] **Step 6: Joint refine, release roughness once, then retry isolated points**
 
 Run the first joint fit with material and roughness rules and prefit consensus. Compare each projection's objective to its prefit objective using:
 
@@ -1883,7 +1883,7 @@ return fit_automatic_transaction(
 
 Use the same keyword in `fit_automatically()` and `automatic_worker_handler()`; do not close over a local function because the worker uses multiprocessing `spawn`.
 
-- [ ] **Step 7: Run GREEN and integration tests**
+- [x] **Step 7: Run GREEN and integration tests**
 
 Run:
 
@@ -1893,7 +1893,7 @@ python -m pytest -o addopts= tests/unit/services/test_parameters.py tests/unit/f
 
 Expected: repeated same-material coordinates share one global coordinate, the first evaluated joint vector equals the prefit consensus, roughness releases at most once, and isolated retry membership is explicit.
 
-- [ ] **Step 8: Commit Task 7**
+- [x] **Step 8: Commit Task 7**
 
 ```bash
 git add src/xrr_fitter/services/parameters.py src/xrr_fitter/fit/joint_sharing.py src/xrr_fitter/fit/joint_pipeline.py src/xrr_fitter/services/fitting.py src/xrr_fitter/services/batch.py tests/unit/services/test_parameters.py tests/unit/fit/test_joint_problem.py tests/unit/fit/test_joint_pipeline.py tests/unit/services/test_automatic_batch.py tests/unit/services/test_automatic_joint.py tests/integration/test_joint_fit_workflow.py && git commit -m "feat: refine matching points with joint consensus"
@@ -1912,7 +1912,7 @@ git add src/xrr_fitter/services/parameters.py src/xrr_fitter/fit/joint_sharing.p
 - Consumes: Task 1 result values and persisted best candidates.
 - Formula-density layers expose nominal density, relative density and fitted g/cm3; direct-SLD layers expose `fitted_density_g_cm3=None` and the exact note `配比未知，无法换算`.
 
-- [ ] **Step 1: Write RED result and statistics tests**
+- [x] **Step 1: Write RED result and statistics tests**
 
 ```python
 # tests/unit/services/test_automatic_results.py
@@ -2034,7 +2034,7 @@ def test_uniformity_uses_only_passed_members_and_population_standard_deviation()
     assert item.relative_range_percent == pytest.approx(10.0 / 95.0 * 100.0)
 ```
 
-- [ ] **Step 2: Run tests and record RED**
+- [x] **Step 2: Run tests and record RED**
 
 Run:
 
@@ -2044,13 +2044,13 @@ python -m pytest -o addopts= tests/unit/services/test_automatic_results.py -q
 
 Expected: `xrr_fitter.services.results` is absent.
 
-- [ ] **Step 3: Implement layer projection**
+- [x] **Step 3: Implement layer projection**
 
 Add `CLASSICAL_ELECTRON_RADIUS_A = 2.8179403262e-5` to `physics.materials`. For each ordinary filename-derived `LayerSpec`, read `component.{index}.thickness_a`, `.roughness_a`, `.density_scale`, `.sld_real_a2`, and `.sld_imag_a2` from the best candidate's parameter map, falling back only to that layer's declared locked value. Formula materials calculate SLD with `material_sld()` at the dataset beam's primary wavelength; direct materials use fitted real/imag values and force density scale 1.
 
 Reject periodic/gradient components in this automatic summary with a clear `ValueError`; they remain supported by the expert result views but are not produced by the filename contract.
 
-- [ ] **Step 4: Implement statistics with the standard library**
+- [x] **Step 4: Implement statistics with the standard library**
 
 Group rows by `(fit_group_id, layer_index, material_name)`, include only `automation.statistics_member`, and calculate:
 
@@ -2063,7 +2063,7 @@ relative_range_percent = 0.0 if mean == 0.0 else (max(values) - min(values)) / m
 
 Keep all review/failed datasets in `AutomaticResultSummary.datasets`; exclusion affects only `uniformity`.
 
-- [ ] **Step 5: Run GREEN**
+- [x] **Step 5: Run GREEN**
 
 Run:
 
@@ -2073,7 +2073,7 @@ python -m pytest -o addopts= tests/unit/services/test_automatic_results.py tests
 
 Expected: all selected tests pass and no service-level NumPy import is introduced.
 
-- [ ] **Step 6: Commit Task 8**
+- [x] **Step 6: Commit Task 8**
 
 ```bash
 git add src/xrr_fitter/services/results.py src/xrr_fitter/physics/materials.py tests/unit/services/test_automatic_results.py tests/unit/physics/test_material_sld.py && git commit -m "feat: summarize automatic layer uniformity"
@@ -2107,7 +2107,7 @@ git add src/xrr_fitter/services/results.py src/xrr_fitter/physics/materials.py t
 - GUI default: successful import emits its `import_batch_id` and immediately calls `FitPanel.start_automatic_fit()`.
 - Expert mode: existing batch selector and `start_fit()` remain available and keep calling `start_fit_job()`.
 
-- [ ] **Step 1: Write RED worker and GUI-flow tests**
+- [x] **Step 1: Write RED worker and GUI-flow tests**
 
 Add a worker unit test that monkeypatches the process owner and asserts the request contains `import_batch_id`. Add GUI tests with these exact outcomes:
 
@@ -2233,7 +2233,7 @@ def test_successful_import_starts_automatic_fit_without_mode_selection(qtbot, au
 
 The integration test must import one valid and one bad file, prove the valid file reaches a published curve, and prove the bad row exposes its filename and recovery action without blocking the worker.
 
-- [ ] **Step 2: Run tests and record RED**
+- [x] **Step 2: Run tests and record RED**
 
 Run:
 
@@ -2243,7 +2243,7 @@ python -m pytest -o addopts= tests/unit/services/test_workers.py tests/gui/test_
 
 Expected: automatic worker/API and GUI entrypoints are absent.
 
-- [ ] **Step 3: Add the process-safe automatic worker**
+- [x] **Step 3: Add the process-safe automatic worker**
 
 Create a frozen request containing project, optional batch ID and optional checkpoint path. Its top-level handler calls `services.fitting.automatic_worker_handler`. Publish prefit snapshots through the existing `checkpoint` callback and the terminal `ProjectFitResult` through `fit_result`. Preserve cancellation and force-stop behavior by using the existing `OperationJob` owner without adding an executor.
 
@@ -2323,7 +2323,7 @@ def automatic_worker_handler(
     )
 ```
 
-- [ ] **Step 4: Complete the public API surface**
+- [x] **Step 4: Complete the public API surface**
 
 Export the Task 1 values and these operations in `api.__all__` and the exact-signature test:
 
@@ -2365,7 +2365,7 @@ GUI_USE_CASES.update(
 )
 ```
 
-- [ ] **Step 5: Make import configuration one-time and substrate selection group-scoped**
+- [x] **Step 5: Make import configuration one-time and substrate selection group-scoped**
 
 On the first import, reuse `ImportDialog` to construct and persist:
 
@@ -2383,13 +2383,13 @@ On later imports, reuse `project.measurement_preset` without opening the full di
 
 After `import_dataset_batch`, show every `ImportFailure` in a single table with filename, message, and recovery action. Emit `automatic_fit_requested(import_batch_id)` when at least one dataset imported.
 
-- [ ] **Step 6: Make automatic fitting the default control**
+- [x] **Step 6: Make automatic fitting the default control**
 
 Add `FitController.start_automatic_fit()` calling `api.start_automatic_fit_job`. `FitPanel` shows one primary `自动拟合` command in normal mode; batch selector and existing `开始拟合` command are visible only when `ui_state.expert_mode` is true. `start_automatic_fit()` runs `api.preflight_automatic_fit`, resets progress, and starts the job. Checkpoint events replace the document immediately so each finished point's curve becomes selectable during `REFINING`.
 
 Cancellation keeps the latest checkpoint project. A terminal error never replaces it with the pre-operation snapshot.
 
-- [ ] **Step 7: Add automatic result tables**
+- [x] **Step 7: Add automatic result tables**
 
 Create two un-nested table views:
 
@@ -2398,7 +2398,7 @@ Create two un-nested table views:
 
 Use `api.summarize_automatic_results()` on project change. Dataset selection continues to drive existing curve/residual plots, so users can scan every point without duplicating plot canvases. Status text maps exactly: `PASSED=通过`, `REFINING=精修中`, `REVIEW=需复核`, `FAILED=失败`.
 
-- [ ] **Step 8: Run GREEN and spawn integration**
+- [x] **Step 8: Run GREEN and spawn integration**
 
 Run:
 
@@ -2408,7 +2408,7 @@ python -m pytest -o addopts= tests/unit/services/test_workers.py tests/architect
 
 Expected: first-use preset and ambiguous substrate are the only normal interactions; import starts fitting; partial checkpoints render; expert controls remain available.
 
-- [ ] **Step 9: Commit Task 9**
+- [x] **Step 9: Commit Task 9**
 
 ```bash
 git add src/xrr_fitter/services/workers.py src/xrr_fitter/services/fitting.py src/xrr_fitter/api.py src/xrr_fitter/gui/data/import_dialog.py src/xrr_fitter/gui/data/substrate_dialog.py src/xrr_fitter/gui/data/panel.py src/xrr_fitter/gui/fitting/controller.py src/xrr_fitter/gui/fitting/panel.py src/xrr_fitter/gui/results/automatic.py src/xrr_fitter/gui/results/panel.py src/xrr_fitter/gui/workspace.py tests/unit/services/test_workers.py tests/architecture/test_public_api.py tests/gui/test_data_import.py tests/gui/test_fit_controller.py tests/gui/test_fit_progress.py tests/gui/test_results.py tests/integration/test_gui_automatic_workflow.py && git commit -m "feat: make automatic fitting the default GUI flow"
@@ -2436,7 +2436,7 @@ git add src/xrr_fitter/services/workers.py src/xrr_fitter/services/fitting.py sr
 - Adds: deterministic automatic recovery cases for direct SLD, shared material/local thickness, uniformity and isolated retry.
 - Adds: non-CI Apple Silicon wall-clock benchmark plus CI-stable work-count assertions.
 
-- [ ] **Step 1: Write RED invalidation tests**
+- [x] **Step 1: Write RED invalidation tests**
 
 ```python
 from dataclasses import replace
@@ -2549,7 +2549,7 @@ def test_automatic_source_acceptance_clears_the_matching_fit_group(tmp_path: Pat
     assert by_id["c"].last_valid_result is not None
 ```
 
-- [ ] **Step 2: Run invalidation tests and record RED**
+- [x] **Step 2: Run invalidation tests and record RED**
 
 Run:
 
@@ -2559,7 +2559,7 @@ python -m pytest -o addopts= tests/unit/services/test_projects.py tests/unit/ser
 
 Expected: current invalidation knows only `batch_mode`: an automatic project in independent mode clears just the changed point, while joint mode can clear every point. Neither branch follows `fit_group_id`, so the new group assertions fail.
 
-- [ ] **Step 3: Implement fit-group-aware invalidation**
+- [x] **Step 3: Implement fit-group-aware invalidation**
 
 Centralize affected IDs:
 
@@ -2610,7 +2610,7 @@ def _cleared(dataset: DatasetProject, *, clear_evidence: bool) -> DatasetProject
 
 Do not invalidate another automatic group in the same project. `services.projects` imports and uses `_dependent_fit_ids()` alongside `_cleared()`; `services.parameters.accept_source_update()` continues to route through the updated `_replace_invalidated()` rather than duplicating the rule.
 
-- [ ] **Step 4: Add deterministic recovery cases without changing the 220-case corpus**
+- [x] **Step 4: Add deterministic recovery cases without changing the 220-case corpus**
 
 Create a separate automatic corpus with at least these four fixtures:
 
@@ -2623,7 +2623,7 @@ Assert the existing thresholds for applicable parameters, exact population stati
 
 Add `tests/regression/test_automatic_recovery.py` to the `regression` verify mode.
 
-- [ ] **Step 5: Add deterministic work-count and manual wall-clock benchmarks**
+- [x] **Step 5: Add deterministic work-count and manual wall-clock benchmarks**
 
 `tools/benchmark_automatic_fit.py` requires exactly one mode from `--single`, `--batch-size {2,3,4}`, and `--adaptive`; it also accepts `--repeat` and `--json`. The adaptive mode runs each deterministic upgrade fixture once per repeat. The tool generates fixed synthetic sources in a temporary directory, calls only public API functions, records total wall time, per-stage `total_nfev`, bootstrap count, profile count, status and recovery error, and deletes its temporary directory through `TemporaryDirectory`.
 
@@ -2639,7 +2639,7 @@ python tools/benchmark_automatic_fit.py --adaptive --repeat 1 --json
 
 Acceptance on the reference Apple Silicon machine is median `<=20 s` for single, median `<=45 s` for 2-4 points, and every adaptive case `<=60 s`. If the numerical gates pass but wall time misses, report the timing miss rather than weakening search/recovery thresholds.
 
-- [ ] **Step 6: Run focused GREEN, real spawn, and GUI tests**
+- [x] **Step 6: Run focused GREEN, real spawn, and GUI tests**
 
 Run:
 
@@ -2649,7 +2649,7 @@ python -m pytest -o addopts= tests/regression/test_automatic_recovery.py tests/i
 
 Expected: direct SLD and joint/local recovery pass, spawn emits partial checkpoints before the terminal result, and benchmark schema/work counts are deterministic.
 
-- [ ] **Step 7: Update stable user documentation**
+- [x] **Step 7: Update stable user documentation**
 
 Document:
 
@@ -2664,7 +2664,7 @@ Document:
 
 Do not describe point coordinates, spatial maps or automatic export as implemented.
 
-- [ ] **Step 8: Run all repository gates**
+- [x] **Step 8: Run all repository gates**
 
 Run each command separately so a failing domain is attributable:
 
@@ -2681,7 +2681,7 @@ python tools/check_radon.py
 
 Expected: every command exits 0; statistical verification still reports exactly 220 existing cases. Clean temporary benchmark/source directories and any generated report directories not tracked by the repository before committing.
 
-- [ ] **Step 9: Commit Task 10**
+- [x] **Step 9: Commit Task 10**
 
 ```bash
 git add src/xrr_fitter/services/projects.py src/xrr_fitter/services/datasets.py tests/unit/services/test_projects.py tests/unit/services/test_datasets.py tests/gui/test_source_recovery.py tests/integration/test_process_workers.py tests/regression/test_automatic_recovery.py tests/support/automatic_recovery.py tools/benchmark_automatic_fit.py tests/unit/tools/test_benchmark_automatic_fit.py tools/verify_registry.py docs/user-guide.md README.md && git commit -m "test: verify automatic fitting end to end"

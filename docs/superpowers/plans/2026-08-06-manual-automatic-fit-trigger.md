@@ -46,7 +46,7 @@
 - Produces: imports whose datasets retain `automation.status.value == "pending"` without calling `api.start_automatic_fit_job()`.
 - Removes: the GUI-internal `DataPanel.automatic_fit_requested` signal and `_connect_automatic_workflow()` workspace helper.
 
-- [ ] **Step 1: Replace the import-start assertions with manual-trigger assertions**
+- [x] **Step 1: Replace the import-start assertions with manual-trigger assertions**
 
 Replace `test_successful_automatic_import_emits_batch_request` in `tests/gui/test_data_import.py` with:
 
@@ -124,7 +124,7 @@ def test_partial_import_waits_for_manual_fit_keeps_failure_recovery_and_publishe
     assert failures.item(0, 2).text()
 ```
 
-- [ ] **Step 2: Run the focused tests and record RED**
+- [x] **Step 2: Run the focused tests and record RED**
 
 Run:
 
@@ -134,7 +134,7 @@ QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/pyt
 
 Expected: the data-panel state test passes, while the integration test fails at `assert starts == []` because the current workspace connection starts one automatic worker during import.
 
-- [ ] **Step 3: Remove the automatic import trigger and clarify the button**
+- [x] **Step 3: Remove the automatic import trigger and clarify the button**
 
 In `src/xrr_fitter/gui/data/panel.py`, remove:
 
@@ -163,7 +163,7 @@ In `src/xrr_fitter/gui/fitting/panel.py`, retain the existing button and change 
 self.automatic_button.setToolTip("运行项目中所有待拟合的自动数据集")
 ```
 
-- [ ] **Step 4: Update the stable user workflow**
+- [x] **Step 4: Update the stable user workflow**
 
 Replace step 4 under `docs/user-guide.md` section 13.1 with:
 
@@ -174,13 +174,13 @@ Replace step 4 under `docs/user-guide.md` section 13.1 with:
    同批同签名多点先并行预拟合，再联合精修。
 ```
 
-- [ ] **Step 5: Run focused GREEN**
+- [x] **Step 5: Run focused GREEN**
 
 Run the exact command from Step 2.
 
 Expected: `2 passed`; the fake worker is absent after import and starts exactly once after the explicit button click.
 
-- [ ] **Step 6: Run affected repository gates**
+- [x] **Step 6: Run affected repository gates**
 
 Run each command separately:
 
@@ -194,7 +194,7 @@ git diff --check
 
 Expected: every command exits 0. The GUI and integration registries cover the changed files; quality and radon confirm removal did not leave dead imports or degrade maintainability.
 
-- [ ] **Step 7: Commit the behavior change**
+- [x] **Step 7: Commit the behavior change**
 
 ```bash
 git add src/xrr_fitter/gui/data/panel.py src/xrr_fitter/gui/workspace.py src/xrr_fitter/gui/fitting/panel.py tests/gui/test_data_import.py tests/integration/test_gui_automatic_workflow.py docs/user-guide.md
