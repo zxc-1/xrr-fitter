@@ -5,12 +5,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import final_fit_result, simple_structure
+
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.analysis import StructureEvidence
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.instrument import InstrumentSpec
+from xrr_fitter.model.parameters import ParameterPrior, PriorSpec
 from xrr_fitter.model.project import OxideDecision, ProjectUiState
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
@@ -20,6 +21,7 @@ from xrr_fitter.model.structure import (
     StructureSpec,
 )
 from xrr_fitter.services.datasets import add_dataset
+from xrr_fitter.services.parameters import describe_parameters, set_parameter_priors
 from xrr_fitter.services.projects import (
     load_project,
     new_project,
@@ -36,7 +38,6 @@ from xrr_fitter.services.structures import (
     suggest_oxide_layers,
     validate_structure,
 )
-
 
 AIR = MaterialSpec("Air", None, None, 0.0j)
 
@@ -100,6 +101,23 @@ def test_structure_change_reconciles_settings_and_invalidates_derived_state(
     assert updated.datasets[0].last_valid_result is None
     assert updated.datasets[0].checkpoint is None
     assert updated.ui_state.selected_candidate_ids == ()
+
+
+def test_structure_change_reconciles_parameter_priors(tmp_path: Path) -> None:
+    value = _project_with_structure(tmp_path, simple_structure())
+    definitions = describe_parameters(value, "curve")
+    thickness = next(item for item in definitions if item.name == "component.0.thickness_a")
+    scale = next(item for item in definitions if item.name == "instrument.scale")
+    thickness_prior = ParameterPrior(
+        thickness.name,
+        PriorSpec("normal", (thickness.initial, 5.0)),
+    )
+    scale_prior = ParameterPrior(scale.name, PriorSpec("normal", (scale.initial, 0.1)))
+    value = set_parameter_priors(value, "curve", (thickness_prior, scale_prior))
+
+    updated = set_structure(value, "curve", _bare())
+
+    assert updated.datasets[0].parameter_priors == (scale_prior,)
 
 
 def test_joint_structure_edit_applies_one_topology_to_every_dataset(
@@ -240,17 +258,13 @@ def test_oxide_gradient_component_is_not_guessed() -> None:
 
     suggestions = suggest_oxide_layers(StructureSpec(AIR, (gradient,), _bare().backing))
 
-    assert [(item.location, item.base_material) for item in suggestions] == [
-        ("backing", "Si")
-    ]
+    assert [(item.location, item.base_material) for item in suggestions] == [("backing", "Si")]
 
 
 def test_oxide_formula_matching_trims_exact_adjacency() -> None:
     silica = MaterialSpec("native", " SiO2 ", 2.20)
 
-    assert suggest_oxide_layers(
-        StructureSpec(AIR, (LayerSpec("native", silica, 5.0),), _bare().backing)
-    ) == ()
+    assert suggest_oxide_layers(StructureSpec(AIR, (LayerSpec("native", silica, 5.0),), _bare().backing)) == ()
 
 
 def test_oxide_matching_ignores_names_and_fuzzy_or_case_variants() -> None:

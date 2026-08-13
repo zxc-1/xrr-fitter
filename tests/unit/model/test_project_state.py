@@ -4,8 +4,8 @@ from dataclasses import fields, replace
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import dataset_project, final_fit_result, fit_candidate, project
+
 from xrr_fitter.model.analysis import ConfidenceClass, McmcConfig, McmcReport, UncertaintyReport
 from xrr_fitter.model.parameters import ParameterReference, SharingRule
 from xrr_fitter.model.project import (
@@ -87,7 +87,12 @@ def test_project_and_dataset_serialization_field_order_is_stable() -> None:
         "checkpoint",
         "display_name",
         "automation",
+        "parameter_priors",
     ]
+
+
+def test_dataset_defaults_parameter_priors_to_empty() -> None:
+    assert dataset_project().parameter_priors == ()
 
 
 @pytest.mark.parametrize("dataset_ids", [("",), ("duplicate", "duplicate")])
@@ -193,9 +198,7 @@ def test_project_accepts_candidate_reference_from_final_fit_result() -> None:
 
 
 def test_project_validation_copies_record_sequence() -> None:
-    records = [
-        DatasetSourceValidation("curve", SourceStatus.OK, "a" * 64, "a" * 64, "ok")
-    ]
+    records = [DatasetSourceValidation("curve", SourceStatus.OK, "a" * 64, "a" * 64, "ok")]
     validation = ProjectValidation(records)
 
     records.clear()
@@ -228,9 +231,7 @@ def test_source_validation_preserves_public_compatibility_properties() -> None:
 @pytest.mark.parametrize("owner", ["uncertainty", "mcmc"])
 def test_project_rejects_missing_analysis_evidence_owner(owner: str) -> None:
     uncertainty = (
-        _uncertainty("missing")
-        if owner == "uncertainty"
-        else _uncertainty("candidate-0", mcmc_candidate_id="missing")
+        _uncertainty("missing") if owner == "uncertainty" else _uncertainty("candidate-0", mcmc_candidate_id="missing")
     )
     result = replace(final_fit_result(), uncertainty=uncertainty)
 

@@ -6,15 +6,15 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data, simple_structure
+
 from xrr_fitter.evaluation import encode_physical_vector, evaluate_model, values_by_name
 from xrr_fitter.fit.candidates import candidate_from_evaluation
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.analysis import EnsembleSamples, McmcConfig
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterPrior, ParameterSetting, PriorSpec
 
 
 def _api():
@@ -87,9 +87,7 @@ def test_affine_sampler_recovers_bounded_gaussian_and_is_deterministic() -> None
         delta = unit - mean
         return float(-0.5 * delta @ precision @ delta)
 
-    initial = np.random.default_rng(991).multivariate_normal(
-        mean, covariance * 0.1, size=16
-    )
+    initial = np.random.default_rng(991).multivariate_normal(mean, covariance * 0.1, size=16)
     config = McmcConfig(walkers=16, burn_in=200, production_steps=500, thin=2)
     first = run_affine_invariant(log_probability, initial, config, child_seed=8128)
     second = run_affine_invariant(log_probability, initial, config, child_seed=8128)
@@ -204,9 +202,7 @@ def test_mcmc_split_rhat_and_ess_match_independent_numpy_calculations() -> None:
     )
     within = np.mean(np.var(chains, axis=1, ddof=1), axis=0)
     between = half * np.var(np.mean(chains, axis=1), axis=0, ddof=1)
-    expected_rhat = np.sqrt(
-        (((half - 1.0) / half) * within + between / half) / within
-    )
+    expected_rhat = np.sqrt((((half - 1.0) / half) * within + between / half) / within)
     expected_ess = np.empty(dimension)
     by_walker = np.transpose(samples, (1, 0, 2))
     for parameter_index in range(dimension):
@@ -233,9 +229,7 @@ def test_mcmc_split_rhat_and_ess_match_independent_numpy_calculations() -> None:
         )
 
     np.testing.assert_allclose(module.split_rhat(samples), expected_rhat, atol=1e-13)
-    np.testing.assert_allclose(
-        module.effective_sample_size(samples), expected_ess, atol=1e-11
-    )
+    np.testing.assert_allclose(module.effective_sample_size(samples), expected_ess, atol=1e-11)
 
 
 def test_affine_sampler_reports_progress_and_honors_cancellation() -> None:
@@ -277,12 +271,8 @@ def test_mcmc_scale_prior_is_a_separate_standard_gaussian_term() -> None:
     residual = evaluation.fit_log_residuals_decades
     weights = problem.weights[problem.data.fit_mask]
     c = problem.config.c_decades
-    data_sum = np.sum(
-        weights**2 * 2.0 * c**2 * (np.sqrt(1.0 + (residual / c) ** 2) - 1.0)
-    )
-    prior_z = (
-        np.log10(scale) - np.log10(problem.scale_prior_center)
-    ) / problem.scale_prior_tau_decades
+    data_sum = np.sum(weights**2 * 2.0 * c**2 * (np.sqrt(1.0 + (residual / c) ** 2) - 1.0))
+    prior_z = (np.log10(scale) - np.log10(problem.scale_prior_center)) / problem.scale_prior_tau_decades
 
     actual = module.problem_log_probability(problem, unit)
 
@@ -380,9 +370,7 @@ def test_physical_roughness_thickness_correlation_is_not_unconditionally_hidden(
     names = ("component.0.thickness_a", "component.0.roughness_a")
     correlation = np.asarray([[1.0, 0.99], [0.99, 1.0]])
 
-    assert derivatives.strong_parameter_correlations(names, correlation) == (
-        (names[0], names[1], 0.99),
-    )
+    assert derivatives.strong_parameter_correlations(names, correlation) == ((names[0], names[1], 0.99),)
 
 
 def test_fit_dataset_never_runs_expert_mcmc() -> None:
@@ -390,3 +378,113 @@ def test_fit_dataset_never_runs_expert_mcmc() -> None:
 
     assert "run_problem_mcmc" not in pipeline.__dict__
     assert not any(name.startswith("xrr_fitter.analysis") for name in pipeline.__dict__)
+
+
+def test_parameter_prior_overlay_preserves_empty_context_and_original_definitions() -> None:
+    module = _api()
+    problem = _problem()
+    prior = ParameterPrior(
+        "component.0.density_scale",
+        PriorSpec("normal", (0.6, 0.05)),
+    )
+
+    overlaid = module.with_parameter_priors(problem, (prior,))
+
+    assert module.with_parameter_priors(problem, ()) is problem
+    assert all(definition.prior is None for definition in problem.parameter_definitions)
+    assert overlaid is not problem
+    assert (
+        next(definition for definition in overlaid.parameter_definitions if definition.name == prior.name).prior
+        == prior.prior
+    )
+
+
+def _inject_priors(problem, priors):
+    definitions = tuple(
+        replace(definition, prior=priors[definition.name]) if definition.name in priors else definition
+        for definition in problem.parameter_definitions
+    )
+    return replace(problem, parameter_definitions=definitions)
+
+
+def _center_ensemble(problem, candidate, config):
+    dimension = len(problem.variables)
+    ensemble = EnsembleSamples(
+        np.broadcast_to(candidate.unit_vector, (2, config.walkers, dimension)).copy(),
+        np.zeros((2, config.walkers)),
+        np.full(config.walkers, 0.5),
+        np.ones(dimension),
+        np.full(dimension, 200.0),
+    )
+    return lambda *args, **kwargs: ensemble
+
+
+def test_mcmc_report_flags_a_parameter_pulled_from_its_prior(monkeypatch) -> None:
+    module = _api()
+    problem = _inject_priors(
+        _problem(),
+        {
+            "component.0.density_scale": PriorSpec("normal", (0.6, 0.05)),
+            "component.0.thickness_a": PriorSpec("normal", (20.0, 5.0)),
+        },
+    )
+    candidate = _candidate(problem)
+    config = McmcConfig(walkers=6, burn_in=2, production_steps=4, thin=2)
+    monkeypatch.setattr(module, "run_affine_invariant", _center_ensemble(problem, candidate, config))
+
+    report = run_problem_mcmc(problem, candidate, config, child_seed=441)
+
+    assert "component.0.density_scale" in report.prior_conflicts
+    assert "component.0.thickness_a" not in report.prior_conflicts
+
+
+def test_mcmc_report_no_conflict_when_posterior_agrees_with_prior(monkeypatch) -> None:
+    module = _api()
+    problem = _inject_priors(
+        _problem(),
+        {
+            "component.0.density_scale": PriorSpec("normal", (1.0, 0.05)),
+            "component.0.thickness_a": PriorSpec("normal", (20.0, 5.0)),
+        },
+    )
+    candidate = _candidate(problem)
+    config = McmcConfig(walkers=6, burn_in=2, production_steps=4, thin=2)
+    monkeypatch.setattr(module, "run_affine_invariant", _center_ensemble(problem, candidate, config))
+
+    report = run_problem_mcmc(problem, candidate, config, child_seed=441)
+
+    assert report.prior_conflicts == ()
+
+
+def test_mcmc_prior_conflicts_use_the_physical_sample_median_for_log_parameters(monkeypatch) -> None:
+    module = _api()
+    problem = _problem("component.0.thickness_a")
+    definition = next(
+        definition for definition in problem.parameter_definitions if definition.name == "component.0.thickness_a"
+    )
+    physical_center = (definition.lower + definition.upper) / 2.0
+    problem = _inject_priors(
+        problem,
+        {definition.name: PriorSpec("normal", (physical_center, 10.0))},
+    )
+    candidate = _candidate(problem)
+    config = McmcConfig(walkers=4, burn_in=2, production_steps=2, thin=1)
+    samples_unit = np.asarray(
+        (
+            ((0.0,), (0.0,), (1.0,), (1.0,)),
+            ((0.0,), (0.0,), (1.0,), (1.0,)),
+        )
+    )
+    ensemble = EnsembleSamples(
+        samples_unit,
+        np.zeros((2, 4)),
+        np.full(4, 0.5),
+        np.ones(1),
+        np.full(1, 200.0),
+    )
+    monkeypatch.setattr(module, "run_affine_invariant", lambda *args, **kwargs: ensemble)
+
+    report = run_problem_mcmc(problem, candidate, config, child_seed=441)
+
+    assert np.median(report.samples_physical[:, 0]) == physical_center
+    assert report.prior_conflicts == ()

@@ -17,7 +17,7 @@ from xrr_fitter.io.codec_common import (
 )
 from xrr_fitter.model.fitting import FitCandidate, FitStageSummary
 from xrr_fitter.model.instrument import PhysicsDiagnostic
-from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue
+from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue, PriorSpec
 from xrr_fitter.model.structure import PeriodicSpan, SlabStack
 
 
@@ -38,13 +38,32 @@ def _diagnostic_from_dict(value: object) -> PhysicsDiagnostic:
     )
 
 
+def _prior_to_dict(value: PriorSpec) -> dict[str, object]:
+    return {"kind": value.kind, "parameters": list(value.parameters)}
+
+
+def _prior_from_dict(value: object) -> PriorSpec:
+    payload = _mapping(value, {"kind", "parameters"}, "parameter prior")
+    return PriorSpec(payload["kind"], tuple(_sequence(payload["parameters"], "prior parameters")))
+
+
+# prior is omitted from the auto-derived field set: it is emitted only when
+# present so projects saved before priors existed stay byte-identical, and it
+# is read back as an optional key (a bare definition decodes prior to None).
+DEFINITION_FIELDS = frozenset(ParameterDefinition.__dataclass_fields__) - {"prior"}
+
+
 def _parameter_definition_to_dict(value: ParameterDefinition) -> dict[str, object]:
-    return {field: getattr(value, field) for field in value.__dataclass_fields__}
+    payload: dict[str, object] = {field: getattr(value, field) for field in DEFINITION_FIELDS}
+    if value.prior is not None:
+        payload["prior"] = _prior_to_dict(value.prior)
+    return payload
 
 
 def _parameter_definition_from_dict(value: object) -> ParameterDefinition:
-    fields = set(ParameterDefinition.__dataclass_fields__)
-    return ParameterDefinition(**_mapping(value, fields, "parameter definition"))
+    payload = dict(_mapping(value, set(DEFINITION_FIELDS), "parameter definition", optional={"prior"}))
+    prior = payload.pop("prior", None)
+    return ParameterDefinition(**payload, prior=None if prior is None else _prior_from_dict(prior))
 
 
 def _parameter_value_to_dict(value: ParameterValue) -> dict[str, object]:
@@ -88,10 +107,7 @@ def _stack_from_dict(value: object) -> SlabStack | None:
         thickness_a=_real_array_from_list(payload["thickness_a"]),
         sld_a2=_complex_array_from_list(payload["sld_a2"]),
         roughness_a=_real_array_from_list(payload["roughness_a"]),
-        periodic_spans=tuple(
-            _span_from_dict(item)
-            for item in _sequence(payload["periodic_spans"], "periodic spans")
-        ),
+        periodic_spans=tuple(_span_from_dict(item) for item in _sequence(payload["periodic_spans"], "periodic spans")),
     )
 
 
@@ -174,8 +190,7 @@ def _candidate_from_dict(value: object) -> FitCandidate:
         seed_index=payload["seed_index"],
         unit_vector=_real_array_from_list(payload["unit_vector"]),
         parameters=tuple(
-            _parameter_value_from_dict(item)
-            for item in _sequence(payload["parameters"], "candidate parameters")
+            _parameter_value_from_dict(item) for item in _sequence(payload["parameters"], "candidate parameters")
         ),
         objective=_candidate_objective_from_json(payload),
         valid=payload["valid"],
@@ -189,24 +204,15 @@ def _candidate_from_dict(value: object) -> FitCandidate:
         sld_depth_a=_real_array_from_list(payload["sld_depth_a"]),
         sld_profile_a2=_complex_array_from_list(payload["sld_profile_a2"]),
         diagnostics=tuple(
-            _diagnostic_from_dict(item)
-            for item in _sequence(payload["diagnostics"], "candidate diagnostics")
+            _diagnostic_from_dict(item) for item in _sequence(payload["diagnostics"], "candidate diagnostics")
         ),
         ranking_objective=None if ranking is None else float(ranking),
     )
 
 
 def _selectable(candidate: FitCandidate) -> bool:
-    objective = (
-        candidate.objective
-        if candidate.ranking_objective is None
-        else candidate.ranking_objective
-    )
-    return (
-        candidate.valid
-        and isfinite(objective)
-        and candidate.stop_reason != "early_eliminated"
-    )
+    objective = candidate.objective if candidate.ranking_objective is None else candidate.ranking_objective
+    return candidate.valid and isfinite(objective) and candidate.stop_reason != "early_eliminated"
 
 
 def _stage_selectable(
@@ -219,9 +225,7 @@ def _stage_selectable(
     try:
         members = tuple(candidates[candidate_id] for candidate_id in candidate_ids)
     except KeyError as error:
-        raise ProjectSchemaError(
-            f"stage references missing candidate: {error.args[0]}"
-        ) from error
+        raise ProjectSchemaError(f"stage references missing candidate: {error.args[0]}") from error
     return any(_selectable(candidate) for candidate in members)
 
 
@@ -286,9 +290,7 @@ def _stages_from_list(
     }
     for item in _sequence(value, "stage summaries"):
         payload = _mapping(item, fields, "stage summary")
-        candidate_ids = tuple(
-            _sequence(payload["candidate_ids"], "stage candidate IDs")
-        )
+        candidate_ids = tuple(_sequence(payload["candidate_ids"], "stage candidate IDs"))
         selectable = _stage_selectable(payload["stage"], candidate_ids, by_id)
         result.append(
             FitStageSummary(
@@ -299,9 +301,7 @@ def _stages_from_list(
                     selectable,
                 ),
                 total_nfev=payload["total_nfev"],
-                stop_reasons=tuple(
-                    _sequence(payload["stop_reasons"], "stage stop reasons")
-                ),
+                stop_reasons=tuple(_sequence(payload["stop_reasons"], "stage stop reasons")),
             )
         )
     return tuple(result)

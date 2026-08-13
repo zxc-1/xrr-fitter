@@ -11,8 +11,7 @@ def _problem(
 ):
     variables = tuple(SimpleNamespace(name=name) for name in names)
     definitions = tuple(
-        SimpleNamespace(name=name)
-        for name in (names if definition_names is None else definition_names)
+        SimpleNamespace(name=name) for name in (names if definition_names is None else definition_names)
     )
     thresholds = SimpleNamespace(
         equivalent_cost_fraction=0.02,
@@ -33,6 +32,7 @@ def _result(
     autocorrelation=False,
     diagnostics=(),
     evidence=(),
+    prior_conflicts=(),
 ):
     uncertainty = SimpleNamespace(
         boundary_hits=boundaries,
@@ -40,6 +40,7 @@ def _result(
         systematic_residual=systematic,
         residual_autocorrelation=autocorrelation,
         diagnostics=diagnostics,
+        prior_conflicts=prior_conflicts,
     )
     candidate = SimpleNamespace(valid=True, objective=0.01, stop_reason="converged")
     return SimpleNamespace(
@@ -51,6 +52,19 @@ def _result(
 
 def test_clean_fast_evidence_passes_without_profiles() -> None:
     decision = assess_automatic_quality(_problem(("component.0.thickness_a",)), _result())
+
+    assert decision.passed is True
+    assert decision.profile_names == ()
+    assert decision.search_upgrade is False
+
+
+def test_prior_conflicts_are_informational_for_automatic_quality() -> None:
+    name = "component.0.thickness_a"
+
+    decision = assess_automatic_quality(
+        _problem((name,)),
+        _result(prior_conflicts=(name,)),
+    )
 
     assert decision.passed is True
     assert decision.profile_names == ()

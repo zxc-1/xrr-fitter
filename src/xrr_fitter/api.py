@@ -1,5 +1,9 @@
 """The complete supported Python API for XRR project workflows."""
 
+from __future__ import annotations
+
+from functools import wraps
+
 from xrr_fitter.model.analysis import (
     ConfidenceClass,
     FitResult,
@@ -37,8 +41,10 @@ from xrr_fitter.model.operations import (
 from xrr_fitter.model.parameters import (
     JointFitLayout,
     ParameterDefinition,
+    ParameterPrior,
     ParameterReference,
     ParameterSetting,
+    PriorSpec,
     SharingRule,
 )
 from xrr_fitter.model.project import (
@@ -68,11 +74,16 @@ from xrr_fitter.services.datasets import (
     preview_import_batch,
     preview_source_update,
     remove_dataset,
-    set_fit_mask,
-    set_instrument,
+)
+from xrr_fitter.services.datasets import (
+    set_fit_mask as _set_fit_mask,
+)
+from xrr_fitter.services.datasets import (
+    set_instrument as _set_instrument,
 )
 from xrr_fitter.services.exports import export_result
 from xrr_fitter.services.fitting import (
+    _reconcile_parameter_sidecars,
     fit_automatically,
     fit_project,
     preflight_automatic_fit,
@@ -83,8 +94,10 @@ from xrr_fitter.services.fitting import (
 from xrr_fitter.services.parameters import (
     accept_source_update,
     describe_parameters,
+    set_parameter_priors,
     set_parameter_settings,
     set_sharing_rules,
+    validate_parameter_priors,
     validate_parameter_settings,
     validate_sharing_rules,
 )
@@ -117,6 +130,28 @@ from xrr_fitter.services.workers import (
     start_fit_job,
     start_mcmc_job,
 )
+
+
+@wraps(_set_fit_mask)
+def set_fit_mask(project, dataset_id, mask):
+    """Persist a fit mask and reconcile all declaration-bound sidecars."""
+    return _reconcile_parameter_sidecars(
+        _set_fit_mask(project, dataset_id, mask),
+        dataset_id,
+    )
+
+
+def set_instrument(
+    project: XrrProject,
+    dataset_id: str,
+    instrument: InstrumentSpec,
+) -> XrrProject:
+    """Persist an instrument and reconcile all declaration-bound sidecars."""
+    return _reconcile_parameter_sidecars(
+        _set_instrument(project, dataset_id, instrument),
+        dataset_id,
+    )
+
 
 __all__ = (
     "AutomaticDatasetSummary",
@@ -153,11 +188,13 @@ __all__ = (
     "OxideDecision",
     "OxideSuggestion",
     "ParameterDefinition",
+    "ParameterPrior",
     "ParameterProfile",
     "ParameterReference",
     "ParameterSetting",
     "PeriodicBlock",
     "PreparedData",
+    "PriorSpec",
     "ProjectFitResult",
     "ProjectImportResult",
     "ProjectUiState",
@@ -202,6 +239,7 @@ __all__ = (
     "set_expert_mode",
     "set_fit_mask",
     "set_instrument",
+    "set_parameter_priors",
     "set_parameter_settings",
     "set_sharing_rules",
     "set_structure",
@@ -212,6 +250,7 @@ __all__ = (
     "start_mcmc_job",
     "suggest_oxide_layers",
     "summarize_automatic_results",
+    "validate_parameter_priors",
     "validate_parameter_settings",
     "validate_sharing_rules",
     "validate_structure",

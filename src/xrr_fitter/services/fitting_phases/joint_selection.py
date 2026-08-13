@@ -21,6 +21,7 @@ from .common import (
 )
 from .sharing import _automatic_material_occurrences
 
+
 def _prefit_isolation_reason(
     prefit: AutomaticPreparedResult,
 ) -> str | None:
@@ -43,19 +44,14 @@ def _mark_objective_outliers(
     qualified = tuple(index for index, reason in enumerate(reasons) if reason is None)
     if len(qualified) < 3:
         return
-    objectives = tuple(
-        prefits[index].fit_result.best_candidate.objective
-        for index in qualified
-    )
+    objectives = tuple(prefits[index].fit_result.best_candidate.objective for index in qualified)
     center = float(median(objectives))
     deviation = float(median(abs(value - center) for value in objectives))
     floor = prefits[qualified[0]].prepared.problem.config.confidence.equivalent_cost_floor
     limit = center + 3.0 * max(deviation, floor)
     for index, objective in zip(qualified, objectives, strict=True):
         if objective > limit:
-            reasons[index] = (
-                f"prefit objective outlier: {objective:.17g} > {limit:.17g}"
-            )
+            reasons[index] = f"prefit objective outlier: {objective:.17g} > {limit:.17g}"
 
 
 def _automatic_isolation_reasons(
@@ -91,15 +87,10 @@ def _merged_settings(
     prepared: PreparedDatasetFit,
     replacements: dict[str, ParameterSetting],
 ) -> tuple[ParameterSetting, ...]:
-    existing = {
-        setting.name: setting
-        for setting in prepared.updated_dataset.parameter_settings
-    }
+    existing = {setting.name: setting for setting in prepared.updated_dataset.parameter_settings}
     existing.update(replacements)
     ordered_names = tuple(
-        definition.name
-        for definition in prepared.problem.parameter_definitions
-        if definition.name in existing
+        definition.name for definition in prepared.problem.parameter_definitions if definition.name in existing
     )
     return tuple(existing[name] for name in ordered_names)
 
@@ -137,19 +128,14 @@ def _unlocked_joint_prepared(
     names_by_dataset: dict[str, set[str]] = {}
     for rule in rules:
         for member in rule.members:
-            names_by_dataset.setdefault(member.dataset_id, set()).add(
-                member.parameter_name
-            )
+            names_by_dataset.setdefault(member.dataset_id, set()).add(member.parameter_name)
     values = []
     for item, prefit in zip(prepared, prefits, strict=True):
         best = prefit.fit_result.best_candidate
         if best is None or not best.valid:
             raise ValueError(f"joint prefit candidate is invalid: {item.dataset_id}")
         physical = {parameter.name: parameter.value for parameter in best.parameters}
-        definitions = {
-            definition.name: definition
-            for definition in item.problem.parameter_definitions
-        }
+        definitions = {definition.name: definition for definition in item.problem.parameter_definitions}
         replacements = {
             name: ParameterSetting(
                 name,
@@ -212,6 +198,7 @@ def _run_automatic_joint_refinement(
                 search,
                 profile_names=(),
                 bootstrap_enabled=False,
+                parameter_priors=item.updated_dataset.parameter_priors,
             ),
             cancelled=cancelled,
             progress=progress,
@@ -219,12 +206,15 @@ def _run_automatic_joint_refinement(
         for item, search in zip(prepared, searches, strict=True)
     )
     decisions = tuple(
-        assess_automatic_quality(item.problem, result)
-        for item, result in zip(prepared, local_results, strict=True)
+        assess_automatic_quality(item.problem, result) for item, result in zip(prepared, local_results, strict=True)
     )
     return (
         problem,
-        analyze_joint_searches(problem, searches),
+        analyze_joint_searches(
+            problem,
+            searches,
+            tuple(item.updated_dataset.parameter_priors for item in prepared),
+        ),
         local_results,
         decisions,
     )
@@ -273,10 +263,7 @@ def _automatic_joint_result(
 def _material_name_by_path(
     prepared: PreparedDatasetFit,
 ) -> dict[str, str]:
-    return {
-        path: material.name
-        for path, material in _automatic_material_occurrences(prepared)
-    }
+    return {path: material.name for path, material in _automatic_material_occurrences(prepared)}
 
 
 def _accepted_material_values(
@@ -284,14 +271,8 @@ def _accepted_material_values(
     results: tuple[FitResult, ...],
     material_rules: tuple[SharingRule, ...],
 ) -> dict[tuple[str, str], float]:
-    results_by_id = {
-        item.dataset_id: result
-        for item, result in zip(prepared, results, strict=True)
-    }
-    paths_by_id = {
-        item.dataset_id: _material_name_by_path(item)
-        for item in prepared
-    }
+    results_by_id = {item.dataset_id: result for item, result in zip(prepared, results, strict=True)}
+    paths_by_id = {item.dataset_id: _material_name_by_path(item) for item in prepared}
     values = {}
     for rule in material_rules:
         member = rule.members[0]
@@ -299,11 +280,7 @@ def _accepted_material_values(
         best = result.best_candidate
         if best is None or not best.valid:
             continue
-        parameter = next(
-            value
-            for value in best.parameters
-            if value.name == member.parameter_name
-        )
+        parameter = next(value for value in best.parameters if value.name == member.parameter_name)
         path, family = member.parameter_name.rsplit(".", 1)
         material_name = paths_by_id[member.dataset_id][path]
         values[(material_name, family)] = parameter.value
@@ -322,10 +299,7 @@ def _locked_material_prepared(
         AutomaticRole.ISOLATED_RETRY,
         reason,
     )
-    definitions = {
-        definition.name: definition
-        for definition in isolated.problem.parameter_definitions
-    }
+    definitions = {definition.name: definition for definition in isolated.problem.parameter_definitions}
     replacements = {}
     for path, material in _automatic_material_occurrences(isolated):
         for family in ("density_scale", "sld_real_a2", "sld_imag_a2"):
@@ -361,15 +335,9 @@ def _insufficient_joint_results(
         isolation_reasons,
         strict=True,
     ):
-        role = (
-            AutomaticRole.ISOLATED_RETRY
-            if isolation_reason is not None
-            else AutomaticRole.JOINT
-        )
+        role = AutomaticRole.ISOLATED_RETRY if isolation_reason is not None else AutomaticRole.JOINT
         updated = _automatic_role_prepared(item, role, isolation_reason)
-        values.append(
-            AutomaticPreparedResult(updated, prefit.fit_result, False, reason)
-        )
+        values.append(AutomaticPreparedResult(updated, prefit.fit_result, False, reason))
     return tuple(values)
 
 
@@ -387,10 +355,7 @@ def _validated_automatic_joint_inputs(
         raise ValueError("fit_group_id must not be empty")
     if len(values) != len(prefit_values) or not values:
         raise ValueError("automatic joint inputs must be nonempty and aligned")
-    if any(
-        item.dataset_id != prefit.prepared.dataset_id
-        for item, prefit in zip(values, prefit_values, strict=True)
-    ):
+    if any(item.dataset_id != prefit.prepared.dataset_id for item, prefit in zip(values, prefit_values, strict=True)):
         raise ValueError("automatic joint dataset order mismatch")
     return values, prefit_values
 
@@ -399,12 +364,7 @@ def _material_only_rules(
     rules: tuple[SharingRule, ...],
 ) -> tuple[SharingRule, ...]:
     return tuple(
-        rule
-        for rule in rules
-        if not any(
-            member.parameter_name.endswith("roughness_a")
-            for member in rule.members
-        )
+        rule for rule in rules if not any(member.parameter_name.endswith("roughness_a") for member in rule.members)
     )
 
 
@@ -412,7 +372,4 @@ def _best_candidates_by_dataset(
     prepared: tuple[PreparedDatasetFit, ...],
     results: tuple[FitResult, ...],
 ) -> dict[str, object]:
-    return {
-        item.dataset_id: result.best_candidate
-        for item, result in zip(prepared, results, strict=True)
-    }
+    return {item.dataset_id: result.best_candidate for item, result in zip(prepared, results, strict=True)}

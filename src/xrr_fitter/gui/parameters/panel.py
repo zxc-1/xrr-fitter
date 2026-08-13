@@ -6,6 +6,7 @@ from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDialog,
     QLabel,
     QMenu,
     QTabWidget,
@@ -17,7 +18,6 @@ import xrr_fitter.api as api
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.parameters.sharing import SharingEditor
 from xrr_fitter.gui.parameters.table import ParameterTable
-
 
 # Editable numeric columns in the parameter table: initial, lower, upper.
 VALUE_COLUMNS = (1, 2, 3)
@@ -78,12 +78,8 @@ class ParametersPanel(QWidget):
         layout.addWidget(self.status_label)
         self.expert_toggle.toggled.connect(self._toggle_expert_mode)
         self.parameter_table.itemChanged.connect(self._table_setting_changed)
-        self.parameter_table.setContextMenuPolicy(
-            Qt.ContextMenuPolicy.CustomContextMenu
-        )
-        self.parameter_table.customContextMenuRequested.connect(
-            self._show_row_context_menu
-        )
+        self.parameter_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.parameter_table.customContextMenuRequested.connect(self._show_row_context_menu)
         document.project_changed.connect(self._refresh)
         self._refresh()
 
@@ -178,9 +174,7 @@ class ParametersPanel(QWidget):
         self._definition(name)
         dataset_id = self._require_active_dataset_id()
         dataset = self._dataset(dataset_id)
-        retained = tuple(
-            value for value in dataset.parameter_settings if value.name != name
-        )
+        retained = tuple(value for value in dataset.parameter_settings if value.name != name)
         if len(retained) == len(dataset.parameter_settings):
             return False
         current = self.document.project
@@ -220,9 +214,17 @@ class ParametersPanel(QWidget):
         menu = QMenu(self.parameter_table)
         reset = menu.addAction("恢复默认值")
         reset.setObjectName("resetParameterAction")
+        edit_prior = menu.addAction("编辑先验")
+        edit_prior.setObjectName("editPriorAction")
+        clear_prior = menu.addAction("清除先验")
+        clear_prior.setObjectName("clearPriorAction")
         chosen = menu.exec(self.parameter_table.viewport().mapToGlobal(position))
         if chosen is reset:
             self._reset_parameter_row(name)
+        elif chosen is edit_prior:
+            self._edit_prior_row(name)
+        elif chosen is clear_prior:
+            self._clear_prior_row(name)
 
     def _reset_parameter_row(self, name: str) -> None:
         try:
@@ -231,6 +233,47 @@ class ParametersPanel(QWidget):
         except (KeyError, ValueError) as error:
             self._refresh()
             self.status_label.setText(str(error))
+
+    def _edit_prior_row(self, name: str) -> None:
+        from xrr_fitter.gui.parameters.dialogs import PriorDialog
+
+        definition = self._definition(name)
+        dialog = PriorDialog(
+            definition,
+            self,
+            existing_prior=definition.prior,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        spec = dialog.spec()
+        if spec is None:
+            return
+        self._commit_prior(name, self._with_prior(name, spec))
+
+    def _clear_prior_row(self, name: str) -> None:
+        self._commit_prior(name, self._without_prior(name))
+
+    def _commit_prior(self, name: str, priors: tuple[api.ParameterPrior, ...]) -> None:
+        try:
+            dataset_id = self._require_active_dataset_id()
+            current = self.document.project
+            updated = api.set_parameter_priors(current, dataset_id, priors)
+            if updated is current:
+                return
+            self.document.replace_project(updated)
+            self.status_label.setText(f"{name} 先验已更新")
+        except (KeyError, ValueError) as error:
+            self._refresh()
+            self.status_label.setText(str(error))
+
+    def _with_prior(self, name: str, spec: api.PriorSpec) -> tuple[api.ParameterPrior, ...]:
+        retained = self._without_prior(name)
+        return (*retained, api.ParameterPrior(name, spec))
+
+    def _without_prior(self, name: str) -> tuple[api.ParameterPrior, ...]:
+        dataset_id = self._require_active_dataset_id()
+        priors = self._dataset(dataset_id).parameter_priors
+        return tuple(value for value in priors if value.name != name)
 
     def _table_setting_changed(self, item: object) -> None:
         if item.column() not in (1, 2, 3, 5):
@@ -265,13 +308,9 @@ class ParametersPanel(QWidget):
 
     def _read_row(self, row: int) -> tuple[str, tuple[float, float, float], bool]:
         name_item = self.parameter_table.item(row, 0)
-        value_items = tuple(
-            self.parameter_table.item(row, column) for column in VALUE_COLUMNS
-        )
+        value_items = tuple(self.parameter_table.item(row, column) for column in VALUE_COLUMNS)
         lock_item = self.parameter_table.item(row, 5)
-        if name_item is None or lock_item is None or any(
-            value is None for value in value_items
-        ):
+        if name_item is None or lock_item is None or any(value is None for value in value_items):
             raise ValueError("parameter row is incomplete")
         name = str(name_item.data(Qt.ItemDataRole.UserRole))
         initial, lower, upper = (float(value.text()) for value in value_items)
@@ -325,11 +364,7 @@ class ParametersPanel(QWidget):
         return dataset_id
 
     def _dataset(self, dataset_id: str) -> api.DatasetProject:
-        matches = tuple(
-            dataset
-            for dataset in self.document.project.datasets
-            if dataset.dataset_id == dataset_id
-        )
+        matches = tuple(dataset for dataset in self.document.project.datasets if dataset.dataset_id == dataset_id)
         if len(matches) != 1:
             raise KeyError(f"unknown dataset: {dataset_id}")
         return matches[0]

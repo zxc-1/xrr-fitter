@@ -1,21 +1,21 @@
 from __future__ import annotations
 
+import pickle
 from dataclasses import FrozenInstanceError, fields, replace
 from importlib import import_module
-import pickle
 
 import numpy as np
-
 import pytest
-
 from tests.support.model_cases import fit_candidate, fit_result
+
 from xrr_fitter.model.fitting import (
+    ConfidenceThresholds,
     FitCheckpoint,
     FitConfig,
-    FitSearchResult,
-    ModelEvaluation,
     FitProgress,
+    FitSearchResult,
     FitStageSummary,
+    ModelEvaluation,
     SearchBudget,
 )
 
@@ -116,14 +116,8 @@ def test_published_fitting_arrays_remain_read_only_after_pickle() -> None:
         "fit_log_residuals_decades",
         "fit_weighted_residuals",
     )
-    assert all(
-        not getattr(restored_candidate, field).flags.writeable
-        for field in candidate_fields
-    )
-    assert all(
-        not getattr(restored_evaluation, field).flags.writeable
-        for field in evaluation_fields
-    )
+    assert all(not getattr(restored_candidate, field).flags.writeable for field in candidate_fields)
+    assert all(not getattr(restored_evaluation, field).flags.writeable for field in evaluation_fields)
     assert restored_search.region_labels.flags.writeable is False
     assert restored_search.region_weights.flags.writeable is False
     assert restored_search.candidates[0].unit_vector.flags.writeable is False
@@ -239,3 +233,23 @@ def test_fit_progress_stage_summary_and_checkpoint_validate_schema() -> None:
     assert checkpoint.stage_summaries == (summary,)
     with pytest.raises(ValueError, match="completed"):
         FitProgress("curve", "stage-a", 11, 10, 1.5, "bad")
+
+
+def test_confidence_thresholds_default_prior_conflict_sigmas_is_three() -> None:
+    assert ConfidenceThresholds().prior_conflict_sigmas == 3.0
+
+
+def test_confidence_thresholds_rejects_nonpositive_sigmas() -> None:
+    with pytest.raises(ValueError, match="prior_conflict_sigmas"):
+        ConfidenceThresholds(prior_conflict_sigmas=0.0)
+    with pytest.raises(ValueError, match="nonnegative"):
+        ConfidenceThresholds(prior_conflict_sigmas=-1.0)
+    # A zero boundary_fraction remains a legal, differently-meaning threshold.
+    assert ConfidenceThresholds(boundary_fraction=0.0).boundary_fraction == 0.0
+
+
+def test_confidence_thresholds_rejects_nonfinite_sigmas() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        ConfidenceThresholds(prior_conflict_sigmas=float("nan"))
+    with pytest.raises(ValueError, match="finite"):
+        ConfidenceThresholds(prior_conflict_sigmas=float("inf"))

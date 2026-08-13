@@ -37,6 +37,7 @@ from xrr_fitter.analysis.diagnostics import (
     ordered_fit_residuals,
     residual_autocorrelation_flag,
 )
+from xrr_fitter.analysis.mcmc import prior_conflicts, with_parameter_priors
 from xrr_fitter.analysis.profiles import (
     _evidence_focused_layout,
     build_problem_profiles,
@@ -50,6 +51,7 @@ from xrr_fitter.model.fitting import (
     FitStageSummary,
     candidate_selection_objective,
 )
+from xrr_fitter.model.parameters import ParameterPrior
 from xrr_fitter.model.provenance import (
     bootstrap_provenance_sha256,
     fit_search_provenance_sha256,
@@ -60,6 +62,8 @@ WARNING_DIAGNOSTICS = {
     "gauss_hermite_unconverged",
     "ideal_reflectivity_above_one",
 }
+
+
 def _analysis_dataset_id(value: object) -> str | None:
     if value is None:
         return None
@@ -92,9 +96,21 @@ def _validate_analysis_members(
         raise TypeError("bootstrap must be a BootstrapResult or None")
 
 
+def _analysis_parameter_priors(values: object) -> tuple[ParameterPrior, ...]:
+    priors = tuple(values)
+    if any(not isinstance(value, ParameterPrior) for value in priors):
+        raise TypeError("parameter_priors must contain ParameterPrior values")
+    return priors
+
+
 @dataclass(frozen=True, slots=True)
 class AnalysisRequest:
-    """Pickle-safe data handoff for a service-owned analysis worker."""
+    """Pickle-safe data handoff for a service-owned analysis worker.
+
+    ``parameter_priors`` is an analysis sidecar. Ownership is always validated
+    against the unmodified fit problem and search result before the sidecar is
+    used only for the final prior-conflict annotation.
+    """
 
     dataset_id: str | None
     problem: FitEvaluationContext
@@ -102,6 +118,7 @@ class AnalysisRequest:
     profile_names: tuple[str, ...] | None = None
     bootstrap: BootstrapResult | None = None
     bootstrap_enabled: bool = True
+    parameter_priors: tuple[ParameterPrior, ...] = ()
 
     def __post_init__(self) -> None:
         dataset_id = _analysis_dataset_id(self.dataset_id)
@@ -110,8 +127,10 @@ class AnalysisRequest:
         _validate_analysis_ownership(self.problem, self.search_result, self.bootstrap)
         if not isinstance(self.bootstrap_enabled, bool):
             raise TypeError("bootstrap_enabled must be bool")
+        priors = _analysis_parameter_priors(self.parameter_priors)
         object.__setattr__(self, "dataset_id", dataset_id)
         object.__setattr__(self, "profile_names", names)
+        object.__setattr__(self, "parameter_priors", priors)
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), (
@@ -121,6 +140,7 @@ class AnalysisRequest:
             self.profile_names,
             self.bootstrap,
             self.bootstrap_enabled,
+            self.parameter_priors,
         )
 
 
@@ -167,9 +187,7 @@ def _correlation_evidence(
     correlation = correlation_from_covariance(physical_covariance)
     fraction = problem.config.confidence.boundary_fraction
     boundary_hits = tuple(
-        name
-        for name, value in zip(names, unit_vector, strict=True)
-        if value <= fraction or value >= 1.0 - fraction
+        name for name, value in zip(names, unit_vector, strict=True) if value <= fraction or value >= 1.0 - fraction
     )
     strong = strong_parameter_correlations(
         names,
@@ -188,11 +206,7 @@ def _profiles(
     task_runner: TaskRunner | None = None,
 ) -> tuple[object, ...]:
     names = tuple(variable.name for variable in problem.variables)
-    requested = tuple(
-        name
-        for name in profile_names
-        if name in names or _validate_derived_profile(problem, name)
-    )
+    requested = tuple(name for name in profile_names if name in names or _validate_derived_profile(problem, name))
     if not requested:
         return ()
     profiles = build_problem_profiles(
@@ -223,13 +237,10 @@ def _residual_evidence(
 ) -> tuple[bool, tuple[object, ...], bool]:
     derived = diagnose_residual_patterns(problem, candidate)
     diagnostics = {
-        (diagnostic.code, diagnostic.point_indices): diagnostic
-        for diagnostic in (*candidate.diagnostics, *derived)
+        (diagnostic.code, diagnostic.point_indices): diagnostic for diagnostic in (*candidate.diagnostics, *derived)
     }
     residuals = ordered_fit_residuals(problem, candidate)
-    autocorrelation = bool(
-        residuals.size >= 4 and residual_autocorrelation_flag(residuals)
-    )
+    autocorrelation = bool(residuals.size >= 4 and residual_autocorrelation_flag(residuals))
     return bool(derived) or autocorrelation, tuple(diagnostics.values()), autocorrelation
 
 
@@ -242,8 +253,10 @@ def build_uncertainty_report(
     cancelled: Callable[[], bool] | None = None,
     progress: Callable[[int, int, str], None] | None = None,
     task_runner: TaskRunner | None = None,
+    parameter_priors: tuple[ParameterPrior, ...] = (),
 ) -> UncertaintyReport:
     """Build covariance, profile, bootstrap, and residual evidence."""
+    parameter_priors = _analysis_parameter_priors(parameter_priors)
     _check_cancelled(cancelled)
     values = tuple(candidates)
     best = _select_candidate(problem, values)
@@ -279,25 +292,23 @@ def build_uncertainty_report(
         residual_autocorrelation=autocorrelation,
         candidate_id=_candidate_id(values, best),
         bootstrap_performed=bootstrap is not None,
+        prior_conflicts=prior_conflicts(
+            with_parameter_priors(problem, parameter_priors),
+            unit,
+        ),
     )
 
 
 def uncertainty_seed(config: object) -> int:
     """Derive the deterministic child stream reserved for uncertainty work."""
     return int(
-        np.random.SeedSequence(
-            [config.master_seed, UNCERTAINTY_SEED_DOMAIN]
-        ).generate_state(1, dtype=np.uint64)[0]
+        np.random.SeedSequence([config.master_seed, UNCERTAINTY_SEED_DOMAIN]).generate_state(1, dtype=np.uint64)[0]
     )
 
 
 def _stage_e_candidates(search_result: FitSearchResult) -> tuple[object, ...]:
     summary = next(
-        (
-            value
-            for value in reversed(search_result.stage_summaries)
-            if value.stage in {"E", "stage-e"}
-        ),
+        (value for value in reversed(search_result.stage_summaries) if value.stage in {"E", "stage-e"}),
         None,
     )
     if summary is None:
@@ -373,21 +384,14 @@ def _diagnostic_warning(problem: object, diagnostic: object) -> str | None:
     if diagnostic.code not in WARNING_DIAGNOSTICS:
         return None
     indices = tuple(int(index) for index in diagnostic.point_indices)
-    valid = tuple(
-        index
-        for index in indices
-        if 0 <= index < np.asarray(problem.data.qz_a_inv).size
-    )
+    valid = tuple(index for index in indices if 0 <= index < np.asarray(problem.data.qz_a_inv).size)
     if valid:
         qz = np.asarray(problem.data.qz_a_inv, dtype=float)[list(valid)]
         extent = f"[{float(np.min(qz)):.12g},{float(np.max(qz)):.12g}]"
     else:
         extent = "[]"
     index_text = ",".join(str(index) for index in indices)
-    return (
-        f"{diagnostic.code}: {diagnostic.message}; "
-        f"full_data_indices=[{index_text}]; qz_a_inv_range={extent}"
-    )
+    return f"{diagnostic.code}: {diagnostic.message}; full_data_indices=[{index_text}]; qz_a_inv_range={extent}"
 
 
 def _enrich_search_result(
@@ -399,11 +403,7 @@ def _enrich_search_result(
     if candidate_id is None:
         raise ValueError("uncertainty report is missing candidate identity")
     winner = next(
-        (
-            candidate
-            for candidate in search_result.candidates
-            if candidate.candidate_id == candidate_id
-        ),
+        (candidate for candidate in search_result.candidates if candidate.candidate_id == candidate_id),
         None,
     )
     if winner is None:
@@ -413,10 +413,7 @@ def _enrich_search_result(
         for diagnostic in (*winner.diagnostics, *report.diagnostics)
     }
     replacement = replace(winner, diagnostics=tuple(diagnostics.values()))
-    candidates = tuple(
-        replacement if candidate is winner else candidate
-        for candidate in search_result.candidates
-    )
+    candidates = tuple(replacement if candidate is winner else candidate for candidate in search_result.candidates)
     diagnostic_warnings = tuple(
         warning
         for diagnostic in report.diagnostics
@@ -442,9 +439,7 @@ def _append_uncertainty_summary(
     best = search_result.best_candidate
     if best is None:
         raise ValueError("uncertainty requires a valid Stage-E winner")
-    summaries = tuple(
-        value for value in search_result.stage_summaries if value.stage != "uncertainty"
-    ) + (
+    summaries = tuple(value for value in search_result.stage_summaries if value.stage != "uncertainty") + (
         FitStageSummary(
             "uncertainty",
             tuple(candidate.candidate_id for candidate in candidates),
@@ -476,10 +471,12 @@ def analyze_search_result(
     dataset_id: str | None = None,
     progress: Callable[[FitProgress], None] | None = None,
     task_runner: TaskRunner | None = None,
+    parameter_priors: tuple[ParameterPrior, ...] = (),
 ) -> FitResult:
     """Finalize a fitting-only search with deterministic uncertainty evidence."""
     _validate_analysis_members(problem, search_result, bootstrap)
     _validate_analysis_ownership(problem, search_result, bootstrap)
+    parameter_priors = _analysis_parameter_priors(parameter_priors)
     candidates = _stage_e_candidates(search_result)
     best = search_result.best_candidate
     if best is None:
@@ -543,6 +540,7 @@ def analyze_search_result(
         cancelled=cancelled,
         progress=profile_progress,
         task_runner=task_runner,
+        parameter_priors=parameter_priors,
     )
     publish("finalizing", 0, 1, "finalizing")
     enriched = _enrich_search_result(problem, search_result, report)
@@ -586,4 +584,5 @@ def run_analysis(
         dataset_id=request.dataset_id,
         progress=progress,
         task_runner=task_runner,
+        parameter_priors=request.parameter_priors,
     )

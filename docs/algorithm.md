@@ -482,6 +482,87 @@ then each persisted `dataset.last_valid_result` supplies candidates,
 confidence, uncertainty, and reporting arrays. An external result object never
 overrides a different persisted graph.
 
+## Parameter Priors
+
+A per-parameter prior is an optional `PriorSpec(kind, parameters)` stored in
+`dataset.parameter_priors` beside — never inside — the parameter declaration,
+so restoring a parameter's defaults clears its bounds and lock without touching
+its prior. Four kinds are supported. `PRIOR_LOG_DENSITY` in `evaluation.py`
+gives each kind as an *unnormalized* log kernel; the normalization is applied
+separately and numerically (below), so no closed-form `sqrt(2 pi)` constant
+appears in the code.
+
+```text
+uniform            : log k = 0                                   (parameters: none)
+normal(mu, sigma)  : log k = -0.5 ((theta - mu)/sigma)^2
+lognormal(mu, sig) : on theta > 0, with x = log theta,
+                     log k = -0.5 ((x - mu)/sig)^2 - log(theta)   (-inf at theta <= 0)
+soft_range(a,b,s)  : log k = -0.5 (d/s)^2, d = max(a - theta, theta - b, 0)
+                     i.e. flat on [a, b] with half-Gaussian tails of width s
+```
+
+The `- log(theta)` term of `lognormal` is the change-of-variables Jacobian that
+makes its kernel a density in `theta` rather than in `log theta`. `mu`/`sigma`
+of `normal` live in physical parameter space; `lognormal` stores `mu`/`sigma` in
+log space, so its physical center is `exp(mu)` and its log-space `sigma` is
+dimensionless. `soft_range` requires `a < b` and `s > 0`.
+
+**Truncation and renormalization.** Every prior is conditioned on the
+parameter's admissible `[lower, upper]` box. `_prior_norm` integrates the
+unnormalized kernel over that interval with a fixed 2049-node composite
+trapezoid rule and caches the total mass `Z`; the truncated log density is then
+`log k(theta) - log Z` for `theta` in `[lower, upper]` and `-inf` outside. Doing
+the normalization numerically on one grid keeps every kind on a single code path
+and makes `prior_cdf`/`prior_inverse_cdf` exact inverses by construction. A
+prior whose center falls outside `[lower, upper]` is rejected when it is bound
+to the parameter definition, not when the `PriorSpec` alone is built; if a
+kernel still integrates to a non-positive or non-finite mass, `_prior_norm`
+raises rather than returning a degenerate normalization.
+
+**Where the prior enters.** The context compiled for deterministic search stays
+prior-free. Persisted priors cross the service boundary as an analysis sidecar;
+only then does `with_parameter_priors` copy the parameter definitions into a
+temporary analysis context. Parameter priors are summed by
+`_parameter_prior_log_density` and added as `+log p(theta)` to
+`problem_log_probability`, the robust pseudo-posterior that uncertainty MCMC
+samples — they do **not** enter the deterministic least-squares objective, fit
+provenance, checkpoint fingerprint, or joint layout, which retain only the data
+loss and optional scale prior. The MCMC service first validates the retained fit
+against the original context, then supplies the overlaid context to
+`run_problem_mcmc`. An empty sidecar returns the original context and contributes
+the literal `0.0`, leaving `problem_log_probability` bitwise unchanged.
+
+**Fraction-space priors.** A parameter carrying the `roughness_fraction`
+transform is sampled as a fraction of its neighboring thickness, not as an
+absolute length. Its prior is therefore stated and evaluated in that same
+fraction space; no Angstrom conversion is applied before the density is taken,
+which is what keeps the fraction parametrization internally consistent.
+
+**Prior-conflict flagging.** After a fit, a posterior estimate is flagged as
+conflicting with its prior when it sits more than `prior_conflict_sigmas`
+prior standard deviations from the prior center. The default is `3.0`: a
+well-specified prior places roughly 99.7% of its mass within three sigma, so a
+posterior beyond that line signals genuine tension between the data and the
+prior rather than ordinary sampling scatter, while staying loose enough not to
+fire on mild, expected disagreement. The point-estimate path in `report.py`
+validates ownership and performs bootstrap, profiles, residual analysis, and
+confidence classification with the original context; only the final report
+annotation compares the winning `unit_vector` through the sidecar overlay. The
+MCMC path in `mcmc.py` runs the same test against the posterior median instead.
+`prior_conflicts` is informational: it is not profile-selection evidence and
+does not change confidence or automatic quality decisions.
+
+**Joint prior-conflict union.** Joint confidence is first computed from the
+unaltered global Stage-E ensemble. Once its `candidate_id` is fixed, each
+dataset evaluates that candidate's local `unit_vector` against its own sidecar
+priors. `JointVariable.members` maps every conflicting
+`(dataset_id, parameter_name)` back to the global variable name; duplicates are
+removed and the union is emitted in `global_variables` order. This local-first
+step is required for shared roughness, whose global
+`shared_roughness_physical` coordinate is not any one dataset's prior
+coordinate. The report is then copied with the union while the already-computed
+confidence and classification evidence remain unchanged.
+
 ## Exact Service Objective
 
 For dataset `d`, fitted rows use unweighted physical log residuals:

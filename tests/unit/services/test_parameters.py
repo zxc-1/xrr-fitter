@@ -10,16 +10,21 @@ from tests.support.model_cases import dataset_project, final_fit_result, project
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
+    ParameterPrior,
     ParameterReference,
     ParameterSetting,
+    PriorSpec,
     SharingRule,
 )
 from xrr_fitter.model.project import ProjectUiState
 from xrr_fitter.services.datasets import add_dataset
 from xrr_fitter.services.parameters import (
+    _reconciled_parameter_sidecars,
     describe_parameters,
+    set_parameter_priors,
     set_parameter_settings,
     set_sharing_rules,
+    validate_parameter_priors,
     validate_parameter_settings,
     validate_sharing_rules,
 )
@@ -77,11 +82,7 @@ def test_set_parameter_settings_persists_and_invalidates_only_fit_state(
             selected_candidate_ids=(("curve", "candidate-0"),),
         ),
     )
-    definition = next(
-        item
-        for item in describe_parameters(value, "curve")
-        if item.name == "component.0.thickness_a"
-    )
+    definition = next(item for item in describe_parameters(value, "curve") if item.name == "component.0.thickness_a")
     setting = ParameterSetting(definition.name, 90.0, 20.0, 180.0)
 
     updated = set_parameter_settings(value, "curve", (setting,))
@@ -91,6 +92,21 @@ def test_set_parameter_settings_persists_and_invalidates_only_fit_state(
     assert updated.datasets[0].structure_evidence is dataset.structure_evidence
     assert updated.datasets[0].last_valid_result is None
     assert updated.ui_state.selected_candidate_ids == ()
+
+
+def test_set_parameter_settings_reconciles_priors_against_effective_bounds(
+    tmp_path: Path,
+) -> None:
+    value = _structured_project(tmp_path)
+    thickness = _thickness(value)
+    prior = ParameterPrior(thickness.name, PriorSpec("normal", (50.0, 5.0)))
+    value = set_parameter_priors(value, "curve", (prior,))
+    setting = ParameterSetting(thickness.name, 20.0, 10.0, 30.0)
+
+    updated = set_parameter_settings(value, "curve", (setting,))
+
+    assert updated.datasets[0].parameter_settings == (setting,)
+    assert updated.datasets[0].parameter_priors == ()
 
 
 def test_sharing_validation_is_pure_and_does_not_read_source(
@@ -165,3 +181,131 @@ def test_set_sharing_rules_invalidates_affected_fit_state() -> None:
     assert updated.sharing_rules == (rule,)
     assert all(dataset.last_valid_result is None for dataset in updated.datasets)
     assert updated.ui_state.selected_candidate_ids == ()
+
+
+def _thickness(value, name: str = "component.0.thickness_a"):
+    return next(item for item in describe_parameters(value, "curve") if item.name == name)
+
+
+def test_set_parameter_priors_returns_new_project(tmp_path: Path) -> None:
+    value = _structured_project(tmp_path)
+    thickness = _thickness(value)
+    prior = ParameterPrior(thickness.name, PriorSpec("normal", (thickness.initial, 5.0)))
+
+    updated = set_parameter_priors(value, "curve", (prior,))
+
+    assert updated is not value
+    assert updated.datasets[0].parameter_priors == (prior,)
+
+
+def test_set_parameter_priors_returns_same_object_when_unchanged(tmp_path: Path) -> None:
+    value = _structured_project(tmp_path)
+    thickness = _thickness(value)
+    prior = ParameterPrior(thickness.name, PriorSpec("normal", (thickness.initial, 5.0)))
+    updated = set_parameter_priors(value, "curve", (prior,))
+
+    assert set_parameter_priors(updated, "curve", (prior,)) is updated
+
+
+def test_set_parameter_priors_invalidates_fit_state(tmp_path: Path) -> None:
+    value = _structured_project(tmp_path)
+    result = final_fit_result()
+    dataset = replace(value.datasets[0], last_valid_result=result)
+    value = replace(
+        value,
+        datasets=(dataset,),
+        ui_state=ProjectUiState(
+            active_dataset_id="curve",
+            selected_candidate_ids=(("curve", "candidate-0"),),
+        ),
+    )
+    thickness = _thickness(value)
+    prior = ParameterPrior(thickness.name, PriorSpec("normal", (thickness.initial, 5.0)))
+
+    updated = set_parameter_priors(value, "curve", (prior,))
+
+    assert updated.datasets[0].parameter_priors == (prior,)
+    assert updated.datasets[0].structure is dataset.structure
+    assert updated.datasets[0].last_valid_result is None
+    assert updated.ui_state.selected_candidate_ids == ()
+
+
+def test_validate_parameter_priors_rejects_unknown_parameter(tmp_path: Path) -> None:
+    value = _structured_project(tmp_path)
+    definitions = describe_parameters(value, "curve")
+
+    with pytest.raises(ValueError, match="unknown parameter name"):
+        validate_parameter_priors(definitions, (ParameterPrior("unknown", PriorSpec("uniform")),))
+
+
+def test_validate_parameter_priors_rejects_duplicate_names(tmp_path: Path) -> None:
+    value = _structured_project(tmp_path)
+    definitions = describe_parameters(value, "curve")
+    thickness = _thickness(value)
+    prior = ParameterPrior(thickness.name, PriorSpec("uniform"))
+
+    with pytest.raises(ValueError, match="prior names must be unique"):
+        validate_parameter_priors(definitions, (prior, prior))
+
+
+def test_validate_parameter_priors_rejects_center_outside_bounds(tmp_path: Path) -> None:
+    value = _structured_project(tmp_path)
+    definitions = describe_parameters(value, "curve")
+    thickness = _thickness(value)
+    prior = ParameterPrior(thickness.name, PriorSpec("normal", (thickness.upper + 100.0, 5.0)))
+
+    with pytest.raises(ValueError, match="within bounds"):
+        validate_parameter_priors(definitions, (prior,))
+
+
+def test_validate_parameter_priors_scores_roughness_prior_in_unit_fraction(tmp_path: Path) -> None:
+    # roughness_fraction 先验落在单位分数 [0,1];一个落在 Å 物理界内但 >1 的中心(在
+    # 分数坐标里非法)必须被拒,以证明服务层继承了定义层的坐标系修正,而不是拿 Å 物理界
+    # 去校验分数先验。
+    value = _structured_project(tmp_path)
+    definitions = describe_parameters(value, "curve")
+    roughness = next(item for item in definitions if item.transform == "roughness_fraction")
+    assert roughness.upper > 1.0
+    center = 0.5 * (roughness.lower + roughness.upper)
+    prior = ParameterPrior(roughness.name, PriorSpec("normal", (center, 1.0)))
+
+    with pytest.raises(ValueError, match="within bounds"):
+        validate_parameter_priors(definitions, (prior,))
+
+
+def test_compiled_definitions_carry_stored_priors(tmp_path: Path) -> None:
+    value = _structured_project(tmp_path)
+    thickness = _thickness(value)
+    spec = PriorSpec("normal", (thickness.initial, 5.0))
+
+    updated = set_parameter_priors(value, "curve", (ParameterPrior(thickness.name, spec),))
+
+    carried = _thickness(updated)
+    assert carried.prior == spec
+
+
+def test_reconcile_parameter_sidecars_keeps_only_valid_unique_entries(
+    tmp_path: Path,
+) -> None:
+    value = _structured_project(tmp_path)
+    definitions = describe_parameters(value, "curve")
+    thickness = _thickness(value)
+    setting = ParameterSetting(
+        thickness.name,
+        thickness.initial,
+        thickness.lower,
+        thickness.upper,
+        thickness.locked,
+    )
+    prior = ParameterPrior(thickness.name, PriorSpec("normal", (thickness.initial, 5.0)))
+    unknown_setting = ParameterSetting("component.99.thickness_a", 10.0, 2.0, 20.0)
+    unknown_prior = ParameterPrior("component.99.thickness_a", PriorSpec("uniform"))
+
+    settings, priors = _reconciled_parameter_sidecars(
+        definitions,
+        (setting, setting, unknown_setting),
+        (prior, prior, unknown_prior),
+    )
+
+    assert settings == (setting,)
+    assert priors == (prior,)
