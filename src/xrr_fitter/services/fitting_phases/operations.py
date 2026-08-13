@@ -37,17 +37,11 @@ def _compile_preflight_fit(
     *,
     prepare_dataset_fit: Callable,
     compile_joint_problem: Callable,
-    validate_parameter_priors: Callable,
 ) -> None:
     seeds = _preflight_seeds(project)
     prepared = tuple(
         prepare_dataset_fit(project, dataset.dataset_id, seeds[dataset.dataset_id]) for dataset in project.datasets
     )
-    for item in prepared:
-        validate_parameter_priors(
-            item.problem.parameter_definitions,
-            item.updated_dataset.parameter_priors,
-        )
     if project.batch_mode == "joint":
         compile_joint_problem(
             tuple(item.dataset_id for item in prepared),
@@ -61,7 +55,6 @@ def preflight_fit(
     *,
     prepare_dataset_fit: Callable,
     compile_joint_problem: Callable,
-    validate_parameter_priors: Callable,
 ) -> FitReadiness:
     """Load and compile the complete declared fit without mutating the project."""
     if not project.datasets:
@@ -75,7 +68,6 @@ def preflight_fit(
             project,
             prepare_dataset_fit=prepare_dataset_fit,
             compile_joint_problem=compile_joint_problem,
-            validate_parameter_priors=validate_parameter_priors,
         )
     except Exception as error:
         return FitReadiness(False, str(error) or type(error).__name__)
