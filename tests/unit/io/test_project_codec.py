@@ -858,3 +858,49 @@ def test_result_without_prior_conflicts_key_still_decodes() -> None:
 
     assert report.prior_conflicts == ()
     assert report.mcmc.prior_conflicts == ()
+
+
+def _project_with_parameter_sigma():
+    result, checkpoint = _manual_result_graph()
+    names = result.uncertainty.correlation_names
+    sigma = np.arange(2.0, 2.0 + len(names))
+    uncertainty = replace(result.uncertainty, parameter_sigma=sigma)
+    result = replace(result, uncertainty=uncertainty)
+    dataset = replace(
+        dataset_project("sample-1"),
+        last_valid_result=result,
+        checkpoint=checkpoint,
+    )
+    return project(dataset)
+
+
+def test_project_roundtrip_preserves_parameter_sigma() -> None:
+    original = _project_with_parameter_sigma()
+    restored = project_from_dict(project_to_dict(original))
+    before = original.datasets[0].last_valid_result.uncertainty.parameter_sigma
+    after = restored.datasets[0].last_valid_result.uncertainty.parameter_sigma
+    assert after is not None
+    assert np.array_equal(after, before)
+
+
+def test_result_without_parameter_sigma_omits_key() -> None:
+    # parameter_sigma 为 None(未标定)时编码不写该键——旧读者仍能加载,
+    # 且关闭该字段的报告 re-encode 逐位不变(向后兼容证明)。
+    payload = project_to_dict(_project_with_prior_conflicts())
+    uncertainty = payload["datasets"][0]["last_valid_result"]["uncertainty"]
+    assert uncertainty is not None
+    assert "parameter_sigma" not in uncertainty
+
+
+def test_result_without_parameter_sigma_key_still_decodes() -> None:
+    # 手工剥掉 parameter_sigma 键模拟旧文件:必须能读回且字段为 None。
+    payload = project_to_dict(_project_with_parameter_sigma())
+    for dataset in payload["datasets"]:
+        result = dataset["last_valid_result"]
+        if result is not None and result["uncertainty"] is not None:
+            result["uncertainty"].pop("parameter_sigma", None)
+
+    restored = project_from_dict(payload)
+    report = restored.datasets[0].last_valid_result.uncertainty
+
+    assert report.parameter_sigma is None

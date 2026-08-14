@@ -191,6 +191,10 @@ def _uncertainty_to_dict(
     # existed re-encode byte-identically and older readers keep loading them.
     if value.prior_conflicts:
         payload["prior_conflicts"] = list(value.prior_conflicts)
+    # Emitted only when calibrated so reports written before parameter sigmas
+    # existed re-encode byte-identically and older readers keep loading them.
+    if value.parameter_sigma is not None:
+        payload["parameter_sigma"] = _real_array_to_list(value.parameter_sigma)
     return payload
 
 
@@ -218,7 +222,7 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         value,
         required | {"bootstrap_performed"},
         "uncertainty report",
-        {"candidate_id", "sld_bands", "prior_conflicts"},
+        {"candidate_id", "sld_bands", "prior_conflicts", "parameter_sigma"},
     )
     return UncertaintyReport(
         correlation_names=tuple(_sequence(payload["correlation_names"], "correlation names")),
@@ -242,6 +246,9 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         bootstrap_performed=payload["bootstrap_performed"],
         sld_bands=_sld_bands_from_dict(payload.get("sld_bands")),
         prior_conflicts=tuple(_sequence(payload.get("prior_conflicts", []), "uncertainty prior conflicts")),
+        parameter_sigma=(
+            None if payload.get("parameter_sigma") is None else _real_array_from_list(payload["parameter_sigma"])
+        ),
     )
 
 
