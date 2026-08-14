@@ -154,7 +154,7 @@ SIGNATURES = {
     "start_fit_job": "(project: 'XrrProject', checkpoint_path: 'str | Path | None' = None) -> 'OperationJob'",
     "start_automatic_fit_job": "(project: 'XrrProject', import_batch_id: 'str | None' = None, checkpoint_path: 'str | Path | None' = None) -> 'OperationJob'",
     "start_mcmc_job": "(project: 'XrrProject', dataset_id: 'str', candidate_id: 'str', config: 'McmcConfig') -> 'OperationJob'",
-    "export_result": "(result: 'XrrProject | ProjectFitResult', output_dir: 'str | Path') -> 'ExportManifest'",
+    "export_result": "(result: 'XrrProject | ProjectFitResult', output_dir: 'str | Path', *, include_ort: 'bool' = False) -> 'ExportManifest'",
     "summarize_automatic_results": "(project: 'XrrProject', import_batch_id: 'str | None' = None) -> 'AutomaticResultSummary'",
 }
 

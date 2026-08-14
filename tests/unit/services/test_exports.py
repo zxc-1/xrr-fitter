@@ -5,19 +5,30 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import final_fit_result, fit_candidate, simple_structure
+
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.instrument import InstrumentSpec
+from xrr_fitter.services import exports
 from xrr_fitter.services.datasets import add_dataset
 from xrr_fitter.services.projects import inspect_sources, new_project
 from xrr_fitter.services.structures import set_structure
-from xrr_fitter.services import exports
-
 
 DATASET_FILES = (
     "fit_overview.png",
     "fit_result.json",
+    "fit_result.xlsx",
+    "residuals.png",
+    "run_log.txt",
+    "sld_profile.png",
+)
+
+# ``DatasetArtifacts`` sorts payloads by path, so the opt-in ``.ort`` lands
+# between ``fit_result.json`` and ``fit_result.xlsx`` (j < o < x).
+DATASET_FILES_WITH_ORT = (
+    "fit_overview.png",
+    "fit_result.json",
+    "fit_result.ort",
     "fit_result.xlsx",
     "residuals.png",
     "run_log.txt",
@@ -81,9 +92,7 @@ def test_export_builds_the_fixed_artifact_set_before_publication(
     assert result == "manifest"
     dataset = captured["datasets"][0]
     assert tuple(item.path for item in dataset.files) == DATASET_FILES
-    assert tuple(item.path for item in captured["root_files"]) == (
-        "compatibility_summary.xlsx",
-    )
+    assert tuple(item.path for item in captured["root_files"]) == ("compatibility_summary.xlsx",)
 
 
 def test_export_rechecks_source_after_initial_inspection_before_allocating(
@@ -110,3 +119,43 @@ def test_export_rechecks_source_after_initial_inspection_before_allocating(
         exports.export_result(value, tmp_path / "exports")
 
     assert not (tmp_path / "exports").exists()
+
+
+def _capture_publish(captured: dict[str, object]):
+    def publish(output_dir, datasets, root_files):
+        captured.update(output_dir=output_dir, datasets=datasets, root_files=root_files)
+        return "manifest"
+
+    return publish
+
+
+def test_export_omits_ort_when_not_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = _fitted_project(tmp_path)
+    captured: dict[str, object] = {}
+    _stub_serializers(monkeypatch)
+    monkeypatch.setattr(exports, "publish_export_run", _capture_publish(captured))
+
+    exports.export_result(value, tmp_path / "exports", include_ort=False)
+
+    dataset = captured["datasets"][0]
+    assert tuple(item.path for item in dataset.files) == DATASET_FILES
+
+
+def test_export_appends_single_ort_when_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = _fitted_project(tmp_path)
+    captured: dict[str, object] = {}
+    _stub_serializers(monkeypatch)
+    monkeypatch.setattr(exports, "publish_export_run", _capture_publish(captured))
+    monkeypatch.setattr(exports, "orso_bytes", lambda *_args, **_kwargs: b"orso-document", raising=False)
+
+    exports.export_result(value, tmp_path / "exports", include_ort=True)
+
+    dataset = captured["datasets"][0]
+    assert tuple(item.path for item in dataset.files) == DATASET_FILES_WITH_ORT
+    assert tuple(item.path for item in captured["root_files"]) == ("compatibility_summary.xlsx",)

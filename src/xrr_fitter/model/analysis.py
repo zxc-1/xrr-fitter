@@ -513,6 +513,22 @@ class UncertaintyReport:
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)
 
+    @property
+    def covariance(self) -> np.ndarray | None:
+        """协方差 ``sigma ⊗ correlation``（只读），缺逐参数 sigma 时为 ``None``。
+
+        公式与 ``analysis.derivatives.covariance_from_correlation`` 逐字一致，放在
+        model 层是因为架构门禁禁止 ``services.exports`` 依赖 ``analysis`` 或 numpy；
+        ``io.orso`` 由此拿到矩阵而无需服务层做数组运算。``parameter_sigma`` 与
+        ``correlation_matrix`` 已在 ``__post_init__`` 校验为只读、且维度对齐。
+        """
+        if self.parameter_sigma is None:
+            return None
+        sigma = self.parameter_sigma
+        covariance = sigma[:, None] * self.correlation_matrix * sigma[None, :]
+        covariance.setflags(write=False)
+        return covariance
+
 
 def _search_result_fields() -> tuple[str, ...]:
     return (
