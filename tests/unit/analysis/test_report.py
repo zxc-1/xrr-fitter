@@ -679,7 +679,7 @@ def test_build_report_selects_the_persisted_global_ranking_winner(
     monkeypatch.setattr(
         module,
         "_correlation_evidence",
-        lambda _problem, _unit, names: (np.eye(len(names)), (), ()),
+        lambda _problem, _unit, names: (np.eye(len(names)), (), (), np.ones(len(names))),
     )
     monkeypatch.setattr(module, "_profiles", lambda *_args: ())
     monkeypatch.setattr(
@@ -996,3 +996,18 @@ def test_prior_conflicts_do_not_enter_profile_selection() -> None:
     report = replace(_empty_report(None), prior_conflicts=("component.0.density_scale",))
 
     assert profiles._reported_profile_names(report) == set()
+
+
+def test_uncertainty_report_populates_parameter_sigma_consistent_with_correlation_diagonal() -> None:
+    problem = _problem()
+    candidate = _candidate(problem, "E-0")
+
+    report = _api().build_uncertainty_report(problem, (candidate,), profile_names=())
+
+    sigma = report.parameter_sigma
+    assert sigma is not None
+    assert sigma.shape == (len(report.correlation_names),)
+    diagonal = np.diag(report.correlation_matrix)
+    # 与 correlation 对角自洽:corr 对角为 1 处 sigma 必 > 0,corr 对角为 0 处 sigma 必 == 0。
+    assert np.all(sigma[diagonal == 1.0] > 0.0)
+    assert np.all(sigma[diagonal == 0.0] == 0.0)
