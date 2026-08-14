@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+import importlib
 from dataclasses import replace
 from hashlib import sha256
-import importlib
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from PySide6.QtWidgets import QDialogButtonBox, QFileDialog, QMessageBox, QPlainTextEdit
+from tests.support.model_cases import final_fit_result, fit_candidate, simple_structure
 
 import xrr_fitter.api as api
-from tests.support.model_cases import final_fit_result, fit_candidate, simple_structure
 
 
 def _exports():
@@ -23,11 +23,7 @@ def _exports():
 
 def _write_curve(path: Path, scale: float = 1000.0) -> Path:
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {scale / (index + 1):.12g}"
-            for index in range(32)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {scale / (index + 1):.12g}" for index in range(32)) + "\n",
         encoding="utf-8",
     )
     return path
@@ -81,6 +77,14 @@ def _manifest(directory: Path):
     )
 
 
+def _option_double(*, include_ort: bool = True, accepted: bool = True):
+    """Stand in for the pre-export ORT option dialog without a modal event loop."""
+    from PySide6.QtWidgets import QDialog
+
+    code = QDialog.DialogCode.Accepted if accepted else QDialog.DialogCode.Rejected
+    return lambda *_args, **_kwargs: SimpleNamespace(exec=lambda: code, include_ort=include_ort)
+
+
 def test_one_click_fit_save_export_reopen(tmp_path: Path) -> None:
     from xrr_fitter.gui.document import ProjectDocument
 
@@ -109,6 +113,7 @@ def test_export_dialog_failure_names_destination_exception_type_and_message(
     workflow = _workflow(api.new_project())
     destination = tmp_path / "exports"
     messages: list[tuple[str, str]] = []
+    monkeypatch.setattr(module, "OrtOptionDialog", _option_double(include_ort=True))
     monkeypatch.setattr(
         QFileDialog,
         "getExistingDirectory",
@@ -130,8 +135,7 @@ def test_export_dialog_failure_names_destination_exception_type_and_message(
     assert messages == [
         (
             "导出失败",
-            f"目标目录：{destination}\nOSError: disk full\n"
-            "请检查目标目录的写入权限和可用空间后重试。",
+            f"目标目录：{destination}\nOSError: disk full\n请检查目标目录的写入权限和可用空间后重试。",
         )
     ]
 
@@ -158,7 +162,8 @@ def test_export_dialog_uses_scrollable_summary_after_success(
         "getExistingDirectory",
         lambda *_args, **_kwargs: str(destination),
     )
-    monkeypatch.setattr(api, "export_result", lambda *_args: manifest)
+    monkeypatch.setattr(module, "OrtOptionDialog", _option_double(include_ort=True))
+    monkeypatch.setattr(api, "export_result", lambda *_args, **_kwargs: manifest)
     monkeypatch.setattr(module, "ExportSummaryDialog", CapturingSummaryDialog)
 
     assert workflow.export_results_dialog(None) is manifest
@@ -181,7 +186,7 @@ def test_export_failure_preserves_previous_summary_and_published_run(
     monkeypatch.setattr(
         api,
         "export_result",
-        lambda *_args: (_ for _ in ()).throw(OSError("cannot publish")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("cannot publish")),
     )
 
     with pytest.raises(OSError, match="cannot publish"):
@@ -237,3 +242,94 @@ def test_export_summary_dialog_uses_read_only_scrollable_text(qtbot) -> None:
         dialog.height() <= dialog.screen().availableGeometry().height(),
         bool(buttons.button(QDialogButtonBox.StandardButton.Close).accessibleName()),
     ) == ("导出完成", "导出完成", True, summary, "导出文件清单", True, True, True)
+
+
+def test_export_results_include_ort_publishes_ort_with_extension_disclosure(
+    tmp_path: Path,
+) -> None:
+    workflow = _workflow(_fitted_project(tmp_path))
+
+    manifest = workflow.export_results(tmp_path / "exports", include_ort=True)
+    summary = workflow.summary_text
+
+    ort_records = [record for record in manifest.files if str(record.path).endswith(".ort")]
+    assert ort_records
+    for record in ort_records:
+        published = manifest.run_directory / record.path
+        assert published.is_file()
+        assert str(published) in summary
+    # 扩展字段说明：三个扩展命名空间都要在摘要里点名
+    assert "xrr_fitter.confidence" in summary
+    assert "xrr_fitter.reduction" in summary
+    assert "xrr_fitter.model" in summary
+    # final_fit_result 的 uncertainty=None -> 协方差缺席，摘要写出缺席原因字段
+    assert "covariance_absent_reason" in summary
+
+
+def test_export_results_without_ort_publishes_no_ort_artifact(
+    tmp_path: Path,
+) -> None:
+    workflow = _workflow(_fitted_project(tmp_path))
+
+    manifest = workflow.export_results(tmp_path / "exports", include_ort=False)
+    summary = workflow.summary_text
+
+    assert not any(str(record.path).endswith(".ort") for record in manifest.files)
+    assert not list(manifest.run_directory.rglob("*.ort"))
+    assert ".ort" not in summary
+    assert "xrr_fitter.confidence" not in summary
+
+
+def test_ort_option_dialog_defaults_checked_and_accessible(qtbot) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    module = _exports()
+    dialog = module.OrtOptionDialog()
+    qtbot.addWidget(dialog)
+
+    checkbox = dialog.findChild(QCheckBox, "ortOptionCheckbox")
+    assert isinstance(checkbox, QCheckBox)
+    assert checkbox.isChecked()
+    assert checkbox.accessibleName()
+    assert checkbox.toolTip()
+    assert dialog.objectName() == "ortOptionDialog"
+    assert dialog.accessibleName()
+    assert dialog.include_ort is True
+    checkbox.setChecked(False)
+    assert dialog.include_ort is False
+
+
+def test_export_dialog_forwards_ort_choice_and_cancel_aborts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _exports()
+    workflow = _workflow(api.new_project())
+    destination = tmp_path / "exports"
+    manifest = _manifest(destination)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        QFileDialog,
+        "getExistingDirectory",
+        lambda *_args, **_kwargs: str(destination),
+    )
+    monkeypatch.setattr(
+        api,
+        "export_result",
+        lambda *_args, **_kwargs: (captured.update(kwargs=_kwargs), manifest)[1],
+    )
+    monkeypatch.setattr(
+        module,
+        "ExportSummaryDialog",
+        lambda *_args, **_kwargs: SimpleNamespace(exec=lambda: None),
+    )
+
+    monkeypatch.setattr(module, "OrtOptionDialog", _option_double(include_ort=True))
+    assert workflow.export_results_dialog(None) is manifest
+    assert captured["kwargs"] == {"include_ort": True}
+
+    captured.clear()
+    monkeypatch.setattr(module, "OrtOptionDialog", _option_double(accepted=False))
+    assert workflow.export_results_dialog(None) is None
+    assert captured == {}

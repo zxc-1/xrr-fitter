@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import os
+from dataclasses import replace
 from pathlib import Path
 
-from matplotlib.backend_bases import MouseEvent
 import numpy as np
 import pytest
-from PySide6.QtCore import QPoint, QTimer, Qt
+from matplotlib.backend_bases import MouseEvent
+from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -30,7 +30,6 @@ from xrr_fitter.gui.results.candidates import candidate_is_selectable
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.physics.reflectivity import instrument_reflectivity
 from xrr_fitter.physics.stack import expand_structure
-
 
 AIR = api.MaterialSpec("Air", None, None, 0.0j)
 SI = api.MaterialSpec("Si", "Si", 2.329)
@@ -82,6 +81,39 @@ def _run_modal(
     assert seen, f"modal dialog did not open: {object_name}"
 
 
+def _run_modals(trigger, steps) -> None:
+    """Drive a fixed sequence of nested modal dialogs opened by one trigger."""
+    seen: list[str] = []
+    errors: list[BaseException] = []
+    pending = list(steps)
+
+    def interact() -> None:
+        if not pending:
+            return
+        object_name, configure = pending[0]
+        dialog = QApplication.activeModalWidget()
+        if dialog is None or dialog.objectName() != object_name:
+            QTimer.singleShot(10, interact)
+            return
+        pending.pop(0)
+        seen.append(object_name)
+        try:
+            configure(dialog)
+        except BaseException as error:
+            errors.append(error)
+            dialog.reject()
+            return
+        if pending:
+            QTimer.singleShot(10, interact)
+
+    QTimer.singleShot(0, interact)
+    trigger()
+    QApplication.processEvents()
+    if errors:
+        raise errors[0]
+    assert seen == [name for name, _ in steps], f"modal sequence incomplete: {seen}"
+
+
 def _select_dataset(tree: QTreeWidget, row: int) -> str:
     item = tree.topLevelItem(row)
     dataset_id = str(item.data(0, Qt.ItemDataRole.UserRole))
@@ -101,18 +133,10 @@ def _add_layer(window, layer: api.LayerSpec) -> None:
 
     def configure(dialog: QDialog) -> None:
         dialog.findChild(QLineEdit, "layerNameInput").setText(layer.name)
-        dialog.findChild(QLineEdit, "layerFormulaInput").setText(
-            layer.material.formula
-        )
-        dialog.findChild(QDoubleSpinBox, "layerDensityInput").setValue(
-            layer.material.bulk_density_g_cm3
-        )
-        dialog.findChild(QDoubleSpinBox, "layerThicknessInput").setValue(
-            layer.thickness_a / 10.0
-        )
-        dialog.findChild(QDoubleSpinBox, "layerRoughnessInput").setValue(
-            layer.roughness_a / 10.0
-        )
+        dialog.findChild(QLineEdit, "layerFormulaInput").setText(layer.material.formula)
+        dialog.findChild(QDoubleSpinBox, "layerDensityInput").setValue(layer.material.bulk_density_g_cm3)
+        dialog.findChild(QDoubleSpinBox, "layerThicknessInput").setValue(layer.thickness_a / 10.0)
+        dialog.findChild(QDoubleSpinBox, "layerRoughnessInput").setValue(layer.roughness_a / 10.0)
         buttons = dialog.findChild(QDialogButtonBox, "layerDialogButtons")
         QTest.mouseClick(
             buttons.button(QDialogButtonBox.StandardButton.Ok),
@@ -152,11 +176,7 @@ def _lock_all_but_first_thickness(window, initial_nm: float) -> None:
     for name in tuple(panel.row_names):
         row = panel.row_names.index(name)
         item = table.item(row, 5)
-        desired = (
-            Qt.CheckState.Unchecked
-            if name == free_name
-            else Qt.CheckState.Checked
-        )
+        desired = Qt.CheckState.Unchecked if name == free_name else Qt.CheckState.Checked
         if item.checkState() != desired:
             item.setCheckState(desired)
             QApplication.processEvents()
@@ -294,14 +314,8 @@ def _import_sources(window) -> None:
     )
 
     assert window.data_panel.dataset_ids == ("S1", "S2")
-    assert all(
-        dataset.column_mapping == api.DataColumnMapping(0, 1)
-        for dataset in window.document.project.datasets
-    )
-    assert all(
-        window.data_panel.status_text(dataset_id) == "可拟合"
-        for dataset_id in window.data_panel.dataset_ids
-    )
+    assert all(dataset.column_mapping == api.DataColumnMapping(0, 1) for dataset in window.document.project.datasets)
+    assert all(window.data_panel.status_text(dataset_id) == "可拟合" for dataset_id in window.data_panel.dataset_ids)
 
 
 def _adopt_dataset_structures(
@@ -323,9 +337,7 @@ def _adopt_dataset_structures(
         dataset_id = _select_dataset(tree, row)
         assert window.document.active_dataset_id == dataset_id
         components = window.structure_panel.structure.components
-        assert tuple(component.name for component in components) == tuple(
-            layer.name for layer in layers
-        )
+        assert tuple(component.name for component in components) == tuple(layer.name for layer in layers)
         _lock_all_but_first_thickness(
             window,
             initial_nm=layers[0].thickness_a / 10.0 * 0.95,
@@ -363,10 +375,7 @@ def _run_gui_fit(window, qtbot) -> None:
     qtbot.waitUntil(
         lambda: (
             not window.fit_panel.is_running
-            and all(
-                dataset.last_valid_result is not None
-                for dataset in window.document.project.datasets
-            )
+            and all(dataset.last_valid_result is not None for dataset in window.document.project.datasets)
         ),
         timeout=120_000,
     )
@@ -375,11 +384,7 @@ def _run_gui_fit(window, qtbot) -> None:
 
 def _select_alternate_candidate(window) -> str:
     result = window.document.project.datasets[1].last_valid_result
-    selectable = tuple(
-        index
-        for index, candidate in enumerate(result.candidates)
-        if candidate_is_selectable(candidate)
-    )
+    selectable = tuple(index for index, candidate in enumerate(result.candidates) if candidate_is_selectable(candidate))
     candidates = window.findChild(QListWidget, "candidateList")
     if candidates is None:
         candidates = window.result_panel.candidates
@@ -413,17 +418,24 @@ def _save_and_export(window, project_path: Path) -> None:
             Qt.MouseButton.LeftButton,
         )
 
-    _run_modal(
+    def accept_ort_option(dialog: QDialog) -> None:
+        buttons = dialog.findChild(QDialogButtonBox, "ortOptionButtons")
+        QTest.mouseClick(
+            buttons.button(QDialogButtonBox.StandardButton.Ok),
+            Qt.MouseButton.LeftButton,
+        )
+
+    _run_modals(
         lambda: QTest.mouseClick(window.export_button, Qt.MouseButton.LeftButton),
-        "exportSummaryDialog",
-        close_export_summary,
+        [
+            ("ortOptionDialog", accept_ort_option),
+            ("exportSummaryDialog", close_export_summary),
+        ],
     )
     manifest = window.export_workflow.manifest
     assert manifest is not None and manifest.run_directory.is_dir()
-    assert all(
-        (manifest.run_directory / record.path).is_file()
-        for record in manifest.files
-    )
+    assert all((manifest.run_directory / record.path).is_file() for record in manifest.files)
+    assert any(str(record.path).endswith(".ort") for record in manifest.files)
 
 
 def _screenshot_geometry() -> tuple[int, int]:
@@ -477,14 +489,8 @@ def _reopen_and_verify(qtbot, target_id: str) -> None:
     qtbot.wait(1)
 
     assert reopened.data_panel.dataset_ids == ("S1", "S2")
-    assert tuple(
-        len(dataset.structure.components)
-        for dataset in reopened.document.project.datasets
-    ) == (1, 2)
-    assert all(
-        dataset.last_valid_result is not None
-        for dataset in reopened.document.project.datasets
-    )
+    assert tuple(len(dataset.structure.components) for dataset in reopened.document.project.datasets) == (1, 2)
+    assert all(dataset.last_valid_result is not None for dataset in reopened.document.project.datasets)
     assert reopened.document.project.ui_state.selected_candidate_ids
     assert reopened.plot_panel.selected_candidate_id() == target_id
     screenshot = os.environ.get("XRR_GUI_E2E_SCREENSHOT")
