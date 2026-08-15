@@ -269,6 +269,38 @@ class GradientLayerSpec:
             raise ValueError(f"{self.name}.microslab_max_a must be in (0,thickness]")
 
 
+_DRIFT_KINDS = frozenset({"linear", "sine", "random"})
+_DRIFT_TARGETS = frozenset({"thickness", "roughness"})
+
+
+@dataclass(frozen=True, slots=True)
+class DriftSpec:
+    """Per-repeat drift law for a periodic block (primitive scalars only)."""
+
+    kind: str
+    target: str
+    amount: float = 0.0
+    period: float = 0.0
+    phase: float = 0.0
+    seed: int = 0
+
+    def __post_init__(self) -> None:
+        if self.kind not in _DRIFT_KINDS:
+            raise ValueError(f"drift.kind must be one of {sorted(_DRIFT_KINDS)}")
+        if self.target not in _DRIFT_TARGETS:
+            raise ValueError(f"drift.target must be one of {sorted(_DRIFT_TARGETS)}")
+        if not isfinite(self.amount):
+            raise ValueError("drift.amount must be finite")
+        if self.kind == "sine":
+            if not isfinite(self.period) or self.period <= 0.0:
+                raise ValueError("drift.period must be finite and positive for sine drift")
+            if not isfinite(self.phase):
+                raise ValueError("drift.phase must be finite")
+        if self.kind == "random":
+            if isinstance(self.seed, bool) or not isinstance(self.seed, int) or self.seed < 0:
+                raise ValueError("drift.seed must be a non-negative integer for random drift")
+
+
 @dataclass(frozen=True, slots=True)
 class PeriodicBlock:
     """A named cell repeated toward the substrate with an optional top termination."""
@@ -277,6 +309,7 @@ class PeriodicBlock:
     layers: tuple[LayerSpec, ...]
     repeats: int
     top_roughness_a: float | None = None
+    drift: DriftSpec | None = None
 
     def __post_init__(self) -> None:
         _component_name(self.name, "periodic block")
@@ -285,6 +318,11 @@ class PeriodicBlock:
         _positive_repeats(self.repeats, self.name)
         if self.top_roughness_a is not None:
             _roughness(f"{self.name}.top", self.top_roughness_a)
+        if self.drift is not None:
+            if not isinstance(self.drift, DriftSpec):
+                raise TypeError(f"{self.name}.drift must be a DriftSpec")
+            if self.repeats < 2:
+                raise ValueError(f"{self.name}.drift requires repeats >= 2")
 
 
 StructureComponent = LayerSpec | PeriodicBlock | GradientLayerSpec
