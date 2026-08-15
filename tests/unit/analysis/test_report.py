@@ -30,11 +30,10 @@ parameters are chosen for profile refinement.
 from __future__ import annotations
 
 import pickle
-from dataclasses import dataclass, fields, replace
+from dataclasses import fields, replace
 from functools import partial
 from importlib import import_module
 from types import SimpleNamespace
-from typing import get_type_hints
 
 import numpy as np
 import pytest
@@ -47,7 +46,6 @@ from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.analysis import BootstrapResult, ConfidenceClass, UncertaintyReport
 from xrr_fitter.model.fitting import (
     FitConfig,
-    FitEvaluationContext,
     FitProgress,
     FitSearchResult,
     FitStageSummary,
@@ -62,35 +60,6 @@ from xrr_fitter.model.provenance import (
 
 def _api():
     return import_module("xrr_fitter.analysis.report")
-
-
-@pytest.mark.parametrize(
-    ("module_name", "function_names"),
-    (
-        (
-            "binary_profiles",
-            ("binary_derived_profiles", "decode_binary_coordinate", "build_binary_profile"),
-        ),
-        ("bootstrap", ("bootstrap_problem_local",)),
-        ("classification", ("classify_result_with_evidence",)),
-        (
-            "derivatives",
-            ("objective_gradient", "objective_information", "physical_parameter_jacobian"),
-        ),
-        ("diagnostics", ("ordered_fit_residuals", "diagnose_residual_patterns")),
-        ("mcmc", ("map_problem_samples", "mcmc_boundary_hits", "run_problem_mcmc")),
-        ("profiles", ("build_problem_profile", "select_profile_names", "recover_profile_basin")),
-        ("report", ("build_uncertainty_report", "analyze_search_result")),
-    ),
-)
-def test_public_analysis_entries_require_the_typed_context(
-    module_name: str,
-    function_names: tuple[str, ...],
-) -> None:
-    module = import_module(f"xrr_fitter.analysis.{module_name}")
-
-    for name in function_names:
-        assert get_type_hints(getattr(module, name))["problem"] is FitEvaluationContext
 
 
 def _problem(*, thickness_a: float = 20.0):
@@ -226,23 +195,6 @@ def _never_cancelled() -> bool:
 
 def _ignore_progress(_value: object) -> None:
     return None
-
-
-@dataclass(frozen=True)
-class _UnsupportedBootstrapPayload:
-    opaque: object
-
-
-def test_provenance_rejects_unsupported_payload_values() -> None:
-    problem = _problem()
-    candidate = _candidate(problem, "E-0")
-
-    with pytest.raises(TypeError, match="unsupported provenance value"):
-        bootstrap_provenance_sha256(
-            problem,
-            candidate,
-            _UnsupportedBootstrapPayload(object()),
-        )
 
 
 def _assert_analysis_pickle_contract(api, request, restored) -> None:

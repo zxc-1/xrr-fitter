@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from math import isfinite
 
 import numpy as np
@@ -19,9 +20,14 @@ from xrr_fitter.model.data import PreparedData
 from xrr_fitter.model.fitting import FitConfig, FitEvaluationContext
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
+    ConstraintRule,
     ParameterCoordinate,
     ParameterDefinition,
+    ParameterReference,
     ParameterSetting,
+    _iter_references,
+    constraint_cycle_path,
+    validate_constraint_stage_split,
 )
 from xrr_fitter.model.structure import LayerSpec, PeriodicBlock, StructureSpec
 
@@ -68,8 +74,80 @@ def _variables(
     return tuple(
         ParameterCoordinate(index, definition.name, definition.transform)
         for index, definition in enumerate(definitions)
-        if not definition.locked
+        if not (definition.locked or definition.constrained)
     )
+
+
+def _mark_constrained(
+    definitions: tuple[ParameterDefinition, ...],
+    constraint_rules: tuple[ConstraintRule, ...],
+) -> tuple[ParameterDefinition, ...]:
+    """Flag every constraint target so it leaves the free-variable layout.
+
+    A derived target keeps its declared bounds for the runtime domain check but
+    must not receive its own unit axis: its physical value comes from the rule
+    expression. Marking here is also what shifts the checkpoint fingerprint, so
+    an unconstrained compile stays byte-identical to the pre-feature layout.
+    """
+    if not constraint_rules:
+        return definitions
+    targets = {rule.target.parameter_name for rule in constraint_rules}
+    known = {definition.name for definition in definitions}
+    unknown = targets - known
+    if unknown:
+        raise ValueError(f"constraint target not in dataset: {sorted(unknown)}")
+    return tuple(
+        replace(definition, constrained=True) if definition.name in targets else definition
+        for definition in definitions
+    )
+
+
+def _validate_local_constraints(
+    constraint_rules: tuple[ConstraintRule, ...],
+) -> str | None:
+    """Keep the single-dataset compiler from erasing dataset identity.
+
+    ``FitEvaluationContext`` indexes physical values by parameter name only.
+    Cross-dataset expressions therefore need ``compile_joint_problem``, whose
+    scatter layer owns the full ``ParameterReference`` namespace.  Accepting
+    such a rule here would silently resolve a foreign reference against a local
+    parameter with the same name.
+    """
+    if any(not isinstance(rule, ConstraintRule) for rule in constraint_rules):
+        raise TypeError("constraint_rules must contain ConstraintRule values")
+    dataset_ids = {
+        dataset_id
+        for rule in constraint_rules
+        for dataset_id in (
+            rule.target.dataset_id,
+            *(reference.dataset_id for reference in _iter_references(rule.expression)),
+        )
+    }
+    if len(dataset_ids) > 1:
+        raise ValueError(
+            "cross-dataset constraints require the joint compiler; single-dataset compilation accepts local rules only"
+        )
+    targets = tuple(rule.target for rule in constraint_rules)
+    if len(targets) != len(set(targets)):
+        raise ValueError("constraint targets must be unique")
+    cycle = constraint_cycle_path(constraint_rules)
+    if cycle:
+        raise ValueError(f"constraint rules form a dependency cycle: {' -> '.join(cycle)}")
+    return next(iter(dataset_ids), None)
+
+
+def _validate_local_constraint_definitions(
+    constraint_rules: tuple[ConstraintRule, ...],
+    namespace: str | None,
+    definitions: tuple[ParameterDefinition, ...],
+) -> None:
+    if namespace is None:
+        return
+    by_reference = {ParameterReference(namespace, definition.name): definition for definition in definitions}
+    validate_constraint_stage_split(constraint_rules, by_reference)
+    targets = {rule.target for rule in constraint_rules}
+    if any(definition.prior is not None for reference, definition in by_reference.items() if reference in targets):
+        raise ValueError("constraint target must not also have a parameter prior")
 
 
 def _require_explicit_expert_density(
@@ -151,14 +229,19 @@ def compile_fit_problem(
     instrument: InstrumentSpec,
     config: FitConfig,
     parameter_settings: tuple[ParameterSetting, ...] = (),
+    constraint_rules: tuple[ConstraintRule, ...] = (),
 ) -> FitEvaluationContext:
     _validate_config(config)
     _validate_data_mode(data, instrument)
     _require_explicit_expert_density(structure, tuple(parameter_settings))
+    rules = tuple(constraint_rules)
+    namespace = _validate_local_constraints(rules)
     definitions = apply_parameter_settings(
         default_parameter_definitions(data, structure, instrument, config),
         tuple(parameter_settings),
     )
+    _validate_local_constraint_definitions(rules, namespace, definitions)
+    definitions = _mark_constrained(definitions, rules)
     validate_compiled_definitions(definitions)
     validate_instrument_modes(definitions, instrument)
     validate_transition_modes(definitions, structure)
@@ -177,6 +260,7 @@ def compile_fit_problem(
         scale_prior_tau_decades=config.scale_prior_tau_decades,
         scale_prior_reason=reason,
         warnings=() if reason is None else (reason,),
+        constraint_rules=rules,
     )
 
 
@@ -192,6 +276,7 @@ def compile_stage_problem(
         problem.instrument,
         problem.config,
         settings,
+        problem.constraint_rules,
     )
 
 
@@ -204,6 +289,8 @@ def compile_fixed_parameter_problem(
     selected = definitions.get(parameter_name)
     if selected is None:
         raise ValueError(f"unknown parameter: {parameter_name}")
+    if selected.constrained:
+        raise ValueError(f"cannot fix constrained parameter: {parameter_name}")
     if selected.locked:
         raise ValueError(f"parameter is already locked: {parameter_name}")
     settings = tuple(
@@ -222,4 +309,5 @@ def compile_fixed_parameter_problem(
         problem.instrument,
         problem.config,
         settings,
+        problem.constraint_rules,
     )

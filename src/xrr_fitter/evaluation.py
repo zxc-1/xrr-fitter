@@ -64,6 +64,12 @@ from threading import local
 
 import numpy as np
 
+from xrr_fitter.model.constraint_resolution import (
+    ConstraintResolutionError,
+    apply_constraint_values,
+    constraint_value_jacobians,
+    geometry_constraint_targets,
+)
 from xrr_fitter.model.fitting import FitEvaluationContext, ModelEvaluation
 from xrr_fitter.model.instrument import PhysicsDiagnostic, resolution_to_sigma_q
 from xrr_fitter.model.parameters import (
@@ -582,6 +588,44 @@ def _decode_nonrough_values(
     return tuple(postponed), tuple(decoded)
 
 
+def _apply_constraint_values(
+    problem: FitEvaluationContext,
+    values: dict[str, float],
+    *,
+    roughness: bool,
+    dynamic_uppers: dict[str, float] | None = None,
+    target_names: set[str] | None = None,
+) -> None:
+    try:
+        apply_constraint_values(
+            problem,
+            values,
+            roughness=roughness,
+            dynamic_uppers=dynamic_uppers,
+            target_names=target_names,
+        )
+    except ConstraintResolutionError as error:
+        raise EvaluationConstraintError(error.reason) from error
+
+
+def _apply_constraint_jacobians(
+    problem: FitEvaluationContext,
+    value_jacobians: dict[str, np.ndarray],
+    values: dict[str, float],
+    *,
+    roughness: bool,
+) -> None:
+    try:
+        constraint_value_jacobians(
+            problem,
+            value_jacobians,
+            values,
+            roughness=roughness,
+        )
+    except ConstraintResolutionError as error:
+        raise EvaluationConstraintError(error.reason) from error
+
+
 def values_and_jacobians(
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
@@ -614,6 +658,10 @@ def values_and_jacobians(
             definition,
             value,
         )
+    # 修正3 第一趟：非粗糙度约束目标须在几何重建（下方 dynamic upper）之前落值，
+    # 其 Jacobian 也须在 dynamic-jacobian 合成之前链好。
+    _apply_constraint_values(problem, values, roughness=False)
+    _apply_constraint_jacobians(problem, value_jacobians, values, roughness=False)
     dynamic_values = _roughness_dynamic_uppers(problem, values)
     dynamic_jacobians = _roughness_dynamic_upper_jacobians(
         problem,
@@ -634,6 +682,10 @@ def values_and_jacobians(
             dynamic_upper,
             dynamic_jacobians[definition.name][1],
         )
+    # 修正3 第二趟：粗糙度约束目标在 postponed 粗糙度解算之后落值与链导，
+    # 上界用刚算出的 dynamic_values 收紧。
+    _apply_constraint_values(problem, values, roughness=True, dynamic_uppers=dynamic_values)
+    _apply_constraint_jacobians(problem, value_jacobians, values, roughness=True)
     return values, value_jacobians
 
 
@@ -654,6 +706,8 @@ def values_by_name(
         values,
         continuous_only=False,
     )
+    # 修正3 第一趟：非粗糙度约束目标先落值，喂入下方几何重建。
+    _apply_constraint_values(problem, values, roughness=False)
     dynamic = _roughness_dynamic_uppers(problem, values)
     for unit_index, definition in postponed:
         values[definition.name] = unit_to_physical(
@@ -661,6 +715,8 @@ def values_by_name(
             unit[unit_index],
             dynamic_upper=dynamic[definition.name],
         )
+    # 修正3 第二趟：粗糙度约束目标在 postponed 之后落值，上界用 dynamic 收紧。
+    _apply_constraint_values(problem, values, roughness=True, dynamic_uppers=dynamic)
     return values
 
 
@@ -676,6 +732,12 @@ def roughness_dynamic_uppers(
         unit,
         values,
         continuous_only=False,
+    )
+    _apply_constraint_values(
+        problem,
+        values,
+        roughness=False,
+        target_names=geometry_constraint_targets(problem),
     )
     return _roughness_dynamic_uppers(problem, values)
 
@@ -702,6 +764,12 @@ def encode_physical_vector(
             partial(_physical_parameter_pair, physical_values=physical_values),
             problem.parameter_definitions,
         )
+    )
+    _apply_constraint_values(
+        problem,
+        values,
+        roughness=False,
+        target_names=geometry_constraint_targets(problem),
     )
     dynamic = _roughness_dynamic_uppers(problem, values)
     encoded: list[float] = []

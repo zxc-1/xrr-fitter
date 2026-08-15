@@ -204,9 +204,16 @@ def _replayed_profiles(
     align: str,
 ) -> Iterator[Profile | None]:
     baseline = _baseline_values(structure)
-    names = report.parameter_names
+    if report.fixed_parameter_values:
+        fixed_names, fixed_values = zip(*report.fixed_parameter_values, strict=True)
+        baseline = _value_map(baseline, fixed_names, np.asarray(fixed_values, dtype=float))
+    names = (*report.parameter_names, *report.derived_parameter_names)
+    derived = report.derived_samples_physical
     for index in indices:
-        values = _value_map(baseline, names, report.samples_physical[index])
+        row = report.samples_physical[index]
+        if derived is not None:
+            row = np.concatenate((row, derived[index]))
+        values = _value_map(baseline, names, row)
         yield _replay_one(structure, values, wavelength_a, step_a, align)
 
 

@@ -307,6 +307,7 @@ def fit_automatic_joint_group(
 def fit_joint_datasets(
     prepared: tuple[PreparedDatasetFit, ...],
     sharing_rules: tuple,
+    constraint_rules: tuple = (),
     *,
     progress: ProgressCallback | None = None,
     cancelled: CancellationProbe | None = None,
@@ -322,6 +323,7 @@ def fit_joint_datasets(
         tuple(item.dataset_id for item in values),
         tuple(item.problem for item in values),
         tuple(sharing_rules),
+        tuple(constraint_rules),
     )
     searches = run_joint_fit(
         joint_fit_request(problem, _joint_checkpoints(values)),

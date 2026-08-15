@@ -13,6 +13,7 @@ from xrr_fitter.model.project import XrrProject
 from xrr_fitter.services.datasets import mcmc_candidate_seed, service_seed_branches
 from xrr_fitter.services.projects import inspect_sources
 
+from .base import _has_cross_dataset_constraints
 from .common import CancellationProbe, CheckpointCallback, ProgressCallback
 
 
@@ -53,6 +54,7 @@ def _compile_preflight_fit(
             tuple(item.dataset_id for item in prepared),
             tuple(item.problem for item in prepared),
             project.sharing_rules,
+            project.constraint_rules,
         )
 
 
@@ -107,6 +109,11 @@ def preflight_automatic_fit(
     """Validate only runnable automatic datasets without mutating state."""
     if project.measurement_preset is None:
         return FitReadiness(False, "automatic fit requires a measurement preset")
+    if _has_cross_dataset_constraints(project):
+        return FitReadiness(
+            False,
+            "automatic fit does not support cross-dataset constraints",
+        )
     dataset_ids = _automatic_dataset_ids(project, import_batch_id)
     if not dataset_ids:
         return FitReadiness(False, "no runnable automatic datasets")
@@ -189,6 +196,14 @@ def _dispatch_project(
     fit_prepared_dataset: Callable,
     fit_joint_datasets: Callable,
 ) -> ProjectFitResult:
+    def fit_joint_with_constraints(prepared, sharing_rules, **kwargs):
+        return fit_joint_datasets(
+            prepared,
+            sharing_rules,
+            project.constraint_rules,
+            **kwargs,
+        )
+
     return fit_project_transaction(
         project,
         progress_callback,
@@ -197,7 +212,7 @@ def _dispatch_project(
         seed_branches=service_seed_branches,
         prepare_dataset=prepare_dataset_fit,
         fit_dataset=fit_prepared_dataset,
-        fit_joint=fit_joint_datasets,
+        fit_joint=fit_joint_with_constraints,
     )
 
 
@@ -207,6 +222,8 @@ def _mcmc_problem(
     *,
     compile_dataset: Callable,
 ):
+    if _has_cross_dataset_constraints(project):
+        raise ValueError("MCMC does not support cross-dataset constraints")
     prepared = compile_dataset(project, dataset_id, master_seed=project.master_seed)
     result = prepared.updated_dataset.last_valid_result
     if result is None or result.uncertainty is None:
@@ -351,6 +368,8 @@ def automatic_worker_handler(
     fit_automatic_prepared_dataset: Callable,
     fit_automatic_joint_group: Callable,
 ) -> ProjectFitResult:
+    if _has_cross_dataset_constraints(project):
+        raise ValueError("automatic fit does not support cross-dataset constraints")
     return fit_automatic_transaction(
         project,
         import_batch_id,

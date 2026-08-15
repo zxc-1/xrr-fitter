@@ -292,7 +292,7 @@ locked.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.It
 
 ### Task 1：节点类型与纯检查函数
 
-- [ ] RED：`tests/unit/model/test_parameters.py` 加测例——`ConstraintNode` 各 op 的构造校验（`ref` 必须带 `reference`、`const` 必须带 `value`、二元 op 的 `operands` 元数正确）；`ConstraintRule` 拒绝 target 出现在自己的表达式里（自引用是一跳环）；环检测四类（自引用、两跳、三跳、跨数据集）都返回非空环路径；跨阶段（非 roughness target 依赖 roughness 自变量）被拒；integer 自变量被拒。
+- [ ] RED：`tests/unit/model/test_parameters.py` 加测例——`ConstraintNode` 各 op 的构造校验（`ref` 必须带 `reference`、`const` 必须带 `value`、二元 op 的 `operands` 元数正确）；`ConstraintRule` 拒绝 target 出现在自己的表达式里（自引用是一跳环）；环检测四类（自引用、两跳、三跳、跨数据集）都返回非空环路径；跨阶段（非 roughness target 依赖 roughness 自变量）被拒；integer target 与自变量都被拒。
 - [ ] GREEN：`model/parameters.py` 加 `ConstraintNode` / `ConstraintRule`，均 `@dataclass(frozen=True, slots=True)`，`__post_init__` 里 `object.__setattr__(self, "operands", tuple(self.operands))` 后校验，与 `SharingRule:350-359` 同型。
 - [ ] GREEN：加三个纯检查函数（修正 4）：`constraint_cycle_path`、`validate_constraint_stage_split`、`constraint_sharing_conflicts`。**环路径必须写进异常消息文本**——用户只能从消息里知道是哪几条约束成环（spec 界面节的明确要求）。
 - [ ] 错误类型按修正 10：`ValueError` / `TypeError`，**不用** `EvaluationConstraintError`。
@@ -342,7 +342,7 @@ locked.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.It
 
 ### Task 7：services 层
 
-- [ ] RED：`validate_constraint_rules` 对非 `ConstraintRule` 抛 `TypeError`；环/跨阶段/integer/冲突各抛 `ValueError` 且消息含环路径；`set_constraint_rules` 未变时**返回原对象**；变更时清掉受影响 dataset 的结果与 `selected_candidate_ids`；joint 模式扩散到全部数据集。
+- [ ] RED：`validate_constraint_rules` 对非 `ConstraintRule` 抛 `TypeError`；环/跨阶段/integer target/integer 自变量/冲突各抛 `ValueError` 且消息含环路径；`set_constraint_rules` 未变时**返回原对象**；变更时清掉受影响 dataset 的结果与 `selected_candidate_ids`；joint 模式扩散到全部数据集。
 - [ ] GREEN：照 `validate_sharing_rules:355` / `set_sharing_rules:377` 复刻，含 `replace(project, constraint_rules=values)` 的校验副作用与修正 9 列的四件事。`affected` 覆盖 target 与全部自变量的 dataset。
 - [ ] 验证：`.venv/bin/python -m pytest tests/unit/services --import-mode=importlib -q`
 
@@ -357,7 +357,7 @@ locked.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.It
 - [ ] RED（落在 `tests/gui/test_parameter_sharing.py`，照 `SharingEditor` 的现有测法）：合法序列提交后 `document.project` 更新且信号带上持久化后的值；非法序列使 `constraintValidationError` 可见且项目不变；对话框内构造失败时错误落 `constraintDialogError` 且**对话框不关闭**。
 - [ ] GREEN：新建 `gui/parameters/constraints.py`。`ConstraintEditor(QWidget)` 逐条对齐 `SharingEditor`：`constraints_changed = Signal(tuple)`、`setObjectName("constraintEditor")`、树 `"constraintTree"`、错误标签 `"constraintValidationError"`、`document.project_changed.connect(self._render)`、`apply_rules` 先 `setText`+`show` 再 `raise`、`updated is current` 返回 `False`。
 - [ ] GREEN：`QTreeWidget` 表头 `("目标参数", "表达式")`，父项显示 op、叶子显示 `param` 名或 `const` 值。
-- [ ] GREEN：`ConstraintDialog(QDialog)` 照 `gui/structure/dialogs.py` 的模式，一次性构造完整不可变对象。目标下拉框候选复用 `SharingEditor.eligible_names:62` 的过滤思路（`api.describe_parameters` 且 `not locked`），**再排除已被其他约束驱动的参数**。表达式用「加运算符/加参数/加常数」三按钮增量搭建——**不是文本框**（spec 非目标）。
+- [ ] GREEN：`ConstraintDialog(QDialog)` 照 `gui/structure/dialogs.py` 的模式，一次性构造完整不可变对象。目标下拉框候选复用 `SharingEditor.eligible_names:62` 的过滤思路（`api.describe_parameters` 且 `not locked`），**再排除 integer 与已被其他约束驱动的参数**。表达式用「加运算符/加参数/加常数」三按钮增量搭建——**不是文本框**（spec 非目标）。
 - [ ] GREEN：`panel.py:72` 之后 `tabs.addTab(self.constraint_editor, "约束")`。
 - [ ] 控件都要 `objectName` / `setAccessibleName` / `setToolTip`，与既有编辑器的无障碍风格一致。
 - [ ] 验证：`.venv/bin/python -m pytest tests/gui --import-mode=importlib -q`
@@ -368,11 +368,11 @@ locked.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.It
 - [ ] GREEN：`table.py:118` 的 `_render_row` 按修正 11 改——不可编辑列集合放宽，锁定列去掉 `ItemIsUserCheckable`。
 - [ ] 验证：`.venv/bin/python -m pytest tests/gui --import-mode=importlib -q`
 
-### Task 11：JointFitLayout 告警补测
+### Task 11：JointFitLayout 假设核验（无需实现）
 
-- [ ] RED：`JointFitLayout` 的既有告警（其 docstring 承认 "cannot assert that a shared parameter still exists or is free"，`model/parameters.py:362-372`）在约束下更易触发。补测例：约束把某个共享成员变成非自由后，告警确实发出。
-- [ ] GREEN：若告警未触发，判断是告警条件需要扩展，还是测例构造有误——**先查清再改**，别直接放宽断言。
-- [ ] 验证：`.venv/bin/python -m pytest tests/unit --import-mode=importlib -q`
+- [x] `JointFitLayout` 没有告警字段或告警生成路径；docstring 只是声明该只读布局不编译参数定义。
+- [x] constraint target 与 sharing member 的双重所有权已在项目校验和 joint 编译期直接拒绝，因此“约束先把共享成员变成非自由，再由布局发告警”的状态不可达。
+- [x] 不为不存在的告警契约新增生产代码或伪造测例。
 
 ### Task 12：全量回归
 

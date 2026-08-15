@@ -21,15 +21,19 @@ separately by the analysis boundary.
 
 from __future__ import annotations
 
+import json
 from dataclasses import fields, is_dataclass
 from enum import Enum
 from hashlib import sha256
-import json
 from math import isfinite
 
 import numpy as np
 
 from xrr_fitter.model.fitting import FitEvaluationContext, FitSearchResult
+
+POST_FREEZE_OMITTED_DEFAULTS: dict[tuple[str, str], object] = {
+    ("ParameterDefinition", "constrained"): False,
+}
 
 
 def _identity_array(value: np.ndarray) -> dict[str, object]:
@@ -46,9 +50,16 @@ def _dataclass_instance(value: object) -> bool:
 
 
 def _identity_dataclass(value: object) -> dict[str, object]:
+    type_name = type(value).__name__
     return {
         item.name: _identity_value(getattr(value, item.name))
         for item in fields(value)
+        if (
+            type_name,
+            item.name,
+        )
+        not in POST_FREEZE_OMITTED_DEFAULTS
+        or getattr(value, item.name) != POST_FREEZE_OMITTED_DEFAULTS[(type_name, item.name)]
     }
 
 
@@ -78,10 +89,7 @@ def _identity_atomic(value: object) -> object:
 
 def _identity_collection(value: object) -> object:
     if isinstance(value, dict):
-        return {
-            str(key): _identity_value(value[key])
-            for key in sorted(value, key=lambda item: str(item))
-        }
+        return {str(key): _identity_value(value[key]) for key in sorted(value, key=lambda item: str(item))}
     return [_identity_value(item) for item in value]
 
 
@@ -113,12 +121,8 @@ def _identity_sha256(value: object) -> str:
 
 
 def _context_identity(problem: FitEvaluationContext) -> dict[str, object]:
-    data = {
-        item.name: getattr(problem.data, item.name)
-        for item in fields(problem.data)
-        if item.name != "source_path"
-    }
-    return {
+    data = {item.name: getattr(problem.data, item.name) for item in fields(problem.data) if item.name != "source_path"}
+    identity = {
         "data": data,
         "structure": problem.structure,
         "instrument": problem.instrument,
@@ -132,14 +136,13 @@ def _context_identity(problem: FitEvaluationContext) -> dict[str, object]:
         "scale_prior_reason": problem.scale_prior_reason,
         "warnings": problem.warnings,
     }
+    if problem.constraint_rules:
+        identity["constraint_rules"] = problem.constraint_rules
+    return identity
 
 
 def _dataclass_payload(value: object, excluded: frozenset[str]) -> dict[str, object]:
-    return {
-        item.name: getattr(value, item.name)
-        for item in fields(value)
-        if item.name not in excluded
-    }
+    return {item.name: getattr(value, item.name) for item in fields(value) if item.name not in excluded}
 
 
 def _provenance_sha256(
@@ -152,10 +155,15 @@ def _provenance_sha256(
 def fit_search_provenance_sha256(
     problem: FitEvaluationContext,
     result: FitSearchResult,
+    *,
+    joint_layout_fingerprint: str | None = None,
 ) -> str:
     """Bind a complete fitting result graph to one evaluation context."""
     payload = _dataclass_payload(result, frozenset({"provenance_sha256"}))
-    return _provenance_sha256(problem, {"result": payload})
+    result_identity: dict[str, object] = {"result": payload}
+    if joint_layout_fingerprint is not None:
+        result_identity["joint_layout_fingerprint"] = joint_layout_fingerprint
+    return _provenance_sha256(problem, result_identity)
 
 
 def bootstrap_provenance_sha256(

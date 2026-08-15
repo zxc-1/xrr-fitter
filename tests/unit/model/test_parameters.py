@@ -8,6 +8,8 @@ import pytest
 
 from xrr_fitter.model.parameters import (
     PRIOR_KINDS,
+    ConstraintNode,
+    ConstraintRule,
     ParameterCoordinate,
     ParameterDefinition,
     ParameterReference,
@@ -15,7 +17,10 @@ from xrr_fitter.model.parameters import (
     ParameterValue,
     PriorSpec,
     SharingRule,
+    constraint_cycle_path,
+    constraint_sharing_conflicts,
     unit_to_physical,
+    validate_constraint_stage_split,
 )
 
 
@@ -264,3 +269,228 @@ def test_lognormal_prior_rejects_a_zero_lower_bound() -> None:
             locked=False,
             prior=PriorSpec("lognormal", (log(0.3), 0.25)),
         )
+
+
+# --- Expression constraints (Task 1) ---------------------------------------
+
+
+def _cref(dataset_id: str, name: str) -> ParameterReference:
+    return ParameterReference(dataset_id, name)
+
+
+def _cdef(name: str, *, transform: str = "linear", integer: bool = False) -> ParameterDefinition:
+    return ParameterDefinition(
+        name=name,
+        display_name=name,
+        unit="Å",
+        category="structure",
+        initial=1.0,
+        lower=0.0,
+        upper=10.0,
+        transform=transform,
+        locked=False,
+        integer=integer,
+    )
+
+
+def test_constraint_node_ref_requires_a_reference_and_nothing_else() -> None:
+    node = ConstraintNode("ref", reference=_cref("d1", "a"))
+
+    assert node.op == "ref"
+    assert node.operands == ()
+    with pytest.raises(TypeError, match="ref node"):
+        ConstraintNode("ref")
+    with pytest.raises(ValueError, match="ref node"):
+        ConstraintNode("ref", reference=_cref("d1", "a"), value=1.0)
+
+
+def test_constraint_node_const_requires_a_finite_value_and_nothing_else() -> None:
+    node = ConstraintNode("const", value=2.0)
+
+    assert node.value == 2.0
+    with pytest.raises(TypeError, match="numeric"):
+        ConstraintNode("const")
+    with pytest.raises(ValueError, match="finite"):
+        ConstraintNode("const", value=float("inf"))
+    with pytest.raises(ValueError, match="const node"):
+        ConstraintNode("const", value=1.0, reference=_cref("d1", "a"))
+
+
+def test_constraint_node_binary_ops_require_exactly_two_node_operands() -> None:
+    a = ConstraintNode("ref", reference=_cref("d1", "a"))
+    b = ConstraintNode("const", value=2.0)
+
+    node = ConstraintNode("mul", operands=(a, b))
+
+    assert node.op == "mul"
+    assert len(node.operands) == 2
+    with pytest.raises(ValueError, match="two operands"):
+        ConstraintNode("add", operands=(a,))
+    with pytest.raises(TypeError, match="ConstraintNode"):
+        ConstraintNode("add", operands=(a, "x"))
+
+
+def test_constraint_node_pow_exponent_must_be_constant() -> None:
+    base = ConstraintNode("ref", reference=_cref("d1", "a"))
+    ok = ConstraintNode("pow", operands=(base, ConstraintNode("const", value=2.0)))
+
+    assert ok.op == "pow"
+    with pytest.raises(ValueError, match="pow exponent"):
+        ConstraintNode("pow", operands=(base, ConstraintNode("ref", reference=_cref("d1", "b"))))
+
+
+def test_constraint_node_rejects_unknown_op() -> None:
+    with pytest.raises(ValueError, match="unsupported constraint op"):
+        ConstraintNode("sqrt")
+
+
+def test_constraint_rule_rejects_direct_self_reference() -> None:
+    target = _cref("d1", "thickness")
+    expression = ConstraintNode(
+        "mul",
+        operands=(ConstraintNode("ref", reference=target), ConstraintNode("const", value=2.0)),
+    )
+
+    with pytest.raises(ValueError, match="own expression"):
+        ConstraintRule(target=target, expression=expression)
+
+
+def test_constraint_rule_constructs_with_a_valid_expression() -> None:
+    target = _cref("d1", "thickness")
+    expression = ConstraintNode(
+        "mul",
+        operands=(ConstraintNode("ref", reference=_cref("d1", "spacing")), ConstraintNode("const", value=2.0)),
+    )
+
+    rule = ConstraintRule(target=target, expression=expression)
+
+    assert rule.target == target
+    assert rule.expression == expression
+
+
+def test_constraint_rule_rejects_deep_direct_expression_without_recursion_error() -> None:
+    target = _cref("d", "target")
+    expression = ConstraintNode("ref", reference=_cref("d", "source"))
+    for _ in range(1_500):
+        expression = ConstraintNode(
+            "mul",
+            operands=(expression, ConstraintNode("const", value=1.0)),
+        )
+
+    with pytest.raises(ValueError, match="constraint expression nesting"):
+        ConstraintRule(target=target, expression=expression)
+
+
+def test_constraint_cycle_path_is_empty_for_an_acyclic_chain() -> None:
+    rules = (
+        ConstraintRule(_cref("d", "a"), ConstraintNode("ref", reference=_cref("d", "b"))),
+        ConstraintRule(_cref("d", "b"), ConstraintNode("ref", reference=_cref("d", "c"))),
+    )
+
+    assert constraint_cycle_path(rules) == ()
+
+
+def test_constraint_cycle_path_detects_a_two_hop_cycle() -> None:
+    rules = (
+        ConstraintRule(_cref("d", "a"), ConstraintNode("ref", reference=_cref("d", "b"))),
+        ConstraintRule(_cref("d", "b"), ConstraintNode("ref", reference=_cref("d", "a"))),
+    )
+
+    path = constraint_cycle_path(rules)
+
+    assert path
+    assert "d::a" in path and "d::b" in path
+
+
+def test_constraint_cycle_path_detects_a_three_hop_cycle() -> None:
+    rules = (
+        ConstraintRule(_cref("d", "a"), ConstraintNode("ref", reference=_cref("d", "b"))),
+        ConstraintRule(_cref("d", "b"), ConstraintNode("ref", reference=_cref("d", "c"))),
+        ConstraintRule(_cref("d", "c"), ConstraintNode("ref", reference=_cref("d", "a"))),
+    )
+
+    assert {"d::a", "d::b", "d::c"} <= set(constraint_cycle_path(rules))
+
+
+def test_constraint_cycle_path_detects_a_cross_dataset_cycle() -> None:
+    rules = (
+        ConstraintRule(_cref("d1", "a"), ConstraintNode("ref", reference=_cref("d2", "a"))),
+        ConstraintRule(_cref("d2", "a"), ConstraintNode("ref", reference=_cref("d1", "a"))),
+    )
+
+    path = constraint_cycle_path(rules)
+
+    assert "d1::a" in path and "d2::a" in path
+
+
+def test_validate_constraint_stage_split_rejects_non_roughness_target_on_roughness_source() -> None:
+    target = _cref("d", "thick")
+    source = _cref("d", "rough")
+    rule = ConstraintRule(target, ConstraintNode("ref", reference=source))
+    definitions = {
+        target: _cdef("thick", transform="linear"),
+        source: _cdef("rough", transform="roughness_fraction"),
+    }
+
+    with pytest.raises(ValueError, match="roughness"):
+        validate_constraint_stage_split((rule,), definitions)
+
+
+def test_validate_constraint_stage_split_allows_roughness_target_on_roughness_source() -> None:
+    target = _cref("d", "r1")
+    source = _cref("d", "r2")
+    rule = ConstraintRule(target, ConstraintNode("ref", reference=source))
+    definitions = {
+        target: _cdef("r1", transform="roughness_fraction"),
+        source: _cdef("r2", transform="roughness_fraction"),
+    }
+
+    validate_constraint_stage_split((rule,), definitions)
+
+
+def test_validate_constraint_stage_split_rejects_integer_independent_variable() -> None:
+    target = _cref("d", "thick")
+    source = _cref("d", "count")
+    rule = ConstraintRule(target, ConstraintNode("ref", reference=source))
+    definitions = {
+        target: _cdef("thick"),
+        source: _cdef("count", integer=True),
+    }
+
+    with pytest.raises(ValueError, match="integer"):
+        validate_constraint_stage_split((rule,), definitions)
+
+
+def test_validate_constraint_stage_split_rejects_integer_target() -> None:
+    target = _cref("d", "count")
+    source = _cref("d", "thick")
+    rule = ConstraintRule(target, ConstraintNode("ref", reference=source))
+    definitions = {
+        target: _cdef("count", integer=True),
+        source: _cdef("thick"),
+    }
+
+    with pytest.raises(ValueError, match="integer target"):
+        validate_constraint_stage_split((rule,), definitions)
+
+
+def test_validate_constraint_stage_split_rejects_unknown_reference() -> None:
+    target = _cref("d", "thick")
+    rule = ConstraintRule(target, ConstraintNode("ref", reference=_cref("d", "missing")))
+
+    with pytest.raises(ValueError, match="unknown"):
+        validate_constraint_stage_split((rule,), {target: _cdef("thick")})
+
+
+def test_constraint_sharing_conflicts_reports_double_driven_targets() -> None:
+    shared = SharingRule("scale", (_cref("d1", "scale"), _cref("d2", "scale")))
+    rule = ConstraintRule(_cref("d1", "scale"), ConstraintNode("const", value=1.0))
+
+    assert constraint_sharing_conflicts((rule,), (shared,)) == (_cref("d1", "scale"),)
+
+
+def test_constraint_sharing_conflicts_is_empty_when_disjoint() -> None:
+    shared = SharingRule("scale", (_cref("d1", "scale"), _cref("d2", "scale")))
+    rule = ConstraintRule(_cref("d1", "thick"), ConstraintNode("const", value=1.0))
+
+    assert constraint_sharing_conflicts((rule,), (shared,)) == ()

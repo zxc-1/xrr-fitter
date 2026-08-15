@@ -5,14 +5,15 @@ from __future__ import annotations
 import numpy as np
 
 from xrr_fitter.evaluation import encode_physical_vector
+from xrr_fitter.fit.joint_constraints import apply_joint_constraints
 from xrr_fitter.fit.joint_roughness import (
-    SHARED_ROUGHNESS_TRANSFORM,
-    apply_consensus_roughness,
     apply_shared_roughness,
     initialize_shared_roughness,
-    rebuild_candidate_roughness,
 )
-from xrr_fitter.model.parameters import ParameterReference, SharingRule
+from xrr_fitter.model.parameters import (
+    ParameterReference,
+    SharingRule,
+)
 
 
 def _definition(problem: object, parameter_name: str) -> object:
@@ -55,14 +56,10 @@ def _definition_signature(definition: object) -> tuple[object, ...]:
 def _validate_compatible(definitions: tuple[tuple[object, object], ...]) -> None:
     baseline_definition, baseline_problem = definitions[0]
     baseline = _definition_signature(baseline_definition)
-    if any(
-        _definition_signature(definition) != baseline
-        for definition, _problem in definitions[1:]
-    ):
+    if any(_definition_signature(definition) != baseline for definition, _problem in definitions[1:]):
         raise ValueError("sharing coordinates must have compatible parameter families and bounds")
     if baseline_definition.category == "instrument" and any(
-        problem.instrument != baseline_problem.instrument
-        for _definition, problem in definitions[1:]
+        problem.instrument != baseline_problem.instrument for _definition, problem in definitions[1:]
     ):
         raise ValueError("sharing instrument coordinates requires matching instrument identity and semantics")
 
@@ -102,8 +99,19 @@ def _validated_global_unit(problem: object, global_unit: np.ndarray) -> np.ndarr
 
 def _raw_scatter(problem: object, unit: np.ndarray) -> list[np.ndarray]:
     local = []
-    for scatter in problem.scatter_maps:
-        vector = np.array(unit[np.asarray(scatter, dtype=int)], dtype=float, copy=True)
+    for local_problem, scatter in zip(
+        problem.problems,
+        problem.scatter_maps,
+        strict=True,
+    ):
+        vector = np.array(
+            encode_physical_vector(local_problem, {}),
+            dtype=float,
+            copy=True,
+        )
+        for local_index, global_index in enumerate(scatter):
+            if global_index >= 0:
+                vector[local_index] = unit[global_index]
         local.append(vector)
     return local
 
@@ -112,7 +120,9 @@ def scatter_joint_vector(problem: object, global_unit: np.ndarray) -> tuple[np.n
     """Project global coordinates, preserving shared roughness in angstroms."""
     unit = _validated_global_unit(problem, global_unit)
     local = _raw_scatter(problem, unit)
+    apply_joint_constraints(problem, local, roughness=False)
     apply_shared_roughness(problem, unit, local)
+    apply_joint_constraints(problem, local, roughness=True)
     for vector in local:
         vector.setflags(write=False)
     return tuple(local)
@@ -124,11 +134,14 @@ def initial_joint_vector(problem: object) -> np.ndarray:
     for local_problem, scatter in zip(problem.problems, problem.scatter_maps, strict=True):
         local = encode_physical_vector(local_problem, {})
         for local_index, global_index in enumerate(scatter):
+            if global_index < 0:
+                continue
             if np.isnan(global_unit[global_index]):
                 global_unit[global_index] = local[local_index]
     if np.any(~np.isfinite(global_unit)):
         raise ValueError("joint global layout contains an unbound coordinate")
     local = _raw_scatter(problem, global_unit)
+    apply_joint_constraints(problem, local, roughness=False)
     initialize_shared_roughness(problem, global_unit, local)
     return global_unit
 
@@ -148,184 +161,6 @@ def validated_joint_initial_vector(
         and np.all((unit >= 0.0) & (unit <= 1.0))
     )
     if not valid:
-        raise ValueError(
-            "joint initial unit vector must match the joint shape, "
-            "finite values, and bounds"
-        )
+        raise ValueError("joint initial unit vector must match the joint shape, finite values, and bounds")
     unit.setflags(write=False)
     return unit
-
-
-def _candidate_local_layout(
-    dataset_id: str,
-    local_problem: object,
-    candidates_by_dataset: object,
-) -> tuple[np.ndarray, dict[str, int], dict[str, float]]:
-    try:
-        candidate = candidates_by_dataset[dataset_id]
-    except (KeyError, TypeError) as error:
-        raise ValueError(f"prefit candidate is missing: {dataset_id}") from error
-    if candidate is None or not getattr(candidate, "valid", False):
-        raise ValueError(f"prefit candidate is invalid: {dataset_id}")
-    physical = {
-        parameter.name: parameter.value
-        for parameter in candidate.parameters
-    }
-    indices = {
-        coordinate.name: index
-        for index, coordinate in enumerate(local_problem.variables)
-    }
-    missing = next((name for name in indices if name not in physical), None)
-    if missing is not None:
-        raise ValueError(
-            f"prefit candidate parameter is missing: {dataset_id}/{missing}"
-        )
-    return encode_physical_vector(local_problem, physical), indices, physical
-
-
-def _consensus_value(
-    variable: object,
-    layouts: dict[str, tuple[np.ndarray, dict[str, int], dict[str, float]]],
-) -> float:
-    values = tuple(
-        layouts[member.dataset_id][0][
-            layouts[member.dataset_id][1][member.parameter_name]
-        ]
-        for member in variable.members
-    )
-    return float(np.median(values))
-
-
-def consensus_joint_vector(
-    problem: object,
-    candidates_by_dataset: object,
-) -> np.ndarray:
-    """Build a global start from the median of each variable's prefit members."""
-    layouts = {
-        dataset_id: _candidate_local_layout(
-            dataset_id,
-            local_problem,
-            candidates_by_dataset,
-        )
-        for dataset_id, local_problem in zip(
-            problem.dataset_ids,
-            problem.problems,
-            strict=True,
-        )
-    }
-    consensus = np.asarray(
-        [
-            _consensus_value(variable, layouts)
-            for variable in problem.global_variables
-        ],
-        dtype=float,
-    )
-    local = _raw_scatter(problem, consensus)
-    apply_consensus_roughness(
-        problem,
-        consensus,
-        local,
-        {
-            dataset_id: physical
-            for dataset_id, (_unit, _indices, physical) in layouts.items()
-        },
-    )
-    if np.any(~np.isfinite(consensus)) or np.any(
-        (consensus < 0.0) | (consensus > 1.0)
-    ):
-        raise ValueError("prefit consensus must contain finite values within [0, 1]")
-    consensus.setflags(write=False)
-    return consensus
-
-
-def _candidate_maps(
-    candidates_by_dataset: tuple[tuple[object, ...], ...],
-) -> tuple[dict[str, object], ...]:
-    return tuple(
-        {candidate.candidate_id: candidate for candidate in candidates}
-        for candidates in candidates_by_dataset
-    )
-
-
-def _joint_candidate_vector(
-    problem: object,
-    candidates_by_id: tuple[dict[str, object], ...],
-    candidate_id: str,
-) -> np.ndarray:
-    local_units = [
-        np.asarray(candidates[candidate_id].unit_vector, dtype=float)
-        for candidates in candidates_by_id
-    ]
-    global_unit = _nonrough_candidate_vector(problem, local_units)
-    rebuild_candidate_roughness(problem, global_unit, local_units)
-    if np.any(~np.isfinite(global_unit)):
-        raise ValueError("joint candidate global projection is incomplete")
-    return global_unit
-
-
-def _nonrough_candidate_vector(
-    problem: object,
-    local_units: list[np.ndarray],
-) -> np.ndarray:
-    global_unit = np.full(len(problem.global_variables), np.nan, dtype=float)
-    for dataset_index, scatter in enumerate(problem.scatter_maps):
-        local = local_units[dataset_index]
-        for local_index, global_index in enumerate(scatter):
-            variable = problem.global_variables[global_index]
-            if variable.transform == SHARED_ROUGHNESS_TRANSFORM:
-                continue
-            value = local[local_index]
-            if np.isnan(global_unit[global_index]):
-                global_unit[global_index] = value
-            elif global_unit[global_index] != value:
-                raise ValueError("joint candidate shared unit projection mismatch")
-    return global_unit
-
-
-def joint_candidate_vectors(
-    problem: object,
-    candidates_by_dataset: tuple[tuple[object, ...], ...],
-    candidate_ids: tuple[str, ...],
-) -> tuple[np.ndarray, ...]:
-    """Reconstruct aligned global vectors from dataset-local candidates."""
-    candidates_by_id = _candidate_maps(candidates_by_dataset)
-    return tuple(
-        _joint_candidate_vector(problem, candidates_by_id, candidate_id)
-        for candidate_id in candidate_ids
-    )
-
-
-def _validate_candidate_order(
-    candidates_by_dataset: tuple[tuple[object, ...], ...],
-) -> tuple[str, ...]:
-    ids = tuple(candidate.candidate_id for candidate in candidates_by_dataset[0])
-    if any(
-        tuple(candidate.candidate_id for candidate in candidates) != ids
-        for candidates in candidates_by_dataset[1:]
-    ):
-        raise ValueError("joint resume candidate order mismatch")
-    return ids
-
-
-def _validate_candidate_rankings(
-    candidates_by_dataset: tuple[tuple[object, ...], ...],
-    candidate_ids: tuple[str, ...],
-) -> None:
-    for candidate_index in range(len(candidate_ids)):
-        aligned = tuple(candidates[candidate_index] for candidates in candidates_by_dataset)
-        ranking = float(np.mean([candidate.objective for candidate in aligned]))
-        if any(candidate.ranking_objective != ranking for candidate in aligned):
-            raise ValueError("joint resume candidate ranking objective mismatch")
-
-
-def validate_joint_candidate_alignment(
-    problem: object,
-    candidates_by_dataset: tuple[tuple[object, ...], ...],
-    stage_summaries: tuple[object, ...],
-) -> None:
-    """Reject cross-dataset checkpoint drift before a resumed stage runs."""
-    candidate_ids = _validate_candidate_order(candidates_by_dataset)
-    _validate_candidate_rankings(candidates_by_dataset, candidate_ids)
-    for summary in stage_summaries:
-        if summary.stage != "A":
-            joint_candidate_vectors(problem, candidates_by_dataset, summary.candidate_ids)

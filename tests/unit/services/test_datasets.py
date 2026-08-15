@@ -16,7 +16,14 @@ from xrr_fitter.model.automation import (
 )
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterPrior, ParameterSetting, PriorSpec
+from xrr_fitter.model.parameters import (
+    ConstraintNode,
+    ConstraintRule,
+    ParameterPrior,
+    ParameterReference,
+    ParameterSetting,
+    PriorSpec,
+)
 from xrr_fitter.model.project import ProjectUiState, ScalePriorState
 from xrr_fitter.services.datasets import (
     add_dataset,
@@ -127,6 +134,44 @@ def test_add_dataset_uses_source_stem_namespace_and_lowest_available_suffix(
         tuple(item.dataset_id for item in project.datasets),
         project.datasets[-1].display_name,
     ) == (("sample", "sample-3", "sample-2"), "replacement display")
+
+
+def test_remove_dataset_drops_constraints_that_reference_it_and_invalidates_remaining_target(
+    tmp_path: Path,
+) -> None:
+    first_source = _write_curve(tmp_path / "first" / "first.xy")
+    second_source = _write_curve(tmp_path / "second" / "second.xy", scale=2.0)
+    project = new_project()
+    project = add_dataset(project, first_source, _instrument())
+    project = add_dataset(project, second_source, _instrument())
+    first_id, second_id = (dataset.dataset_id for dataset in project.datasets)
+    target = ParameterReference(first_id, "component.0.thickness_a")
+    source = ParameterReference(second_id, "instrument.scale")
+    rule = ConstraintRule(target, ConstraintNode("ref", reference=source))
+    datasets = tuple(
+        replace(
+            dataset,
+            structure=simple_structure(),
+            last_valid_result=final_fit_result() if dataset.dataset_id == first_id else None,
+        )
+        for dataset in project.datasets
+    )
+    project = replace(
+        project,
+        datasets=datasets,
+        constraint_rules=(rule,),
+        ui_state=replace(
+            project.ui_state,
+            selected_candidate_ids=((first_id, "candidate-0"),),
+        ),
+    )
+
+    updated = remove_dataset(project, second_id)
+
+    assert updated.constraint_rules == ()
+    assert len(updated.datasets) == 1
+    assert updated.datasets[0].last_valid_result is None
+    assert updated.ui_state.selected_candidate_ids == ()
 
 
 def test_add_dataset_preserves_an_explicit_mixed_kalpha_beam(tmp_path: Path) -> None:

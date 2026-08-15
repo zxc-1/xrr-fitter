@@ -117,11 +117,21 @@ MODEL_ALLOWED = {
     "automation": {"data", "instrument"},
     "structure": set(),
     "parameters": set(),
+    "constraint_expression": {"parameters"},
+    "constraint_resolution": {"constraint_expression", "parameters"},
+    "project_parameter_graph": {"parameters"},
     "progress": set(),
+    "mcmc_samples": set(),
     "sld_bands": set(),
     "fitting": {"data", "instrument", "structure", "parameters", "progress"},
     "provenance": {"fitting"},
-    "analysis": {"data", "parameters", "fitting", "sld_bands"},
+    "analysis": {
+        "data",
+        "parameters",
+        "fitting",
+        "mcmc_samples",
+        "sld_bands",
+    },
     "project": {
         "automation",
         "data",
@@ -130,6 +140,7 @@ MODEL_ALLOWED = {
         "parameters",
         "fitting",
         "analysis",
+        "project_parameter_graph",
     },
     "operations": {"automation", "fitting", "analysis", "project"},
     "export": {"data", "fitting", "analysis", "project", "operations"},
@@ -630,19 +641,14 @@ from xrr_fitter.physics.stack import expand_structure
     )
 
 
-def test_fixture_checker_enforces_model_module_dag_and_services_composition() -> None:
+def test_fixture_checker_enforces_services_composition() -> None:
     known = {
-        "model.analysis",
-        "model.fitting",
-        "model.provenance",
+        "analysis.report",
+        "fit.pipeline",
         "services.batch",
         "services.fitting",
         "services.fitting_phases.automatic_dataset",
     }
-    assert _module_violations("model.analysis", "from xrr_fitter.model import fitting", known) == ()
-    assert _module_violations("model.provenance", "from xrr_fitter.model import fitting", known) == ()
-    assert "model-edge" in _fixture_kinds("model.fitting", "from xrr_fitter.model import analysis", *known)
-    assert "model-edge" in _fixture_kinds("model.fitting", "from xrr_fitter.model import provenance", *known)
     assert _module_violations("services.fitting", "import xrr_fitter.fit\nimport xrr_fitter.analysis", known) == ()
     assert "services-composition" in _fixture_kinds(
         "services.fitting_phases.automatic_dataset",

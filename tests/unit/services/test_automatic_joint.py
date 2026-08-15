@@ -9,9 +9,9 @@ from tests.support.model_cases import dataset_project, prepared_data
 
 from xrr_fitter.evaluation import encode_physical_vector
 from xrr_fitter.fit.candidates import candidate_from_evaluation
+from xrr_fitter.fit.joint_candidates import consensus_joint_vector
 from xrr_fitter.fit.joint_pipeline import JointFitRequest
 from xrr_fitter.fit.joint_problem import compile_joint_problem
-from xrr_fitter.fit.joint_sharing import consensus_joint_vector
 from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem

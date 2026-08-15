@@ -9,7 +9,12 @@ from types import MappingProxyType
 from xrr_fitter.io.source import dataset_index
 from xrr_fitter.model.analysis import StructureEvidence
 from xrr_fitter.model.data import BeamSpec
-from xrr_fitter.model.parameters import ParameterSetting, SharingRule
+from xrr_fitter.model.parameters import (
+    ConstraintRule,
+    ParameterSetting,
+    SharingRule,
+    _iter_references,
+)
 from xrr_fitter.model.project import OxideDecision, XrrProject
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
@@ -25,6 +30,7 @@ from xrr_fitter.services.datasets import _prepared_current, _replace_invalidated
 from xrr_fitter.services.parameters import (
     _reconciled_parameter_settings,
     describe_parameters,
+    set_constraint_rules,
     validate_parameter_settings,
 )
 
@@ -154,6 +160,21 @@ def _reconciled_sharing(
     return tuple(retained)
 
 
+def _reconciled_constraints(
+    rules: tuple[ConstraintRule, ...],
+    dataset_id: str,
+    compatible_names: frozenset[str],
+) -> tuple[ConstraintRule, ...]:
+    return tuple(
+        rule
+        for rule in rules
+        if all(
+            reference.dataset_id != dataset_id or reference.parameter_name in compatible_names
+            for reference in (rule.target, *_iter_references(rule.expression))
+        )
+    )
+
+
 def _set_dataset_structure(
     project: XrrProject,
     dataset_id: str,
@@ -182,10 +203,18 @@ def _set_dataset_structure(
         updated,
         clear_evidence=False,
     )
-    return replace(
+    reconciled = replace(
         invalidated,
         sharing_rules=_reconciled_sharing(
             invalidated.sharing_rules,
+            dataset_id,
+            compatible,
+        ),
+    )
+    return set_constraint_rules(
+        reconciled,
+        _reconciled_constraints(
+            invalidated.constraint_rules,
             dataset_id,
             compatible,
         ),

@@ -55,6 +55,11 @@ from xrr_fitter.model.project import (
     XrrProject,
 )
 from xrr_fitter.model.structure import LayerSpec, StructureSpec
+from xrr_fitter.services.dataset_removal import (
+    removal_constraint_rules,
+    removal_sharing_rules,
+    removal_ui_state,
+)
 from xrr_fitter.services.materials import automatic_structure, initial_structure
 
 SERVICE_SEED_TREE_VERSION = 1
@@ -466,10 +471,7 @@ def _automatic_fit_group_member(
     groups: set[str],
 ) -> bool:
     state = dataset.automation
-    return (
-        state.role is not AutomaticRole.MANUAL
-        and state.fit_group_id in groups
-    )
+    return state.role is not AutomaticRole.MANUAL and state.fit_group_id in groups
 
 
 def _dependent_fit_ids(project: XrrProject, changed_ids: set[str]) -> set[str]:
@@ -478,14 +480,9 @@ def _dependent_fit_ids(project: XrrProject, changed_ids: set[str]) -> set[str]:
     groups = {
         dataset.automation.fit_group_id
         for dataset in project.datasets
-        if dataset.dataset_id in changed_ids
-        and dataset.automation.fit_group_id is not None
+        if dataset.dataset_id in changed_ids and dataset.automation.fit_group_id is not None
     }
-    automatic = {
-        dataset.dataset_id
-        for dataset in project.datasets
-        if _automatic_fit_group_member(dataset, groups)
-    }
+    automatic = {dataset.dataset_id for dataset in project.datasets if _automatic_fit_group_member(dataset, groups)}
     if automatic:
         return changed_ids | automatic
     return changed_ids
@@ -502,16 +499,10 @@ def _replace_invalidated(
     datasets[index] = updated
     affected = _dependent_fit_ids(project, {updated.dataset_id})
     datasets = [
-        _cleared(dataset, clear_evidence=clear_evidence)
-        if dataset.dataset_id in affected
-        else dataset
+        _cleared(dataset, clear_evidence=clear_evidence) if dataset.dataset_id in affected else dataset
         for dataset in datasets
     ]
-    selected = tuple(
-        item
-        for item in project.ui_state.selected_candidate_ids
-        if item[0] not in affected
-    )
+    selected = tuple(item for item in project.ui_state.selected_candidate_ids if item[0] not in affected)
     return replace(
         project,
         datasets=tuple(datasets),
@@ -519,47 +510,39 @@ def _replace_invalidated(
     )
 
 
-def _ui_after_removal(
-    project: XrrProject,
-    datasets: tuple[DatasetProject, ...],
-    remaining_ids: set[str],
-    index: int,
-    dataset_id: str,
-):
-    active = project.ui_state.active_dataset_id
-    if active == dataset_id:
-        active = datasets[min(index, len(datasets) - 1)].dataset_id if datasets else None
-    selected = tuple(item for item in project.ui_state.selected_candidate_ids if item[0] in remaining_ids)
-    return replace(
-        project.ui_state,
-        active_dataset_id=active,
-        selected_candidate_ids=selected,
-    )
-
-
-def _sharing_after_removal(
-    project: XrrProject,
-    remaining_ids: set[str],
-):
-    return tuple(
-        rule for rule in project.sharing_rules if all(member.dataset_id in remaining_ids for member in rule.members)
-    )
-
-
 def remove_dataset(project: XrrProject, dataset_id: str) -> XrrProject:
     """Remove one dataset and every cross-project reference to it."""
     index = dataset_index(project, dataset_id)
     datasets = (*project.datasets[:index], *project.datasets[index + 1 :])
+    remaining_ids = {dataset.dataset_id for dataset in datasets}
+    constraint_rules, constraint_affected = removal_constraint_rules(
+        project,
+        remaining_ids,
+    )
     if project.batch_mode == "joint":
         datasets = tuple(_cleared(dataset, clear_evidence=False) for dataset in datasets)
-    remaining_ids = {dataset.dataset_id for dataset in datasets}
+        invalidated_ids = remaining_ids
+    else:
+        datasets = tuple(
+            _cleared(dataset, clear_evidence=False) if dataset.dataset_id in constraint_affected else dataset
+            for dataset in datasets
+        )
+        invalidated_ids = constraint_affected
     mode = "independent" if project.batch_mode == "joint" and len(datasets) < 2 else project.batch_mode
     return replace(
         project,
         batch_mode=mode,
         datasets=datasets,
-        sharing_rules=_sharing_after_removal(project, remaining_ids),
-        ui_state=_ui_after_removal(project, datasets, remaining_ids, index, dataset_id),
+        sharing_rules=removal_sharing_rules(project, remaining_ids),
+        constraint_rules=constraint_rules,
+        ui_state=removal_ui_state(
+            project,
+            datasets,
+            remaining_ids,
+            invalidated_ids,
+            index,
+            dataset_id,
+        ),
     )
 
 

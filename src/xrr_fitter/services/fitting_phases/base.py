@@ -12,11 +12,29 @@ from xrr_fitter.model.fitting import (
     FitProgress,
     candidate_selection_objective,
 )
+from xrr_fitter.model.parameters import _iter_references
 from xrr_fitter.model.project import ScalePriorState, XrrProject
 from xrr_fitter.services.datasets import _prepared_current
 from xrr_fitter.services.parallel import OrderedTaskRunner
 
 from .common import CancellationProbe, PreparedDatasetFit, ProgressCallback
+
+
+def _constraint_references(rule):
+    return tuple(_iter_references(rule.expression))
+
+
+def _has_cross_dataset_constraints(project: XrrProject) -> bool:
+    return any(
+        len(
+            {
+                rule.target.dataset_id,
+                *(reference.dataset_id for reference in _constraint_references(rule)),
+            }
+        )
+        > 1
+        for rule in project.constraint_rules
+    )
 
 
 def _scale_prior(problem: FitEvaluationContext) -> ScalePriorState:
@@ -74,6 +92,7 @@ def compiled_parameter_definitions(
     instrument,
     config,
     settings,
+    constraint_rules=(),
     *,
     compile_fit_problem: Callable,
 ):
@@ -84,6 +103,7 @@ def compiled_parameter_definitions(
         instrument,
         config,
         tuple(settings),
+        tuple(constraint_rules),
     ).parameter_definitions
 
 
@@ -112,6 +132,8 @@ def _compile_dataset(
     compile_fit_problem: Callable,
     structure_evidence: Callable,
 ) -> PreparedDatasetFit:
+    if project.batch_mode != "joint" and _has_cross_dataset_constraints(project):
+        raise ValueError("cross-dataset constraints require joint fitting")
     index = _dataset_index(project, dataset_id)
     dataset = project.datasets[index]
     if dataset.structure is None:
@@ -124,6 +146,12 @@ def _compile_dataset(
         dataset.instrument,
         config,
         dataset.parameter_settings,
+        tuple(
+            rule
+            for rule in project.constraint_rules
+            if rule.target.dataset_id == dataset_id
+            and all(reference.dataset_id == dataset_id for reference in _constraint_references(rule))
+        ),
     )
     updated = replace(
         dataset,

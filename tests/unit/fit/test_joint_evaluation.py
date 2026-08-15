@@ -13,7 +13,11 @@ from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, ModelEvaluation, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterReference, ParameterSetting, SharingRule
+from xrr_fitter.model.parameters import (
+    ParameterReference,
+    ParameterSetting,
+    SharingRule,
+)
 from xrr_fitter.model.structure import LayerSpec
 
 SHARED_NAME = "component.0.density_scale"
@@ -162,18 +166,10 @@ def _unequal_roughness_problem(*, thickness_a: float, seed: int, size: int):
         ParameterSetting(
             definition.name,
             definition.initial,
-            (
-                thickness_a * 0.5
-                if definition.name == "component.0.thickness_a"
-                else definition.lower
-            )
+            (thickness_a * 0.5 if definition.name == "component.0.thickness_a" else definition.lower)
             if definition.name in free_names
             else definition.initial,
-            (
-                thickness_a * 1.5
-                if definition.name == "component.0.thickness_a"
-                else definition.upper
-            )
+            (thickness_a * 1.5 if definition.name == "component.0.thickness_a" else definition.upper)
             if definition.name in free_names
             else definition.initial,
             locked=definition.name not in free_names,
@@ -233,9 +229,7 @@ def test_joint_objective_is_the_arithmetic_mean_of_local_objectives() -> None:
 
     assert result.valid
     assert len(result.local_evaluations) == 2
-    assert result.objective == pytest.approx(
-        np.mean([value.objective for value in result.local_evaluations])
-    )
+    assert result.objective == pytest.approx(np.mean([value.objective for value in result.local_evaluations]))
     assert result.local_unit_vectors[0][0] == result.local_unit_vectors[1][0] == 0.5
     assert not result.residuals.flags.writeable
 
@@ -247,10 +241,7 @@ def test_joint_residual_gives_each_dataset_equal_mass(
     joint = _joint()
     c_decades = joint.problems[0].config.c_decades
     objective = 2.0 * c_decades**2 * (np.sqrt(1.0 + 1.0 / c_decades**2) - 1.0)
-    by_identity = {
-        id(problem): _evaluation(problem, objective=objective, residual=1.0)
-        for problem in joint.problems
-    }
+    by_identity = {id(problem): _evaluation(problem, objective=objective, residual=1.0) for problem in joint.problems}
     monkeypatch.setattr(api, "evaluate_vector", lambda problem, _unit: by_identity[id(problem)])
 
     result = api.evaluate_joint_vector(joint, np.asarray([0.5]))
@@ -283,11 +274,7 @@ def test_joint_loss_scales_data_mass_and_each_active_scale_prior_row() -> None:
         scaled = 1.0 + data_squared / problem.config.c_decades**2
         np.testing.assert_allclose(
             rho[0, offset : offset + size],
-            4.0
-            * alpha
-            * weights**2
-            * problem.config.c_decades**2
-            * (np.sqrt(scaled) - 1.0),
+            4.0 * alpha * weights**2 * problem.config.c_decades**2 * (np.sqrt(scaled) - 1.0),
         )
         np.testing.assert_allclose(
             rho[1, offset : offset + size],
@@ -335,9 +322,7 @@ def test_joint_loss_scales_data_mass_and_each_active_scale_prior_row() -> None:
 def test_joint_loss_rejects_invalid_squared_residual_rows(invalid_rows) -> None:
     api = import_module("xrr_fitter.fit.joint_evaluation")
     joint = _joint(scale_prior=True)
-    row_count = sum(
-        int(np.count_nonzero(problem.data.fit_mask)) + 1 for problem in joint.problems
-    )
+    row_count = sum(int(np.count_nonzero(problem.data.fit_mask)) + 1 for problem in joint.problems)
 
     with pytest.raises(ValueError, match="joint loss|squared|row|finite|nonnegative"):
         api.joint_least_squares_loss(joint)(invalid_rows(row_count))
@@ -448,9 +433,7 @@ def test_joint_analytic_jacobian_matches_finite_difference_with_scale_prior() ->
             for index in range(unit.size)
         ]
     )
-    prior_rows = np.cumsum(
-        [int(np.count_nonzero(problem.data.fit_mask)) + 1 for problem in joint.problems]
-    ) - 1
+    prior_rows = np.cumsum([int(np.count_nonzero(problem.data.fit_mask)) + 1 for problem in joint.problems]) - 1
 
     assert np.all(np.any(np.abs(analytic[prior_rows]) > 0.0, axis=1))
     np.testing.assert_allclose(analytic, finite, rtol=2e-5, atol=2e-8)
@@ -462,9 +445,7 @@ def test_dynamic_roughness_tie_jacobian_matches_central_difference() -> None:
     joint = _tie_joint()
     unit = sharing.initial_joint_vector(joint)
     thickness_index = next(
-        index
-        for index, variable in enumerate(joint.global_variables)
-        if variable.name == "shared-thickness"
+        index for index, variable in enumerate(joint.global_variables) if variable.name == "shared-thickness"
     )
 
     analytic = api.evaluate_joint_jacobian(joint, unit)[:, thickness_index]
@@ -473,10 +454,9 @@ def test_dynamic_roughness_tie_jacobian_matches_central_difference() -> None:
     minus = unit.copy()
     plus[thickness_index] += step
     minus[thickness_index] -= step
-    finite = (
-        api.evaluate_joint_vector(joint, plus).residuals
-        - api.evaluate_joint_vector(joint, minus).residuals
-    ) / (2.0 * step)
+    finite = (api.evaluate_joint_vector(joint, plus).residuals - api.evaluate_joint_vector(joint, minus).residuals) / (
+        2.0 * step
+    )
 
     np.testing.assert_allclose(analytic, finite, rtol=3e-5, atol=3e-8)
 
@@ -490,27 +470,19 @@ def test_shared_roughness_uses_one_physical_value_with_local_thicknesses() -> No
     result = evaluation.evaluate_joint_vector(joint, unit)
 
     roughness = tuple(
-        next(
-            value.value
-            for value in local.parameters
-            if value.name == "component.0.roughness_a"
-        )
+        next(value.value for value in local.parameters if value.name == "component.0.roughness_a")
         for local in result.local_evaluations
     )
     assert roughness == pytest.approx((3.0, 3.0))
     roughness_index = next(
-        index
-        for index, variable in enumerate(joint.global_variables)
-        if variable.name == "shared-physical-roughness"
+        index for index, variable in enumerate(joint.global_variables) if variable.name == "shared-physical-roughness"
     )
-    assert joint.global_variables[roughness_index].transform == (
-        "shared_roughness_physical"
-    )
+    assert joint.global_variables[roughness_index].transform == ("shared_roughness_physical")
 
 
 def test_shared_roughness_consensus_uses_candidate_physical_values() -> None:
+    candidates_api = import_module("xrr_fitter.fit.joint_candidates")
     evaluation = import_module("xrr_fitter.fit.joint_evaluation")
-    sharing = import_module("xrr_fitter.fit.joint_sharing")
     joint = _unequal_roughness_joint()
     candidates = {}
     for dataset_id, problem in zip(
@@ -527,21 +499,18 @@ def test_shared_roughness_consensus_uses_candidate_physical_values() -> None:
             parameters=evaluate_vector(problem, unit).parameters,
         )
 
-    consensus = sharing.consensus_joint_vector(joint, candidates)
+    consensus = candidates_api.consensus_joint_vector(joint, candidates)
     result = evaluation.evaluate_joint_vector(joint, consensus)
 
     roughness = tuple(
-        next(
-            value.value
-            for value in local.parameters
-            if value.name == "component.0.roughness_a"
-        )
+        next(value.value for value in local.parameters if value.name == "component.0.roughness_a")
         for local in result.local_evaluations
     )
     assert roughness == pytest.approx((4.0, 4.0))
 
 
 def test_shared_roughness_joint_candidate_rebuilds_from_physical_projection() -> None:
+    candidates_api = import_module("xrr_fitter.fit.joint_candidates")
     sharing = import_module("xrr_fitter.fit.joint_sharing")
     joint = _unequal_roughness_joint()
     global_unit = sharing.initial_joint_vector(joint)
@@ -558,7 +527,7 @@ def test_shared_roughness_joint_candidate_rebuilds_from_physical_projection() ->
         for unit in local_units
     )
 
-    rebuilt = sharing.joint_candidate_vectors(
+    rebuilt = candidates_api.joint_candidate_vectors(
         joint,
         candidates,
         ("joint-a",),
@@ -651,9 +620,7 @@ def test_invalid_local_evaluation_with_scale_prior_remains_a_joint_invalid(
 
     assert not result.valid
     assert result.objective == float("inf")
-    assert result.residuals.size == sum(
-        np.count_nonzero(problem.data.fit_mask) + 1 for problem in joint.problems
-    )
+    assert result.residuals.size == sum(np.count_nonzero(problem.data.fit_mask) + 1 for problem in joint.problems)
 
 
 def test_joint_evaluation_propagates_unexpected_local_errors(

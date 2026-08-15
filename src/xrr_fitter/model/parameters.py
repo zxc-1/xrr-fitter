@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from math import exp, isfinite, log
 
@@ -148,6 +149,7 @@ class ParameterDefinition:
     expert_only: bool = False
     sharing_key: str | None = None
     prior: PriorSpec | None = None
+    constrained: bool = False
 
     def __post_init__(self) -> None:
         _name(self.name, "parameter name")
@@ -156,7 +158,9 @@ class ParameterDefinition:
         _bounds(self.name, self.initial, self.lower, self.upper)
         if self.transform not in TRANSFORMS:
             raise ValueError(f"unsupported parameter transform: {self.transform}")
-        if not all(isinstance(value, bool) for value in (self.locked, self.integer, self.expert_only)):
+        if not all(
+            isinstance(value, bool) for value in (self.locked, self.integer, self.expert_only, self.constrained)
+        ):
             raise TypeError("parameter flags must be bool")
         if self.sharing_key is not None:
             _name(self.sharing_key, "sharing_key")
@@ -340,6 +344,200 @@ class ParameterReference:
     def __post_init__(self) -> None:
         _name(self.dataset_id, "dataset_id")
         _name(self.parameter_name, "parameter_name")
+
+
+# Expression parameter constraints ------------------------------------------
+#
+# A ``ConstraintRule`` drives one target parameter from an expression over
+# other parameters.  Expressions are small immutable trees of ``ConstraintNode``
+# leaves (``ref`` / ``const``) joined by binary operators.  The three pure
+# checks below are the *binding-time* validators; they live here (not in
+# ``evaluation.py``) because ``ALLOWED["services"]`` excludes ``evaluation``
+# while both services and evaluation may import ``model`` (plan 修正 4).  Every
+# rejection is ``ValueError`` / ``TypeError`` — never ``EvaluationConstraintError``,
+# which is silently swallowed as an invalid candidate (修正 10).
+
+CONSTRAINT_BINARY_OPS = frozenset({"add", "sub", "mul", "div", "pow"})
+CONSTRAINT_LEAF_OPS = frozenset({"ref", "const"})
+CONSTRAINT_OPS = CONSTRAINT_LEAF_OPS | CONSTRAINT_BINARY_OPS
+MAX_CONSTRAINT_DEPTH = 64
+
+
+def _reference_key(reference: ParameterReference) -> str:
+    return f"{reference.dataset_id}::{reference.parameter_name}"
+
+
+def _validate_ref_node(node: ConstraintNode) -> None:
+    if not isinstance(node.reference, ParameterReference):
+        raise TypeError("ref node requires a ParameterReference")
+    if node.value is not None or node.operands:
+        raise ValueError("ref node must not carry a value or operands")
+
+
+def _validate_const_node(node: ConstraintNode) -> None:
+    if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+        raise TypeError("const node requires a numeric value")
+    if not isfinite(node.value):
+        raise ValueError("const value must be finite")
+    object.__setattr__(node, "value", float(node.value))
+    if node.reference is not None or node.operands:
+        raise ValueError("const node must not carry a reference or operands")
+
+
+def _validate_binary_node(node: ConstraintNode) -> None:
+    if node.reference is not None or node.value is not None:
+        raise ValueError(f"{node.op} node must not carry a reference or value")
+    if len(node.operands) != 2:
+        raise ValueError(f"{node.op} node requires exactly two operands")
+    if any(not isinstance(operand, ConstraintNode) for operand in node.operands):
+        raise TypeError("binary operands must be ConstraintNode values")
+    if node.op == "pow" and node.operands[1].op != "const":
+        raise ValueError("pow exponent must be a constant")
+
+
+@dataclass(frozen=True, slots=True)
+class ConstraintNode:
+    op: str
+    reference: ParameterReference | None = None
+    value: float | None = None
+    operands: tuple[ConstraintNode, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "operands", tuple(self.operands))
+        if self.op not in CONSTRAINT_OPS:
+            raise ValueError(f"unsupported constraint op: {self.op}")
+        if self.op == "ref":
+            _validate_ref_node(self)
+        elif self.op == "const":
+            _validate_const_node(self)
+        else:
+            _validate_binary_node(self)
+
+
+def _iter_references(node: ConstraintNode) -> Iterator[ParameterReference]:
+    pending = [(node, 0)]
+    while pending:
+        current, depth = pending.pop()
+        if depth > MAX_CONSTRAINT_DEPTH:
+            raise ValueError("constraint expression nesting exceeds the maximum depth")
+        if current.op == "ref":
+            yield current.reference
+        pending.extend((operand, depth + 1) for operand in reversed(current.operands))
+
+
+@dataclass(frozen=True, slots=True)
+class ConstraintRule:
+    target: ParameterReference
+    expression: ConstraintNode
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.target, ParameterReference):
+            raise TypeError("constraint target must be a ParameterReference")
+        if not isinstance(self.expression, ConstraintNode):
+            raise TypeError("constraint expression must be a ConstraintNode")
+        # A target appearing in its own expression is a one-hop cycle; reject it
+        # at construction so a self-referential rule can never reach the forward
+        # model.  Cycles that span several rules need the whole set and are
+        # found by ``constraint_cycle_path``.
+        if any(reference == self.target for reference in _iter_references(self.expression)):
+            raise ValueError(f"constraint target {_reference_key(self.target)} must not appear in its own expression")
+
+
+def constraint_cycle_path(rules: Sequence[ConstraintRule]) -> tuple[str, ...]:
+    """Return one dependency cycle among ``rules`` as reference keys, else ().
+
+    The graph has one node per constraint *target*; an edge ``t -> r`` exists
+    when target ``t``'s expression references another target ``r``.  Independent
+    variables that are not themselves targets cannot close a cycle and are
+    ignored.  The returned path starts and ends on the same key so the caller
+    can quote the whole loop in an error message (环路径写进异常文本).
+    """
+    target_keys = {_reference_key(rule.target) for rule in rules}
+    adjacency: dict[str, list[str]] = {}
+    for rule in rules:
+        key = _reference_key(rule.target)
+        bucket = adjacency.setdefault(key, [])
+        for reference in _iter_references(rule.expression):
+            dependency = _reference_key(reference)
+            if dependency in target_keys and dependency not in bucket:
+                bucket.append(dependency)
+
+    visiting: dict[str, bool] = {}
+    stack: list[str] = []
+
+    def _walk(node: str) -> tuple[str, ...]:
+        visiting[node] = True
+        stack.append(node)
+        for dependency in adjacency[node]:
+            if visiting.get(dependency) is True:
+                start = stack.index(dependency)
+                return tuple(stack[start:]) + (dependency,)
+            if dependency not in visiting:
+                found = _walk(dependency)
+                if found:
+                    return found
+        stack.pop()
+        visiting[node] = False
+        return ()
+
+    for node in adjacency:
+        if node not in visiting:
+            found = _walk(node)
+            if found:
+                return found
+    return ()
+
+
+def validate_constraint_stage_split(
+    rules: Sequence[ConstraintRule],
+    definitions_by_reference: Mapping[ParameterReference, ParameterDefinition],
+) -> None:
+    """Reject constraints that break the two-phase evaluation ordering.
+
+    Roughness values are decoded in a second phase whose dynamic upper bounds
+    depend on already-decoded non-roughness values.  A non-roughness target may
+    therefore not read a roughness independent variable — its value is not known
+    yet when the target is resolved.  Integer parameters describe discrete
+    topology and may be neither derived targets nor independent variables in an
+    analytic constraint graph.  Unknown references (target or operand) are
+    rejected rather than skipped.
+    """
+    for rule in rules:
+        target_definition = definitions_by_reference.get(rule.target)
+        if target_definition is None:
+            raise ValueError(f"constraint references unknown parameter: {_reference_key(rule.target)}")
+        if target_definition.integer:
+            raise ValueError(f"constraint integer target is unsupported: {_reference_key(rule.target)}")
+        target_is_roughness = target_definition.transform == "roughness_fraction"
+        for reference in _iter_references(rule.expression):
+            definition = definitions_by_reference.get(reference)
+            if definition is None:
+                raise ValueError(f"constraint references unknown parameter: {_reference_key(reference)}")
+            if definition.integer:
+                raise ValueError(f"constraint independent variable must not be integer: {_reference_key(reference)}")
+            if not target_is_roughness and definition.transform == "roughness_fraction":
+                raise ValueError(
+                    f"non-roughness constraint target {_reference_key(rule.target)} "
+                    f"cannot depend on roughness parameter {_reference_key(reference)}"
+                )
+
+
+def constraint_sharing_conflicts(
+    rules: Sequence[ConstraintRule],
+    sharing_rules: Sequence[SharingRule],
+) -> tuple[ParameterReference, ...]:
+    """Return targets driven by both a constraint and a sharing rule.
+
+    A parameter cannot be both equality-shared and expression-driven; the two
+    would fight over the same coordinate.  The result preserves rule order and
+    de-duplicates so a caller can name each conflicting reference once.
+    """
+    shared_members = {member for rule in sharing_rules for member in rule.members}
+    conflicts: list[ParameterReference] = []
+    for rule in rules:
+        if rule.target in shared_members and rule.target not in conflicts:
+            conflicts.append(rule.target)
+    return tuple(conflicts)
 
 
 @dataclass(frozen=True, slots=True)

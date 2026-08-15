@@ -55,7 +55,6 @@ from xrr_fitter.fit.candidates import (
     bounded_perturbations,
     build_candidate_pool,
     candidate_from_evaluation,
-    cluster_candidate_indices,
     rank_candidate_indices,
     select_coarse_candidates,
     select_full_search_candidates,
@@ -72,13 +71,15 @@ from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem, compile_stage_problem
 from xrr_fitter.fit.progress import (
     best_preview_candidate as _best_candidate,
+)
+from xrr_fitter.fit.progress import (
     emit_progress as _emit,
 )
 from xrr_fitter.fit.screening import fringe_count_screen
-from xrr_fitter.fit.tasking import TaskRunner, run_tasks as _run_tasks
+from xrr_fitter.fit.tasking import TaskRunner
+from xrr_fitter.fit.tasking import run_tasks as _run_tasks
 from xrr_fitter.model.fitting import FitCandidate, FitProgress, FitStageSummary
 from xrr_fitter.model.parameters import ParameterSetting
-
 
 STAGE_ORDER = ("A", "B", "C", "D", "E")
 
@@ -149,6 +150,7 @@ def compile_coarse_problem(problem: object) -> object:
         problem.instrument,
         problem.config,
         _parameter_settings(problem),
+        problem.constraint_rules,
     )
 
 
@@ -215,8 +217,7 @@ def _candidate_values(candidate: FitCandidate) -> dict[str, float]:
 
 def _complete_values(problem: object, values: dict[str, float]) -> dict[str, float]:
     return {
-        definition.name: values.get(definition.name, definition.initial)
-        for definition in problem.parameter_definitions
+        definition.name: values.get(definition.name, definition.initial) for definition in problem.parameter_definitions
     }
 
 
@@ -504,8 +505,7 @@ def _stage_b_geometry_indices(problem: object) -> tuple[int, ...]:
     return tuple(
         index
         for index, variable in enumerate(problem.variables)
-        if problem.parameter_definitions[variable.parameter_index].category
-        == "structure"
+        if problem.parameter_definitions[variable.parameter_index].category == "structure"
     )
 
 
@@ -582,9 +582,7 @@ def _stage_b_representatives(
     representatives = {group[0] for group in groups}
     unselectable = set(range(len(candidates))) - set(ranked)
     retained = representatives | unselectable
-    return tuple(
-        candidate for index, candidate in enumerate(candidates) if index in retained
-    )
+    return tuple(candidate for index, candidate in enumerate(candidates) if index in retained)
 
 
 def _best_objective(candidates: tuple[FitCandidate, ...]) -> float:
@@ -624,13 +622,8 @@ def run_stage_b(
         )
     representatives = _stage_b_representatives(problem, tuple(candidates))
     archive = archive_stage_b_candidates(representatives)
-    archived_by_id = {
-        candidate.candidate_id: candidate
-        for candidate in archive.active + archive.archived
-    }
-    values = tuple(
-        archived_by_id[candidate.candidate_id] for candidate in representatives
-    )
+    archived_by_id = {candidate.candidate_id: candidate for candidate in archive.active + archive.archived}
+    values = tuple(archived_by_id[candidate.candidate_id] for candidate in representatives)
     return StageOutcome(
         values,
         _summary("B", values),
@@ -672,9 +665,9 @@ def _local_stage_starts(
 ) -> tuple[np.ndarray, ...]:
     center = encode_physical_vector(stage_problem, _candidate_values(parent))
     seed = int(
-        np.random.SeedSequence(
-            [problem.config.master_seed, ord(stage), cluster_index]
-        ).generate_state(1, dtype=np.uint64)[0]
+        np.random.SeedSequence([problem.config.master_seed, ord(stage), cluster_index]).generate_state(
+            1, dtype=np.uint64
+        )[0]
     )
     return (center, *bounded_perturbations(center, perturbation_count, seed=seed))
 
@@ -697,11 +690,7 @@ def run_local_stage(
     perturbation counts preserve that order for the next stage and checkpoint
     resume.
     """
-    counts = (
-        (0,) * len(parents)
-        if perturbation_counts is None
-        else tuple(perturbation_counts)
-    )
+    counts = (0,) * len(parents) if perturbation_counts is None else tuple(perturbation_counts)
     if len(counts) != len(parents):
         raise ValueError("local perturbation counts must align with parent clusters")
     total = sum(count + 1 for count in counts)
@@ -804,14 +793,8 @@ def _stage_e_setup(problem: object, parents: tuple[FitCandidate, ...]) -> _Stage
     selected = tuple(parents[index] for index in ranked)
     values = _candidate_values(selected[0])
     coarse_problem, full_problem = _stage_problems(problem, "E", values)
-    centers = tuple(
-        encode_physical_vector(coarse_problem, _candidate_values(candidate))
-        for candidate in selected
-    )
-    incumbents = [
-        encode_physical_vector(full_problem, _candidate_values(candidate))
-        for candidate in selected
-    ]
+    centers = tuple(encode_physical_vector(coarse_problem, _candidate_values(candidate)) for candidate in selected)
+    incumbents = [encode_physical_vector(full_problem, _candidate_values(candidate)) for candidate in selected]
     declared = encode_physical_vector(
         full_problem,
         {definition.name: definition.initial for definition in problem.parameter_definitions},
@@ -1166,15 +1149,10 @@ def _publish_profile_rescue(
             result.evaluation,
             candidate_id=f"E-{seed_index}",
             seed_index=seed_index,
-            stop_reason=(
-                f"profile_basin_rescue:{parameter_name}:"
-                f"seed-{seed_index}:{result.stop_reason}"
-            ),
+            stop_reason=(f"profile_basin_rescue:{parameter_name}:seed-{seed_index}:{result.stop_reason}"),
             nfev=int(original.nfev) + int(result.nfev),
         )
-        for seed_index, (original, result) in enumerate(
-            zip(originals, refined, strict=True)
-        )
+        for seed_index, (original, result) in enumerate(zip(originals, refined, strict=True))
     )
 
 

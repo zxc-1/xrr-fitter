@@ -20,25 +20,34 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import numpy as np
-from scipy.optimize import differential_evolution, least_squares
 
 from xrr_fitter.fit.candidates import best_candidate_index, candidate_from_evaluation
 from xrr_fitter.fit.checkpoint import build_checkpoint
 from xrr_fitter.fit.global_search import build_de_population
+from xrr_fitter.fit.joint_candidates import (
+    joint_candidate_vectors,
+    validate_joint_candidate_alignment,
+)
 from xrr_fitter.fit.joint_evaluation import (
-    JointEvaluation,
-    evaluate_joint_jacobian,
     evaluate_joint_vector,
-    joint_least_squares_loss,
 )
 from xrr_fitter.fit.joint_problem import JointFitProblem, compile_joint_problem
 from xrr_fitter.fit.joint_sharing import (
     initial_joint_vector,
-    joint_candidate_vectors,
-    validate_joint_candidate_alignment,
     validated_joint_initial_vector,
 )
-from xrr_fitter.fit.local_search import SearchCancelled
+from xrr_fitter.fit.joint_solvers import (
+    SolvedJoint as _SolvedJoint,
+)
+from xrr_fitter.fit.joint_solvers import (
+    poll as _poll,
+)
+from xrr_fitter.fit.joint_solvers import (
+    solve_joint as _solve_joint,
+)
+from xrr_fitter.fit.joint_solvers import (
+    solve_joint_global as _solve_joint_global,
+)
 from xrr_fitter.fit.pipeline import FitSearchRequest, run_fit_search
 from xrr_fitter.fit.resume import validate_resume_checkpoint
 from xrr_fitter.fit.stages import reserve_child_seeds
@@ -49,7 +58,7 @@ from xrr_fitter.model.fitting import (
     FitSearchResult,
     FitStageSummary,
 )
-from xrr_fitter.model.parameters import SharingRule
+from xrr_fitter.model.parameters import ConstraintRule, SharingRule
 from xrr_fitter.model.provenance import fit_search_provenance_sha256
 
 
@@ -60,9 +69,7 @@ class JointFitRequest:
     initial_unit_vector: np.ndarray | None = None
 
     def __post_init__(self) -> None:
-        checkpoints = (
-            None if self.resume_checkpoints is None else tuple(self.resume_checkpoints)
-        )
+        checkpoints = None if self.resume_checkpoints is None else tuple(self.resume_checkpoints)
         if checkpoints is not None and self.initial_unit_vector is not None:
             raise ValueError("joint resume cannot use an explicit initial unit vector")
         if checkpoints is not None and len(checkpoints) != len(self.problem.dataset_ids):
@@ -84,10 +91,12 @@ class FitBatchRequest:
     mode: str
     requests: tuple[FitSearchRequest, ...]
     sharing_rules: tuple[SharingRule, ...] = ()
+    constraint_rules: tuple[ConstraintRule, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "requests", tuple(self.requests))
         object.__setattr__(self, "sharing_rules", tuple(self.sharing_rules))
+        object.__setattr__(self, "constraint_rules", tuple(self.constraint_rules))
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,118 +104,6 @@ class _JointState:
     candidates: tuple[tuple[FitCandidate, ...], ...]
     warnings: tuple[str, ...]
     summaries: tuple[FitStageSummary, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class _SolvedJoint:
-    unit_vector: np.ndarray
-    evaluation: JointEvaluation
-    stop_reason: str
-    nfev: int
-    objective_increased: bool = False
-
-
-def _poll(cancelled: Callable[[], bool] | None) -> None:
-    if cancelled is not None and cancelled():
-        raise SearchCancelled("search cancelled")
-
-
-def _solve_joint(
-    problem: JointFitProblem,
-    start: np.ndarray,
-    max_nfev: int,
-    cancelled: Callable[[], bool] | None,
-) -> _SolvedJoint:
-    unit = np.asarray(start, dtype=float)
-    _poll(cancelled)
-    if unit.size == 0:
-        return _SolvedJoint(unit, evaluate_joint_vector(problem, unit), "no_free_parameters", 1)
-    initial_evaluation = evaluate_joint_vector(problem, unit)
-
-    def residual(value: np.ndarray) -> np.ndarray:
-        _poll(cancelled)
-        return evaluate_joint_vector(problem, value).residuals
-
-    def jacobian(value: np.ndarray) -> np.ndarray:
-        _poll(cancelled)
-        return evaluate_joint_jacobian(problem, value)
-
-    solved = least_squares(
-        residual,
-        unit,
-        jac=jacobian,
-        bounds=(0.0, 1.0),
-        loss=joint_least_squares_loss(problem),
-        ftol=1e-10,
-        xtol=1e-10,
-        gtol=1e-10,
-        x_scale="jac",
-        max_nfev=max_nfev,
-        callback=lambda *_args, **_kwargs: _poll(cancelled),
-    )
-    result_unit = np.array(solved.x, dtype=float, copy=True)
-    evaluation = evaluate_joint_vector(problem, result_unit)
-    tolerance = max(1e-12, 1e-8 * initial_evaluation.objective)
-    objective_increased = bool(
-        initial_evaluation.valid
-        and (
-            not evaluation.valid
-            or evaluation.objective > initial_evaluation.objective + tolerance
-        )
-    )
-    if objective_increased:
-        return _SolvedJoint(
-            np.array(unit, dtype=float, copy=True),
-            initial_evaluation,
-            "local_objective_increased",
-            int(solved.nfev),
-            True,
-        )
-    return _SolvedJoint(
-        result_unit,
-        evaluation,
-        str(solved.message),
-        int(solved.nfev),
-    )
-
-
-def _solve_joint_global(
-    problem: JointFitProblem,
-    start: np.ndarray,
-    population: np.ndarray,
-    *,
-    seed: int,
-    maxiter: int,
-    cancelled: Callable[[], bool] | None,
-) -> _SolvedJoint:
-    unit = np.asarray(start, dtype=float)
-    _poll(cancelled)
-    if unit.size == 0:
-        return _SolvedJoint(unit, evaluate_joint_vector(problem, unit), "no_free_parameters", 1)
-
-    def objective(value: np.ndarray) -> float:
-        _poll(cancelled)
-        return evaluate_joint_vector(problem, value).objective
-
-    solved = differential_evolution(
-        objective,
-        [(0.0, 1.0)] * len(problem.global_variables),
-        init=np.asarray(population, dtype=float),
-        seed=np.random.default_rng(seed),
-        maxiter=maxiter,
-        updating="deferred",
-        polish=False,
-        tol=1e-6,
-        workers=1,
-        callback=lambda *_args, **_kwargs: _poll(cancelled),
-    )
-    result_unit = np.array(solved.x, dtype=float, copy=True)
-    return _SolvedJoint(
-        result_unit,
-        evaluate_joint_vector(problem, result_unit),
-        str(solved.message),
-        int(solved.nfev),
-    )
 
 
 def _project_candidate(
@@ -273,10 +170,7 @@ def _append_stage(
 ) -> _JointState:
     by_dataset = _transpose_candidates(stage_candidates)
     return _JointState(
-        tuple(
-            existing + additions
-            for existing, additions in zip(state.candidates, by_dataset, strict=True)
-        ),
+        tuple(existing + additions for existing, additions in zip(state.candidates, by_dataset, strict=True)),
         state.warnings,
         state.summaries + (summary,),
     )
@@ -291,11 +185,7 @@ def _append_stage_e(
         return _append_stage(state, projected, _summary("E", projected))
     previous = state.summaries[-1]
     primary = candidate[0]
-    objective = (
-        primary.ranking_objective
-        if primary.valid and primary.ranking_objective is not None
-        else float("inf")
-    )
+    objective = primary.ranking_objective if primary.valid and primary.ranking_objective is not None else float("inf")
     summary = FitStageSummary(
         "E",
         previous.candidate_ids + (primary.candidate_id,),
@@ -304,10 +194,7 @@ def _append_stage_e(
         previous.stop_reasons + (primary.stop_reason,),
     )
     return _JointState(
-        tuple(
-            existing + (addition,)
-            for existing, addition in zip(state.candidates, candidate, strict=True)
-        ),
+        tuple(existing + (addition,) for existing, addition in zip(state.candidates, candidate, strict=True)),
         state.warnings,
         state.summaries[:-1] + (summary,),
     )
@@ -348,9 +235,7 @@ def _append_solution(
 ) -> float:
     projected.append(_project_candidate(problem, solved, candidate_id, seed_index))
     objective = (
-        solved.evaluation.objective
-        if solved.evaluation.valid and not solved.objective_increased
-        else float("inf")
+        solved.evaluation.objective if solved.evaluation.valid and not solved.objective_increased else float("inf")
     )
     current_best = min(best, objective)
     _emit(progress, stage, completed, total, current_best, f"joint {stage}")
@@ -547,10 +432,7 @@ def _validate_joint_resume(
         raise ValueError("joint resume stage, seed, warning, or history mismatch")
     initial_state, _initial = _fresh_state(request.problem)
     state = _JointState(
-        tuple(
-            initial + plan.candidates
-            for initial, plan in zip(initial_state.candidates, plans, strict=True)
-        ),
+        tuple(initial + plan.candidates for initial, plan in zip(initial_state.candidates, plans, strict=True)),
         first.runtime_warnings,
         initial_state.summaries + first.stage_summaries,
     )
@@ -568,11 +450,7 @@ def _fresh_state(
     initial_unit_vector: np.ndarray | None = None,
 ) -> tuple[_JointState, np.ndarray]:
     warnings = tuple(dict.fromkeys(warning for value in problem.problems for warning in value.warnings))
-    initial = (
-        initial_joint_vector(problem)
-        if initial_unit_vector is None
-        else initial_unit_vector
-    )
+    initial = initial_joint_vector(problem) if initial_unit_vector is None else initial_unit_vector
     evaluation = evaluate_joint_vector(problem, initial)
     solved = _SolvedJoint(initial, evaluation, "declared_initial", 1)
     projected = _project_candidate(problem, solved, "A-0", 0)
@@ -605,10 +483,15 @@ def _result_tuple(
         )
         for local_problem, candidates in zip(request.problem.problems, state.candidates, strict=True)
     )
+    joint_layout_fingerprint = request.problem.layout_fingerprint if request.problem.joint_constraint_rules else None
     return tuple(
         replace(
             result,
-            provenance_sha256=fit_search_provenance_sha256(local_problem, result),
+            provenance_sha256=fit_search_provenance_sha256(
+                local_problem,
+                result,
+                joint_layout_fingerprint=joint_layout_fingerprint,
+            ),
         )
         for local_problem, result in zip(request.problem.problems, results, strict=True)
     )
@@ -757,11 +640,12 @@ def _run_joint_batch(
     cancelled: Callable[[], bool] | None,
     progress: Callable[[FitProgress], None] | None,
 ) -> tuple[FitSearchResult, ...]:
-    problem = compile_joint_problem(
+    arguments = (
         tuple(item.dataset_id for item in request.requests),
         tuple(item.problem for item in request.requests),
         request.sharing_rules,
     )
+    problem = compile_joint_problem(*arguments, request.constraint_rules)
     return run_joint_fit(
         JointFitRequest(problem, _joint_resume_checkpoints(request)),
         cancelled=cancelled,
@@ -777,10 +661,7 @@ def run_fit_batch(
 ) -> tuple[FitSearchResult, ...]:
     """Dispatch only the two declared batch modes without fallback."""
     if request.mode == "independent":
-        return tuple(
-            run_fit_search(item, cancelled=cancelled, progress=progress)
-            for item in request.requests
-        )
+        return tuple(run_fit_search(item, cancelled=cancelled, progress=progress) for item in request.requests)
     if request.mode == "joint":
         return _run_joint_batch(request, cancelled, progress)
     raise ValueError("fit batch mode must be independent or joint")

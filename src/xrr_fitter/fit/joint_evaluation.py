@@ -8,11 +8,19 @@ from math import isfinite
 
 import numpy as np
 
+from xrr_fitter.evaluation import EvaluationConstraintError
 from xrr_fitter.fit.joint_roughness import SHARED_ROUGHNESS_TRANSFORM
-from xrr_fitter.fit.joint_sharing import scatter_joint_vector
+from xrr_fitter.fit.joint_scatter_jacobian import (
+    joint_scatter_jacobians as _joint_scatter_jacobians,
+)
+from xrr_fitter.fit.joint_sharing import _raw_scatter, scatter_joint_vector
 from xrr_fitter.fit.local_search import local_jacobian
-from xrr_fitter.fit.objective import evaluate_vector
+from xrr_fitter.fit.objective import _invalid_evaluation, evaluate_vector
 from xrr_fitter.model.fitting import ModelEvaluation
+
+
+def _has_cross_dataset_constraints(problem: object) -> bool:
+    return bool(problem.joint_constraint_rules)
 
 
 def _readonly(value: object) -> np.ndarray:
@@ -41,10 +49,7 @@ def _prior_residual(problem: object, evaluation: ModelEvaluation) -> float | Non
     if not evaluation.valid:
         return 0.0
     scale = next(value.value for value in evaluation.parameters if value.name == "instrument.scale")
-    return (
-        (np.log10(scale) - np.log10(problem.scale_prior_center))
-        / problem.scale_prior_tau_decades
-    )
+    return (np.log10(scale) - np.log10(problem.scale_prior_center)) / problem.scale_prior_tau_decades
 
 
 def _evaluation_residual(problem: object, evaluation: ModelEvaluation) -> np.ndarray:
@@ -55,10 +60,35 @@ def _evaluation_residual(problem: object, evaluation: ModelEvaluation) -> np.nda
 
 def evaluate_joint_vector(problem: object, global_unit: np.ndarray) -> JointEvaluation:
     """Evaluate every local projection and report their arithmetic mean cost."""
-    local_units = scatter_joint_vector(problem, global_unit)
+    try:
+        local_units = scatter_joint_vector(problem, global_unit)
+    except EvaluationConstraintError as error:
+        local_units = tuple(
+            _raw_scatter(
+                problem,
+                np.asarray(global_unit, dtype=float),
+            )
+        )
+        evaluations = tuple(_invalid_evaluation(local_problem, error) for local_problem in problem.problems)
+        residuals = np.concatenate(
+            tuple(
+                _evaluation_residual(local_problem, evaluation)
+                for local_problem, evaluation in zip(
+                    problem.problems,
+                    evaluations,
+                    strict=True,
+                )
+            )
+        )
+        return JointEvaluation(
+            False,
+            float("inf"),
+            local_units,
+            evaluations,
+            residuals,
+        )
     evaluations = tuple(
-        evaluate_vector(local_problem, unit)
-        for local_problem, unit in zip(problem.problems, local_units, strict=True)
+        evaluate_vector(local_problem, unit) for local_problem, unit in zip(problem.problems, local_units, strict=True)
     )
     valid = all(value.valid for value in evaluations)
     objective = float(np.mean([value.objective for value in evaluations])) if valid else float("inf")
@@ -106,15 +136,8 @@ def _loss_layout(local_problem: object) -> tuple[int, np.ndarray, float, bool]:
 
 def _validated_squared_residuals(squared: np.ndarray, row_count: int) -> np.ndarray:
     values = np.asarray(squared, dtype=float)
-    if (
-        values.ndim != 1
-        or values.size != row_count
-        or not np.all(np.isfinite(values))
-        or np.any(values < 0.0)
-    ):
-        raise ValueError(
-            "joint loss squared residual rows must be finite, nonnegative, and match the compiled layout"
-        )
+    if values.ndim != 1 or values.size != row_count or not np.all(np.isfinite(values)) or np.any(values < 0.0):
+        raise ValueError("joint loss squared residual rows must be finite, nonnegative, and match the compiled layout")
     return values
 
 
@@ -126,10 +149,7 @@ def joint_least_squares_loss(problem: object) -> Callable[[np.ndarray], np.ndarr
     frozen_layouts = tuple(_loss_layout(local_problem) for local_problem in problems)
     sizes = tuple(layout[0] for layout in frozen_layouts)
     total_data = sum(sizes)
-    row_count = sum(
-        size + int(has_prior)
-        for size, _weights, _c_decades, has_prior in frozen_layouts
-    )
+    row_count = sum(size + int(has_prior) for size, _weights, _c_decades, has_prior in frozen_layouts)
 
     def loss(squared: np.ndarray) -> np.ndarray:
         values = _validated_squared_residuals(squared, row_count)
@@ -153,58 +173,38 @@ def joint_least_squares_loss(problem: object) -> Callable[[np.ndarray], np.ndarr
 
 def evaluate_joint_jacobian(problem: object, global_unit: np.ndarray) -> np.ndarray:
     """Scatter local analytic columns into the exact global coordinate order."""
-    local_units = scatter_joint_vector(problem, global_unit)
+    try:
+        local_units = scatter_joint_vector(problem, global_unit)
+    except EvaluationConstraintError:
+        row_count = sum(
+            int(np.count_nonzero(local_problem.data.fit_mask)) + int(local_problem.scale_prior_center is not None)
+            for local_problem in problem.problems
+        )
+        return _readonly(np.zeros((row_count, len(problem.global_variables)), dtype=float))
     rows = []
     width = len(problem.global_variables)
-    physical_roughness = any(
-        variable.transform == SHARED_ROUGHNESS_TRANSFORM
-        for variable in problem.global_variables
-    )
+    physical_roughness = any(variable.transform == SHARED_ROUGHNESS_TRANSFORM for variable in problem.global_variables)
     scatter_jacobians = (
         _joint_scatter_jacobians(problem, global_unit)
-        if physical_roughness
+        if physical_roughness or _has_cross_dataset_constraints(problem)
         else None
     )
-    for dataset_index, (local_problem, unit, scatter) in enumerate(zip(
-        problem.problems,
-        local_units,
-        problem.scatter_maps,
-        strict=True,
-    )):
+    for dataset_index, (local_problem, unit, scatter) in enumerate(
+        zip(
+            problem.problems,
+            local_units,
+            problem.scatter_maps,
+            strict=True,
+        )
+    ):
         local = local_jacobian(local_problem, unit)
         if scatter_jacobians is not None:
             rows.append(local @ scatter_jacobians[dataset_index])
             continue
         block = np.zeros((local.shape[0], width), dtype=float)
         for local_index, global_index in enumerate(scatter):
+            if global_index < 0:
+                continue
             block[:, global_index] += local[:, local_index]
         rows.append(block)
     return _readonly(np.vstack(rows))
-
-
-def _joint_scatter_jacobians(
-    problem: object,
-    global_unit: np.ndarray,
-) -> tuple[np.ndarray, ...]:
-    unit = np.asarray(global_unit, dtype=float)
-    width = unit.size
-    jacobians = [
-        np.zeros((len(local_problem.variables), width), dtype=float)
-        for local_problem in problem.problems
-    ]
-    step = 1e-6
-    for global_index in range(width):
-        lower = max(0.0, unit[global_index] - step)
-        upper = min(1.0, unit[global_index] + step)
-        plus = unit.copy()
-        minus = unit.copy()
-        plus[global_index] = upper
-        minus[global_index] = lower
-        plus_local = scatter_joint_vector(problem, plus)
-        minus_local = scatter_joint_vector(problem, minus)
-        scale = upper - lower
-        for dataset_index, (high, low) in enumerate(
-            zip(plus_local, minus_local, strict=True)
-        ):
-            jacobians[dataset_index][:, global_index] = (high - low) / scale
-    return tuple(jacobians)

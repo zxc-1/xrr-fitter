@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 from xrr_fitter.gui.document import ProjectDocument
+from xrr_fitter.gui.parameters.constraints import ConstraintEditor
 from xrr_fitter.gui.parameters.sharing import SharingEditor
 from xrr_fitter.gui.parameters.table import ParameterTable
 
@@ -24,6 +25,7 @@ VALUE_COLUMNS = (1, 2, 3)
 
 # Wash of the error color behind a cell whose entered bound is self-inconsistent.
 INVALID_CELL_BRUSH = QBrush(QColor(179, 38, 30, 48))
+CONSTRAINT_CONTEXT_TOOLTIP = "该参数由表达式约束驱动，请先删除约束再修改"
 
 
 def bounds_problem(initial: float, lower: float, upper: float) -> str | None:
@@ -49,6 +51,7 @@ class ParametersPanel(QWidget):
 
     settings_changed = Signal(str, tuple)
     sharing_changed = Signal(tuple)
+    constraints_changed = Signal(tuple)
     expert_mode_changed = Signal(bool)
 
     def __init__(self, document: ProjectDocument) -> None:
@@ -62,6 +65,8 @@ class ParametersPanel(QWidget):
         self.parameter_table = ParameterTable()
         self.sharing_editor = SharingEditor(document)
         self.sharing_editor.rules_changed.connect(self.sharing_changed.emit)
+        self.constraint_editor = ConstraintEditor(document)
+        self.constraint_editor.constraints_changed.connect(self.constraints_changed.emit)
         self.status_label = QLabel()
         self.status_label.setObjectName("parameterStatus")
         self.status_label.setProperty("mutedText", True)
@@ -70,6 +75,7 @@ class ParametersPanel(QWidget):
         tabs.setObjectName("parameterTabs")
         tabs.addTab(self.parameter_table, "参数")
         tabs.addTab(self.sharing_editor, "共享")
+        tabs.addTab(self.constraint_editor, "约束")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
@@ -102,6 +108,10 @@ class ParametersPanel(QWidget):
     @property
     def sharing_rules(self) -> tuple[api.SharingRule, ...]:
         return self.sharing_editor.rules
+
+    @property
+    def constraint_rules(self) -> tuple[api.ConstraintRule, ...]:
+        return self.constraint_editor.rules
 
     def display_values(self, name: str) -> tuple[float, float, float]:
         return self.parameter_table.display_values(name)
@@ -200,6 +210,21 @@ class ParametersPanel(QWidget):
     def sharing_error_text(self) -> str:
         return self.sharing_editor.error_text()
 
+    def apply_constraint_rules(self, rules) -> bool:
+        return self.constraint_editor.apply_rules(rules)
+
+    def remove_constraint_rule(self, target: api.ParameterReference) -> bool:
+        return self.constraint_editor.remove_rule(target)
+
+    def eligible_constraint_targets(self, dataset_id: str) -> tuple[api.ParameterReference, ...]:
+        return self.constraint_editor.eligible_targets(dataset_id)
+
+    def eligible_constraint_sources(self, dataset_id: str) -> tuple[api.ParameterReference, ...]:
+        return self.constraint_editor.eligible_sources(dataset_id)
+
+    def constraint_error_text(self) -> str:
+        return self.constraint_editor.error_text()
+
     def _toggle_expert_mode(self, enabled: bool) -> None:
         self.set_expert_mode(enabled)
 
@@ -211,13 +236,11 @@ class ParametersPanel(QWidget):
         if name_item is None:
             return
         name = str(name_item.data(Qt.ItemDataRole.UserRole))
-        menu = QMenu(self.parameter_table)
-        reset = menu.addAction("恢复默认值")
-        reset.setObjectName("resetParameterAction")
-        edit_prior = menu.addAction("编辑先验")
-        edit_prior.setObjectName("editPriorAction")
-        clear_prior = menu.addAction("清除先验")
-        clear_prior.setObjectName("clearPriorAction")
+        menu = self._row_context_menu(name)
+        actions = {action.objectName(): action for action in menu.actions()}
+        reset = actions["resetParameterAction"]
+        edit_prior = actions["editPriorAction"]
+        clear_prior = actions["clearPriorAction"]
         chosen = menu.exec(self.parameter_table.viewport().mapToGlobal(position))
         if chosen is reset:
             self._reset_parameter_row(name)
@@ -225,6 +248,21 @@ class ParametersPanel(QWidget):
             self._edit_prior_row(name)
         elif chosen is clear_prior:
             self._clear_prior_row(name)
+
+    def _row_context_menu(self, name: str) -> QMenu:
+        definition = self._definition(name)
+        menu = QMenu(self.parameter_table)
+        reset = menu.addAction("恢复默认值")
+        reset.setObjectName("resetParameterAction")
+        edit_prior = menu.addAction("编辑先验")
+        edit_prior.setObjectName("editPriorAction")
+        clear_prior = menu.addAction("清除先验")
+        clear_prior.setObjectName("clearPriorAction")
+        if definition.constrained:
+            for action in (reset, edit_prior, clear_prior):
+                action.setEnabled(False)
+                action.setToolTip(CONSTRAINT_CONTEXT_TOOLTIP)
+        return menu
 
     def _reset_parameter_row(self, name: str) -> None:
         try:
