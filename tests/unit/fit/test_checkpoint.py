@@ -5,9 +5,11 @@ from importlib import import_module
 from pathlib import Path
 
 import numpy as np
+from tests.support.drift_cases import make_layer
 from tests.support.model_cases import prepared_data, simple_structure
 
 from xrr_fitter.fit.candidates import candidate_from_evaluation
+from xrr_fitter.fit.checkpoint import _canonical
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, FitStageSummary, SearchBudget
@@ -19,7 +21,7 @@ from xrr_fitter.model.parameters import (
     ParameterSetting,
     PriorSpec,
 )
-from xrr_fitter.model.structure import InterfaceTransition, TransitionBranch
+from xrr_fitter.model.structure import DriftSpec, InterfaceTransition, PeriodicBlock, TransitionBranch
 
 
 def _api():
@@ -275,3 +277,18 @@ def test_checkpoint_identity_binds_the_complete_constraint_expression() -> None:
         _api().checkpoint_identity(first).parameter_settings_fingerprint
         != _api().checkpoint_identity(second).parameter_settings_fingerprint
     )
+
+
+def test_no_drift_block_omits_drift_key() -> None:
+    block = PeriodicBlock(name="p", layers=(make_layer(),), repeats=2)
+    assert "drift" not in _canonical(block)
+
+
+def test_drifted_block_includes_drift_key() -> None:
+    block = PeriodicBlock(
+        name="p",
+        layers=(make_layer(),),
+        repeats=2,
+        drift=DriftSpec(kind="linear", target="thickness", amount=0.1),
+    )
+    assert "drift" in _canonical(block)

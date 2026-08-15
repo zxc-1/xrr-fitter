@@ -26,6 +26,7 @@ POST_FREEZE_OMITTED_DEFAULTS: dict[tuple[str, str], object] = {
     ("ParameterDefinition", "constrained"): False,
     ("ConfidenceThresholds", "prior_conflict_sigmas"): 3.0,
     ("LayerSpec", "transition"): None,
+    ("PeriodicBlock", "drift"): None,
 }
 
 
