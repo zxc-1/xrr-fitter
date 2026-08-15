@@ -187,6 +187,34 @@ def _periodic_definitions(
             ),
         )
     )
+    if block.drift is not None:
+        drift = block.drift
+        family = "thickness_a" if drift.target == "thickness" else "roughness_a"
+        definitions.append(
+            _definition(
+                f"{prefix}.drift_scale",
+                f"{block.name} 漂移标度",
+                "",
+                "structure",
+                drift.amount,
+                min(-0.5, drift.amount),
+                max(0.5, drift.amount),
+                "linear",
+                False,
+            )
+        )
+        by_name = {d.name: d for d in definitions}
+        for index in range(len(block.layers)):
+            base = by_name[f"{prefix}.layer.{index}.{family}"]
+            for k in range(1, block.repeats):
+                definitions.append(
+                    replace(
+                        base,
+                        name=f"{prefix}.repeat.{k}.layer.{index}.{family}",
+                        display_name=f"{base.display_name} 副本{k}",
+                        initial=base.initial,
+                    )
+                )
     return definitions
 
 
