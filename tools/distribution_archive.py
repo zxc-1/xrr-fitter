@@ -2,23 +2,24 @@
 
 from __future__ import annotations
 
-from email import policy
-from email.parser import BytesParser
 import gzip
 import io
 import os
-from pathlib import Path, PurePosixPath
 import stat
 import tarfile
 import tempfile
 import tomllib
-from typing import Mapping
 import zipfile
+from collections.abc import Mapping
+from email import policy
+from email.parser import BytesParser
+from pathlib import Path, PurePosixPath
 
 from packaging.markers import Marker
 from packaging.requirements import Requirement
 
 from distribution_manifest import ARTIFACT_KINDS, select_artifacts
+from version_source import declared_project_version as _declared_project_version
 
 
 def _declared_requirements(project: Mapping[str, object]) -> tuple[Requirement, ...]:
@@ -31,9 +32,7 @@ def _declared_requirements(project: Mapping[str, object]) -> tuple[Requirement, 
         for value in values:
             requirement = Requirement(value)
             requirement.marker = (
-                extra_marker
-                if requirement.marker is None
-                else Marker(f"({requirement.marker}) and ({extra_marker})")
+                extra_marker if requirement.marker is None else Marker(f"({requirement.marker}) and ({extra_marker})")
             )
             expected.append(requirement)
     return tuple(expected)
@@ -43,15 +42,11 @@ def verify_wheel_dependencies(wheel: str | Path, pyproject: str | Path) -> None:
     project = tomllib.loads(Path(pyproject).read_text(encoding="utf-8"))["project"]
     expected = _declared_requirements(project)
     with zipfile.ZipFile(wheel) as archive:
-        names = tuple(
-            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
-        )
+        names = tuple(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
         if len(names) != 1:
             raise ValueError("wheel must contain exactly one METADATA file")
         message = BytesParser(policy=policy.default).parsebytes(archive.read(names[0]))
-    observed = tuple(
-        Requirement(value) for value in message.get_all("Requires-Dist", ())
-    )
+    observed = tuple(Requirement(value) for value in message.get_all("Requires-Dist", ()))
     if observed != expected:
         raise ValueError("wheel Requires-Dist does not exactly match pyproject.toml")
 
@@ -126,22 +121,18 @@ def canonicalize_sdist(path: str | Path, epoch: int) -> None:
 
 
 def _project_identity(repository: Path) -> tuple[str, str]:
-    project = tomllib.loads(
-        (repository / "pyproject.toml").read_text(encoding="utf-8")
-    )["project"]
+    payload = tomllib.loads((repository / "pyproject.toml").read_text(encoding="utf-8"))
+    project = payload["project"]
     normalized = project["name"].replace("-", "_").replace(".", "_")
-    return normalized, project["version"]
+    version = _declared_project_version(repository, payload)
+    return normalized, version
 
 
 def _wheel_metadata(repository: Path) -> set[str]:
     name, version = _project_identity(repository)
     root = f"{name}-{version}.dist-info"
-    result = {
-        f"{root}/{item}" for item in ("METADATA", "RECORD", "WHEEL", "top_level.txt")
-    }
-    project = tomllib.loads(
-        (repository / "pyproject.toml").read_text(encoding="utf-8")
-    )["project"]
+    result = {f"{root}/{item}" for item in ("METADATA", "RECORD", "WHEEL", "top_level.txt")}
+    project = tomllib.loads((repository / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     if project.get("gui-scripts"):
         result.add(f"{root}/entry_points.txt")
     if project.get("license"):
@@ -154,9 +145,7 @@ def _wheel_members(path: Path) -> set[str]:
         members = tuple(archive.infolist())
     if any(member.is_dir() for member in members):
         raise ValueError("wheel contains a directory member")
-    if any(
-        stat.S_IFMT(member.external_attr >> 16) == stat.S_IFLNK for member in members
-    ):
+    if any(stat.S_IFMT(member.external_attr >> 16) == stat.S_IFLNK for member in members):
         raise ValueError("wheel contains a symlink")
     names = [member.filename for member in members]
     if len(names) != len(set(names)):
@@ -171,9 +160,7 @@ def _verify_wheel_members(
     spec: dict[str, object],
 ) -> None:
     expected_package = {
-        path.as_posix().removeprefix("src/")
-        for path in inputs
-        if path.parts[:2] == ("src", "xrr_fitter")
+        path.as_posix().removeprefix("src/") for path in inputs if path.parts[:2] == ("src", "xrr_fitter")
     }
     observed = _wheel_members(wheel)
     if observed != expected_package | _wheel_metadata(repository):
@@ -191,9 +178,7 @@ def _sdist_members(path: Path) -> tuple[str, set[str]]:
         members = tuple(archive.getmembers())
     if any(not (member.isfile() or member.isdir()) for member in members):
         raise ValueError("sdist contains a non-file member")
-    files = tuple(
-        PurePosixPath(member.name) for member in members if member.isfile()
-    )
+    files = tuple(PurePosixPath(member.name) for member in members if member.isfile())
     if len(files) != len(set(files)):
         raise ValueError("sdist contains duplicate members")
     roots = {path.parts[0] for path in files}

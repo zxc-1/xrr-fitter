@@ -12,16 +12,64 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
 import subprocess
+import sys
 import tarfile
 import zipfile
+from pathlib import Path
 
 import pytest
 
-
 COMMIT = "1" * 40
 TREE = "2" * 40
+
+
+def test_distribution_archive_identity_reads_dynamic_package_version(
+    tmp_path: Path,
+    load_tool_module,
+) -> None:
+    load_tool_module("verify_distribution")
+    module = sys.modules["distribution_archive"]
+    package = tmp_path / "src" / "xrr_fitter"
+    package.mkdir(parents=True)
+    (package / "version.py").write_text('__version__ = "0.2.2"\n', encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        """[project]
+name = "xrr-fitter"
+dynamic = ["version"]
+
+[tool.setuptools.dynamic]
+version = {attr = "xrr_fitter.version.__version__"}
+""",
+        encoding="utf-8",
+    )
+
+    assert module._project_identity(tmp_path) == ("xrr_fitter", "0.2.2")
+
+
+def test_distribution_archive_identity_rejects_static_and_dynamic_versions(
+    tmp_path: Path,
+    load_tool_module,
+) -> None:
+    load_tool_module("verify_distribution")
+    module = sys.modules["distribution_archive"]
+    package = tmp_path / "src" / "xrr_fitter"
+    package.mkdir(parents=True)
+    (package / "version.py").write_text('__version__ = "0.2.2"\n', encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        """[project]
+name = "xrr-fitter"
+version = "1.0.0"
+dynamic = ["version"]
+
+[tool.setuptools.dynamic]
+version = {attr = "xrr_fitter.version.__version__"}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="both statically and dynamically"):
+        module._project_identity(tmp_path)
 
 
 def _canonical(value: object) -> bytes:
@@ -334,7 +382,6 @@ def test_wheel_requires_dist_matches_pyproject_exactly(
     load_tool_module,
 ) -> None:
     module = load_tool_module("verify_distribution")
-    dependencies = ("numpy>=2.0,<3", "PySide6>=6.8,<7")
     observed = (
         "numpy<3,>=2.0",
         "PySide6<7,>=6.8",
@@ -409,10 +456,7 @@ def test_installed_smoke_uses_only_absolute_venv_commands_and_isolated_environme
         child = kwargs["env"]
         assert child["PATH"] == ""
         assert "PYTHONPATH" not in child
-        assert all(
-            Path(child[name]).is_relative_to(resolved)
-            for name in ("HOME", "XDG_CACHE_HOME", "MPLCONFIGDIR")
-        )
+        assert all(Path(child[name]).is_relative_to(resolved) for name in ("HOME", "XDG_CACHE_HOME", "MPLCONFIGDIR"))
 
 
 def _write_sdist(path: Path, members: tuple[tuple[str, bytes, str], ...]) -> None:

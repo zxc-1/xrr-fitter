@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -15,11 +15,23 @@ def _fixture_repo(tmp_path: Path, version: str = "0.2.3") -> tuple[Path, str]:
     root = tmp_path / "repo"
     root.mkdir()
     (root / "pyproject.toml").write_text(
-        f"[project]\nname = 'xrr-fitter'\nversion = '{version}'\n",
+        "[project]\n"
+        "name = 'xrr-fitter'\n"
+        "dynamic = ['version']\n"
+        "\n"
+        "[tool.setuptools.dynamic]\n"
+        "version = {attr = 'xrr_fitter.version.__version__'}\n",
+        encoding="utf-8",
+    )
+    version_module = root / "src" / "xrr_fitter"
+    version_module.mkdir(parents=True)
+    (version_module / "version.py").write_text(
+        f'__version__ = "{version}"\n',
         encoding="utf-8",
     )
     subprocess.run(("git", "init", "-q"), cwd=root, check=True)
     subprocess.run(("git", "add", "pyproject.toml"), cwd=root, check=True)
+    subprocess.run(("git", "add", "src/xrr_fitter/version.py"), cwd=root, check=True)
     subprocess.run(
         (
             "git",
@@ -40,6 +52,56 @@ def _fixture_repo(tmp_path: Path, version: str = "0.2.3") -> tuple[Path, str]:
         },
     )
     return root, _git(root, "rev-parse", "HEAD")
+
+
+def _dynamic_fixture_repo(tmp_path: Path, version: str = "0.2.3") -> Path:
+    root = tmp_path / "dynamic-repo"
+    package = root / "src" / "xrr_fitter"
+    package.mkdir(parents=True)
+    (package / "version.py").write_text(
+        f'__version__ = "{version}"\n',
+        encoding="utf-8",
+    )
+    (root / "pyproject.toml").write_text(
+        """[project]
+name = "xrr-fitter"
+dynamic = ["version"]
+
+[tool.setuptools.dynamic]
+version = {attr = "xrr_fitter.version.__version__"}
+""",
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_project_version_reads_setuptools_dynamic_attribute(
+    tmp_path: Path,
+    load_tool_module,
+) -> None:
+    module = load_tool_module("release_version")
+    root = _dynamic_fixture_repo(tmp_path)
+
+    assert module.project_version(root) == "0.2.3"
+
+
+def test_project_version_rejects_static_and_dynamic_version_sources(
+    tmp_path: Path,
+    load_tool_module,
+) -> None:
+    module = load_tool_module("release_version")
+    root = _dynamic_fixture_repo(tmp_path)
+    pyproject = root / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text(encoding="utf-8").replace(
+            'dynamic = ["version"]',
+            'version = "1.0.0"\ndynamic = ["version"]',
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="both statically and dynamically"):
+        module.project_version(root)
 
 
 def test_validate_release_tag_requires_annotated_tag_matching_project_version(

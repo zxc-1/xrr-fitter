@@ -4,13 +4,12 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
 import stat
 import tarfile
 import tomllib
+from pathlib import Path
 
 import pytest
-
 
 BUILD = ("setuptools==75.8.2", "wheel==0.45.1")
 GENERATED_METADATA = (
@@ -35,8 +34,7 @@ INPUT_FILES = (
 
 def _canonical(value: object) -> bytes:
     return (
-        json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-        + "\n"
+        json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n"
     ).encode()
 
 
@@ -135,9 +133,7 @@ def test_committed_pyproject_declares_the_single_gui_entrypoint() -> None:
     root = Path(__file__).resolve().parents[3]
     payload = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert payload["project"]["gui-scripts"] == {
-        "xrr-fitter": "xrr_fitter.__main__:main"
-    }
+    assert payload["project"]["gui-scripts"] == {"xrr-fitter": "xrr_fitter.__main__:main"}
 
 
 def test_calculation_binds_build_requirements_to_the_lock(
@@ -203,8 +199,7 @@ def test_pyproject_dependency_and_build_system_drift_is_rejected(
         ),
         (
             _lock_text(
-                "evil @ git+https://example.invalid/evil.git@"
-                "1111111111111111111111111111111111111111",
+                "evil @ git+https://example.invalid/evil.git@1111111111111111111111111111111111111111",
                 "numpy==2.1.3",
                 "pytest==8.3.5",
                 *BUILD,
@@ -278,14 +273,38 @@ def test_pinned_fixture_builds_twice_with_exact_metadata_set(load_tool_module) -
     module = load_tool_module("build_release_spec")
     payload = module._pyproject(Path(__file__).resolve().parents[3] / "pyproject.toml")
 
-    assert module.build_generated_metadata(payload) == tuple(
-        sorted((*GENERATED_METADATA, ENTRY_POINT_METADATA))
+    assert module.build_generated_metadata(payload) == tuple(sorted((*GENERATED_METADATA, ENTRY_POINT_METADATA)))
+
+
+def test_dynamic_version_project_can_build_release_fixture(load_tool_module) -> None:
+    module = load_tool_module("build_release_spec")
+    root = Path(__file__).resolve().parents[3]
+    payload = module._pyproject(root / "pyproject.toml")
+
+    fixture = module._fixture_toml(payload)
+
+    assert 'version = "0.2.2"' in fixture
+
+
+def test_pyproject_rejects_static_and_dynamic_version_sources(
+    tmp_path: Path,
+    load_tool_module,
+) -> None:
+    module = load_tool_module("build_release_spec")
+    pyproject, _lock = _fixture(tmp_path)
+    pyproject.write_text(
+        _pyproject_text().replace(
+            'version = "0.2.0"',
+            'version = "0.2.0"\ndynamic = ["version"]',
+        ),
+        encoding="utf-8",
     )
 
+    with pytest.raises(ValueError, match="both statically and dynamically"):
+        module._pyproject(pyproject)
 
-def test_generated_metadata_rejects_unknown_egg_info_member(
-    tmp_path: Path, load_tool_module
-) -> None:
+
+def test_generated_metadata_rejects_unknown_egg_info_member(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("build_release_spec")
     archive = _metadata_archive(
         tmp_path,

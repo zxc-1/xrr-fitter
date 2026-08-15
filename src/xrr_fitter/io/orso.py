@@ -21,6 +21,7 @@ from orsopy.fileio.base import ContentHash, _read_header_data, _validate_header_
 
 from xrr_fitter.io.export_tables import DatasetExportData
 from xrr_fitter.io.project_codec import project_to_dict
+from xrr_fitter.version import __version__ as PACKAGE_VERSION
 
 # Measurement start date is not recorded anywhere in the export context; a fixed
 # epoch sentinel plus an explicit comment marks it as unavailable rather than
@@ -31,9 +32,6 @@ INSTRUMENT_SENTINEL = "unknown"
 OWNER_AFFILIATION = "XRR-Fitter automated export"
 EXCLUDED_ROW_REASON = "non_finite_or_nonpositive_export_row"
 COVARIANCE_ABSENT_REASON = "covariance not estimated for this fit result"
-# Source checkouts and frozen executables do not have to carry distribution
-# metadata. The ORSO test pins this release value to ``pyproject.toml``.
-PACKAGE_VERSION = "0.2.2"
 
 
 def orso_bytes(context: DatasetExportData, *, covariance: np.ndarray | None) -> bytes:
@@ -56,7 +54,14 @@ def orso_bytes(context: DatasetExportData, *, covariance: np.ndarray | None) -> 
     buffer = io.StringIO()
     fileio.save_orso([dataset], buffer)
     text = buffer.getvalue()
+    _validate_serialized_header(text)
+    return text.encode("utf-8")
+
+
+def _validate_serialized_header(text: str) -> None:
     # 唯一 schema 校验点（spec 三层验证之层 2），也是 orsopy 升级时的首个检查点。
+    # orsopy 1.2.3 未提供公开 header 校验 API；pyproject 精确 pin 该版本，
+    # 此处集中封装私有 ``_read_header_data`` / ``_validate_header_data`` 依赖。
     # 校验对象是「序列化后再由 orsopy 自身 reader 解析回来」的 header：
     # ``Orso.to_dict()`` 直出 ``datetime`` 对象，会被 jsonschema 的字符串日期约束拒绝，
     # 故改走 ``_read_header_data`` 得到字符串化 header 再校验。失败直接抛、不降级
@@ -66,7 +71,6 @@ def orso_bytes(context: DatasetExportData, *, covariance: np.ndarray | None) -> 
         _validate_header_data(header_dicts)
     except ValidationError as error:
         raise ValueError(f"ORSO schema validation failed: {error.message}") from error
-    return text.encode("utf-8")
 
 
 def _export_mask(context: DatasetExportData) -> np.ndarray:

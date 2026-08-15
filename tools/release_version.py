@@ -5,11 +5,17 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import re
 import subprocess
+import sys
 import tomllib
+from pathlib import Path
 
+TOOL_DIRECTORY = str(Path(__file__).resolve().parent)
+if TOOL_DIRECTORY not in sys.path:
+    sys.path.insert(0, TOOL_DIRECTORY)
+
+from version_source import declared_project_version as _declared_project_version  # noqa: E402
 
 VERSION_TAG = re.compile(r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
 HEX = frozenset("0123456789abcdef")
@@ -32,12 +38,10 @@ def project_version(repo_root: str | Path) -> str:
     root = Path(repo_root).resolve()
     try:
         with (root / "pyproject.toml").open("rb") as handle:
-            value = tomllib.load(handle)["project"]["version"]
+            payload = tomllib.load(handle)
     except (KeyError, OSError, tomllib.TOMLDecodeError) as error:
         raise ValueError("pyproject.toml does not declare a project version") from error
-    if not isinstance(value, str) or not value:
-        raise ValueError("project version must be a non-empty string")
-    return value
+    return _declared_project_version(root, payload)
 
 
 def validate_release_tag(
@@ -53,9 +57,7 @@ def validate_release_tag(
     version = tag[1:]
     declared = project_version(root)
     if declared != version:
-        raise ValueError(
-            f"release tag version {version} does not match project version {declared}"
-        )
+        raise ValueError(f"release tag version {version} does not match project version {declared}")
 
     reference = f"refs/tags/{tag}"
     if _git(root, "cat-file", "-t", reference) != "tag":

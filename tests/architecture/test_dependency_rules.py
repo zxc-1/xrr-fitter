@@ -81,11 +81,13 @@ ALLOWED = {
     "api": {"model", "services"},
     "gui": {"gui", "api"},
     "cli": {"cli", "api"},
+    "version": set(),
     "__main__": {"gui", "cli"},
     "__init__": set(),
 }
 PACKAGE_EDGE_EXCEPTIONS = {
     "io.examples": {"physics.reflectivity", "physics.stack"},
+    "io.orso": {"version"},
 }
 # Package exceptions are exact directed module edges, never owner-wide grants.
 # The mapping key names the only source module that receives an exception.

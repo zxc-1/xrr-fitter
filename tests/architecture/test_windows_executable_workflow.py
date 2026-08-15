@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
 import tomllib
+from pathlib import Path
 
 import yaml
-
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "windows-executable.yml"
@@ -22,10 +21,23 @@ def _step(name: str) -> dict[str, object]:
 
 
 def test_patch_release_version_is_0_2_2() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
-        "project"
-    ]
-    assert project["version"] == "0.2.2"
+    payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    project = payload["project"]
+    version_module = (ROOT / "src" / "xrr_fitter" / "version.py").read_text(encoding="utf-8")
+
+    assert "version" not in project
+    assert project["dynamic"] == ["version"]
+    assert payload["tool"]["setuptools"]["dynamic"]["version"] == {
+        "attr": "xrr_fitter.version.__version__",
+    }
+    assert '__version__ = "0.2.2"' in version_module
+
+
+def test_windows_spec_collects_orsopy_schema_files() -> None:
+    spec_text = (ROOT / "packaging" / "windows" / "xrr-fitter.spec").read_text(encoding="utf-8")
+
+    assert 'collect_data_files("orsopy", subdir="fileio/schema")' in spec_text
+    assert 'excludes=["orsopy.slddb"]' in spec_text
 
 
 def test_windows_workflow_supports_release_calls_and_manual_retries() -> None:
@@ -45,27 +57,12 @@ def test_windows_workflow_derives_asset_names_from_installed_version() -> None:
     verify = _step("Verify executable and smoke-test GUI startup")["run"]
     manifest = _step("Write executable manifest")["run"]
 
-    assert (
-        'python -c "import importlib.metadata; '
-        "print(importlib.metadata.version('xrr-fitter'))\""
-    ) in install
+    assert ("python -c \"import importlib.metadata; print(importlib.metadata.version('xrr-fitter'))\"") in install
     assert "XRR_PACKAGE_VERSION=$packageVersion" in install
-    assert (
-        '"$release/xrr-fitter-$env:XRR_PACKAGE_VERSION-windows-x86_64.exe"'
-        in build
-    )
-    assert (
-        '"$env:RUNNER_TEMP/windows-release/'
-        'xrr-fitter-$env:XRR_PACKAGE_VERSION-windows-x86_64.exe"'
-    ) in verify
-    assert (
-        '$filename = "xrr-fitter-$env:XRR_PACKAGE_VERSION-windows-x86_64.exe"'
-        in manifest
-    )
-    assert (
-        '"$release/xrr-fitter-$env:XRR_PACKAGE_VERSION-windows-x86_64.json"'
-        in manifest
-    )
+    assert '"$release/xrr-fitter-$env:XRR_PACKAGE_VERSION-windows-x86_64.exe"' in build
+    assert ('"$env:RUNNER_TEMP/windows-release/xrr-fitter-$env:XRR_PACKAGE_VERSION-windows-x86_64.exe"') in verify
+    assert '$filename = "xrr-fitter-$env:XRR_PACKAGE_VERSION-windows-x86_64.exe"' in manifest
+    assert '"$release/xrr-fitter-$env:XRR_PACKAGE_VERSION-windows-x86_64.json"' in manifest
     assert "xrr-fitter-0.2.0-windows-x86_64" not in workflow_text
 
 

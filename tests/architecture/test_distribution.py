@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from email import policy
-from email.parser import BytesParser
 import importlib.metadata
 import json
 import os
-from pathlib import Path, PurePosixPath
 import shutil
 import stat
 import subprocess
@@ -14,13 +11,15 @@ import tarfile
 import time
 import tomllib
 import zipfile
+from email import policy
+from email.parser import BytesParser
+from pathlib import Path, PurePosixPath
 
+import pytest
 from packaging.markers import Marker
 from packaging.requirements import Requirement
-import pytest
 from tools import build_release_spec
 from tools.verify_distribution import canonicalize_sdist
-
 
 ROOT = Path(__file__).resolve().parents[2]
 RELEASE_SPEC = ROOT / "verification" / "release-spec.json"
@@ -33,9 +32,7 @@ def _release_spec() -> dict[str, object]:
 
 def test_gui_entrypoint_and_shell_modules_are_explicit() -> None:
     payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert payload["project"]["gui-scripts"] == {
-        "xrr-fitter": "xrr_fitter.__main__:main"
-    }
+    assert payload["project"]["gui-scripts"] == {"xrr-fitter": "xrr_fitter.__main__:main"}
     assert payload["project"]["scripts"] == {
         "xrr-fitter-cli": "xrr_fitter.cli.main:main",
     }
@@ -80,14 +77,8 @@ def _repository_inputs(policy: dict[str, object]) -> tuple[PurePosixPath, ...]:
     )
     directories = set(policy["input_directories"])
     files = set(policy["input_files"])
-    paths = tuple(
-        PurePosixPath(value.decode("utf-8"))
-        for value in result.stdout.split(b"\0")
-        if value
-    )
-    selected = tuple(
-        path for path in paths if path.as_posix() in files or path.parts[0] in directories
-    )
+    paths = tuple(PurePosixPath(value.decode("utf-8")) for value in result.stdout.split(b"\0") if value)
+    selected = tuple(path for path in paths if path.as_posix() in files or path.parts[0] in directories)
     assert {path.as_posix() for path in selected if len(path.parts) == 1} == files
     assert {path.parts[0] for path in selected if len(path.parts) > 1} == directories
     return selected
@@ -180,7 +171,21 @@ def _project_identity() -> tuple[str, str]:
     payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = payload["project"]
     normalized = project["name"].replace("-", "_").replace(".", "_")
-    return normalized, project["version"]
+    from xrr_fitter.version import __version__
+
+    return normalized, __version__
+
+
+def test_project_version_is_sourced_from_package_metadata_attribute() -> None:
+    payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    project = payload["project"]
+    dynamic = project.get("dynamic")
+
+    assert "version" not in project
+    assert dynamic == ["version"]
+    assert payload["tool"]["setuptools"]["dynamic"]["version"] == {
+        "attr": "xrr_fitter.version.__version__",
+    }
 
 
 def _wheel_metadata() -> set[str]:
@@ -208,9 +213,7 @@ def _project_requirements(project: dict[str, object]) -> tuple[Requirement, ...]
             requirement = Requirement(value)
             extra_marker = Marker(f'extra == "{extra}"')
             requirement.marker = (
-                extra_marker
-                if requirement.marker is None
-                else Marker(f"({requirement.marker}) and ({extra_marker})")
+                extra_marker if requirement.marker is None else Marker(f"({requirement.marker}) and ({extra_marker})")
             )
             expected.append(requirement)
     return tuple(expected)
@@ -221,31 +224,30 @@ def test_wheel_contains_only_package_and_exact_distribution_metadata(
 ) -> None:
     spec, inputs, wheel, _sdist, _second_wheel, _second_sdist = built_distributions
     expected_package = {
-        path.as_posix().removeprefix("src/")
-        for path in inputs
-        if path.parts[:2] == ("src", "xrr_fitter")
+        path.as_posix().removeprefix("src/") for path in inputs if path.parts[:2] == ("src", "xrr_fitter")
     }
     observed = _wheel_files(wheel)
     assert observed == expected_package | _wheel_metadata()
     policy = spec["wheel_content_policy"]
     assert policy["package_root"] == "xrr_fitter"
     assert policy["include_distribution_metadata"] is True
-    assert {PurePosixPath(path).parts[0] for path in observed}.isdisjoint(
-        policy["forbidden_roots"]
-    )
+    assert {PurePosixPath(path).parts[0] for path in observed}.isdisjoint(policy["forbidden_roots"])
+
+
+def test_wheel_contains_the_package_version_source_module(built_distributions) -> None:
+    _spec, _inputs, wheel, _sdist, _second_wheel, _second_sdist = built_distributions
+    observed = _wheel_files(wheel)
+
+    assert "xrr_fitter/version.py" in observed
 
 
 def test_wheel_requires_dist_exactly_matches_pyproject(
     built_distributions,
 ) -> None:
     spec, _inputs, wheel, _sdist, _second_wheel, _second_sdist = built_distributions
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
-        "project"
-    ]
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     with zipfile.ZipFile(wheel) as archive:
-        metadata = tuple(
-            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
-        )
+        metadata = tuple(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
         assert len(metadata) == 1
         message = BytesParser(policy=policy.default).parsebytes(archive.read(metadata[0]))
     observed = tuple(Requirement(value) for value in message.get_all("Requires-Dist", ()))

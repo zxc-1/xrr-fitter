@@ -11,18 +11,23 @@ import hashlib
 import importlib.metadata
 import json
 import os
-from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
 import tarfile
 import tempfile
 import tomllib
-from typing import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from pathlib import Path, PurePosixPath
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
+TOOL_DIRECTORY = str(Path(__file__).resolve().parent)
+if TOOL_DIRECTORY not in sys.path:
+    sys.path.insert(0, TOOL_DIRECTORY)
+
+from version_source import declared_project_version as _declared_project_version  # noqa: E402
 
 SCHEMA = "xrr-r23-release-spec-v1"
 EXPECTED_BUILD = ("setuptools==75.8.2", "wheel==0.45.1")
@@ -50,8 +55,7 @@ VCS_REVISION = re.compile(r"[0-9a-f]{40}")
 
 def _canonical(value: object) -> bytes:
     return (
-        json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-        + "\n"
+        json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n"
     ).encode("utf-8")
 
 
@@ -59,6 +63,21 @@ def _regular(path: Path, label: str) -> Path:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"{label} must be a regular file")
     return path.resolve()
+
+
+def _dependency_metadata(
+    payload: dict[str, object],
+) -> tuple[dict[str, object], dict[str, object], object, object]:
+    try:
+        build = payload["build-system"]
+        project = payload["project"]
+        tests = project["optional-dependencies"]["test"]
+        runtime = project["dependencies"]
+    except (KeyError, TypeError) as error:
+        raise ValueError("pyproject is missing dependency metadata") from error
+    if not isinstance(build, dict) or not isinstance(project, dict):
+        raise ValueError("pyproject dependency metadata must be tables")
+    return build, project, tests, runtime
 
 
 def _pyproject(path: Path) -> dict[str, object]:
@@ -71,13 +90,8 @@ def _pyproject(path: Path) -> dict[str, object]:
         payload = tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:
         raise ValueError("invalid pyproject TOML") from error
-    try:
-        build = payload["build-system"]
-        project = payload["project"]
-        tests = project["optional-dependencies"]["test"]
-        runtime = project["dependencies"]
-    except (KeyError, TypeError) as error:
-        raise ValueError("pyproject is missing dependency metadata") from error
+    build, project, tests, runtime = _dependency_metadata(payload)
+    project["version"] = _declared_project_version(source.parent, payload)
     if not isinstance(build, dict) or tuple(build.get("requires", ())) != EXPECTED_BUILD:
         raise ValueError("build-system requirements differ from the pinned policy")
     if build.get("build-backend") != "setuptools.build_meta":
@@ -167,11 +181,7 @@ def _validate_direct_closure(
     declared: Sequence[Requirement],
 ) -> None:
     observed = {name for name, requirement in pins.items() if requirement.url is not None}
-    expected = {
-        canonicalize_name(requirement.name)
-        for requirement in declared
-        if requirement.url is not None
-    }
+    expected = {canonicalize_name(requirement.name) for requirement in declared if requirement.url is not None}
     if observed != expected:
         raise ValueError("dependency lock contains an undeclared direct dependency")
 
@@ -277,9 +287,7 @@ def _archive_files(archive: Path) -> tuple[str, ...]:
 
 
 def _is_generated_metadata(path: str) -> bool:
-    return path in {"PKG-INFO", "setup.cfg"} or path.startswith(
-        "src/xrr_fitter.egg-info/"
-    )
+    return path in {"PKG-INFO", "setup.cfg"} or path.startswith("src/xrr_fitter.egg-info/")
 
 
 def _generated_metadata(archive: Path) -> tuple[str, ...]:

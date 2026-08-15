@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xrr-fitter"
-version = "0.2.2"
+dynamic = ["version"]
 description = "X-ray reflectivity fitting application"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -17,7 +17,7 @@ dependencies = [
   "pandas>=2.2,<3",
   "xlsxwriter>=3.2,<4",
   "matplotlib>=3.9,<4",
-  "orsopy>=1.2,<2",
+  "orsopy==1.2.3",
   "jsonschema>=4.0,<5",
   "PySide6>=6.8,<7",
 ]
@@ -42,6 +42,9 @@ test = [
 where = ["src"]
 include = ["xrr_fitter*"]
 namespaces = false
+
+[tool.setuptools.dynamic]
+version = {attr = "xrr_fitter.version.__version__"}
 
 # Extra direct requirements needed to freeze the Windows standalone executable.
 # Deliberately not an optional-dependencies group: every extras group is injected
@@ -78,4 +81,3 @@ ignore = ["E501"]
 
 [tool.ruff.format]
 line-ending = "lf"
-

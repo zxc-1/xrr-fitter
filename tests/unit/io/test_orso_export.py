@@ -41,8 +41,9 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def _declared_package_version() -> str:
-    with (ROOT / "pyproject.toml").open("rb") as handle:
-        return str(tomllib.load(handle)["project"]["version"])
+    from xrr_fitter.version import __version__
+
+    return __version__
 
 
 def test_api_import_does_not_require_installed_distribution_metadata() -> None:
@@ -67,6 +68,43 @@ import xrr_fitter.api
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_orso_bytes_does_not_require_installed_distribution_metadata() -> None:
+    script = """
+import importlib.metadata
+
+def missing_distribution(name):
+    raise importlib.metadata.PackageNotFoundError(name)
+
+importlib.metadata.version = missing_distribution
+
+from tests.unit.io.test_orso_export import _load_single, _orso_context
+from xrr_fitter.io.orso import orso_bytes
+from xrr_fitter.version import __version__
+
+loaded = _load_single(orso_bytes(_orso_context(), covariance=None))
+assert loaded.info.reduction.software.version == __version__
+"""
+    environment = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
+
+    completed = subprocess.run(
+        (sys.executable, "-c", script),
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_orsopy_private_header_helpers_are_exactly_pinned_and_importable() -> None:
+    dependencies = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["dependencies"]
+    assert "orsopy==1.2.3" in dependencies
+    assert callable(_read_header_data)
+    assert callable(_validate_header_data)
 
 
 def _orso_context(
