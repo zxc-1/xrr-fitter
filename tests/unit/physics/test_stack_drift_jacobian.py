@@ -67,7 +67,7 @@ def test_drift_expansion_aligns_across_all_three_paths() -> None:
     rebuilt = rebuild_structure(problem.structure, values)
     wavelength = problem.data.beam.effective_wavelength_a
 
-    primal = expand_structure(rebuilt, wavelength, values)
+    primal = expand_structure(rebuilt, wavelength)
     differentiable = expand_structure_with_jacobian(
         problem.structure,
         values,
@@ -75,7 +75,7 @@ def test_drift_expansion_aligns_across_all_three_paths() -> None:
         wavelength,
         len(problem.variables),
     )
-    geometry = expand_geometry(rebuilt, len(problem.variables), value_jacobians, values)
+    geometry = expand_geometry(rebuilt, len(problem.variables), value_jacobians)
 
     # Linear thickness drift, amount ~= 0.1, coeffs (0, 1, 2): copies scale the cell.
     np.testing.assert_allclose(primal.thickness_a, [0.0, 20.0, 500.0, 22.0, 550.0, 24.0, 600.0, 0.0])

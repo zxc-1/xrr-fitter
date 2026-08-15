@@ -86,20 +86,30 @@ def drift_case() -> tuple:
 
 
 def drift_values(structure) -> dict[str, float]:
+    """Emit the complete physical map ``rebuild_structure`` reads for a drift block.
+
+    The map covers the free ``drift_scale``, every base-cell coordinate, the
+    per-copy ``.repeat.{k}`` coordinate for whichever family the block drifts, and
+    the backing roughness -- rebuilding requires all of them by name, since it
+    bakes drift into per-copy layers rather than reading the declaration's values.
+    """
     from xrr_fitter.fit.drift import drift_coefficients
 
     block = structure.components[0]
     drift = block.drift
     coeffs = drift_coefficients(drift, block.repeats)
     prefix = "component.0"
-    values = {f"{prefix}.drift_scale": drift.amount}
+    values = {
+        f"{prefix}.drift_scale": drift.amount,
+        "backing.roughness_a": structure.backing_roughness_a,
+    }
     for index, layer in enumerate(block.layers):
         base = f"{prefix}.layer.{index}"
         values[f"{base}.thickness_a"] = layer.thickness_a
         values[f"{base}.roughness_a"] = layer.roughness_a
         values[f"{base}.density_scale"] = layer.density_scale
+        base_target = layer.thickness_a if drift.target == "thickness" else layer.roughness_a
         for k in range(1, block.repeats):
-            values[f"{prefix}.repeat.{k}.layer.{index}.thickness_a"] = layer.thickness_a * (
-                1.0 + drift.amount * coeffs[k]
-            )
+            copy = f"{prefix}.repeat.{k}.layer.{index}.{drift.target}_a"
+            values[copy] = base_target * (1.0 + drift.amount * coeffs[k])
     return values

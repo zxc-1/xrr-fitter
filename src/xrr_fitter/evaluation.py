@@ -409,7 +409,7 @@ def _roughness_dynamic_uppers(
         problem.structure,
         provisional_values,
     )
-    geometry = _expand_geometry(provisional, values=provisional_values)
+    geometry = _expand_geometry(provisional)
     dynamic: dict[str, float] = {}
     final_medium = geometry.thickness_a.size - 1
     # Repeated source names reduce by minimum, independent of occurrence order.
@@ -454,7 +454,6 @@ def _roughness_geometry_context(
         provisional,
         parameter_count=len(problem.variables),
         value_jacobians=value_jacobians,
-        values=provisional_values,
     )
 
 
@@ -870,19 +869,18 @@ def _primary_wavelength(problem: object) -> float:
 def _expanded_stacks(
     problem: object,
     rebuilt: StructureSpec,
-    values: dict[str, float],
 ) -> tuple[float, SlabStack, SlabStack | None]:
     """Expand primary and optional secondary stacks at their true wavelengths.
 
     Material SLD is wavelength dependent, so a mixed beam cannot reuse one stack
-    even though both expansions share the same rebuilt physical geometry. The
-    resolved ``values`` map is forwarded so drifted periodic blocks expand their
-    per-copy geometry rather than the shared base cell.
+    even though both expansions share the same rebuilt physical geometry. Any
+    drifted periodic block is already baked into per-copy layers by
+    ``rebuild_structure``, so expansion is a pure function of the rebuilt geometry.
     """
     primary_wavelength = _primary_wavelength(problem)
-    primary = expand_structure(rebuilt, primary_wavelength, values)
+    primary = expand_structure(rebuilt, primary_wavelength)
     secondary = (
-        expand_structure(rebuilt, problem.data.beam.wavelength_2_a, values)
+        expand_structure(rebuilt, problem.data.beam.wavelength_2_a)
         if problem.data.beam.kind == "mixed_kalpha"
         else None
     )
@@ -1167,7 +1165,6 @@ def _model_evaluation(
         primary_wavelength, primary_stack, secondary_stack = _expanded_stacks(
             problem,
             rebuilt,
-            values,
         )
     except (ValueError, FloatingPointError, OverflowError) as error:
         raise EvaluationConstraintError(f"constraint_violation:{type(error).__name__}") from error
