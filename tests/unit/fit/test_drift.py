@@ -1,6 +1,8 @@
 import math
 
-from xrr_fitter.fit.drift import drift_coefficients
+from tests.support.drift_cases import one_drift_block_structure, plain_periodic_structure
+
+from xrr_fitter.fit.drift import DRIFT_DATASET, drift_coefficients, drift_constraint_rules
 from xrr_fitter.model.structure import DriftSpec
 
 
@@ -20,3 +22,14 @@ def test_random_is_deterministic_bitwise():
     a = drift_coefficients(d, 6)
     b = drift_coefficients(d, 6)
     assert a == b and a[0] == 0.0 and all(-1.0 <= v <= 1.0 for v in a[1:])
+
+
+def test_rules_cover_every_copy_and_layer():  # 2 层, repeats=3
+    rules = drift_constraint_rules(one_drift_block_structure())
+    targets = {r.target.parameter_name for r in rules}
+    assert targets == {f"component.0.repeat.{k}.layer.{i}.thickness_a" for k in (1, 2) for i in (0, 1)}
+    assert all(r.target.dataset_id == DRIFT_DATASET for r in rules)
+
+
+def test_no_drift_yields_no_rules():
+    assert drift_constraint_rules(plain_periodic_structure()) == ()

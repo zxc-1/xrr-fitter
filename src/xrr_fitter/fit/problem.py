@@ -8,6 +8,7 @@ from math import isfinite
 import numpy as np
 
 from xrr_fitter.evaluation import assign_fit_regions, region_weights
+from xrr_fitter.fit.drift import drift_constraint_rules
 from xrr_fitter.fit.parameters import (
     apply_parameter_settings,
     default_parameter_definitions,
@@ -234,7 +235,11 @@ def compile_fit_problem(
     _validate_config(config)
     _validate_data_mode(data, instrument)
     _require_explicit_expert_density(structure, tuple(parameter_settings))
-    rules = tuple(constraint_rules)
+    # Drift ``.repeat.`` targets are regenerated from ``structure`` on every
+    # compile so a staged recompile (which feeds ``problem.constraint_rules``
+    # back in) cannot accumulate duplicates; only foreign rules are carried over.
+    incoming = tuple(rule for rule in constraint_rules if ".repeat." not in rule.target.parameter_name)
+    rules = incoming + drift_constraint_rules(structure)
     namespace = _validate_local_constraints(rules)
     definitions = apply_parameter_settings(
         default_parameter_definitions(data, structure, instrument, config),
