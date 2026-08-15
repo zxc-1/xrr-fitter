@@ -461,7 +461,7 @@ for dataset in fit_output.updated_project.datasets:
     )
 
 api.save_project(updated, path.with_name("single-layer-fitted.xrrproj.json"))
-manifest = api.export_result(updated, Path("exports"))
+manifest = api.export_result(updated, Path("exports"), include_ort=True)
 print(manifest.run_directory)
 ```
 
@@ -470,12 +470,12 @@ print(manifest.run_directory)
 
 ## 11. 导出文件和语义
 
-`api.export_result(result, output_dir)` 接受 fitted `XrrProject` 或
+`api.export_result(result, output_dir, *, include_ort=False)` 接受 fitted `XrrProject` 或
 `ProjectFitResult`；后者先归一为 `updated_project`，持久
 `dataset.last_valid_result` 是 artifact source of truth。导出先完成 schema、
 result、source/TOCTOU 和 selected candidate preflight，才分配输出目录。
 
-每个 dataset 固定输出：
+每个 dataset 始终输出：
 
 ```text
 fit_result.xlsx
@@ -485,6 +485,9 @@ sld_profile.png
 residuals.png
 run_log.txt
 ```
+
+传入 `include_ort=True`（CLI 对应 `--ort`）时，每个 dataset 还会额外输出
+ORSO `fit_result.ort`；默认关闭时产物集合保持不变。
 
 `fit_result.xlsx` sheets 固定为：
 
@@ -571,7 +574,7 @@ start_fit_job(project, checkpoint_path)
 start_automatic_fit_job(project, import_batch_id, checkpoint_path)
 start_mcmc_job(project, dataset_id, candidate_id, config)
 summarize_automatic_results(project, import_batch_id)
-export_result(result, output_dir)
+export_result(result, output_dir, *, include_ort=False)
 ```
 
 `OperationJob` 提供只读 `pid`/`is_running` 以及 `poll()`、`cancel()`、
@@ -800,14 +803,15 @@ xrr-fitter-cli validate <project>
 xrr-fitter-cli fit <project> [--auto] [--output PATH] [--json-progress]
 xrr-fitter-cli mcmc <project> --dataset ID --candidate ID \
     --walkers N --burn-in N --steps N [--output PATH] [--json-progress]
-xrr-fitter-cli export <project> <output_dir>
+xrr-fitter-cli export <project> <output_dir> [--ort]
 ```
 
 - `validate` 只读校验工程与源文件的新鲜度，并报告拟合就绪状态，不运行任何优化器。
 - `fit` 运行拟合流水线；`--auto` 走自动批次路径，`--output` 把更新后的工程写到指定
   路径，`--json-progress` 把进度写成 stdout 的 JSON Lines，否则写成 stderr 的文本行。
 - `mcmc` 对选定候选运行采样并持久化增广后的工程。
-- `export` 原子发布已有结果，并在 stdout 打印运行目录。
+- `export` 原子发布已有结果，并在 stdout 打印运行目录；`--ort` 额外生成每个
+  dataset 的 ORSO `fit_result.ort`。
 
 进程退出码构成无头编排的合同：
 

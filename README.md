@@ -31,17 +31,20 @@ parameter uncertainty.
 - macOS on Apple Silicon (arm64)
 
 Runtime dependencies (numpy, scipy, periodictable, pandas, xlsxwriter,
-matplotlib, PySide6) are declared in `pyproject.toml` and pinned in
-`requirements-macos-arm64-py312.lock`.
+matplotlib, orsopy, jsonschema, PySide6) are declared in `pyproject.toml` and
+pinned in `requirements-macos-arm64-py312.lock`.
 
 ## Installation
 
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
+python3.12 -m venv "${TMPDIR:-/tmp}/xrr-fitter-venv"
+source "${TMPDIR:-/tmp}/xrr-fitter-venv/bin/activate"
 pip install -r requirements-macos-arm64-py312.lock
 pip install .
 ```
+
+Keep the environment outside the checkout: the repository hygiene gate rejects
+generated `.venv`/`venv` directories even when Git ignores them.
 
 ## Usage
 
@@ -109,5 +112,4 @@ conventions.
 
 ## License
 
-License to be determined. Until a license is added, all rights are reserved by
-the authors.
+XRR Fitter is licensed under the MIT License. See [`LICENSE`](LICENSE).
