@@ -19,6 +19,7 @@ PUBLIC_NAMES = (
     "DataColumnMapping",
     "DatasetAutomation",
     "DatasetProject",
+    "DriftSpec",
     "ExportManifest",
     "FitConfig",
     "FitProgress",
