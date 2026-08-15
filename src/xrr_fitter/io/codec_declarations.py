@@ -19,6 +19,7 @@ from xrr_fitter.model.fitting import (
 )
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.structure import (
+    DriftSpec,
     GradientLayerSpec,
     InterfaceTransition,
     LayerSpec,
@@ -264,14 +265,42 @@ def _layer_from_dict(value: object) -> LayerSpec:
     )
 
 
-def _periodic_to_dict(value: PeriodicBlock) -> dict[str, object]:
+def _drift_to_dict(value: DriftSpec) -> dict[str, object]:
     return {
+        "kind": value.kind,
+        "target": value.target,
+        "amount": value.amount,
+        "period": value.period,
+        "phase": value.phase,
+        "seed": value.seed,
+    }
+
+
+def _drift_from_dict(value: object) -> DriftSpec:
+    payload = _mapping(value, {"kind", "target", "amount", "period", "phase", "seed"}, "drift")
+    return DriftSpec(
+        kind=payload["kind"],
+        target=payload["target"],
+        amount=payload["amount"],
+        period=payload["period"],
+        phase=payload["phase"],
+        seed=payload["seed"],
+    )
+
+
+def _periodic_to_dict(value: PeriodicBlock) -> dict[str, object]:
+    payload: dict[str, object] = {
         "kind": "periodic_block",
         "name": value.name,
         "layers": [_layer_to_dict(layer) for layer in value.layers],
         "repeats": value.repeats,
         "top_roughness_a": value.top_roughness_a,
     }
+    # Emitting the key only when present keeps files written before drift
+    # existed byte-identical, and lets older readers load them unchanged.
+    if value.drift is not None:
+        payload["drift"] = _drift_to_dict(value.drift)
+    return payload
 
 
 def _periodic_from_dict(value: object) -> PeriodicBlock:
@@ -279,12 +308,15 @@ def _periodic_from_dict(value: object) -> PeriodicBlock:
         value,
         {"kind", "name", "layers", "repeats", "top_roughness_a"},
         "periodic block",
+        optional={"drift"},
     )
+    drift = payload.get("drift")
     return PeriodicBlock(
         name=payload["name"],
         layers=tuple(_layer_from_dict(item) for item in _sequence(payload["layers"], "layers")),
         repeats=payload["repeats"],
         top_roughness_a=payload["top_roughness_a"],
+        drift=None if drift is None else _drift_from_dict(drift),
     )
 
 
