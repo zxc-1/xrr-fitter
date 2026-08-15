@@ -50,6 +50,7 @@ from xrr_fitter.model.automation import (
 )
 from xrr_fitter.model.parameters import (
     CONSTRAINT_BINARY_OPS,
+    CONSTRAINT_UNARY_OPS,
     MAX_CONSTRAINT_DEPTH,
     ConstraintNode,
     ConstraintRule,
@@ -186,7 +187,7 @@ def _constraint_node_from_dict(value: object, depth: int = 0) -> ConstraintNode:
     if op == "const":
         fields = _mapping(value, {"op", "value"}, "constraint const node")
         return ConstraintNode("const", value=fields["value"])
-    if op in CONSTRAINT_BINARY_OPS:
+    if op in CONSTRAINT_BINARY_OPS | CONSTRAINT_UNARY_OPS:
         fields = _mapping(value, {"op", "operands"}, "constraint operator node")
         operands = tuple(
             _constraint_node_from_dict(item, depth + 1) for item in _sequence(fields["operands"], "constraint operands")
