@@ -15,25 +15,25 @@ from xrr_fitter.model.structure import (
     StructureSpec,
 )
 
-_AIR = MaterialSpec("Air", None, None, 0.0j)
-_SILICON = MaterialSpec("Si", "Si", 2.329)
-_SILICA = MaterialSpec("SiO2", "SiO2", 2.2)
+AIR = MaterialSpec("Air", None, None, 0.0j)
+SILICON = MaterialSpec("Si", "Si", 2.329)
+SILICA = MaterialSpec("SiO2", "SiO2", 2.2)
 
 
 def media() -> MaterialSpec:
-    return _AIR
+    return AIR
 
 
 def make_layer(name="film", thickness_a=20.0, roughness_a=2.0) -> LayerSpec:
-    return LayerSpec(name, _SILICA, thickness_a, roughness_a=roughness_a)
+    return LayerSpec(name, SILICA, thickness_a, roughness_a=roughness_a)
 
 
 def two_layer_block(repeats=3) -> PeriodicBlock:
     return PeriodicBlock(
         name="p",
         layers=(
-            LayerSpec("a", _SILICA, 20.0, roughness_a=2.0),
-            LayerSpec("b", _SILICON, 500.0, roughness_a=3.0),
+            LayerSpec("a", SILICA, 20.0, roughness_a=2.0),
+            LayerSpec("b", SILICON, 500.0, roughness_a=3.0),
         ),
         repeats=repeats,
     )
@@ -52,18 +52,18 @@ def drift_block() -> PeriodicBlock:
 
 def one_drift_block_structure() -> StructureSpec:
     return StructureSpec(
-        fronting=_AIR,
+        fronting=AIR,
         components=(drift_block(),),
-        backing=_SILICON,
+        backing=SILICON,
         backing_roughness_a=3.0,
     )
 
 
 def plain_periodic_structure() -> StructureSpec:
     return StructureSpec(
-        fronting=_AIR,
+        fronting=AIR,
         components=(two_layer_block(),),
-        backing=_SILICON,
+        backing=SILICON,
         backing_roughness_a=3.0,
     )
 

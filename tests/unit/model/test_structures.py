@@ -254,7 +254,7 @@ def test_layer_without_transition_keeps_existing_construction() -> None:
     assert (layer.thickness_a, layer.density_scale, layer.roughness_a) == (20.0, 1.0, 3.0)
 
 
-_FILM = LayerSpec("film", MaterialSpec("SiO2", "SiO2", 2.2), 20.0, roughness_a=2.0)
+FILM = LayerSpec("film", MaterialSpec("SiO2", "SiO2", 2.2), 20.0, roughness_a=2.0)
 
 
 def test_drift_spec_defaults_and_kind_validation() -> None:
@@ -277,7 +277,7 @@ def test_random_requires_nonneg_int_seed() -> None:
 def test_periodic_block_accepts_drift_and_requires_two_repeats() -> None:
     block = PeriodicBlock(
         name="p",
-        layers=(_FILM,),
+        layers=(FILM,),
         repeats=3,
         drift=DriftSpec(kind="linear", target="thickness", amount=0.05),
     )
@@ -285,11 +285,11 @@ def test_periodic_block_accepts_drift_and_requires_two_repeats() -> None:
     with pytest.raises(ValueError):
         PeriodicBlock(
             name="p",
-            layers=(_FILM,),
+            layers=(FILM,),
             repeats=1,
             drift=DriftSpec(kind="linear", target="thickness", amount=0.05),
         )
 
 
 def test_periodic_block_without_drift_defaults_none() -> None:
-    assert PeriodicBlock(name="p", layers=(_FILM,), repeats=2).drift is None
+    assert PeriodicBlock(name="p", layers=(FILM,), repeats=2).drift is None

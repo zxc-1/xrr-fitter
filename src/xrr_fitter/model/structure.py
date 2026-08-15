@@ -269,8 +269,8 @@ class GradientLayerSpec:
             raise ValueError(f"{self.name}.microslab_max_a must be in (0,thickness]")
 
 
-_DRIFT_KINDS = frozenset({"linear", "sine", "random"})
-_DRIFT_TARGETS = frozenset({"thickness", "roughness"})
+DRIFT_KINDS = frozenset({"linear", "sine", "random"})
+DRIFT_TARGETS = frozenset({"thickness", "roughness"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,10 +285,10 @@ class DriftSpec:
     seed: int = 0
 
     def __post_init__(self) -> None:
-        if self.kind not in _DRIFT_KINDS:
-            raise ValueError(f"drift.kind must be one of {sorted(_DRIFT_KINDS)}")
-        if self.target not in _DRIFT_TARGETS:
-            raise ValueError(f"drift.target must be one of {sorted(_DRIFT_TARGETS)}")
+        if self.kind not in DRIFT_KINDS:
+            raise ValueError(f"drift.kind must be one of {sorted(DRIFT_KINDS)}")
+        if self.target not in DRIFT_TARGETS:
+            raise ValueError(f"drift.target must be one of {sorted(DRIFT_TARGETS)}")
         if not isfinite(self.amount):
             raise ValueError("drift.amount must be finite")
         if self.kind == "sine":
