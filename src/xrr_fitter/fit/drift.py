@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import numpy as np
 
@@ -54,3 +55,40 @@ def drift_constraint_rules(structure: StructureSpec) -> tuple[ConstraintRule, ..
                 target = ParameterReference(DRIFT_DATASET, f"{prefix}.repeat.{k}.layer.{layer_index}.{family}")
                 rules.append(ConstraintRule(target=target, expression=ConstraintNode("mul", operands=(base, factor))))
     return tuple(rules)
+
+
+def _rebind_node(node: ConstraintNode, dataset_id: str) -> ConstraintNode:
+    """Rewrite every ``DRIFT_DATASET`` reference in an expression to ``dataset_id``."""
+    if node.op == "ref":
+        if node.reference.dataset_id == DRIFT_DATASET:
+            return ConstraintNode("ref", reference=ParameterReference(dataset_id, node.reference.parameter_name))
+        return node
+    if node.op == "const":
+        return node
+    return ConstraintNode(node.op, operands=tuple(_rebind_node(child, dataset_id) for child in node.operands))
+
+
+def rebind_drift_dataset(problem: object, dataset_id: str) -> object:
+    """Rebind a compiled member's ``__drift__`` sentinel rules to its real ``dataset_id``.
+
+    Drift rules are generated dataset-agnostically (target and refs carry the
+    ``DRIFT_DATASET`` sentinel) so a single structure desugars identically for any
+    dataset. Joint compilation validates each member's local rules against the
+    member's own dataset identity, so the sentinel must be rebound before the
+    problem enters ``compile_joint_problem``. Returns the problem unchanged (same
+    object) when it carries no drift rules, keeping non-drift joint fingerprints
+    byte-identical.
+    """
+    rules = problem.constraint_rules
+    if not any(rule.target.dataset_id == DRIFT_DATASET for rule in rules):
+        return problem
+    rebound = tuple(
+        ConstraintRule(
+            target=ParameterReference(dataset_id, rule.target.parameter_name),
+            expression=_rebind_node(rule.expression, dataset_id),
+        )
+        if rule.target.dataset_id == DRIFT_DATASET
+        else rule
+        for rule in rules
+    )
+    return replace(problem, constraint_rules=rebound)

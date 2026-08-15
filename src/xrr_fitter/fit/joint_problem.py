@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from hashlib import sha256
 
 from xrr_fitter.fit.checkpoint import checkpoint_identity
+from xrr_fitter.fit.drift import rebind_drift_dataset
 from xrr_fitter.fit.joint_constraint_compilation import (
     constraint_node_payload,
     joint_constraint_closure,
@@ -158,6 +159,9 @@ def compile_joint_problem(
     local_problems = tuple(problems)
     rules = tuple(sharing_rules)
     _validate_inputs(ids, local_problems)
+    local_problems = tuple(
+        rebind_drift_dataset(problem, dataset_id) for dataset_id, problem in zip(ids, local_problems, strict=True)
+    )
     constraints = merged_constraints(
         ids,
         local_problems,
