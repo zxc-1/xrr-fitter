@@ -241,6 +241,38 @@ def _validate_constraint_rule_values(rules: tuple[ConstraintRule, ...]) -> None:
         raise TypeError("constraint_rules must contain ConstraintRule values")
 
 
+def _reject_user_reserved_rules(
+    provided: tuple[ConstraintRule, ...],
+    generated: tuple[ConstraintRule, ...],
+) -> None:
+    if any(DRIFT_DATASET in _constraint_dataset_ids((rule,)) and rule not in generated for rule in provided):
+        raise ValueError(f"{DRIFT_DATASET!r} is reserved for generated drift rules")
+
+
+def _bound_generated_rules(
+    provided: tuple[ConstraintRule, ...],
+    generated: tuple[ConstraintRule, ...],
+) -> tuple[ConstraintRule, ...]:
+    dataset_ids = _constraint_dataset_ids(provided) - {DRIFT_DATASET}
+    if len(dataset_ids) == 1:
+        return rebind_drift_rules(generated, next(iter(dataset_ids)))
+    return generated
+
+
+def _incoming_user_rules(
+    provided: tuple[ConstraintRule, ...],
+    generated_sentinel: tuple[ConstraintRule, ...],
+    generated: tuple[ConstraintRule, ...],
+) -> tuple[ConstraintRule, ...]:
+    generated_variants = set(generated_sentinel) | set(generated)
+    incoming = tuple(rule for rule in provided if rule not in generated_variants)
+    generated_names = {rule.target.parameter_name for rule in generated}
+    conflicts = sorted(rule.target.parameter_name for rule in incoming if rule.target.parameter_name in generated_names)
+    if conflicts:
+        raise ValueError(f"user constraint target conflicts with generated drift rule: {conflicts}")
+    return incoming
+
+
 def _compiled_constraint_rules(
     structure: StructureSpec,
     constraint_rules: tuple[ConstraintRule, ...],
@@ -248,27 +280,12 @@ def _compiled_constraint_rules(
     provided_rules = tuple(constraint_rules)
     _validate_constraint_rule_values(provided_rules)
     generated_sentinel = drift_constraint_rules(structure)
-    if any(
-        DRIFT_DATASET in _constraint_dataset_ids((rule,)) and rule not in generated_sentinel for rule in provided_rules
-    ):
-        raise ValueError(f"{DRIFT_DATASET!r} is reserved for generated drift rules")
-    incoming_dataset_ids = _constraint_dataset_ids(provided_rules) - {DRIFT_DATASET}
-    generated = generated_sentinel
-    if len(incoming_dataset_ids) == 1:
-        generated = rebind_drift_rules(generated, next(iter(incoming_dataset_ids)))
+    _reject_user_reserved_rules(provided_rules, generated_sentinel)
+    generated = _bound_generated_rules(provided_rules, generated_sentinel)
     # Regenerate drift rules on every compile so staged recompiles remain
     # idempotent, but only discard rules that exactly match a prior generated
     # rule. A user-authored repeat target must never disappear silently.
-    generated_variants = set(generated_sentinel) | set(generated)
-    incoming = tuple(rule for rule in provided_rules if rule not in generated_variants)
-    conflicts = sorted(
-        rule.target.parameter_name
-        for rule in incoming
-        if rule.target.parameter_name in {item.target.parameter_name for item in generated}
-    )
-    if conflicts:
-        raise ValueError(f"user constraint target conflicts with generated drift rule: {conflicts}")
-    return incoming + generated
+    return _incoming_user_rules(provided_rules, generated_sentinel, generated) + generated
 
 
 def compile_fit_problem(
