@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import datetime
 import io
-from importlib.metadata import version
 from numbers import Real
 
 import numpy as np
@@ -32,7 +31,9 @@ INSTRUMENT_SENTINEL = "unknown"
 OWNER_AFFILIATION = "XRR-Fitter automated export"
 EXCLUDED_ROW_REASON = "non_finite_or_nonpositive_export_row"
 COVARIANCE_ABSENT_REASON = "covariance not estimated for this fit result"
-PACKAGE_VERSION = version("xrr-fitter")
+# Source checkouts and frozen executables do not have to carry distribution
+# metadata. The ORSO test pins this release value to ``pyproject.toml``.
+PACKAGE_VERSION = "0.2.2"
 
 
 def orso_bytes(context: DatasetExportData, *, covariance: np.ndarray | None) -> bytes:

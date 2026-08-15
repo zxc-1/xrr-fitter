@@ -10,8 +10,12 @@ significant digits, so equality is asserted with ``==`` not ``approx``.
 from __future__ import annotations
 
 import io
+import os
+import subprocess
+import sys
+import tomllib
 from dataclasses import replace
-from importlib.metadata import version
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -32,6 +36,37 @@ from xrr_fitter.io.orso import orso_bytes
 from xrr_fitter.model.analysis import UncertaintyReport
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.parameters import ParameterValue
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def _declared_package_version() -> str:
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        return str(tomllib.load(handle)["project"]["version"])
+
+
+def test_api_import_does_not_require_installed_distribution_metadata() -> None:
+    script = """
+import importlib.metadata
+
+def missing_distribution(name):
+    raise importlib.metadata.PackageNotFoundError(name)
+
+importlib.metadata.version = missing_distribution
+import xrr_fitter.api
+"""
+    environment = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
+
+    completed = subprocess.run(
+        (sys.executable, "-c", script),
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def _orso_context(
@@ -368,7 +403,7 @@ def test_orso_bytes_records_source_hash_package_version_and_mixed_kalpha() -> No
     assert isinstance(source, fileio.File)
     assert source.hash.algorithm == "sha256"
     assert source.hash.digest == context.data.source_sha256
-    assert loaded.info.reduction.software.version == version("xrr-fitter")
+    assert loaded.info.reduction.software.version == _declared_package_version()
     assert reduction["beam"] == {
         "kind": "mixed_kalpha",
         "effective_wavelength_a": beam.effective_wavelength_a,
