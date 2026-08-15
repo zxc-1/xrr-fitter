@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from pathlib import Path
-import sys
 
 import xrr_fitter.api as api
-from xrr_fitter.cli import exit_codes, progress as progress_module
+from xrr_fitter.cli import exit_codes
+from xrr_fitter.cli import progress as progress_module
 
 
 class CommandError(Exception):
@@ -95,6 +96,6 @@ def run_mcmc(arguments) -> int:
 def run_export(arguments) -> int:
     """Publish an existing project's results atomically."""
     project = _load(arguments.project)
-    manifest = api.export_result(project, arguments.output_dir)
+    manifest = api.export_result(project, arguments.output_dir, include_ort=arguments.ort)
     print(manifest.run_directory)
     return exit_codes.SUCCESS

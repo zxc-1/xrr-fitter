@@ -125,6 +125,27 @@ payload = _mapping(value, _project_fields(), "project", {"constraint_rules"})
 
 **不要 bump `SCHEMA_VERSION`**（`model/project.py:51` 现为 `2`）。bump 需要配一个 `_migrate_v2_document`，还会牵动 `model/project.py:481` 的版本相等判定与所有以 `schema_version: 2` 写死的 fixture——代价远大于一个 optional 键。
 
+**「序列化零改造」还有第二处错：节点树不能 emit `null`。** `ConstraintNode` 的 `reference` / `value` / `operands` 里恒有两个是空的，而 `_allows_null`（`io/codec_common.py:119-123`）是两套并列机制：
+
+```python
+field = path[-1]
+if isinstance(field, str) and field in OPTIONAL_FIELDS:   # 只看叶子名
+    return True
+return any(isinstance(part, str) and part in NULLABLE_ARRAY_FIELDS for part in path)  # 看整条路径
+```
+
+`value` / `reference` / `operands` **都不在 `OPTIONAL_FIELDS`（`:19-54`）也不在 `NULLABLE_ARRAY_FIELDS`（`:55-80`）**。所以照直觉写成 `{"op": "ref", "reference": {...}, "value": null, "operands": []}`，`project_to_bytes:506` 的 `_validate_nulls` 会在第一次保存时抛 `ProjectSchemaError("required project value is null: constraint_rules.0.expression.value")`。
+
+**改成按 op 只 emit 相关键**，与 `prior` / `transition` 同一套做法（它们也不在两个集合里，所以 `codec_candidates.py:58` 用 `if value.prior is not None:` 条件 emit）：
+
+```
+{"op": "ref",   "reference": {"dataset_id": ..., "parameter_name": ...}}
+{"op": "const", "value": 2.0}
+{"op": "mul",   "operands": [{...}, {...}]}
+```
+
+**不要**把 `"value"` / `"reference"` 加进 `OPTIONAL_FIELDS`。两个理由：一是 `_allows_null` 只看 `path[-1]`，把 `"value"` 设为全局可空会让文档里**任何**叫 `value` 的字段都能是 `null`，这是实打实的校验放宽；二是那样会写 `io/codec_common.py`，而 `orso-export` plan 的 Task 5 也要改同一个文件的 `NULLABLE_ARRAY_FIELDS`——两份 plan 会撞在同一处。按 op 省键则完全不碰 `codec_common.py`。
+
 ### 修正 6：`XrrProject` 的新字段位置有约束
 
 尾字段是 `base_directory: str | None = field(default=None, compare=False, repr=False)`（`model/project.py:229`）。`constraint_rules` 语义上该紧跟 `sharing_rules:226`，但那样会把 `ui_state` / `measurement_preset` / `base_directory` 的位置参数序号全部后移。
@@ -318,6 +339,8 @@ locked.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.It
 
 - [ ] RED：含多层节点树的项目保存后加载，节点树**逐位相等**（spec 明列）；`constraint_rules` 为空时编码输出**不含**该键；缺该键的旧 v2 文件正常加载且字段为空元组。
 - [ ] GREEN：`io/project_codec.py` 加 `_constraint_node_to_dict` / `_constraint_node_from_dict`（递归）与 `_constraint_rule_to_dict` / `_from_dict`，照 `_sharing_to_dict:126` / `_sharing_from_dict:139` 的风格。
+- [ ] RED：`ref` 节点与 `const` 节点各存读一次——这两个测例专门抓 null 问题，见修正 5 第二段。若实现 emit 了 `"value": null`，`project_to_bytes` 会抛 `ProjectSchemaError`，测例必须在 GREEN 之前红在这个点上。
+- [ ] GREEN：**按 op 只 emit 相关键**，空字段整键省略，不写 `null`（修正 5 第二段）。解码时 `_mapping` 的 `required={"op"}`、`optional={"reference", "value", "operands"}`，再按 `op` 校验必需键是否到位。**不改 `io/codec_common.py`**——那个文件 `orso-export` plan 也要改。
 - [ ] GREEN：按修正 5 走 optional 通道——`_validated_document:440` 的 `_mapping` 传第四参 `{"constraint_rules"}`，`_project_fields():355` **不加**该键，`project_to_dict:369` 非空才 emit，`project_from_dict:476` 用 `payload.get(..., [])`。
 - [ ] **不 bump `SCHEMA_VERSION`**，不加迁移函数。
 - [ ] 递归解码要有深度上限，避免恶意/损坏文件造成栈溢出；超限抛 `ProjectSchemaError`。

@@ -153,6 +153,8 @@ THIRD_PARTY_ROOTS = {
     "xlsxwriter",
     "matplotlib",
     "PySide6",
+    "jsonschema",
+    "orsopy",
 }
 THIRD_PARTY_OWNER_ALLOWLIST = {
     "numpy": {"model", "io", "physics", "evaluation", "fit", "analysis"},
@@ -165,6 +167,8 @@ THIRD_PARTY_MODULE_ALLOWLIST = {
     "pandas": {"io.export_tables"},
     "xlsxwriter": {"io.export_tables"},
     "matplotlib": {"io.export_plots", "gui.plots"},
+    "jsonschema": {"io.orso"},
+    "orsopy": {"io.orso"},
 }
 THIRD_PARTY_PREFIX_ALLOWLIST = {
     "numpy": ("gui.plots.",),
@@ -641,14 +645,19 @@ from xrr_fitter.physics.stack import expand_structure
     )
 
 
-def test_fixture_checker_enforces_services_composition() -> None:
+def test_fixture_checker_enforces_model_module_dag_and_services_composition() -> None:
     known = {
-        "analysis.report",
-        "fit.pipeline",
+        "model.analysis",
+        "model.fitting",
+        "model.provenance",
         "services.batch",
         "services.fitting",
         "services.fitting_phases.automatic_dataset",
     }
+    assert _module_violations("model.analysis", "from xrr_fitter.model import fitting", known) == ()
+    assert _module_violations("model.provenance", "from xrr_fitter.model import fitting", known) == ()
+    assert "model-edge" in _fixture_kinds("model.fitting", "from xrr_fitter.model import analysis", *known)
+    assert "model-edge" in _fixture_kinds("model.fitting", "from xrr_fitter.model import provenance", *known)
     assert _module_violations("services.fitting", "import xrr_fitter.fit\nimport xrr_fitter.analysis", known) == ()
     assert "services-composition" in _fixture_kinds(
         "services.fitting_phases.automatic_dataset",
@@ -693,6 +702,8 @@ def test_fixture_checker_allows_cli_domain_access_only_through_public_api() -> N
         ("gui.plots", "import matplotlib\nfrom PySide6 import QtWidgets"),
         ("gui.plots.reflectivity", "import numpy"),
         ("services.datasets", "import numpy"),
+        ("io.orso", "from jsonschema import ValidationError"),
+        ("io.orso", "import orsopy"),
     ],
 )
 def test_fixture_checker_accepts_exact_third_party_owners(module: str, source: str) -> None:
@@ -709,6 +720,8 @@ def test_fixture_checker_accepts_exact_third_party_owners(module: str, source: s
         ("physics.reflectivity", "import matplotlib"),
         ("fit.search", "import refnx"),
         ("analysis.report", "import pytest"),
+        ("fit.search", "import jsonschema"),
+        ("fit.search", "import orsopy"),
     ],
 )
 def test_fixture_checker_rejects_unknown_or_wrong_third_party_owner(module: str, source: str) -> None:

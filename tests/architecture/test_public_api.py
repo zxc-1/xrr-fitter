@@ -144,6 +144,7 @@ SIGNATURES = {
     "set_sharing_rules": "(project: 'XrrProject', rules: 'Sequence[SharingRule]') -> 'XrrProject'",
     "set_structure": "(project: 'XrrProject', dataset_id: 'str', structure: 'StructureSpec') -> 'XrrProject'",
     "set_workspace_state": "(project: 'XrrProject', state: 'ProjectUiState') -> 'XrrProject'",
+    "sld_uncertainty_bands": "(structure, report, *, wavelength_a, align='backing')",
     "suggest_oxide_layers": "(structure: 'StructureSpec') -> 'tuple[OxideSuggestion, ...]'",
     "validate_constraint_rules": "(project: 'XrrProject', rules: 'Sequence[ConstraintRule]') -> 'tuple[ConstraintRule, ...]'",
     "validate_parameter_priors": "(definitions: 'Sequence[ParameterDefinition]', priors: 'Sequence[ParameterPrior]') -> 'tuple[ParameterPrior, ...]'",
@@ -159,9 +160,8 @@ SIGNATURES = {
     "start_fit_job": "(project: 'XrrProject', checkpoint_path: 'str | Path | None' = None) -> 'OperationJob'",
     "start_automatic_fit_job": "(project: 'XrrProject', import_batch_id: 'str | None' = None, checkpoint_path: 'str | Path | None' = None) -> 'OperationJob'",
     "start_mcmc_job": "(project: 'XrrProject', dataset_id: 'str', candidate_id: 'str', config: 'McmcConfig') -> 'OperationJob'",
-    "export_result": "(result: 'XrrProject | ProjectFitResult', output_dir: 'str | Path') -> 'ExportManifest'",
+    "export_result": "(result: 'XrrProject | ProjectFitResult', output_dir: 'str | Path', *, include_ort: 'bool' = False) -> 'ExportManifest'",
     "summarize_automatic_results": "(project: 'XrrProject', import_batch_id: 'str | None' = None) -> 'AutomaticResultSummary'",
-    "sld_uncertainty_bands": "(structure, report, *, wavelength_a, align='backing')",
 }
 
 

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 from multiprocessing import freeze_support
-import sys
 
 from xrr_fitter.cli import commands, exit_codes
-
 
 HANDLERS = {
     "fit": commands.run_fit,
@@ -53,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     export = subparsers.add_parser("export", help="发布已有结果")
     export.add_argument("project")
     export.add_argument("output_dir")
+    export.add_argument("--ort", action="store_true", help="额外产出 ORSO .ort 文件")
 
     validate = subparsers.add_parser("validate", help="只读校验工程与源文件")
     validate.add_argument("project")

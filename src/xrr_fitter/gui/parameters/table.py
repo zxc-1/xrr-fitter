@@ -10,7 +10,6 @@ from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
 import xrr_fitter.api as api
 
 HEADERS = ("参数", "初值", "下限", "上限", "单位", "锁定", "先验")
-
 # Shown on the lock cell of a constraint-driven row, where the checkbox is a
 # read-only indicator rather than a user toggle.
 CONSTRAINT_DRIVEN_TOOLTIP = "该参数由表达式约束驱动，数值不可手动编辑"

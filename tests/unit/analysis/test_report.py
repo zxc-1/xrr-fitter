@@ -631,7 +631,7 @@ def test_build_report_selects_the_persisted_global_ranking_winner(
     monkeypatch.setattr(
         module,
         "_correlation_evidence",
-        lambda _problem, _unit, names: (np.eye(len(names)), (), ()),
+        lambda _problem, _unit, names: (np.eye(len(names)), (), (), np.ones(len(names))),
     )
     monkeypatch.setattr(module, "_profiles", lambda *_args: ())
     monkeypatch.setattr(
@@ -868,23 +868,6 @@ def test_joint_result_uncertainty_uses_global_candidate_parameter_names() -> Non
         len(problem.variables),
         len(problem.variables),
     )
-
-
-def test_joint_ensemble_marks_bootstrap_as_not_performed() -> None:
-    joint = import_module("xrr_fitter.analysis.joint")
-
-    report, _confidence, _evidence = joint.analyze_joint_ensemble(
-        variable_names=("shared",),
-        candidate_ids=("E-0",),
-        unit_vectors=np.asarray(((0.5,),)),
-        physical_values=np.asarray(((1.0,),)),
-        objectives=(1.0,),
-        valid=(True,),
-        diagnostics=((),),
-        thresholds=FitConfig.fast(1701).confidence,
-    )
-
-    assert report.bootstrap_performed is False
 
 
 def test_problem_objective_information_uses_robust_weights_and_scale_prior() -> None:

@@ -63,6 +63,7 @@ NULLABLE_ARRAY_FIELDS = frozenset(
         "log_residuals_decades",
         "model_normalized",
         "objectives",
+        "parameter_sigma",
         "qz_a_inv",
         "real",
         "region_labels",

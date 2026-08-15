@@ -177,7 +177,7 @@ def _correlation_evidence(
     problem: object,
     unit_vector: np.ndarray,
     names: tuple[str, ...],
-) -> tuple[np.ndarray, tuple[str, ...], tuple[tuple[str, str, float], ...]]:
+) -> tuple[np.ndarray, tuple[str, ...], tuple[tuple[str, str, float], ...], np.ndarray]:
     unit_covariance = np.linalg.pinv(
         objective_information(problem, unit_vector),
         rcond=1e-12,
@@ -185,6 +185,7 @@ def _correlation_evidence(
     physical_jacobian = physical_parameter_jacobian(problem, unit_vector)
     physical_covariance = physical_jacobian @ unit_covariance @ physical_jacobian.T
     correlation = correlation_from_covariance(physical_covariance)
+    sigma = np.sqrt(np.clip(np.diag(physical_covariance), 0.0, np.inf))
     fraction = problem.config.confidence.boundary_fraction
     boundary_hits = tuple(
         name for name, value in zip(names, unit_vector, strict=True) if value <= fraction or value >= 1.0 - fraction
@@ -194,7 +195,7 @@ def _correlation_evidence(
         correlation,
         threshold=problem.config.confidence.strong_correlation,
     )
-    return correlation, boundary_hits, strong
+    return correlation, boundary_hits, strong, sigma
 
 
 def _profiles(
@@ -262,7 +263,7 @@ def build_uncertainty_report(
     best = _select_candidate(problem, values)
     unit = np.asarray(best.unit_vector, dtype=float)
     names = tuple(variable.name for variable in problem.variables)
-    correlation, boundary_hits, strong_correlations = _correlation_evidence(
+    correlation, boundary_hits, strong_correlations, sigma = _correlation_evidence(
         problem,
         unit,
         names,
@@ -282,6 +283,7 @@ def build_uncertainty_report(
     return UncertaintyReport(
         correlation_names=names,
         correlation_matrix=correlation,
+        parameter_sigma=sigma,
         profiles=profiles,
         bootstrap_intervals=intervals,
         bootstrap_failure_rate=failure_rate,
