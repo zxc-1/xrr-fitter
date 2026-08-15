@@ -367,11 +367,12 @@ def _roughness_dynamic_uppers(
     zero_roughness = _zero_roughness_values(problem)
     # Right-hand union deliberately overrides any supplied roughness coordinate.
     # Geometry remains candidate-specific because all thickness values are kept.
+    provisional_values = nonrough_values | zero_roughness
     provisional = rebuild_structure(
         problem.structure,
-        nonrough_values | zero_roughness,
+        provisional_values,
     )
-    geometry = _expand_geometry(provisional)
+    geometry = _expand_geometry(provisional, values=provisional_values)
     dynamic: dict[str, float] = {}
     final_medium = geometry.thickness_a.size - 1
     # Repeated source names reduce by minimum, independent of occurrence order.
@@ -415,6 +416,7 @@ def _roughness_geometry_context(
         provisional,
         parameter_count=len(problem.variables),
         value_jacobians=value_jacobians,
+        values=provisional_values,
     )
 
 
