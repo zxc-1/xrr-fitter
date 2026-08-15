@@ -60,6 +60,7 @@ from xrr_fitter.model.project import (
     XrrProject,
 )
 from xrr_fitter.model.structure import (
+    DriftSpec,
     GradientLayerSpec,
     InterfaceTransition,
     LayerSpec,
@@ -170,6 +171,7 @@ __all__ = (
     "DataColumnMapping",
     "DatasetAutomation",
     "DatasetProject",
+    "DriftSpec",
     "ExportManifest",
     "FitConfig",
     "FitProgress",
