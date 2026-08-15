@@ -217,7 +217,10 @@ def _positive_repeats(value: int, name: str) -> None:
 
 def _structure_components(values: object) -> tuple[StructureComponent, ...]:
     components = tuple(values)
-    allowed = (LayerSpec, PeriodicBlock, GradientLayerSpec)
+    # ``_ExpandedDriftBlock`` is ephemeral yet flows through ``replace`` when
+    # ``rebuild_structure`` bakes a drift, which re-runs this validation; admit it
+    # here so the rebuilt spec is accepted while it never enters the public union.
+    allowed = (LayerSpec, PeriodicBlock, GradientLayerSpec, _ExpandedDriftBlock)
     if any(not isinstance(value, allowed) for value in components):
         raise TypeError("structure components contain an unsupported value")
     return components
@@ -323,6 +326,25 @@ class PeriodicBlock:
                 raise TypeError(f"{self.name}.drift must be a DriftSpec")
             if self.repeats < 2:
                 raise ValueError(f"{self.name}.drift requires repeats >= 2")
+
+
+@dataclass(frozen=True, slots=True)
+class _ExpandedDriftBlock:
+    """Ephemeral per-copy expansion of a drifted block.
+
+    ``rebuild_structure`` produces this so that ``expand_structure`` stays a pure
+    function of the structure: every per-copy thickness/roughness/SLD is already
+    baked into ``layers`` (flattened copy-major, ``repeats * len(base.layers)``
+    entries). ``layer_count`` records the base cell width so geometry can recover
+    the ``(copy, layer)`` grid via ``divmod(flat_index, layer_count)``. NEVER
+    persisted, codec-encoded, or checkpointed; it lives only between the rebuild
+    and the expansion passes.
+    """
+
+    layers: tuple[LayerSpec, ...]
+    layer_count: int
+    top_roughness_a: float | None
+    target: str
 
 
 StructureComponent = LayerSpec | PeriodicBlock | GradientLayerSpec

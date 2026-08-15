@@ -183,13 +183,15 @@ def _replay_one(
 
     A sample can leave the physically expandable region -- roughness above the
     dynamic interface limit is the common case -- and such a draw carries no
-    profile to average. It is dropped here and counted by the caller so the
-    failure rate stays visible instead of silently narrowing the band.
+    profile to average. A drifted block whose derived per-copy coordinates are
+    absent from the replayed value map surfaces as a missing key here. Both are
+    dropped and counted by the caller so the failure rate stays visible instead
+    of silently narrowing the band.
     """
     try:
         stack = expand_structure(rebuild_structure(structure, values), wavelength_a)
         depth, profile = sld_depth_profile(stack, step_a=step_a)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, KeyError):
         return None
     total = float(np.sum(stack.thickness_a[1:-1]))
     return depth + _alignment_offset(depth, total, align), profile
