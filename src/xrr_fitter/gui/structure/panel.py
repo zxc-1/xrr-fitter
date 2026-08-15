@@ -37,6 +37,7 @@ class StructurePanel(QWidget):
             self.accept_current_oxide,
             self.refuse_current_oxide,
             self,
+            master_seed_source=lambda: self.document.project.master_seed,
         )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -168,9 +169,7 @@ class StructurePanel(QWidget):
         project: api.XrrProject,
         dataset_id: str,
     ) -> api.DatasetProject:
-        matches = tuple(
-            dataset for dataset in project.datasets if dataset.dataset_id == dataset_id
-        )
+        matches = tuple(dataset for dataset in project.datasets if dataset.dataset_id == dataset_id)
         if len(matches) != 1:
             raise KeyError(f"unknown dataset: {dataset_id}")
         return matches[0]

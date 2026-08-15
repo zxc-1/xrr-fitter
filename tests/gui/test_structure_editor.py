@@ -5,19 +5,20 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QLabel,
     QLineEdit,
     QPushButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTreeWidget,
 )
 
 import xrr_fitter.api as api
-
 
 AIR = api.MaterialSpec("Air", None, None, 0.0j)
 SI = api.MaterialSpec("Si", "Si", 2.329)
@@ -26,11 +27,7 @@ SIO2 = api.MaterialSpec("SiO2", "SiO2", 2.20)
 
 def _write_curve(path: Path) -> Path:
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}"
-            for index in range(32)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}" for index in range(32)) + "\n",
         encoding="utf-8",
     )
     return path
@@ -369,3 +366,118 @@ def test_add_periodic_dialog_keeps_full_stack_error_open_then_commits_correction
 
     assert dialog.result() == QDialog.DialogCode.Accepted
     assert tuple(block.name for block in panel.structure.components) == ("thin repeat",)
+
+
+def _fill_periodic_layers(dialog) -> None:
+    table = dialog.findChild(QTableWidget, "periodicLayerTable")
+    values = (("Mo", "Mo", "10.28", "2.5", "0.2"), ("Si", "Si", "2.329", "4", "0.3"))
+    for row, fields in enumerate(values):
+        for column, value in enumerate(fields):
+            table.setItem(row, column, QTableWidgetItem(value))
+
+
+def test_periodic_dialog_without_drift_emits_no_constraint_rules(qtbot) -> None:
+    from xrr_fitter.fit.drift import drift_constraint_rules
+    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+
+    dialog = PeriodicDialog()
+    qtbot.addWidget(dialog)
+    kind = dialog.findChild(QComboBox, "periodicDriftKind")
+    assert kind is not None
+    assert kind.currentData() is None
+    dialog.findChild(QLineEdit, "periodicNameInput").setText("plain")
+    _fill_periodic_layers(dialog)
+    buttons = dialog.findChild(QDialogButtonBox, "periodicDialogButtons")
+
+    qtbot.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Ok), Qt.LeftButton)
+
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    block = dialog.block()
+    assert block.drift is None
+    assert drift_constraint_rules(api.StructureSpec(AIR, (block,), SI)) == ()
+
+
+def test_periodic_dialog_drift_warning_tracks_repeats(qtbot) -> None:
+    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+
+    dialog = PeriodicDialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    warning = dialog.findChild(QLabel, "periodicDriftWarning")
+    assert warning is not None
+    assert not warning.isVisible()
+
+    dialog.findChild(QComboBox, "periodicDriftKind").setCurrentText("线性")
+    assert warning.isVisible()
+
+    repeats = dialog.findChild(QSpinBox, "periodicRepeatsInput")
+    repeats.setValue(5)
+    text_five = warning.text()
+    repeats.setValue(50)
+    text_fifty = warning.text()
+
+    assert "5" in text_five
+    assert "50" in text_fifty
+    assert text_five != text_fifty
+
+
+def test_periodic_dialog_random_drift_shows_seed_source_without_randomize_button(qtbot) -> None:
+    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+
+    dialog = PeriodicDialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.findChild(QComboBox, "periodicDriftKind").setCurrentText("随机")
+
+    seed_source = dialog.findChild(QLabel, "periodicDriftSeedSource")
+    assert seed_source is not None
+    assert seed_source.isVisible()
+    assert "种子来源" in seed_source.text()
+    assert "工程种子" in seed_source.text()
+
+    labels = tuple(button.text() for button in dialog.findChildren(QPushButton))
+    assert all("随机生成" not in text for text in labels)
+
+
+def test_periodic_dialog_feeds_selected_drift_into_committed_block(qtbot) -> None:
+    from xrr_fitter.fit.drift import drift_constraint_rules
+    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+
+    dialog = PeriodicDialog()
+    qtbot.addWidget(dialog)
+    dialog.findChild(QLineEdit, "periodicNameInput").setText("drifting")
+    _fill_periodic_layers(dialog)
+    dialog.findChild(QComboBox, "periodicDriftKind").setCurrentText("线性")
+    dialog.findChild(QComboBox, "periodicDriftTarget").setCurrentText("厚度")
+    dialog.findChild(QDoubleSpinBox, "periodicDriftAmount").setValue(0.05)
+    buttons = dialog.findChild(QDialogButtonBox, "periodicDialogButtons")
+
+    qtbot.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Ok), Qt.LeftButton)
+
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    drift = dialog.block().drift
+    assert drift is not None
+    assert (drift.kind, drift.target) == ("linear", "thickness")
+    assert drift.amount == pytest.approx(0.05)
+    assert drift_constraint_rules(api.StructureSpec(AIR, (dialog.block(),), SI))
+
+
+def test_periodic_block_row_tooltip_annotates_drift(qtbot, tmp_path) -> None:
+    panel = _panel(qtbot, tmp_path)
+    block = api.PeriodicBlock(
+        "drifted",
+        (
+            api.LayerSpec("Mo", api.MaterialSpec("Mo", "Mo", 10.28), 25.0, roughness_a=2.0),
+            api.LayerSpec("Si", SI, 40.0, roughness_a=3.0),
+        ),
+        3,
+        drift=api.DriftSpec("linear", "thickness", 0.05),
+    )
+    panel.editor.load(api.StructureSpec(AIR, (block,), SI))
+
+    tree = panel.editor.findChild(QTreeWidget, "structureTree")
+    item = tree.topLevelItem(1)
+    assert item.text(0) == "drifted"
+    tooltip = item.toolTip(0)
+    assert "线性" in tooltip
+    assert "厚度" in tooltip

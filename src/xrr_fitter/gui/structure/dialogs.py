@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -20,6 +21,14 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+
+# The amount field means a different physical quantity per drift law, so its
+# label follows the selected kind rather than staying a single fixed string.
+DRIFT_AMOUNT_LABELS = {
+    "linear": "每周期增量",
+    "sine": "正弦幅度",
+    "random": "随机标准差",
+}
 
 
 def _number(name: str, minimum: float, value: float = 0.0) -> QDoubleSpinBox:
@@ -238,6 +247,8 @@ class PeriodicDialog(QDialog):
         parent: QWidget | None = None,
         *,
         commit_block: Callable[[api.PeriodicBlock], object] | None = None,
+        master_seed: int | None = None,
+        block_offset: int | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("periodicBlockDialog")
@@ -246,6 +257,8 @@ class PeriodicDialog(QDialog):
         self.setModal(True)
         self._commit_block = commit_block
         self._block: api.PeriodicBlock | None = None
+        self._master_seed = master_seed or 0
+        self._block_offset = block_offset or 0
         self.name_editor = QLineEdit()
         self.name_editor.setObjectName("periodicNameInput")
         self.repeats_editor = QSpinBox()
@@ -259,18 +272,58 @@ class PeriodicDialog(QDialog):
         self.error_label.setObjectName("periodicDialogError")
         self.error_label.setWordWrap(True)
         self.error_label.hide()
+        self._build_drift_inputs()
         self.buttons = _buttons("periodicDialogButtons")
         self.buttons.accepted.connect(self._accept_fields)
         self.buttons.rejected.connect(self.reject)
+        self.drift_kind.currentIndexChanged.connect(self._sync_drift_inputs)
+        self.repeats_editor.valueChanged.connect(self._sync_drift_warning)
         self._arrange()
+        self._sync_drift_inputs()
+
+    def _build_drift_inputs(self) -> None:
+        self.drift_kind = QComboBox()
+        self.drift_kind.setObjectName("periodicDriftKind")
+        self.drift_kind.addItem("无", None)
+        self.drift_kind.addItem("线性", "linear")
+        self.drift_kind.addItem("正弦", "sine")
+        self.drift_kind.addItem("随机", "random")
+        self.drift_target = QComboBox()
+        self.drift_target.setObjectName("periodicDriftTarget")
+        self.drift_target.addItem("厚度", "thickness")
+        self.drift_target.addItem("粗糙度", "roughness")
+        self.drift_amount = _number("periodicDriftAmount", -1_000_000.0, 0.0)
+        self.drift_amount_label = QLabel("每周期增量")
+        self.drift_period = _number("periodicDriftPeriod", 0.000001, 4.0)
+        self.drift_phase = _number("periodicDriftPhase", -1_000_000.0, 0.0)
+        self.drift_seed = QSpinBox()
+        self.drift_seed.setObjectName("periodicDriftSeed")
+        self.drift_seed.setRange(0, 2_147_483_647)
+        self.drift_seed.setValue(self._master_seed + self._block_offset)
+        self.drift_seed_source = QLabel(f"种子来源：工程种子 {self._master_seed} + 块偏移 {self._block_offset}")
+        self.drift_seed_source.setObjectName("periodicDriftSeedSource")
+        self.drift_seed_source.setWordWrap(True)
+        self.drift_warning = QLabel()
+        self.drift_warning.setObjectName("periodicDriftWarning")
+        self.drift_warning.setWordWrap(True)
 
     def _arrange(self) -> None:
         form = QFormLayout()
         form.addRow("名称", self.name_editor)
         form.addRow("重复次数", self.repeats_editor)
+        self._drift_form = QFormLayout()
+        self._drift_form.addRow("漂移类型", self.drift_kind)
+        self._drift_form.addRow("作用目标", self.drift_target)
+        self._drift_form.addRow(self.drift_amount_label, self.drift_amount)
+        self._drift_form.addRow("正弦周期", self.drift_period)
+        self._drift_form.addRow("正弦相位", self.drift_phase)
+        self._drift_form.addRow("随机种子", self.drift_seed)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(self.table)
+        layout.addLayout(self._drift_form)
+        layout.addWidget(self.drift_seed_source)
+        layout.addWidget(self.drift_warning)
         layout.addWidget(self.error_label)
         layout.addWidget(self.buttons)
 
@@ -281,6 +334,7 @@ class PeriodicDialog(QDialog):
                 self.name_editor.text().strip(),
                 layers,
                 self.repeats_editor.value(),
+                drift=self._drift_spec(),
             )
             if self._commit_block is not None:
                 self._commit_block(candidate)
@@ -293,6 +347,49 @@ class PeriodicDialog(QDialog):
         self._block = candidate
         self.error_label.hide()
         self.accept()
+
+    def _sync_drift_inputs(self, *_args: object) -> None:
+        """Show only the fields the selected drift law actually consumes.
+
+        A hidden field would otherwise feed a value the model rejects, so the
+        row visibility mirrors ``DriftSpec``'s per-kind requirements exactly.
+        """
+        kind = self.drift_kind.currentData()
+        active = kind is not None
+        self._drift_form.setRowVisible(self.drift_target, active)
+        self._drift_form.setRowVisible(self.drift_amount, active)
+        self._drift_form.setRowVisible(self.drift_period, kind == "sine")
+        self._drift_form.setRowVisible(self.drift_phase, kind == "sine")
+        self._drift_form.setRowVisible(self.drift_seed, kind == "random")
+        self.drift_seed_source.setVisible(kind == "random")
+        self.drift_warning.setVisible(active)
+        if active:
+            self.drift_amount_label.setText(DRIFT_AMOUNT_LABELS[kind])
+        self._sync_drift_warning()
+
+    def _sync_drift_warning(self, *_args: object) -> None:
+        repeats = self.repeats_editor.value()
+        self.drift_warning.setText(
+            f"漂移块退出矩阵幂快路径：{repeats} 个周期的雅可比复杂度为 O({repeats})，而非无漂移时的 O(log {repeats})。"
+        )
+
+    def _drift_spec(self) -> api.DriftSpec | None:
+        kind = self.drift_kind.currentData()
+        if kind is None:
+            return None
+        target = self.drift_target.currentData()
+        amount = self.drift_amount.value()
+        if kind == "sine":
+            return api.DriftSpec(
+                kind,
+                target,
+                amount,
+                period=self.drift_period.value(),
+                phase=self.drift_phase.value(),
+            )
+        if kind == "random":
+            return api.DriftSpec(kind, target, amount, seed=self.drift_seed.value())
+        return api.DriftSpec(kind, target, amount)
 
     def _layer_at(self, row: int) -> api.LayerSpec:
         fields = tuple(self._cell(row, column) for column in range(5))

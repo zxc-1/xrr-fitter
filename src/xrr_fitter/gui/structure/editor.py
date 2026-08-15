@@ -23,6 +23,11 @@ CommitStructure = Callable[[api.StructureSpec], object]
 OxideAction = Callable[[], object]
 TREE_HEADERS = ("名称", "材料", "密度", "厚度 (nm)", "粗糙度 (nm)", "重复")
 
+# The tree annotates a drifting block in its tooltip rather than adding a
+# column, so these mirror the dialog's Chinese labels for kind and target.
+DRIFT_KIND_LABELS = {"linear": "线性", "sine": "正弦", "random": "随机"}
+DRIFT_TARGET_LABELS = {"thickness": "厚度", "roughness": "粗糙度"}
+
 
 def _material_text(material: api.MaterialSpec) -> str:
     return material.formula.strip() if material.formula is not None else "显式 SLD"
@@ -45,6 +50,13 @@ def _transition_text(transition: api.InterfaceTransition) -> str:
     return f"界面过渡取代粗糙度：{branches}；切片上限 {_nm(transition.microslab_max_a)} nm"
 
 
+def _drift_tooltip(drift: api.DriftSpec) -> str:
+    """Name the drift law and target in the block row without a new column."""
+    kind = DRIFT_KIND_LABELS.get(drift.kind, drift.kind)
+    target = DRIFT_TARGET_LABELS.get(drift.target, drift.target)
+    return f"漂移：{kind} · 作用于{target}"
+
+
 def _oxide_identity(value: object) -> tuple[object, ...]:
     material = value.oxide_material
     formula = material.formula if isinstance(material, api.MaterialSpec) else material
@@ -65,6 +77,8 @@ class StructureEditor(QWidget):
         accept_oxide: OxideAction,
         refuse_oxide: OxideAction,
         parent: QWidget | None = None,
+        *,
+        master_seed_source: Callable[[], int] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("structureEditor")
@@ -72,6 +86,7 @@ class StructureEditor(QWidget):
         self._commit_structure = commit_structure
         self._accept_oxide = accept_oxide
         self._refuse_oxide = refuse_oxide
+        self._master_seed_source = master_seed_source
         self._structure: api.StructureSpec | None = None
         self._decisions: tuple[api.OxideDecision, ...] = ()
         self._suggestion: api.OxideSuggestion | None = None
@@ -244,6 +259,8 @@ class StructureEditor(QWidget):
     def _component_item(self, component: object, index: int) -> QTreeWidgetItem:
         if isinstance(component, api.PeriodicBlock):
             item = QTreeWidgetItem((component.name, "周期", "", "", "", str(component.repeats)))
+            if component.drift is not None:
+                item.setToolTip(0, _drift_tooltip(component.drift))
             for layer in component.layers:
                 item.addChild(self._layer_item(layer))
         elif isinstance(component, api.GradientLayerSpec):
@@ -308,7 +325,18 @@ class StructureEditor(QWidget):
         LayerDialog(self, commit_layer=self.add_layer).exec()
 
     def _choose_periodic(self) -> None:
-        PeriodicDialog(self, commit_block=self.add_periodic_block).exec()
+        structure = self._require_structure()
+        PeriodicDialog(
+            self,
+            commit_block=self.add_periodic_block,
+            master_seed=self._master_seed(),
+            block_offset=len(structure.components),
+        ).exec()
+
+    def _master_seed(self) -> int:
+        if self._master_seed_source is None:
+            return 0
+        return self._master_seed_source()
 
     def _choose_backing(self) -> None:
         structure = self._require_structure()
