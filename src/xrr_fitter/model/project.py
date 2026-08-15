@@ -45,7 +45,13 @@ from xrr_fitter.model.automation import DatasetAutomation, MeasurementPreset
 from xrr_fitter.model.data import BeamSpec, DataColumnMapping
 from xrr_fitter.model.fitting import FitCheckpoint, FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterPrior, ParameterSetting, SharingRule
+from xrr_fitter.model.parameters import (
+    ConstraintRule,
+    ParameterPrior,
+    ParameterSetting,
+    SharingRule,
+)
+from xrr_fitter.model.project_parameter_graph import validate_project_parameter_graph
 from xrr_fitter.model.structure import StructureSpec
 
 SCHEMA_VERSION = 2
@@ -224,6 +230,7 @@ class XrrProject:
     batch_mode: str
     datasets: tuple[DatasetProject, ...]
     sharing_rules: tuple[SharingRule, ...] = ()
+    constraint_rules: tuple[ConstraintRule, ...] = ()
     ui_state: ProjectUiState = ProjectUiState()
     measurement_preset: MeasurementPreset | None = None
     base_directory: str | None = field(default=None, compare=False, repr=False)
@@ -231,6 +238,7 @@ class XrrProject:
     def __post_init__(self) -> None:
         object.__setattr__(self, "datasets", tuple(self.datasets))
         object.__setattr__(self, "sharing_rules", tuple(self.sharing_rules))
+        object.__setattr__(self, "constraint_rules", tuple(self.constraint_rules))
         validate_project(self)
 
     @property
@@ -516,7 +524,12 @@ def validate_project(project: XrrProject) -> None:
     # then to UI selections that point into those already validated graphs.
     _validate_project_header(project)
     dataset_ids = set(_project_dataset_ids(project))
-    _validate_sharing(project.sharing_rules, dataset_ids)
+    validate_project_parameter_graph(
+        project.datasets,
+        project.sharing_rules,
+        project.constraint_rules,
+        dataset_ids,
+    )
     if project.batch_mode == "joint":
         _validate_joint_results(project.datasets)
     _validate_ui(project, dataset_ids)
@@ -599,17 +612,6 @@ def _validate_joint_results(datasets: tuple[DatasetProject, ...]) -> None:
         raise ValueError("joint result candidates are not coherent across datasets")
     for index in range(len(results[0].candidates)):
         _validate_joint_rank(tuple(result.candidates[index] for result in results))
-
-
-def _validate_sharing(rules: tuple[SharingRule, ...], dataset_ids: set[str]) -> None:
-    if any(not isinstance(rule, SharingRule) for rule in rules):
-        raise TypeError("sharing_rules must contain SharingRule values")
-    keys = tuple(rule.sharing_key for rule in rules)
-    if len(keys) != len(set(keys)):
-        raise ValueError("sharing_key values must be unique")
-    for rule in rules:
-        if any(member.dataset_id not in dataset_ids for member in rule.members):
-            raise ValueError("sharing rule references a missing dataset")
 
 
 def _validate_ui(project: XrrProject, dataset_ids: set[str]) -> None:

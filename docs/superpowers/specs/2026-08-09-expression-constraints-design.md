@@ -84,8 +84,8 @@ roughness 约束。**跨阶段约束在绑定期直接拒绝**（非 roughness �
 它会造成循环依赖，且没有真实用例。
 
 `_decode_nonrough_values` 对 `(continuous_only, integer) == (True, True)` 抛
-`"analytic Jacobian requires continuous free parameters"`，所以 integer 参数不得作为约束
-表达式的自变量。
+`"analytic Jacobian requires continuous free parameters"`。integer 参数代表离散拓扑：作为
+自变量没有解析切向量，作为 target 又需要取整并产生不连续前向模型；两种位置都在绑定期拒绝。
 
 ## 绑定期检查
 
@@ -151,7 +151,7 @@ GUI 会逼出一个解析器。`ConstraintDialog(QDialog)` 照 `gui/structure/di
 - 同一 target 被 `SharingRule` 与 `ConstraintRule` 同时驱动时报错。
 - 约束引用不存在的参数时报错，复用既有 `EvaluationConstraintError`
   （`evaluation.py:726`）。
-- 约束结果越界、非有限、或引用 integer 参数时报错。
+- 约束结果越界、非有限、target 为 integer、或引用 integer 参数时报错。
 - `JointFitLayout` 的既有告警（其文档承认 "cannot assert that a shared parameter still
   exists or is free"）在约束下更易触发，需补告警测例。
 
@@ -173,4 +173,4 @@ GUI 会逼出一个解析器。`ConstraintDialog(QDialog)` 照 `gui/structure/di
 - 不做字符串表达式解析器。节点树是唯一构造方式，GUI 也照此约束（树形拾取而非文本框）。
 - 不做不等式约束或惩罚型软约束。
 - 不替换 `SharingRule`。
-- 不支持 integer 参数作为约束自变量。
+- 不支持 integer 参数作为约束 target 或自变量。

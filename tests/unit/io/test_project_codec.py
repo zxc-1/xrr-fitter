@@ -844,6 +844,27 @@ def test_project_roundtrip_preserves_prior_conflicts() -> None:
     assert report.mcmc.prior_conflicts == ("layer.0.thickness_a",)
 
 
+def test_project_roundtrip_preserves_mcmc_derived_samples() -> None:
+    original = _project_with_prior_conflicts()
+    mcmc = replace(
+        original.datasets[0].last_valid_result.uncertainty.mcmc,
+        derived_parameter_names=("component.0.thickness_a",),
+        derived_samples_physical=np.array([[20.0], [21.0], [22.0]]),
+    )
+    uncertainty = replace(
+        original.datasets[0].last_valid_result.uncertainty,
+        mcmc=mcmc,
+    )
+    result = replace(original.datasets[0].last_valid_result, uncertainty=uncertainty)
+    value = project(replace(original.datasets[0], last_valid_result=result))
+
+    restored = project_from_dict(project_to_dict(value))
+    report = restored.datasets[0].last_valid_result.uncertainty.mcmc
+
+    assert report.derived_parameter_names == ("component.0.thickness_a",)
+    np.testing.assert_array_equal(report.derived_samples_physical, np.array([[20.0], [21.0], [22.0]]))
+
+
 def test_result_without_prior_conflicts_key_still_decodes() -> None:
     payload = project_to_dict(_project_with_prior_conflicts())
     for dataset in payload["datasets"]:

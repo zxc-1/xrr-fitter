@@ -11,7 +11,12 @@ from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterReference, SharingRule
+from xrr_fitter.model.parameters import (
+    ConstraintNode,
+    ConstraintRule,
+    ParameterReference,
+    SharingRule,
+)
 from xrr_fitter.model.structure import LayerSpec, MaterialSpec
 
 SHARED_NAME = "component.0.density_scale"
@@ -56,10 +61,7 @@ def _compile():
 
 
 def _coordinate_index(problem, name: str) -> int:
-    return next(
-        index for index, coordinate in enumerate(problem.variables)
-        if coordinate.name == name
-    )
+    return next(index for index, coordinate in enumerate(problem.variables) if coordinate.name == name)
 
 
 def test_joint_problem_has_stable_global_layout_and_shared_scatter_identity() -> None:
@@ -86,6 +88,18 @@ def test_joint_problem_requires_strict_dataset_problem_pairing() -> None:
             ("left", "right"),
             (_problem(seed=811),),
             (),
+        )
+
+
+def test_joint_problem_rejects_non_constraint_rule_values() -> None:
+    api = import_module("xrr_fitter.fit.joint_problem")
+
+    with pytest.raises(TypeError, match="ConstraintRule"):
+        api.compile_joint_problem(
+            ("left", "right"),
+            (_problem(seed=812), _problem(seed=812, size=48)),
+            (),
+            ("not-a-rule",),
         )
 
 
@@ -173,11 +187,7 @@ def test_one_material_group_can_share_repeated_members_from_the_same_dataset() -
 
     joint = api.compile_joint_problem(("left", "right"), problems, (rule,))
 
-    shared = next(
-        value
-        for value in joint.global_variables
-        if value.sharing_key == rule.sharing_key
-    )
+    shared = next(value for value in joint.global_variables if value.sharing_key == rule.sharing_key)
     first_index = _coordinate_index(problems[0], "component.0.sld_real_a2")
     second_index = _coordinate_index(problems[0], "component.1.sld_real_a2")
     assert len(shared.members) == 4
@@ -185,6 +195,7 @@ def test_one_material_group_can_share_repeated_members_from_the_same_dataset() -
 
 
 def test_prefit_consensus_uses_shared_median_and_keeps_local_coordinates() -> None:
+    candidates_api = import_module("xrr_fitter.fit.joint_candidates")
     sharing = import_module("xrr_fitter.fit.joint_sharing")
     joint = _compile()
     declared = sharing.scatter_joint_vector(
@@ -217,17 +228,11 @@ def test_prefit_consensus_uses_shared_median_and_keeps_local_coordinates() -> No
         )
     }
 
-    consensus = sharing.consensus_joint_vector(joint, candidates)
+    consensus = candidates_api.consensus_joint_vector(joint, candidates)
 
-    shared_index = joint.scatter_maps[0][
-        _coordinate_index(joint.problems[0], SHARED_NAME)
-    ]
-    left_local = joint.scatter_maps[0][
-        _coordinate_index(joint.problems[0], LOCAL_NAME)
-    ]
-    right_local = joint.scatter_maps[1][
-        _coordinate_index(joint.problems[1], LOCAL_NAME)
-    ]
+    shared_index = joint.scatter_maps[0][_coordinate_index(joint.problems[0], SHARED_NAME)]
+    left_local = joint.scatter_maps[0][_coordinate_index(joint.problems[0], LOCAL_NAME)]
+    right_local = joint.scatter_maps[1][_coordinate_index(joint.problems[1], LOCAL_NAME)]
     assert consensus[shared_index] == pytest.approx(0.5)
     assert consensus[left_local] == pytest.approx(0.2)
     assert consensus[right_local] == pytest.approx(0.8)
@@ -235,6 +240,7 @@ def test_prefit_consensus_uses_shared_median_and_keeps_local_coordinates() -> No
 
 
 def test_prefit_consensus_rejects_missing_and_invalid_candidates() -> None:
+    candidates_api = import_module("xrr_fitter.fit.joint_candidates")
     sharing = import_module("xrr_fitter.fit.joint_sharing")
     joint = _compile()
     declared = sharing.scatter_joint_vector(
@@ -259,7 +265,7 @@ def test_prefit_consensus_rejects_missing_and_invalid_candidates() -> None:
     }
 
     with pytest.raises(ValueError, match="candidate.*missing|missing.*candidate"):
-        sharing.consensus_joint_vector(joint, {"left": candidates["left"]})
+        candidates_api.consensus_joint_vector(joint, {"left": candidates["left"]})
 
     invalid = type(
         "Candidate",
@@ -267,7 +273,7 @@ def test_prefit_consensus_rejects_missing_and_invalid_candidates() -> None:
         {"valid": False, "parameters": candidates["right"].parameters},
     )()
     with pytest.raises(ValueError, match="candidate.*invalid|invalid.*candidate"):
-        sharing.consensus_joint_vector(
+        candidates_api.consensus_joint_vector(
             joint,
             {"left": candidates["left"], "right": invalid},
         )
@@ -313,9 +319,7 @@ def test_joint_sharing_rejects_incompatible_parameter_families() -> None:
     right = _problem(seed=841)
     density = next(value for value in left.parameter_definitions if value.name == SHARED_NAME)
     background_index = next(
-        index
-        for index, value in enumerate(right.parameter_definitions)
-        if value.name == "instrument.background"
+        index for index, value in enumerate(right.parameter_definitions) if value.name == "instrument.background"
     )
     background = right.parameter_definitions[background_index]
     compatible_shape = replace(
@@ -382,3 +386,88 @@ def test_joint_scatter_rejects_invalid_global_vectors(global_unit: np.ndarray) -
         global_unit = np.resize(global_unit, len(joint.global_variables))
     with pytest.raises(ValueError, match="global|unit|shape|finite|bounds"):
         api.scatter_joint_vector(joint, global_unit)
+
+
+def _constrained_problem(base, target_name: str):
+    """Recompile ``base`` with ``target_name`` driven by an expression constraint.
+
+    The rule's expression only needs to be structurally valid: ``_mark_constrained``
+    reads the target name to flip its definition to ``constrained=True``, which is
+    what drops the coordinate from ``problem.variables``.
+    """
+    rule = ConstraintRule(
+        ParameterReference("right", target_name),
+        ConstraintNode("ref", reference=ParameterReference("right", LOCAL_NAME)),
+    )
+    return compile_fit_problem(
+        base.data,
+        base.structure,
+        base.instrument,
+        base.config,
+        constraint_rules=(rule,),
+    )
+
+
+def test_constraint_driving_a_shared_member_makes_joint_compilation_reject_it() -> None:
+    # Joint compilation now merges the rules already compiled into each local
+    # context, so dual ownership is rejected at the explicit conflict boundary
+    # before the lower-level free-coordinate check is needed.
+    api = import_module("xrr_fitter.fit.joint_problem")
+    left = _problem(seed=857)
+    right = _constrained_problem(_problem(seed=857), SHARED_NAME)
+
+    left_free = {coordinate.name for coordinate in left.variables}
+    right_free = {coordinate.name for coordinate in right.variables}
+    assert SHARED_NAME in left_free  # 未约束数据集：共享成员仍自由
+    assert SHARED_NAME not in right_free  # 约束驱动后：共享成员已非自由
+
+    with pytest.raises(ValueError, match="constraint target.*sharing member"):
+        api.compile_joint_problem(("left", "right"), (left, right), _rules())
+
+
+def test_joint_problem_preserves_constraints_compiled_into_local_contexts() -> None:
+    api = import_module("xrr_fitter.fit.joint_problem")
+    left = _problem(seed=861)
+    right = _problem(seed=861)
+    rule = ConstraintRule(
+        ParameterReference("left", SHARED_NAME),
+        ConstraintNode(
+            "mul",
+            operands=(
+                ConstraintNode(
+                    "ref",
+                    reference=ParameterReference("left", LOCAL_NAME),
+                ),
+                ConstraintNode("const", value=0.04),
+            ),
+        ),
+    )
+    left = compile_fit_problem(
+        left.data,
+        left.structure,
+        left.instrument,
+        left.config,
+        constraint_rules=(rule,),
+    )
+
+    joint = api.compile_joint_problem(("left", "right"), (left, right), ())
+
+    assert joint.constraint_rules == (rule,)
+    assert joint.problems[0].constraint_rules == (rule,)
+    assert joint.problems[1].constraint_rules == ()
+
+
+def test_joint_problem_rejects_uncompiled_dataset_local_constraint_argument() -> None:
+    api = import_module("xrr_fitter.fit.joint_problem")
+    rule = ConstraintRule(
+        ParameterReference("left", SHARED_NAME),
+        ConstraintNode("const", value=0.8),
+    )
+
+    with pytest.raises(ValueError, match="local constraint.*compiled"):
+        api.compile_joint_problem(
+            ("left", "right"),
+            (_problem(seed=865), _problem(seed=865)),
+            (),
+            (rule,),
+        )

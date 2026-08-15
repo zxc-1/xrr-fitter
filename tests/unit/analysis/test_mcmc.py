@@ -14,7 +14,11 @@ from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.analysis import EnsembleSamples, McmcConfig
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterPrior, ParameterSetting, PriorSpec
+from xrr_fitter.model.parameters import (
+    ParameterPrior,
+    ParameterSetting,
+    PriorSpec,
+)
 
 
 def _api():

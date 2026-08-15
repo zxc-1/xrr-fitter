@@ -7,11 +7,14 @@ from dataclasses import replace
 
 from xrr_fitter.io.source import dataset_index
 from xrr_fitter.model.parameters import (
+    ConstraintRule,
     ParameterDefinition,
     ParameterPrior,
     ParameterReference,
     ParameterSetting,
     SharingRule,
+    _iter_references,
+    validate_constraint_stage_split,
 )
 from xrr_fitter.model.project import DatasetProject, SourceUpdatePreview, XrrProject
 from xrr_fitter.model.structure import StructureSpec
@@ -68,6 +71,30 @@ def _with_priors(
     )
 
 
+def _constraint_rules_for_dataset(
+    project: XrrProject,
+    dataset_id: str,
+) -> tuple[tuple[ConstraintRule, ...], set[str]]:
+    rules = tuple(rule for rule in project.constraint_rules if rule.target.dataset_id == dataset_id)
+    local_rules = tuple(
+        rule
+        for rule in rules
+        if all(reference.dataset_id == dataset_id for reference in _iter_references(rule.expression))
+    )
+    cross_targets = {rule.target.parameter_name for rule in rules if rule not in local_rules}
+    return local_rules, cross_targets
+
+
+def _mark_cross_targets(
+    definitions: tuple[ParameterDefinition, ...],
+    target_names: set[str],
+) -> tuple[ParameterDefinition, ...]:
+    return tuple(
+        replace(definition, constrained=True) if definition.name in target_names else definition
+        for definition in definitions
+    )
+
+
 def describe_parameters(
     project: XrrProject,
     dataset_id: str,
@@ -77,13 +104,17 @@ def describe_parameters(
     if dataset.structure is None:
         raise ValueError(f"dataset has no structure: {dataset_id}")
     data = _prepared_current(project, dataset)
+    local_rules, cross_targets = _constraint_rules_for_dataset(project, dataset_id)
     definitions = fitting.compiled_parameter_definitions(
         data,
         dataset.structure,
         dataset.instrument,
         project.fit_config,
         dataset.parameter_settings,
+        local_rules,
     )
+    if cross_targets:
+        definitions = _mark_cross_targets(definitions, cross_targets)
     return _with_priors(definitions, dataset.parameter_priors)
 
 
@@ -284,6 +315,8 @@ def validate_parameter_priors(
             definition = by_name[value.name]
         except KeyError as error:
             raise ValueError(f"unknown parameter name: {value.name}") from error
+        if definition.constrained:
+            raise ValueError(f"cannot assign a prior to constrained parameter: {value.name}")
         replace(definition, prior=value.prior)
     return values
 
@@ -394,5 +427,98 @@ def set_sharing_rules(
         project,
         datasets=datasets,
         sharing_rules=validated,
+        ui_state=replace(project.ui_state, selected_candidate_ids=selected),
+    )
+
+
+def _constraint_dataset_ids(rules: Sequence[ConstraintRule]) -> set[str]:
+    """Every dataset a rule touches: its target plus each independent variable."""
+    identifiers: set[str] = set()
+    for rule in rules:
+        identifiers.add(rule.target.dataset_id)
+        for reference in _iter_references(rule.expression):
+            identifiers.add(reference.dataset_id)
+    return identifiers
+
+
+def _without_constraint_target_priors(
+    datasets: tuple[DatasetProject, ...],
+    rules: Sequence[ConstraintRule],
+) -> tuple[DatasetProject, ...]:
+    targets = {(rule.target.dataset_id, rule.target.parameter_name) for rule in rules}
+    updated = []
+    for dataset in datasets:
+        priors = tuple(prior for prior in dataset.parameter_priors if (dataset.dataset_id, prior.name) not in targets)
+        updated.append(dataset if priors == dataset.parameter_priors else replace(dataset, parameter_priors=priors))
+    return tuple(updated)
+
+
+def _constraint_definitions_by_reference(
+    project: XrrProject,
+    rules: Sequence[ConstraintRule],
+) -> dict[ParameterReference, ParameterDefinition]:
+    mapping: dict[ParameterReference, ParameterDefinition] = {}
+    for dataset_id in _constraint_dataset_ids(rules):
+        for definition in describe_parameters(project, dataset_id):
+            mapping[ParameterReference(dataset_id, definition.name)] = definition
+    return mapping
+
+
+def validate_constraint_rules(
+    project: XrrProject,
+    rules: Sequence[ConstraintRule],
+) -> tuple[ConstraintRule, ...]:
+    """Validate expression constraints against compiled parameter definitions.
+
+    Dataset existence, acyclicity, and sharing conflicts are delegated to
+    ``validate_project`` by rebinding the rules; the parameter-existence and
+    roughness two-phase checks that need compiled definitions run here, because
+    ``ALLOWED["services"]`` excludes ``evaluation`` while both may import
+    ``model`` (修正 4). Every rejection is ``ValueError``/``TypeError`` — never
+    the runtime-only ``EvaluationConstraintError`` (修正 10).
+    """
+    values = tuple(rules)
+    if any(not isinstance(rule, ConstraintRule) for rule in values):
+        raise TypeError("rules must contain ConstraintRule values")
+    validation_datasets = _without_constraint_target_priors(
+        project.datasets,
+        values,
+    )
+    validation_project = replace(
+        project,
+        datasets=validation_datasets,
+        constraint_rules=values,
+    )
+    validate_constraint_stage_split(
+        values,
+        _constraint_definitions_by_reference(validation_project, values),
+    )
+    return values
+
+
+def set_constraint_rules(
+    project: XrrProject,
+    rules: Sequence[ConstraintRule],
+) -> XrrProject:
+    """Persist expression constraints and invalidate the affected result graph."""
+    validated = validate_constraint_rules(project, rules)
+    if validated == project.constraint_rules:
+        return project
+    affected = _constraint_dataset_ids((*project.constraint_rules, *validated))
+    if project.batch_mode == "joint" and affected:
+        affected = {dataset.dataset_id for dataset in project.datasets}
+    without_target_priors = _without_constraint_target_priors(
+        project.datasets,
+        validated,
+    )
+    datasets = tuple(
+        _cleared(dataset, clear_evidence=False) if dataset.dataset_id in affected else dataset
+        for dataset in without_target_priors
+    )
+    selected = tuple(item for item in project.ui_state.selected_candidate_ids if item[0] not in affected)
+    return replace(
+        project,
+        datasets=datasets,
+        constraint_rules=validated,
         ui_state=replace(project.ui_state, selected_candidate_ids=selected),
     )

@@ -350,14 +350,45 @@ def map_problem_samples(
     ensemble: EnsembleSamples,
     cancelled: Callable[[], bool] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
+    flat_unit, physical, _derived_names, derived = _map_problem_sample_arrays(
+        problem,
+        ensemble,
+        cancelled,
+    )
+    del _derived_names, derived
+    return flat_unit, physical
+
+
+def _map_problem_sample_arrays(
+    problem: FitEvaluationContext,
+    ensemble: EnsembleSamples,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[np.ndarray, np.ndarray, tuple[str, ...], np.ndarray | None]:
     names = tuple(variable.name for variable in problem.variables)
+    derived_names = tuple(rule.target.parameter_name for rule in problem.constraint_rules)
     flat_unit = ensemble.samples_unit.reshape(-1, len(names))
     physical = np.empty_like(flat_unit)
+    derived = np.empty((flat_unit.shape[0], len(derived_names)), dtype=float) if derived_names else None
     for index, unit in enumerate(flat_unit):
         _poll(cancelled)
         mapped = values_by_name(problem, unit)
         physical[index] = [mapped[name] for name in names]
-    return flat_unit, physical
+        if derived is not None:
+            derived[index] = [mapped[name] for name in derived_names]
+    return flat_unit, physical, derived_names, derived
+
+
+def _fixed_parameter_values(
+    problem: FitEvaluationContext,
+    sampled_names: tuple[str, ...],
+    derived_names: tuple[str, ...],
+) -> tuple[tuple[str, float], ...]:
+    dynamic = set((*sampled_names, *derived_names))
+    return tuple(
+        (definition.name, float(definition.initial))
+        for definition in problem.parameter_definitions
+        if definition.name not in dynamic
+    )
 
 
 def problem_mcmc_warnings(
@@ -498,7 +529,11 @@ def run_problem_mcmc(
         cancelled=cancelled,
     )
     names = tuple(variable.name for variable in problem.variables)
-    flat_unit, physical = map_problem_samples(problem, ensemble, cancelled)
+    flat_unit, physical, derived_names, derived = _map_problem_sample_arrays(
+        problem,
+        ensemble,
+        cancelled,
+    )
     return McmcReport(
         config=config,
         child_seed=int(child_seed),
@@ -512,4 +547,7 @@ def run_problem_mcmc(
         warnings=problem_mcmc_warnings(ensemble, names),
         candidate_id=getattr(candidate, "candidate_id", None),
         prior_conflicts=mcmc_prior_conflicts(problem, flat_unit, physical),
+        derived_parameter_names=derived_names,
+        derived_samples_physical=derived,
+        fixed_parameter_values=_fixed_parameter_values(problem, names, derived_names),
     )

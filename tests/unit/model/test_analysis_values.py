@@ -154,6 +154,24 @@ def test_mcmc_config_and_report_validate_sampling_geometry() -> None:
     assert config.walkers >= 32 and config.walkers % 2 == 0
     assert report.label == "目标函数伪后验"
     assert report.samples_physical.flags.writeable is False
+    with pytest.raises(ValueError, match="derived"):
+        replace(
+            report,
+            derived_parameter_names=("derived",),
+            derived_samples_physical=np.ones((7, 1)),
+        )
+    with pytest.raises(ValueError, match="derived"):
+        replace(
+            report,
+            derived_parameter_names=("",),
+            derived_samples_physical=np.ones((8, 1)),
+        )
+    fixed = replace(report, fixed_parameter_values=(("locked", 2.0),))
+    assert fixed.fixed_parameter_values == (("locked", 2.0),)
+    with pytest.raises(ValueError, match="fixed"):
+        replace(report, fixed_parameter_values=(("a", 2.0),))
+    with pytest.raises(ValueError, match="fixed"):
+        replace(report, fixed_parameter_values=(("locked", float("nan")),))
     with pytest.raises(ValueError, match="parameter"):
         McmcReport(
             config=config,

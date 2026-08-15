@@ -49,6 +49,10 @@ from xrr_fitter.model.automation import (
     MeasurementPreset,
 )
 from xrr_fitter.model.parameters import (
+    CONSTRAINT_BINARY_OPS,
+    MAX_CONSTRAINT_DEPTH,
+    ConstraintNode,
+    ConstraintRule,
     ParameterPrior,
     ParameterReference,
     ParameterSetting,
@@ -143,6 +147,67 @@ def _sharing_from_dict(value: object) -> SharingRule:
         for item in _sequence(payload["members"], "sharing members")
     )
     return SharingRule(payload["sharing_key"], members)
+
+
+def _reference_to_dict(value: ParameterReference) -> dict[str, str]:
+    return {"dataset_id": value.dataset_id, "parameter_name": value.parameter_name}
+
+
+def _reference_from_dict(value: object) -> ParameterReference:
+    payload = _mapping(value, {"dataset_id", "parameter_name"}, "parameter reference")
+    if not isinstance(payload["dataset_id"], str) or not isinstance(payload["parameter_name"], str):
+        raise ProjectSchemaError("parameter reference fields must be strings")
+    return ParameterReference(
+        dataset_id=payload["dataset_id"],
+        parameter_name=payload["parameter_name"],
+    )
+
+
+def _constraint_node_to_dict(node: ConstraintNode) -> dict[str, object]:
+    # Emit only the key each op actually carries (修正 5): ref -> reference,
+    # const -> value, binary -> operands. No branch ever writes a null field, so
+    # unconstrained documents stay byte-identical and _validate_nulls never trips.
+    if node.op == "ref":
+        return {"op": "ref", "reference": _reference_to_dict(node.reference)}
+    if node.op == "const":
+        return {"op": "const", "value": node.value}
+    return {"op": node.op, "operands": [_constraint_node_to_dict(operand) for operand in node.operands]}
+
+
+def _constraint_node_from_dict(value: object, depth: int = 0) -> ConstraintNode:
+    if depth > MAX_CONSTRAINT_DEPTH:
+        raise ProjectSchemaError("constraint expression nesting exceeds the maximum depth")
+    if not isinstance(value, dict):
+        raise ProjectSchemaError("constraint node must be a JSON object")
+    op = value.get("op")
+    if op == "ref":
+        fields = _mapping(value, {"op", "reference"}, "constraint ref node")
+        return ConstraintNode("ref", reference=_reference_from_dict(fields["reference"]))
+    if op == "const":
+        fields = _mapping(value, {"op", "value"}, "constraint const node")
+        return ConstraintNode("const", value=fields["value"])
+    if op in CONSTRAINT_BINARY_OPS:
+        fields = _mapping(value, {"op", "operands"}, "constraint operator node")
+        operands = tuple(
+            _constraint_node_from_dict(item, depth + 1) for item in _sequence(fields["operands"], "constraint operands")
+        )
+        return ConstraintNode(op, operands=operands)
+    raise ProjectSchemaError(f"unsupported constraint op: {op!r}")
+
+
+def _constraint_rule_to_dict(value: ConstraintRule) -> dict[str, object]:
+    return {
+        "target": _reference_to_dict(value.target),
+        "expression": _constraint_node_to_dict(value.expression),
+    }
+
+
+def _constraint_rule_from_dict(value: object) -> ConstraintRule:
+    payload = _mapping(value, {"target", "expression"}, "constraint rule")
+    return ConstraintRule(
+        target=_reference_from_dict(payload["target"]),
+        expression=_constraint_node_from_dict(payload["expression"]),
+    )
 
 
 def _ui_to_dict(value: ProjectUiState) -> dict[str, object]:
@@ -370,7 +435,7 @@ def project_to_dict(project: XrrProject) -> dict[str, object]:
     """Encode a project without its runtime-only base directory."""
     if not isinstance(project, XrrProject):
         raise TypeError("project must be an XrrProject")
-    return {
+    document: dict[str, object] = {
         "schema_version": project.schema_version,
         "algorithm_version": project.algorithm_version,
         "fit_config": _fit_config_to_dict(project.fit_config),
@@ -381,6 +446,11 @@ def project_to_dict(project: XrrProject) -> dict[str, object]:
         "ui_state": _ui_to_dict(project.ui_state),
         "measurement_preset": _measurement_preset_to_dict(project.measurement_preset),
     }
+    # Optional root key (修正 5): omit it entirely when empty so projects saved
+    # before expression constraints existed keep a byte-identical encoding.
+    if project.constraint_rules:
+        document["constraint_rules"] = [_constraint_rule_to_dict(item) for item in project.constraint_rules]
+    return document
 
 
 def _validate_version(value: object) -> None:
@@ -437,7 +507,10 @@ def _validate_result_identity(value: object) -> None:
 
 
 def _validated_document(value: object) -> dict[str, Any]:
-    payload = _mapping(value, _project_fields(), "project")
+    # constraint_rules rides an optional channel: the curated _project_fields()
+    # set stays unchanged (修正 5) and the key is accepted only as an extra so a
+    # document that never carried it still passes the exact field-set check.
+    payload = _mapping(value, _project_fields(), "project", {"constraint_rules"})
     _validate_nulls(payload)
     _validate_version(payload["schema_version"])
     datasets = _sequence(payload["datasets"], "datasets")
@@ -491,6 +564,13 @@ def project_from_dict(value: object) -> XrrProject:
                     "sharing rules",
                 )
             ),
+            constraint_rules=tuple(
+                _constraint_rule_from_dict(item)
+                for item in _sequence(
+                    payload.get("constraint_rules", []),
+                    "constraint rules",
+                )
+            ),
             ui_state=_ui_from_dict(payload["ui_state"]),
             measurement_preset=_measurement_preset_from_dict(payload["measurement_preset"]),
         )
@@ -533,7 +613,7 @@ def project_from_bytes(
         )
     except ProjectSchemaError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
         raise ProjectSchemaError("invalid project JSON") from error
     project = project_from_dict(value)
     return replace(project, base_directory=base_directory)

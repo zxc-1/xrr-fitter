@@ -58,6 +58,14 @@ def _profile_from_dict(value: object) -> ParameterProfile:
     )
 
 
+def _fixed_parameters_from_list(value: object) -> tuple[tuple[str, object], ...]:
+    result = []
+    for item in _sequence(value, "MCMC fixed parameter values"):
+        payload = _mapping(item, {"name", "value"}, "MCMC fixed parameter value")
+        result.append((payload["name"], payload["value"]))
+    return tuple(result)
+
+
 def _mcmc_to_dict(value: McmcReport | None) -> dict[str, object] | None:
     if value is None:
         return None
@@ -79,6 +87,13 @@ def _mcmc_to_dict(value: McmcReport | None) -> dict[str, object] | None:
     # existed re-encode byte-identically and older readers keep loading them.
     if value.prior_conflicts:
         payload["prior_conflicts"] = list(value.prior_conflicts)
+    if value.derived_parameter_names:
+        payload["derived_parameter_names"] = list(value.derived_parameter_names)
+        payload["derived_samples_physical"] = _real_array_to_list(value.derived_samples_physical)
+    if value.fixed_parameter_values:
+        payload["fixed_parameter_values"] = [
+            {"name": name, "value": fixed_value} for name, fixed_value in value.fixed_parameter_values
+        ]
     return payload
 
 
@@ -98,7 +113,18 @@ def _mcmc_from_dict(value: object) -> McmcReport | None:
         "label",
         "warnings",
     }
-    payload = _mapping(value, required, "MCMC report", {"candidate_id", "prior_conflicts"})
+    payload = _mapping(
+        value,
+        required,
+        "MCMC report",
+        {
+            "candidate_id",
+            "prior_conflicts",
+            "derived_parameter_names",
+            "derived_samples_physical",
+            "fixed_parameter_values",
+        },
+    )
     config = McmcConfig(
         **_mapping(
             payload["config"],
@@ -120,6 +146,15 @@ def _mcmc_from_dict(value: object) -> McmcReport | None:
         warnings=tuple(_sequence(payload["warnings"], "MCMC warnings")),
         candidate_id=payload.get("candidate_id"),
         prior_conflicts=tuple(_sequence(payload.get("prior_conflicts", []), "MCMC prior conflicts")),
+        derived_parameter_names=tuple(
+            _sequence(payload.get("derived_parameter_names", []), "MCMC derived parameter names")
+        ),
+        derived_samples_physical=(
+            None
+            if "derived_samples_physical" not in payload
+            else _real_array_from_list(payload["derived_samples_physical"])
+        ),
+        fixed_parameter_values=_fixed_parameters_from_list(payload.get("fixed_parameter_values", [])),
     )
 
 

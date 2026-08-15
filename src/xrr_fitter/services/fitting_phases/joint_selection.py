@@ -107,6 +107,7 @@ def _recompiled_automatic_prepared(
         prepared.problem.instrument,
         prepared.problem.config,
         settings,
+        prepared.problem.constraint_rules,
     )
     updated = replace(
         prepared.updated_dataset,

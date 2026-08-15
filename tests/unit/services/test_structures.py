@@ -11,7 +11,13 @@ from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.analysis import StructureEvidence
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterPrior, PriorSpec
+from xrr_fitter.model.parameters import (
+    ConstraintNode,
+    ConstraintRule,
+    ParameterPrior,
+    ParameterReference,
+    PriorSpec,
+)
 from xrr_fitter.model.project import OxideDecision, ProjectUiState
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
@@ -21,7 +27,11 @@ from xrr_fitter.model.structure import (
     StructureSpec,
 )
 from xrr_fitter.services.datasets import add_dataset
-from xrr_fitter.services.parameters import describe_parameters, set_parameter_priors
+from xrr_fitter.services.parameters import (
+    describe_parameters,
+    set_constraint_rules,
+    set_parameter_priors,
+)
 from xrr_fitter.services.projects import (
     load_project,
     new_project,
@@ -118,6 +128,65 @@ def test_structure_change_reconciles_parameter_priors(tmp_path: Path) -> None:
     updated = set_structure(value, "curve", _bare())
 
     assert updated.datasets[0].parameter_priors == (scale_prior,)
+
+
+def test_structure_change_drops_only_constraints_with_incompatible_parameters(
+    tmp_path: Path,
+) -> None:
+    value = _project_with_structure(tmp_path, simple_structure())
+    structural = ConstraintRule(
+        ParameterReference("curve", "component.0.density_scale"),
+        ConstraintNode(
+            "ref",
+            reference=ParameterReference("curve", "component.0.thickness_a"),
+        ),
+    )
+    instrument = ConstraintRule(
+        ParameterReference("curve", "instrument.scale"),
+        ConstraintNode("const", value=1.0),
+    )
+    value = set_constraint_rules(value, (structural, instrument))
+
+    updated = set_structure(value, "curve", _bare())
+
+    assert updated.constraint_rules == (instrument,)
+    definitions = describe_parameters(updated, "curve")
+    assert next(item for item in definitions if item.name == "instrument.scale").constrained
+
+
+def test_structure_change_invalidates_results_for_datasets_in_dropped_constraints(
+    tmp_path: Path,
+) -> None:
+    project = new_project()
+    for dataset_id in ("source", "target"):
+        project = add_dataset(
+            project,
+            _source(tmp_path / f"{dataset_id}.xy"),
+            InstrumentSpec(instrument_id="structure-service"),
+        )
+        project = set_structure(project, dataset_id, simple_structure())
+    rule = ConstraintRule(
+        ParameterReference("target", "instrument.scale"),
+        ConstraintNode(
+            "ref",
+            reference=ParameterReference("source", "component.0.thickness_a"),
+        ),
+    )
+    project = set_constraint_rules(project, (rule,))
+    project = replace(
+        project,
+        datasets=tuple(replace(dataset, last_valid_result=final_fit_result()) for dataset in project.datasets),
+        ui_state=replace(
+            project.ui_state,
+            selected_candidate_ids=(("source", "candidate-0"), ("target", "candidate-0")),
+        ),
+    )
+
+    updated = set_structure(project, "source", _bare())
+
+    assert updated.constraint_rules == ()
+    assert tuple(dataset.last_valid_result for dataset in updated.datasets) == (None, None)
+    assert updated.ui_state.selected_candidate_ids == ()
 
 
 def test_joint_structure_edit_applies_one_topology_to_every_dataset(

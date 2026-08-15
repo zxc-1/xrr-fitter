@@ -7,7 +7,14 @@ import pytest
 from tests.support.model_cases import dataset_project, final_fit_result, fit_candidate, project
 
 from xrr_fitter.model.analysis import ConfidenceClass, McmcConfig, McmcReport, UncertaintyReport
-from xrr_fitter.model.parameters import ParameterReference, SharingRule
+from xrr_fitter.model.parameters import (
+    ConstraintNode,
+    ConstraintRule,
+    ParameterPrior,
+    ParameterReference,
+    PriorSpec,
+    SharingRule,
+)
 from xrr_fitter.model.project import (
     DatasetProject,
     DatasetSourceValidation,
@@ -64,6 +71,7 @@ def test_project_and_dataset_serialization_field_order_is_stable() -> None:
         "batch_mode",
         "datasets",
         "sharing_rules",
+        "constraint_rules",
         "ui_state",
         "measurement_preset",
         "base_directory",
@@ -295,3 +303,81 @@ def test_joint_project_allows_dataset_local_classification_and_warnings() -> Non
     )
 
     validate_project(joint)
+
+
+# --- Task 3: expression constraint validation on the project root -----------
+# 项目层校验只能断定 dataset 是否存在、约束之间是否成环、以及是否与 SharingRule
+# 争夺同一 target；参数是否存在、跨阶段合法性依赖编译期的定义映射，留给 services 层
+# 的 validate_constraint_rules（Task 7）。
+
+
+def _ref(parameter_name: str, dataset_id: str = "curve") -> ParameterReference:
+    return ParameterReference(dataset_id, parameter_name)
+
+
+def _linear_rule(target: str, source: str, *, dataset_id: str = "curve") -> ConstraintRule:
+    # target = 2 * source，两层节点树，覆盖二元 op 下 ref/const 叶子的引用遍历。
+    expression = ConstraintNode(
+        "mul",
+        operands=(
+            ConstraintNode("const", value=2.0),
+            ConstraintNode("ref", reference=_ref(source, dataset_id)),
+        ),
+    )
+    return ConstraintRule(target=_ref(target, dataset_id), expression=expression)
+
+
+def test_project_accepts_constraint_rules_over_known_datasets() -> None:
+    constrained = replace(project(), constraint_rules=(_linear_rule("t0", "t1"),))
+
+    assert constrained.constraint_rules == (_linear_rule("t0", "t1"),)
+    validate_project(constrained)
+
+
+def test_project_rejects_constraint_target_on_unknown_dataset() -> None:
+    with pytest.raises(ValueError, match="dataset"):
+        replace(project(), constraint_rules=(_linear_rule("t0", "t1", dataset_id="ghost"),))
+
+
+def test_project_rejects_constraint_operand_on_unknown_dataset() -> None:
+    expression = ConstraintNode(
+        "add",
+        operands=(
+            ConstraintNode("ref", reference=_ref("t1")),
+            ConstraintNode("ref", reference=_ref("t2", dataset_id="ghost")),
+        ),
+    )
+    rule = ConstraintRule(target=_ref("t0"), expression=expression)
+
+    with pytest.raises(ValueError, match="dataset"):
+        replace(project(), constraint_rules=(rule,))
+
+
+def test_project_rejects_parameter_driven_by_sharing_and_constraint() -> None:
+    sharing = SharingRule("shared-key", (_ref("t0"), _ref("t1")))
+    constraint = ConstraintRule(target=_ref("t0"), expression=ConstraintNode("ref", reference=_ref("t2")))
+
+    with pytest.raises(ValueError):
+        replace(project(), sharing_rules=(sharing,), constraint_rules=(constraint,))
+
+
+def test_project_rejects_prior_owned_by_constraint_target() -> None:
+    target = "component.0.density_scale"
+    dataset = replace(
+        dataset_project(),
+        parameter_priors=(ParameterPrior(target, PriorSpec("uniform")),),
+    )
+    constraint = _linear_rule(target, "component.0.thickness_a")
+
+    with pytest.raises(ValueError, match="prior.*constraint|constraint.*prior"):
+        replace(project(dataset), constraint_rules=(constraint,))
+
+
+def test_project_rejects_cyclic_constraints() -> None:
+    rules = (
+        ConstraintRule(target=_ref("t0"), expression=ConstraintNode("ref", reference=_ref("t1"))),
+        ConstraintRule(target=_ref("t1"), expression=ConstraintNode("ref", reference=_ref("t0"))),
+    )
+
+    with pytest.raises(ValueError, match="cycle"):
+        replace(project(), constraint_rules=rules)

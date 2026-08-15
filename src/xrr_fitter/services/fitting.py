@@ -26,12 +26,12 @@ from xrr_fitter.fit.automatic import (
 )
 from xrr_fitter.fit.candidates import best_candidate_index, candidate_from_evaluation
 from xrr_fitter.fit.initialization import structure_evidence
-from xrr_fitter.fit.joint_pipeline import JointFitRequest, run_joint_fit
-from xrr_fitter.fit.joint_problem import compile_joint_problem
-from xrr_fitter.fit.joint_sharing import (
+from xrr_fitter.fit.joint_candidates import (
     consensus_joint_vector,
     joint_candidate_vectors,
 )
+from xrr_fitter.fit.joint_pipeline import JointFitRequest, run_joint_fit
+from xrr_fitter.fit.joint_problem import compile_joint_problem
 from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.parameters import (
@@ -209,6 +209,7 @@ def compiled_parameter_definitions(
     instrument,
     config,
     settings,
+    constraint_rules=(),
 ):
     """Compile settings through the canonical fit problem boundary."""
     return _base.compiled_parameter_definitions(
@@ -217,6 +218,7 @@ def compiled_parameter_definitions(
         instrument,
         config,
         settings,
+        constraint_rules,
         compile_fit_problem=compile_fit_problem,
     )
 
@@ -405,6 +407,7 @@ def fit_automatic_joint_group(
 def fit_joint_datasets(
     prepared: tuple[PreparedDatasetFit, ...],
     sharing_rules: tuple,
+    constraint_rules: tuple = (),
     *,
     progress: ProgressCallback | None = None,
     cancelled: CancellationProbe | None = None,
@@ -414,6 +417,7 @@ def fit_joint_datasets(
     return _joint_execution.fit_joint_datasets(
         prepared,
         sharing_rules,
+        constraint_rules,
         progress=progress,
         cancelled=cancelled,
         checkpoint=checkpoint,

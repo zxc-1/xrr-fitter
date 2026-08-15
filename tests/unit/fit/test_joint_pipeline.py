@@ -250,9 +250,7 @@ def test_joint_request_uses_prefit_consensus_instead_of_declared_initial(
         return evaluate(problem, unit)
 
     monkeypatch.setattr(joint_pipeline, "evaluate_joint_vector", capture)
-    joint_pipeline.run_joint_fit(
-        joint_pipeline.JointFitRequest(joint, initial_unit_vector=consensus)
-    )
+    joint_pipeline.run_joint_fit(joint_pipeline.JointFitRequest(joint, initial_unit_vector=consensus))
 
     assert np.array_equal(observed[0], consensus)
 
@@ -336,10 +334,7 @@ def test_joint_pipeline_projects_aligned_results_and_atomic_checkpoints() -> Non
         6048956452989709052,
         7082095701162067864,
     )
-    assert all(
-        tuple(candidate.candidate_id for candidate in result.candidates) == expected_ids
-        for result in results
-    )
+    assert all(tuple(candidate.candidate_id for candidate in result.candidates) == expected_ids for result in results)
     assert all(result.child_seeds == expected_seeds for result in results)
     assert tuple(summary.candidate_ids for summary in results[0].stage_summaries) == (
         ("A-0",),
@@ -348,10 +343,7 @@ def test_joint_pipeline_projects_aligned_results_and_atomic_checkpoints() -> Non
         ("D-0",),
         ("E-0", "E-1", "E-2", "E-3"),
     )
-    assert tuple(
-        (value.stage, value.completed, value.total, value.message)
-        for value in progress
-    ) == (
+    assert tuple((value.stage, value.completed, value.total, value.message) for value in progress) == (
         ("A", 1, 1, "joint A"),
         ("B", 1, 1, "joint B"),
         ("C", 1, 1, "joint C"),
@@ -361,14 +353,10 @@ def test_joint_pipeline_projects_aligned_results_and_atomic_checkpoints() -> Non
         ("E", 3, 4, "joint E"),
         ("E", 4, 4, "joint E"),
     )
-    assert tuple(
-        tuple(candidate.candidate_id for candidate in batch[0].candidates)
-        for batch in checkpoints
-    ) == tuple(expected_ids[1:stop] for stop in (2, 3, 4, 5, 6, 7, 8))
-    assert tuple(
-        tuple(summary.stage for summary in batch[0].stage_summaries)
-        for batch in checkpoints
-    ) == (
+    assert tuple(tuple(candidate.candidate_id for candidate in batch[0].candidates) for batch in checkpoints) == tuple(
+        expected_ids[1:stop] for stop in (2, 3, 4, 5, 6, 7, 8)
+    )
+    assert tuple(tuple(summary.stage for summary in batch[0].stage_summaries) for batch in checkpoints) == (
         ("B",),
         ("B", "C"),
         ("B", "C", "D"),
@@ -395,10 +383,7 @@ def test_joint_analysis_publishes_coherent_shared_ranking_history() -> None:
     searches = fit_api.run_joint_fit(fit_api.JointFitRequest(joint))
     best_candidates = tuple(search.best_candidate for search in searches)
     assert all(best is not None for best in best_candidates)
-    assert all(
-        candidate_selection_objective(best) != best.objective
-        for best in best_candidates
-    )
+    assert all(candidate_selection_objective(best) != best.objective for best in best_candidates)
     results = tuple(
         analysis_api.analyze_search_result(problem, search, profile_names=())
         for problem, search in zip(joint.problems, searches, strict=True)
@@ -463,15 +448,10 @@ def test_joint_pipeline_preserves_fully_locked_lineage_through_stage_e() -> None
     results = api.run_joint_fit(api.JointFitRequest(_fully_locked_joint_problem()))
 
     assert all(
-        tuple(summary.stage for summary in result.stage_summaries) == ("A", "B", "C", "D", "E")
-        for result in results
+        tuple(summary.stage for summary in result.stage_summaries) == ("A", "B", "C", "D", "E") for result in results
     )
     for result in results:
-        final = tuple(
-            candidate
-            for candidate in result.candidates
-            if candidate.candidate_id.startswith("E-")
-        )
+        final = tuple(candidate for candidate in result.candidates if candidate.candidate_id.startswith("E-"))
         assert tuple(candidate.candidate_id for candidate in final) == ("E-0", "E-1", "E-2", "E-3")
         assert all(candidate.stop_reason == "no_free_parameters" for candidate in final)
         assert all(candidate.unit_vector.size == 0 for candidate in final)
@@ -482,6 +462,7 @@ def test_joint_pipeline_uses_one_global_layout_short_and_full_de_then_local_refi
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api = import_module("xrr_fitter.fit.joint_pipeline")
+    solvers = import_module("xrr_fitter.fit.joint_solvers")
     de_calls: list[tuple[int, int]] = []
     local_calls: list[int] = []
 
@@ -504,8 +485,8 @@ def test_joint_pipeline_uses_one_global_layout_short_and_full_de_then_local_refi
         jac(start)
         return SimpleNamespace(x=start, message="captured local", nfev=1)
 
-    monkeypatch.setattr(api, "differential_evolution", fake_de, raising=False)
-    monkeypatch.setattr(api, "least_squares", fake_local)
+    monkeypatch.setattr(solvers, "differential_evolution", fake_de)
+    monkeypatch.setattr(solvers, "least_squares", fake_local)
 
     results = api.run_joint_fit(api.JointFitRequest(_staged_joint_problem()))
 
@@ -592,8 +573,7 @@ def test_joint_resume_rejects_cross_dataset_drift_before_callbacks() -> None:
     first = stage_d[0]
     wrong_rank = replace(
         first.candidates[0],
-        ranking_objective=(first.candidates[0].ranking_objective or first.candidates[0].objective)
-        + 0.25,
+        ranking_objective=(first.candidates[0].ranking_objective or first.candidates[0].objective) + 0.25,
     )
     changed_unit = np.array(first.candidates[0].unit_vector, copy=True)
     changed_unit[0] = 0.0 if changed_unit[0] > 0.5 else 1.0
@@ -663,8 +643,13 @@ def test_independent_and_joint_modes_are_dispatched_explicitly(
         calls.append(("independent", request.dataset_id))
         return independent_results[len(calls) - 1]
 
-    def compile_joint(dataset_ids, problems, rules):
-        calls.append(("compile-joint", (dataset_ids, problems, rules)))
+    def compile_joint(dataset_ids, problems, rules, constraint_rules):
+        calls.append(
+            (
+                "compile-joint",
+                (dataset_ids, problems, rules, constraint_rules),
+            )
+        )
         return "joint-problem"
 
     def run_joint(request, **_kwargs):
@@ -676,9 +661,7 @@ def test_independent_and_joint_modes_are_dispatched_explicitly(
     monkeypatch.setattr(api, "run_joint_fit", run_joint)
 
     independent = api.run_fit_batch(api.FitBatchRequest("independent", requests))
-    joint = api.run_fit_batch(
-        api.FitBatchRequest("joint", requests, sharing_rules=_sharing_rules())
-    )
+    joint = api.run_fit_batch(api.FitBatchRequest("joint", requests, sharing_rules=_sharing_rules()))
 
     assert independent == independent_results
     assert joint == joint_results

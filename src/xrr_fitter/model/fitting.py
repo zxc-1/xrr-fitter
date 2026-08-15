@@ -59,6 +59,7 @@ import numpy as np
 from xrr_fitter.model.data import PreparedData
 from xrr_fitter.model.instrument import InstrumentSpec, PhysicsDiagnostic
 from xrr_fitter.model.parameters import (
+    ConstraintRule,
     ParameterCoordinate,
     ParameterDefinition,
     ParameterValue,
@@ -339,6 +340,20 @@ def _context_warnings(values: object) -> tuple[str, ...]:
     return warnings
 
 
+def _context_constraint_rules(values: object) -> tuple[ConstraintRule, ...]:
+    """Freeze the compiled expression constraints carried by the context.
+
+    The default empty tuple keeps unconstrained contexts byte-identical: the
+    field is never persisted and never hashed into the checkpoint fingerprint.
+    Each member must already be a validated ``ConstraintRule`` so evaluation can
+    substitute derived parameters without re-checking node topology per call.
+    """
+    rules = tuple(values)
+    if any(not isinstance(rule, ConstraintRule) for rule in rules):
+        raise TypeError("constraint_rules must contain ConstraintRule values")
+    return rules
+
+
 @dataclass(frozen=True, slots=True)
 class FitEvaluationContext:
     """Compiled immutable handoff shared by fitting and analysis.
@@ -366,6 +381,7 @@ class FitEvaluationContext:
     scale_prior_tau_decades: float = 0.1
     scale_prior_reason: str | None = None
     warnings: tuple[str, ...] = ()
+    constraint_rules: tuple[ConstraintRule, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_context_components(self)
@@ -376,6 +392,7 @@ class FitEvaluationContext:
         labels, weights = _context_arrays(self)
         _validate_context_prior(self)
         warnings = _context_warnings(self.warnings)
+        constraint_rules = _context_constraint_rules(self.constraint_rules)
         # Reconstruct nested prepared data so a pickle round-trip cannot expose
         # writable NumPy buffers through the shared context.
         object.__setattr__(self, "data", replace(self.data))
@@ -384,6 +401,7 @@ class FitEvaluationContext:
         object.__setattr__(self, "region_labels", labels)
         object.__setattr__(self, "weights", weights)
         object.__setattr__(self, "warnings", warnings)
+        object.__setattr__(self, "constraint_rules", constraint_rules)
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         values = tuple(getattr(self, field) for field in self.__dataclass_fields__)

@@ -670,38 +670,55 @@ def stage_parameter_is_free(stage: str, definition: ParameterDefinition) -> bool
     return definition.category == STAGE_CATEGORIES[stage] or definition.name in STAGE_INSTRUMENT_NAMES[stage]
 
 
+def _missing_stage_values(
+    definitions: tuple[ParameterDefinition, ...],
+    current_values: dict[str, float],
+) -> tuple[str, ...]:
+    return tuple(
+        definition.name
+        for definition in definitions
+        if not (definition.locked or definition.constrained) and definition.name not in current_values
+    )
+
+
+def _stage_parameter_setting(
+    definition: ParameterDefinition,
+    stage: str,
+    current_values: dict[str, float],
+) -> ParameterSetting:
+    if definition.constrained:
+        return ParameterSetting(
+            definition.name,
+            definition.initial,
+            definition.lower,
+            definition.upper,
+            locked=definition.locked,
+        )
+    if definition.locked:
+        return ParameterSetting(
+            definition.name,
+            definition.initial,
+            definition.lower,
+            definition.upper,
+            locked=True,
+        )
+    current = current_values[definition.name]
+    free = stage_parameter_is_free(stage, definition)
+    return ParameterSetting(
+        definition.name,
+        current,
+        definition.lower if free else current,
+        definition.upper if free else current,
+        locked=not free,
+    )
+
+
 def stage_parameter_settings(
     definitions: tuple[ParameterDefinition, ...],
     stage: str,
     current_values: dict[str, float],
 ) -> tuple[ParameterSetting, ...]:
-    missing = tuple(
-        definition.name for definition in definitions if not definition.locked and definition.name not in current_values
-    )
+    missing = _missing_stage_values(definitions, current_values)
     if missing:
         raise ValueError("missing current stage values: " + ", ".join(missing))
-    settings: list[ParameterSetting] = []
-    for definition in definitions:
-        if definition.locked:
-            settings.append(
-                ParameterSetting(
-                    definition.name,
-                    definition.initial,
-                    definition.lower,
-                    definition.upper,
-                    locked=True,
-                )
-            )
-            continue
-        current = current_values[definition.name]
-        free = stage_parameter_is_free(stage, definition)
-        settings.append(
-            ParameterSetting(
-                definition.name,
-                current,
-                definition.lower if free else current,
-                definition.upper if free else current,
-                locked=not free,
-            )
-        )
-    return tuple(settings)
+    return tuple(_stage_parameter_setting(definition, stage, current_values) for definition in definitions)

@@ -124,18 +124,52 @@ def _allows_null(path: tuple[str | int, ...]) -> bool:
     return any(isinstance(part, str) and part in NULLABLE_ARRAY_FIELDS for part in path)
 
 
-def _validate_nulls(value: object, path: tuple[str | int, ...] = ()) -> None:
-    if value is None:
-        if not path or not _allows_null(path):
-            location = ".".join(str(part) for part in path) or "<root>"
-            raise ProjectSchemaError(f"required project value is null: {location}")
-        return
+def _linked_path(path: tuple[str | int, ...]) -> object | None:
+    linked: object | None = None
+    for part in path:
+        linked = (linked, part)
+    return linked
+
+
+def _materialize_path(linked_path: object | None) -> tuple[str | int, ...]:
+    parts: list[str | int] = []
+    cursor = linked_path
+    while cursor is not None:
+        cursor, part = cursor
+        parts.append(part)
+    return tuple(reversed(parts))
+
+
+def _null_validation_children(
+    value: object,
+    linked_path: object | None,
+) -> tuple[tuple[object, object], ...]:
     if isinstance(value, dict):
-        for key, item in value.items():
-            _validate_nulls(item, (*path, key))
-    elif isinstance(value, list):
-        for index, item in enumerate(value):
-            _validate_nulls(item, (*path, index))
+        return tuple((item, (linked_path, key)) for key, item in reversed(tuple(value.items())))
+    if isinstance(value, list):
+        return tuple((value[index], (linked_path, index)) for index in range(len(value) - 1, -1, -1))
+    return ()
+
+
+def _reject_disallowed_null(linked_path: object | None) -> None:
+    path = _materialize_path(linked_path)
+    if path and _allows_null(path):
+        return
+    location = ".".join(str(part) for part in path) or "<root>"
+    raise ProjectSchemaError(f"required project value is null: {location}")
+
+
+def _validate_nulls(value: object, path: tuple[str | int, ...] = ()) -> None:
+    # Persisted constraint expressions are attacker-controlled recursive data.
+    # Keep this schema-wide preflight iterative so their dedicated decoder can
+    # enforce its explicit depth limit instead of Python's call stack doing so.
+    pending: list[tuple[object, object | None]] = [(value, _linked_path(path))]
+    while pending:
+        current, linked_path = pending.pop()
+        if current is None:
+            _reject_disallowed_null(linked_path)
+            continue
+        pending.extend(_null_validation_children(current, linked_path))
 
 
 def _finite_number(value: object) -> bool:

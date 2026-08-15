@@ -10,6 +10,9 @@ from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
 import xrr_fitter.api as api
 
 HEADERS = ("参数", "初值", "下限", "上限", "单位", "锁定", "先验")
+# Shown on the lock cell of a constraint-driven row, where the checkbox is a
+# read-only indicator rather than a user toggle.
+CONSTRAINT_DRIVEN_TOOLTIP = "该参数由表达式约束驱动，数值不可手动编辑"
 
 
 def _uses_nm(definition: api.ParameterDefinition) -> bool:
@@ -124,17 +127,30 @@ class ParameterTable(QTableWidget):
             _number(upper),
             "nm" if _uses_nm(definition) else definition.unit,
         )
+        # A constraint-driven value is computed from other parameters, so its
+        # numeric columns join the always-read-only display-name/unit columns;
+        # an unconstrained row keeps 1/2/3 editable exactly as before.
+        readonly_columns = (0, 1, 2, 3, 4) if definition.constrained else (0, 4)
         for column, value in enumerate(values):
             item = QTableWidgetItem(value)
-            if column in (0, 4):
+            if column in readonly_columns:
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             if column == 0:
                 item.setData(Qt.ItemDataRole.UserRole, definition.name)
                 item.setToolTip(definition.name)
             self.setItem(row, column, item)
         locked = QTableWidgetItem()
-        locked.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable)
-        locked.setCheckState(Qt.CheckState.Checked if definition.locked else Qt.CheckState.Unchecked)
+        lock_flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if not definition.constrained:
+            # Only a free row exposes an interactive lock toggle; a driven row
+            # keeps the checkbox as a read-only indicator of its locked state.
+            lock_flags |= Qt.ItemFlag.ItemIsUserCheckable
+        locked.setFlags(lock_flags)
+        locked.setCheckState(
+            Qt.CheckState.Checked if definition.locked or definition.constrained else Qt.CheckState.Unchecked
+        )
+        if definition.constrained:
+            locked.setToolTip(CONSTRAINT_DRIVEN_TOOLTIP)
         self.setItem(row, 5, locked)
         prior = QTableWidgetItem(_prior_summary(definition))
         prior.setFlags(prior.flags() & ~Qt.ItemFlag.ItemIsEditable)

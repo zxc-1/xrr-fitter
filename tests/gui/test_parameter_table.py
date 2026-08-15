@@ -330,3 +330,67 @@ def test_roughness_fraction_prior_summary_remains_an_unscaled_fraction(qtbot) ->
     table = _table(qtbot, definition)
 
     assert table.item(0, 6).text() == "normal(μ=0.5, σ=0.1)"
+
+
+def test_constraint_driven_row_locks_value_columns_and_check(qtbot) -> None:
+    driven = _definition("component.0.thickness_a", constrained=True)
+    table = _table(qtbot, driven)
+
+    # 初值/下限/上限 join the always-read-only display-name/unit columns: a
+    # constraint-driven value is computed, so the user may not type over it.
+    for column in (0, 1, 2, 3, 4):
+        assert not (table.item(0, column).flags() & Qt.ItemFlag.ItemIsEditable)
+    # The lock checkbox degrades to a read-only indicator: still visible and
+    # selectable, no longer user-checkable, and annotated with the reason.
+    locked = table.item(0, 5)
+    assert locked.flags() & Qt.ItemFlag.ItemIsEnabled
+    assert locked.flags() & Qt.ItemFlag.ItemIsSelectable
+    assert not (locked.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+    assert locked.checkState() == Qt.CheckState.Checked
+    assert "约束" in locked.toolTip()
+
+
+def test_constraint_driven_row_disables_mutating_context_actions(qtbot, tmp_path) -> None:
+    panel = _panel(qtbot, tmp_path)
+    target = "component.0.density_scale"
+    rule = api.ConstraintRule(
+        api.ParameterReference("sample", target),
+        api.ConstraintNode(
+            "mul",
+            operands=(
+                api.ConstraintNode(
+                    "ref",
+                    reference=api.ParameterReference(
+                        "sample",
+                        "component.0.thickness_a",
+                    ),
+                ),
+                api.ConstraintNode("const", value=0.01),
+            ),
+        ),
+    )
+    panel.apply_constraint_rules((rule,))
+
+    menu = panel._row_context_menu(target)
+    actions = {action.objectName(): action for action in menu.actions()}
+
+    for name in ("resetParameterAction", "editPriorAction", "clearPriorAction"):
+        assert actions[name].isEnabled() is False
+        assert "约束" in actions[name].toolTip()
+
+
+def test_unconstrained_row_matches_head_editability(qtbot) -> None:
+    plain = _definition("component.0.thickness_a")  # constrained defaults to False
+
+    table = _table(qtbot, plain)
+
+    # Value columns stay editable exactly as before the constraint feature.
+    for column in (1, 2, 3):
+        assert table.item(0, column).flags() & Qt.ItemFlag.ItemIsEditable
+    # Display-name and unit columns remain read-only, unchanged from HEAD.
+    for column in (0, 4):
+        assert not (table.item(0, column).flags() & Qt.ItemFlag.ItemIsEditable)
+    # The lock cell keeps its interactive checkbox and carries no tooltip.
+    locked = table.item(0, 5)
+    assert locked.flags() & Qt.ItemFlag.ItemIsUserCheckable
+    assert locked.toolTip() == ""

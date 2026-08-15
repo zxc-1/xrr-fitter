@@ -23,6 +23,7 @@ class CheckpointIdentity:
 
 POST_FREEZE_OMITTED_DEFAULTS: dict[tuple[str, str], object] = {
     ("ParameterDefinition", "prior"): None,
+    ("ParameterDefinition", "constrained"): False,
     ("ConfidenceThresholds", "prior_conflict_sigmas"): 3.0,
     ("LayerSpec", "transition"): None,
 }
@@ -88,12 +89,20 @@ def _fingerprint(value: object) -> str:
 
 def checkpoint_identity(problem: object) -> CheckpointIdentity:
     """Bind every resume-relevant declaration without source-path identity."""
+    parameter_payload = (
+        problem.parameter_definitions
+        if not problem.constraint_rules
+        else {
+            "parameter_definitions": problem.parameter_definitions,
+            "constraint_rules": problem.constraint_rules,
+        }
+    )
     return CheckpointIdentity(
         data_sha256=problem.data.source_sha256,
         structure_fingerprint=_fingerprint(problem.structure),
         instrument_fingerprint=_fingerprint(problem.instrument),
         config_fingerprint=_fingerprint(problem.config),
-        parameter_settings_fingerprint=_fingerprint(problem.parameter_definitions),
+        parameter_settings_fingerprint=_fingerprint(parameter_payload),
     )
 
 

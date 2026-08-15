@@ -12,7 +12,13 @@ from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, FitStageSummary, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting, PriorSpec
+from xrr_fitter.model.parameters import (
+    ConstraintNode,
+    ConstraintRule,
+    ParameterReference,
+    ParameterSetting,
+    PriorSpec,
+)
 from xrr_fitter.model.structure import InterfaceTransition, TransitionBranch
 
 
@@ -220,3 +226,52 @@ def test_configuring_a_layer_transition_yields_a_distinct_identity() -> None:
     )
 
     assert api.checkpoint_identity(configured).structure_fingerprint != baseline.structure_fingerprint
+
+
+def test_constraining_a_parameter_yields_a_distinct_identity() -> None:
+    api = _api()
+    problem = _problem()
+    baseline = api.checkpoint_identity(problem)
+
+    # constrained=False 是 POST_FREEZE 省略默认,不得扰动冻结指纹;但某参数一旦真正
+    # 被表达式约束驱动,其自由度已改变,必须换取不同的 resume 身份,否则两个物理上
+    # 不同(自由 vs 被驱动)的问题会共用同一 checkpoint。
+    definition = problem.parameter_definitions[0]
+    constrained = replace(
+        problem,
+        parameter_definitions=(
+            replace(definition, constrained=True),
+            *problem.parameter_definitions[1:],
+        ),
+    )
+
+    assert (
+        api.checkpoint_identity(constrained).parameter_settings_fingerprint != baseline.parameter_settings_fingerprint
+    )
+
+
+def test_checkpoint_identity_binds_the_complete_constraint_expression() -> None:
+    problem = _problem()
+    target = "component.0.density_scale"
+
+    def constrained(value: float):
+        rule = ConstraintRule(
+            ParameterReference("curve", target),
+            ConstraintNode("const", value=value),
+        )
+        return compile_fit_problem(
+            problem.data,
+            problem.structure,
+            problem.instrument,
+            problem.config,
+            constraint_rules=(rule,),
+        )
+
+    first = constrained(0.8)
+    second = constrained(0.9)
+
+    assert first.parameter_definitions == second.parameter_definitions
+    assert (
+        _api().checkpoint_identity(first).parameter_settings_fingerprint
+        != _api().checkpoint_identity(second).parameter_settings_fingerprint
+    )

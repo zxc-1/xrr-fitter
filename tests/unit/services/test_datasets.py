@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 from tests.support.model_cases import final_fit_result, simple_structure
 
+import xrr_fitter.api as api
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.analysis import StructureEvidence
 from xrr_fitter.model.automation import (
@@ -15,7 +16,14 @@ from xrr_fitter.model.automation import (
 )
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterPrior, ParameterSetting, PriorSpec
+from xrr_fitter.model.parameters import (
+    ConstraintNode,
+    ConstraintRule,
+    ParameterPrior,
+    ParameterReference,
+    ParameterSetting,
+    PriorSpec,
+)
 from xrr_fitter.model.project import ProjectUiState, ScalePriorState
 from xrr_fitter.services.datasets import (
     add_dataset,
@@ -24,9 +32,19 @@ from xrr_fitter.services.datasets import (
     set_fit_mask,
     set_instrument,
 )
-from xrr_fitter.services.parameters import accept_source_update, describe_parameters
+from xrr_fitter.services.parameters import (
+    accept_source_update,
+    describe_parameters,
+)
 from xrr_fitter.services.projects import new_project
 from xrr_fitter.services.structures import set_structure
+
+# These service contracts intentionally exercise complete immutable project
+# transitions rather than isolated setters.  Each scenario builds real source
+# bytes, changes one declaration, and checks the exact result graph that must be
+# retained or invalidated.  Keeping that end-to-end evidence together makes
+# data-derived bounds, sidecars, automatic-fit groups, and UI selection state
+# observable at the same public boundary.
 
 
 def _write_curve(path: Path, *, scale: float = 1.0) -> Path:
@@ -116,6 +134,44 @@ def test_add_dataset_uses_source_stem_namespace_and_lowest_available_suffix(
         tuple(item.dataset_id for item in project.datasets),
         project.datasets[-1].display_name,
     ) == (("sample", "sample-3", "sample-2"), "replacement display")
+
+
+def test_remove_dataset_drops_constraints_that_reference_it_and_invalidates_remaining_target(
+    tmp_path: Path,
+) -> None:
+    first_source = _write_curve(tmp_path / "first" / "first.xy")
+    second_source = _write_curve(tmp_path / "second" / "second.xy", scale=2.0)
+    project = new_project()
+    project = add_dataset(project, first_source, _instrument())
+    project = add_dataset(project, second_source, _instrument())
+    first_id, second_id = (dataset.dataset_id for dataset in project.datasets)
+    target = ParameterReference(first_id, "component.0.thickness_a")
+    source = ParameterReference(second_id, "instrument.scale")
+    rule = ConstraintRule(target, ConstraintNode("ref", reference=source))
+    datasets = tuple(
+        replace(
+            dataset,
+            structure=simple_structure(),
+            last_valid_result=final_fit_result() if dataset.dataset_id == first_id else None,
+        )
+        for dataset in project.datasets
+    )
+    project = replace(
+        project,
+        datasets=datasets,
+        constraint_rules=(rule,),
+        ui_state=replace(
+            project.ui_state,
+            selected_candidate_ids=((first_id, "candidate-0"),),
+        ),
+    )
+
+    updated = remove_dataset(project, second_id)
+
+    assert updated.constraint_rules == ()
+    assert len(updated.datasets) == 1
+    assert updated.datasets[0].last_valid_result is None
+    assert updated.ui_state.selected_candidate_ids == ()
 
 
 def test_add_dataset_preserves_an_explicit_mixed_kalpha_beam(tmp_path: Path) -> None:
@@ -300,6 +356,62 @@ def test_automatic_fit_mask_change_clears_the_matching_fit_group(
         statistics_member=False,
         reason=None,
     )
+
+
+def test_fit_mask_change_reconciles_data_derived_parameter_priors(
+    tmp_path: Path,
+) -> None:
+    project = add_dataset(
+        new_project(),
+        _write_curve(tmp_path / "mask-priors.xy"),
+        _instrument(),
+    )
+    dataset = replace(project.datasets[0], structure=simple_structure())
+    project = replace(project, datasets=(dataset,))
+    definitions = {definition.name: definition for definition in describe_parameters(project, dataset.dataset_id)}
+    thickness = definitions["component.0.thickness_a"]
+    scale = definitions["instrument.scale"]
+    thickness_prior = ParameterPrior(
+        thickness.name,
+        PriorSpec("normal", (thickness.lower, max(thickness.lower / 10.0, 1e-6))),
+    )
+    scale_prior = ParameterPrior(
+        scale.name,
+        PriorSpec("normal", (scale.initial, 0.1)),
+    )
+    project = replace(
+        project,
+        datasets=(
+            replace(
+                dataset,
+                parameter_priors=(thickness_prior, scale_prior),
+            ),
+        ),
+    )
+    mask = np.asarray(dataset.fit_mask, dtype=bool)
+    mask[-2:] = False
+    new_lower = thickness.lower
+    for cutoff in range(mask.size - 2, 29, -1):
+        candidate = np.zeros_like(mask)
+        candidate[:cutoff] = True
+        probe = api.set_fit_mask(project, dataset.dataset_id, candidate)
+        probe_thickness = next(
+            definition
+            for definition in describe_parameters(probe, dataset.dataset_id)
+            if definition.name == thickness.name
+        )
+        mask = candidate
+        new_lower = probe_thickness.lower
+        if new_lower > thickness.lower:
+            break
+
+    assert new_lower > thickness.lower
+
+    updated = api.set_fit_mask(project, dataset.dataset_id, mask)
+
+    new_definitions = {definition.name: definition for definition in describe_parameters(updated, dataset.dataset_id)}
+    assert new_definitions[thickness.name].lower == new_lower
+    assert updated.datasets[0].parameter_priors == (scale_prior,)
 
 
 def test_source_update_is_previewed_then_accepted_with_fresh_declarations(
@@ -535,3 +647,57 @@ def test_instrument_change_preserves_source_and_structure_but_invalidates_fit_st
         (),
         True,
     )
+
+
+def test_instrument_change_reconciles_parameter_sidecars(tmp_path: Path) -> None:
+    project = add_dataset(
+        new_project(),
+        _write_curve(tmp_path / "instrument-priors.xy"),
+        replace(_instrument(), footprint_mode="fit"),
+    )
+    dataset = replace(project.datasets[0], structure=simple_structure())
+    project = replace(project, datasets=(dataset,))
+    definitions = {definition.name: definition for definition in describe_parameters(project, dataset.dataset_id)}
+    scale = definitions["instrument.scale"]
+    footprint = definitions["instrument.footprint_spill_angle_deg"]
+    scale_setting = ParameterSetting(
+        scale.name,
+        scale.initial,
+        scale.lower,
+        scale.upper,
+        scale.locked,
+    )
+    footprint_setting = ParameterSetting(
+        footprint.name,
+        footprint.initial,
+        footprint.lower,
+        footprint.upper,
+        footprint.locked,
+    )
+    scale_prior = ParameterPrior(
+        scale.name,
+        PriorSpec("normal", (scale.initial, 0.1)),
+    )
+    footprint_prior = ParameterPrior(
+        footprint.name,
+        PriorSpec("normal", (footprint.initial, 0.1)),
+    )
+    project = replace(
+        project,
+        datasets=(
+            replace(
+                dataset,
+                parameter_settings=(scale_setting, footprint_setting),
+                parameter_priors=(scale_prior, footprint_prior),
+            ),
+        ),
+    )
+
+    updated = api.set_instrument(
+        project,
+        dataset.dataset_id,
+        replace(dataset.instrument, footprint_mode="none"),
+    )
+
+    assert updated.datasets[0].parameter_settings == (scale_setting,)
+    assert updated.datasets[0].parameter_priors == (scale_prior,)

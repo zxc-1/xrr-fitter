@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -179,9 +181,61 @@ def test_instrument_parameters_in_the_report_are_ignored_by_the_replay() -> None
     np.testing.assert_array_equal(mixed.depth_a, structure_only.depth_a)
 
 
+def test_derived_mcmc_samples_are_used_for_sld_replay() -> None:
+    derived = _report(
+        np.ones(12),
+        names=("instrument.scale",),
+    )
+    derived = replace(
+        derived,
+        derived_parameter_names=("component.0.thickness_a",),
+        derived_samples_physical=np.linspace(30.0, 50.0, 12).reshape(-1, 1),
+    )
+    direct = _report(np.linspace(30.0, 50.0, 12))
+
+    from_derived = sld_uncertainty_bands(_structure(), derived, wavelength_a=WAVELENGTH_A)
+    from_direct = sld_uncertainty_bands(_structure(), direct, wavelength_a=WAVELENGTH_A)
+
+    np.testing.assert_array_equal(from_derived.depth_a, from_direct.depth_a)
+    np.testing.assert_array_equal(from_derived.real, from_direct.real)
+    np.testing.assert_array_equal(from_derived.imaginary, from_direct.imaginary)
+
+
+def test_locked_structure_values_are_used_for_sld_replay() -> None:
+    report = replace(
+        _report(np.ones(12), names=("component.0.density_scale",)),
+        fixed_parameter_values=(("component.0.thickness_a", 70.0),),
+    )
+    structure = _structure()
+    expected_structure = replace(
+        structure,
+        components=(replace(structure.components[0], thickness_a=70.0),),
+    )
+    expected = sld_uncertainty_bands(
+        expected_structure,
+        _report(np.ones(12), names=("component.0.density_scale",)),
+        wavelength_a=WAVELENGTH_A,
+    )
+
+    actual = sld_uncertainty_bands(structure, report, wavelength_a=WAVELENGTH_A)
+
+    np.testing.assert_array_equal(actual.depth_a, expected.depth_a)
+    np.testing.assert_array_equal(actual.real, expected.real)
+    np.testing.assert_array_equal(actual.imaginary, expected.imaginary)
+
+
 def test_unknown_sample_parameter_name_fails_instead_of_being_ignored() -> None:
     report = _report(np.full((8, 1), 40.0), names=("component.9.thickness_a",))
     with pytest.raises(ValueError, match="component.9.thickness_a"):
+        sld_uncertainty_bands(_structure(), report, wavelength_a=WAVELENGTH_A)
+
+
+def test_unknown_fixed_parameter_name_fails_instead_of_being_ignored() -> None:
+    report = replace(
+        _report(np.full((8, 1), 40.0)),
+        fixed_parameter_values=(("component.9.roughness_a", 3.0),),
+    )
+    with pytest.raises(ValueError, match="component.9.roughness_a"):
         sld_uncertainty_bands(_structure(), report, wavelength_a=WAVELENGTH_A)
 
 

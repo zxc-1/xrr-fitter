@@ -47,23 +47,31 @@ def _prior_from_dict(value: object) -> PriorSpec:
     return PriorSpec(payload["kind"], tuple(_sequence(payload["parameters"], "prior parameters")))
 
 
-# prior is omitted from the auto-derived field set: it is emitted only when
-# present so projects saved before priors existed stay byte-identical, and it
-# is read back as an optional key (a bare definition decodes prior to None).
-DEFINITION_FIELDS = frozenset(ParameterDefinition.__dataclass_fields__) - {"prior"}
+# prior and constrained are omitted from the auto-derived field set: each is
+# emitted only when it departs from its default so projects saved before the
+# field existed stay byte-identical, and both are read back as optional keys (a
+# bare definition decodes prior to None and constrained to False).
+DEFINITION_FIELDS = frozenset(ParameterDefinition.__dataclass_fields__) - {"prior", "constrained"}
 
 
 def _parameter_definition_to_dict(value: ParameterDefinition) -> dict[str, object]:
     payload: dict[str, object] = {field: getattr(value, field) for field in DEFINITION_FIELDS}
     if value.prior is not None:
         payload["prior"] = _prior_to_dict(value.prior)
+    if value.constrained:
+        payload["constrained"] = True
     return payload
 
 
 def _parameter_definition_from_dict(value: object) -> ParameterDefinition:
-    payload = dict(_mapping(value, set(DEFINITION_FIELDS), "parameter definition", optional={"prior"}))
+    payload = dict(_mapping(value, set(DEFINITION_FIELDS), "parameter definition", optional={"prior", "constrained"}))
     prior = payload.pop("prior", None)
-    return ParameterDefinition(**payload, prior=None if prior is None else _prior_from_dict(prior))
+    constrained = payload.pop("constrained", False)
+    return ParameterDefinition(
+        **payload,
+        prior=None if prior is None else _prior_from_dict(prior),
+        constrained=constrained,
+    )
 
 
 def _parameter_value_to_dict(value: ParameterValue) -> dict[str, object]:

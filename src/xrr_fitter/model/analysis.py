@@ -61,6 +61,10 @@ from xrr_fitter.model.fitting import (
     FitStageSummary,
     PhysicsDiagnostic,
 )
+from xrr_fitter.model.mcmc_samples import (
+    validate_derived_samples,
+    validate_fixed_parameter_values,
+)
 from xrr_fitter.model.parameters import ParameterDefinition
 
 # Re-exported so analysis values keep one import entry point; the band lives in
@@ -421,6 +425,10 @@ class McmcReport:
     acceptance fractions remain walker-owned, while R-hat and effective sample
     size remain parameter-owned. The optional candidate ID records which fit
     state supplied the sampling center without retaining that mutable runtime.
+
+    Constraint targets are deterministic transforms of sampled coordinates,
+    while locked coordinates are constant physical values. Both stay separate
+    from sampled axes so R-hat and ESS describe free dimensions only.
     """
 
     config: McmcConfig
@@ -436,25 +444,46 @@ class McmcReport:
     warnings: tuple[str, ...] = ()
     candidate_id: str | None = None
     prior_conflicts: tuple[str, ...] = ()
+    # Keep deterministic replay values outside sampled axes for stable diagnostics.
+    derived_parameter_names: tuple[str, ...] = ()
+    derived_samples_physical: np.ndarray | None = None
+    fixed_parameter_values: tuple[tuple[str, float], ...] = ()
 
     def __post_init__(self) -> None:
         _validate_mcmc_identity(self)
-        names = _nonempty_unique_names(self.parameter_names, "parameter names")
+        parameter_names = _nonempty_unique_names(self.parameter_names, "parameter names")
         arrays = _mcmc_arrays(self)
-        _validate_mcmc_axes(self.config, names, arrays)
+        _validate_mcmc_axes(self.config, parameter_names, arrays)
         _validate_mcmc_values(arrays)
-        object.__setattr__(self, "parameter_names", names)
-        names = (
+        object.__setattr__(self, "parameter_names", parameter_names)
+        array_fields = (
             "samples_physical",
             "log_probability",
             "acceptance_fraction",
             "split_rhat",
             "effective_sample_size",
         )
-        _set_array_fields(self, names, arrays)
+        _set_array_fields(self, array_fields, arrays)
         object.__setattr__(self, "boundary_hits", tuple(self.boundary_hits))
         object.__setattr__(self, "warnings", tuple(self.warnings))
         object.__setattr__(self, "prior_conflicts", tuple(self.prior_conflicts))
+        derived_names, derived = validate_derived_samples(
+            parameter_names,
+            arrays[0].shape[0],
+            self.derived_parameter_names,
+            self.derived_samples_physical,
+        )
+        object.__setattr__(self, "derived_parameter_names", derived_names)
+        object.__setattr__(self, "derived_samples_physical", derived)
+        object.__setattr__(
+            self,
+            "fixed_parameter_values",
+            validate_fixed_parameter_values(
+                parameter_names,
+                derived_names,
+                self.fixed_parameter_values,
+            ),
+        )
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)
@@ -493,6 +522,7 @@ class UncertaintyReport:
     bootstrap_performed: bool = True
     sld_bands: SldUncertaintyBands | None = None
     prior_conflicts: tuple[str, ...] = ()
+    # Optional calibration metadata is validated without changing legacy reports.
     parameter_sigma: np.ndarray | None = None
 
     def __post_init__(self) -> None:

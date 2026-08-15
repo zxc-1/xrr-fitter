@@ -12,10 +12,10 @@ from xrr_fitter.model.fitting import (
     candidate_selection_objective,
 )
 from xrr_fitter.model.parameters import ParameterSetting
-from xrr_fitter.model.provenance import fit_search_provenance_sha256
 
 from .base import _scale_prior
 from .common import CancellationProbe, PreparedDatasetFit
+
 
 def _automatic_absorption_problem(
     problem: FitEvaluationContext,
@@ -32,9 +32,9 @@ def _automatic_absorption_problem(
                 values.get(definition.name, definition.initial),
                 definition.lower,
                 definition.upper,
-                locked=False,
+                locked=definition.locked if definition.constrained else False,
             )
-            if definition.name in released
+            if definition.name in released or definition.constrained
             else ParameterSetting(
                 definition.name,
                 values.get(definition.name, definition.initial),
@@ -51,6 +51,7 @@ def _automatic_absorption_problem(
         problem.instrument,
         problem.config,
         settings,
+        problem.constraint_rules,
     )
 
 
@@ -65,12 +66,10 @@ def _fixed_absorption_problem(
     settings = tuple(
         ParameterSetting(
             definition.name,
-            values[definition.name]
-            if definition.name in fixed
-            else definition.initial,
+            values[definition.name] if definition.name in fixed else definition.initial,
             definition.lower,
             definition.upper,
-            locked=True if definition.name in fixed else definition.locked,
+            locked=(True if definition.name in fixed else definition.locked),
         )
         for definition in problem.parameter_definitions
     )
@@ -80,6 +79,7 @@ def _fixed_absorption_problem(
         problem.instrument,
         problem.config,
         settings,
+        problem.constraint_rules,
     )
 
 
@@ -90,9 +90,7 @@ def _fixed_absorption_settings(
     values: dict[str, float],
 ) -> tuple[ParameterSetting, ...]:
     fixed = frozenset(names)
-    definitions = {
-        definition.name: definition for definition in problem.parameter_definitions
-    }
+    definitions = {definition.name: definition for definition in problem.parameter_definitions}
     existing = {setting.name for setting in prepared.updated_dataset.parameter_settings}
 
     def updated(setting: ParameterSetting) -> ParameterSetting:
@@ -153,11 +151,7 @@ def _candidate_for_problem(
 
 def _last_stage_e_index(summaries: tuple[FitStageSummary, ...]) -> int | None:
     return next(
-        (
-            index
-            for index in range(len(summaries) - 1, -1, -1)
-            if summaries[index].stage in {"E", "stage-e"}
-        ),
+        (index for index in range(len(summaries) - 1, -1, -1) if summaries[index].stage in {"E", "stage-e"}),
         None,
     )
 
@@ -171,11 +165,7 @@ def _replacement_stage_e_summary(
     by_id = {candidate.candidate_id: candidate for candidate in candidates}
     scoped = tuple(by_id[candidate_id] for candidate_id in summary.candidate_ids)
     selectable = best_candidate_index(candidates, eligible_ids=summary.candidate_ids)
-    best_objective = (
-        float("inf")
-        if selectable is None
-        else candidate_selection_objective(candidates[selectable])
-    )
+    best_objective = float("inf") if selectable is None else candidate_selection_objective(candidates[selectable])
     return FitStageSummary(
         summary.stage,
         summary.candidate_ids,
@@ -201,8 +191,7 @@ def _updated_stage_e_summaries(
         best_candidate_index=best_candidate_index,
     )
     return tuple(
-        replacement if index == stage_index else summary
-        for index, summary in enumerate(search.stage_summaries)
+        replacement if index == stage_index else summary for index, summary in enumerate(search.stage_summaries)
     )
 
 
@@ -224,9 +213,7 @@ def _absorption_inputs(
     if baseline is None or not names:
         return None
     baseline_values = {value.name: value.value for value in baseline.parameters}
-    definitions = {
-        definition.name: definition for definition in problem.parameter_definitions
-    }
+    definitions = {definition.name: definition for definition in problem.parameter_definitions}
     active = tuple(name for name in names if name in definitions)
     if not active:
         return None
@@ -285,11 +272,7 @@ def _accepted_absorption_result(
         for candidate in search.candidates
     )
     eligible_ids = next(
-        (
-            summary.candidate_ids
-            for summary in reversed(search.stage_summaries)
-            if summary.stage in {"E", "stage-e"}
-        ),
+        (summary.candidate_ids for summary in reversed(search.stage_summaries) if summary.stage in {"E", "stage-e"}),
         None,
     )
     best_index = best_candidate_index(candidates, eligible_ids=eligible_ids)
