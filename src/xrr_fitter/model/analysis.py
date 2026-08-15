@@ -460,6 +460,20 @@ class McmcReport:
         return type(self), _pickle_values(self)
 
 
+def _parameter_sigma(
+    value: np.ndarray | None,
+    dimension: int,
+) -> np.ndarray | None:
+    if value is None:
+        return None
+    sigma = _readonly(value, float, "parameter_sigma", 1)
+    if sigma.shape != (dimension,):
+        raise ValueError("parameter_sigma length must match correlation names")
+    if not np.all(np.isfinite(sigma)) or np.any(sigma < 0.0):
+        raise ValueError("parameter_sigma must be finite and nonnegative")
+    return sigma
+
+
 @dataclass(frozen=True, slots=True)
 class UncertaintyReport:
     """Combined covariance, profile, bootstrap, residual, and MCMC evidence."""
@@ -504,10 +518,8 @@ class UncertaintyReport:
         _validate_optional_sld_bands(self.sld_bands)
         object.__setattr__(self, "diagnostics", diagnostics)
         object.__setattr__(self, "prior_conflicts", tuple(self.prior_conflicts))
-        if self.parameter_sigma is not None:
-            sigma = _readonly(self.parameter_sigma, float, "parameter_sigma", 1)
-            if sigma.shape != (len(names),):
-                raise ValueError("parameter_sigma length must match correlation names")
+        sigma = _parameter_sigma(self.parameter_sigma, len(names))
+        if sigma is not None:
             object.__setattr__(self, "parameter_sigma", sigma)
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:

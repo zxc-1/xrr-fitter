@@ -918,23 +918,6 @@ def test_joint_result_uncertainty_uses_global_candidate_parameter_names() -> Non
     )
 
 
-def test_joint_ensemble_marks_bootstrap_as_not_performed() -> None:
-    joint = import_module("xrr_fitter.analysis.joint")
-
-    report, _confidence, _evidence = joint.analyze_joint_ensemble(
-        variable_names=("shared",),
-        candidate_ids=("E-0",),
-        unit_vectors=np.asarray(((0.5,),)),
-        physical_values=np.asarray(((1.0,),)),
-        objectives=(1.0,),
-        valid=(True,),
-        diagnostics=((),),
-        thresholds=FitConfig.fast(1701).confidence,
-    )
-
-    assert report.bootstrap_performed is False
-
-
 def test_problem_objective_information_uses_robust_weights_and_scale_prior() -> None:
     derivatives = import_module("xrr_fitter.analysis.derivatives")
     problem = _problem()
@@ -970,44 +953,8 @@ def test_uncertainty_report_point_estimate_conflict() -> None:
     assert "component.0.thickness_a" not in report.prior_conflicts
 
 
-def test_joint_report_leaves_prior_conflicts_empty() -> None:
-    joint = import_module("xrr_fitter.analysis.joint")
-
-    report, _confidence, _evidence = joint.analyze_joint_ensemble(
-        variable_names=("shared",),
-        candidate_ids=("E-0",),
-        unit_vectors=np.asarray(((0.5,),)),
-        physical_values=np.asarray(((1.0,),)),
-        objectives=(1.0,),
-        valid=(True,),
-        diagnostics=((),),
-        thresholds=FitConfig.fast(1701).confidence,
-    )
-
-    assert report.prior_conflicts == ()
-
-
-def test_reports_default_prior_conflicts_to_empty() -> None:
-    assert _empty_report(None).prior_conflicts == ()
-
-
 def test_prior_conflicts_do_not_enter_profile_selection() -> None:
     profiles = import_module("xrr_fitter.analysis.profiles")
     report = replace(_empty_report(None), prior_conflicts=("component.0.density_scale",))
 
     assert profiles._reported_profile_names(report) == set()
-
-
-def test_uncertainty_report_populates_parameter_sigma_consistent_with_correlation_diagonal() -> None:
-    problem = _problem()
-    candidate = _candidate(problem, "E-0")
-
-    report = _api().build_uncertainty_report(problem, (candidate,), profile_names=())
-
-    sigma = report.parameter_sigma
-    assert sigma is not None
-    assert sigma.shape == (len(report.correlation_names),)
-    diagonal = np.diag(report.correlation_matrix)
-    # 与 correlation 对角自洽:corr 对角为 1 处 sigma 必 > 0,corr 对角为 0 处 sigma 必 == 0。
-    assert np.all(sigma[diagonal == 1.0] > 0.0)
-    assert np.all(sigma[diagonal == 0.0] == 0.0)

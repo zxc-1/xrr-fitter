@@ -28,23 +28,35 @@ ORT_EXTENSION_NOTE = (
     "不属于 ORSO 标准反射率列，分别封装在扩展命名空间 xrr_fitter.confidence、"
     "xrr_fitter.reduction、xrr_fitter.model 中。"
 )
-# 缺逐参数 sigma 时无法派生协方差；受影响数据集的 .ort 会在 ``xrr_fitter.confidence``
-# 段以 ``covariance_absent_reason`` 字段记录缺席原因，摘要在此如实披露。
+# 缺逐参数 sigma 或 uncertainty 不属于实际选中候选时，受影响数据集的 .ort 会在
+# ``xrr_fitter.confidence`` 段以 ``covariance_absent_reason`` 记录原因，摘要在此披露。
 COVARIANCE_ABSENT_NOTE = (
-    "注意：本次拟合缺少逐参数标准差，无法派生协方差矩阵；受影响数据集的 .ort 已在 "
-    "xrr_fitter.confidence 段以 covariance_absent_reason 字段记录该缺席原因。"
+    "注意：本次导出的部分选中候选缺少可用协方差矩阵；受影响数据集的 .ort 已在 "
+    "xrr_fitter.confidence 段以 covariance_absent_reason 字段记录具体原因。"
 )
+
+
+def _selected_candidate(result, selected_id: str | None):
+    if selected_id is None:
+        return result.best_candidate
+    return next(
+        (candidate for candidate in result.candidates if candidate.candidate_id == selected_id),
+        None,
+    )
 
 
 def _covariance_absent(project: api.XrrProject) -> bool:
     """镜像 ``services.exports`` 的判定：任一导出数据集缺协方差即为真。"""
+    selected_ids = dict(project.ui_state.selected_candidate_ids)
     for dataset in project.datasets:
         result = dataset.last_valid_result
         if result is None:
             continue
+        selected_id = selected_ids.get(dataset.dataset_id)
+        selected = _selected_candidate(result, selected_id)
         report = result.uncertainty
         covariance = None if report is None else report.covariance
-        if covariance is None:
+        if selected is None or report is None or report.candidate_id != selected.candidate_id or covariance is None:
             return True
     return False
 

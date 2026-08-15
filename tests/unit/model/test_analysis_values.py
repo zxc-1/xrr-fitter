@@ -366,6 +366,10 @@ def test_uncertainty_report_defaults_sld_bands_to_none() -> None:
     assert _uncertainty_report().sld_bands is None
 
 
+def test_uncertainty_report_defaults_prior_conflicts_to_empty() -> None:
+    assert _uncertainty_report().prior_conflicts == ()
+
+
 def test_uncertainty_report_retains_a_supplied_sld_band() -> None:
     bands = _bands()
 
@@ -401,4 +405,14 @@ def test_uncertainty_report_rejects_parameter_sigma_length_mismatch() -> None:
             correlation_names=("a", "b"),
             correlation_matrix=np.eye(2),
             parameter_sigma=np.array([1.0]),
+        )
+
+
+@pytest.mark.parametrize("sigma", (np.array([np.nan]), np.array([np.inf]), np.array([-0.1])))
+def test_uncertainty_report_rejects_invalid_parameter_sigma(sigma: np.ndarray) -> None:
+    with pytest.raises(ValueError, match="parameter_sigma"):
+        _uncertainty_report(
+            correlation_names=("a",),
+            correlation_matrix=np.eye(1),
+            parameter_sigma=sigma,
         )

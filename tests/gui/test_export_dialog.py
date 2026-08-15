@@ -244,6 +244,14 @@ def test_export_summary_dialog_uses_read_only_scrollable_text(qtbot) -> None:
     ) == ("导出完成", "导出完成", True, summary, "导出文件清单", True, True, True)
 
 
+def _assert_published_ort_paths(manifest, summary: str) -> None:
+    records = tuple(record for record in manifest.files if str(record.path).endswith(".ort"))
+    assert records
+    for record in records:
+        published = manifest.run_directory / record.path
+        assert (published.is_file(), str(published) in summary) == (True, True)
+
+
 def test_export_results_include_ort_publishes_ort_with_extension_disclosure(
     tmp_path: Path,
 ) -> None:
@@ -252,18 +260,59 @@ def test_export_results_include_ort_publishes_ort_with_extension_disclosure(
     manifest = workflow.export_results(tmp_path / "exports", include_ort=True)
     summary = workflow.summary_text
 
-    ort_records = [record for record in manifest.files if str(record.path).endswith(".ort")]
-    assert ort_records
-    for record in ort_records:
-        published = manifest.run_directory / record.path
-        assert published.is_file()
-        assert str(published) in summary
+    _assert_published_ort_paths(manifest, summary)
     # 扩展字段说明：三个扩展命名空间都要在摘要里点名
     assert "xrr_fitter.confidence" in summary
     assert "xrr_fitter.reduction" in summary
     assert "xrr_fitter.model" in summary
     # final_fit_result 的 uncertainty=None -> 协方差缺席，摘要写出缺席原因字段
     assert "covariance_absent_reason" in summary
+
+
+def test_export_results_discloses_covariance_absence_for_selected_candidate_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _fitted_project(tmp_path)
+    dataset = project.datasets[0]
+    result = dataset.last_valid_result
+    assert result is not None
+    selected = result.candidates[0]
+    owner = replace(selected, candidate_id="owner")
+    uncertainty = api.UncertaintyReport(
+        correlation_names=("scale",),
+        correlation_matrix=np.eye(1),
+        profiles=(),
+        bootstrap_intervals=(),
+        bootstrap_failure_rate=0.0,
+        boundary_hits=(),
+        strong_correlations=(),
+        systematic_residual=False,
+        diagnostics=(),
+        candidate_id=owner.candidate_id,
+        parameter_sigma=np.array([0.1]),
+    )
+    updated_result = replace(
+        result,
+        candidates=(owner, selected),
+        best_index=0,
+        uncertainty=uncertainty,
+    )
+    project = replace(
+        project,
+        datasets=(replace(dataset, last_valid_result=updated_result),),
+    )
+    manifest = SimpleNamespace(
+        run_directory=tmp_path / "exports" / "run",
+        datasets=(SimpleNamespace(dataset_id="curve"),),
+        files=(SimpleNamespace(path="01-curve/fit_result.ort"),),
+    )
+    monkeypatch.setattr(api, "export_result", lambda *_args, **_kwargs: manifest)
+    workflow = _workflow(project)
+
+    workflow.export_results(tmp_path / "exports", include_ort=True)
+
+    assert "covariance_absent_reason" in workflow.summary_text
 
 
 def test_export_results_without_ort_publishes_no_ort_artifact(
