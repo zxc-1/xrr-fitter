@@ -30,6 +30,10 @@ DRIFT_AMOUNT_LABELS = {
     "random": "随机标准差",
 }
 
+# QSpinBox stores a signed 32-bit int, so a 64-bit project master seed must be
+# folded into range before it can seed the derived random-drift field.
+DRIFT_SEED_MODULUS = 2_147_483_648
+
 
 def _number(name: str, minimum: float, value: float = 0.0) -> QDoubleSpinBox:
     editor = QDoubleSpinBox()
@@ -298,9 +302,12 @@ class PeriodicDialog(QDialog):
         self.drift_phase = _number("periodicDriftPhase", -1_000_000.0, 0.0)
         self.drift_seed = QSpinBox()
         self.drift_seed.setObjectName("periodicDriftSeed")
-        self.drift_seed.setRange(0, 2_147_483_647)
-        self.drift_seed.setValue(self._master_seed + self._block_offset)
-        self.drift_seed_source = QLabel(f"种子来源：工程种子 {self._master_seed} + 块偏移 {self._block_offset}")
+        self.drift_seed.setRange(0, DRIFT_SEED_MODULUS - 1)
+        seed = (self._master_seed + self._block_offset) % DRIFT_SEED_MODULUS
+        self.drift_seed.setValue(seed)
+        self.drift_seed_source = QLabel(
+            f"种子来源：工程种子 {self._master_seed} + 块偏移 {self._block_offset}，折叠至 32 位 = {seed}"
+        )
         self.drift_seed_source.setObjectName("periodicDriftSeedSource")
         self.drift_seed_source.setWordWrap(True)
         self.drift_warning = QLabel()

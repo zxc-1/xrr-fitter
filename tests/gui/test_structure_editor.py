@@ -481,3 +481,69 @@ def test_periodic_block_row_tooltip_annotates_drift(qtbot, tmp_path) -> None:
     tooltip = item.toolTip(0)
     assert "线性" in tooltip
     assert "厚度" in tooltip
+
+
+def test_periodic_dialog_accepts_64bit_master_seed_without_overflow(qtbot) -> None:
+    """真实工程 master_seed 为 64 位；对话框须折叠到 32 位而非溢出崩溃（终审 Finding #1）。"""
+    from xrr_fitter.gui.structure.dialogs import DRIFT_SEED_MODULUS, PeriodicDialog
+
+    master_seed = 2**63 + 12345
+    block_offset = 3
+    dialog = PeriodicDialog(master_seed=master_seed, block_offset=block_offset)
+    qtbot.addWidget(dialog)
+
+    seed = dialog.findChild(QSpinBox, "periodicDriftSeed")
+    assert 0 <= seed.value() <= 2_147_483_647
+    assert seed.value() == (master_seed + block_offset) % DRIFT_SEED_MODULUS
+
+    twin = PeriodicDialog(master_seed=master_seed, block_offset=block_offset)
+    qtbot.addWidget(twin)
+    assert twin.findChild(QSpinBox, "periodicDriftSeed").value() == seed.value()
+
+    source = dialog.findChild(QLabel, "periodicDriftSeedSource")
+    assert "种子来源" in source.text()
+    assert "工程种子" in source.text()
+    assert str(seed.value()) in source.text()
+
+
+def test_panel_set_structure_accepts_drifted_block_end_to_end(qtbot, tmp_path) -> None:
+    """漂移块经 panel.set_structure → validate_structure → expand_structure 全链不崩，
+    且声明逐位回存（终审 Finding #2：补齐 Task 12/13 边界的全链断言）。"""
+    panel = _panel(qtbot, tmp_path)
+    block = api.PeriodicBlock(
+        "drifted",
+        (
+            api.LayerSpec("Mo", api.MaterialSpec("Mo", "Mo", 10.28), 25.0, roughness_a=2.0),
+            api.LayerSpec("Si", SI, 40.0, roughness_a=3.0),
+        ),
+        3,
+        drift=api.DriftSpec("linear", "thickness", 0.05),
+    )
+    structure = api.StructureSpec(AIR, (block,), SI)
+
+    assert panel.set_structure(structure) is True
+    assert panel.structure == structure
+    assert panel.structure.components[0].drift == api.DriftSpec("linear", "thickness", 0.05)
+
+
+def test_periodic_dialog_field_visibility_tracks_drift_kind(qtbot) -> None:
+    """按漂移类型精确显隐字段并切换增量标签：无→周期/相位隐藏；正弦→显现（终审 Finding #3）。"""
+    from xrr_fitter.gui.structure.dialogs import DRIFT_AMOUNT_LABELS, PeriodicDialog
+
+    dialog = PeriodicDialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    kind = dialog.findChild(QComboBox, "periodicDriftKind")
+    period = dialog.findChild(QDoubleSpinBox, "periodicDriftPeriod")
+    phase = dialog.findChild(QDoubleSpinBox, "periodicDriftPhase")
+
+    assert kind.currentData() is None
+    assert not period.isVisible() and not phase.isVisible()
+
+    kind.setCurrentText("正弦")
+    assert period.isVisible() and phase.isVisible()
+    assert dialog.drift_amount_label.text() == DRIFT_AMOUNT_LABELS["sine"]
+
+    kind.setCurrentText("线性")
+    assert not period.isVisible() and not phase.isVisible()
+    assert dialog.drift_amount_label.text() == DRIFT_AMOUNT_LABELS["linear"]
