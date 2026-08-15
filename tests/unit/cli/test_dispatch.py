@@ -74,3 +74,40 @@ def test_cli_package_never_imports_pyside6() -> None:
             elif isinstance(node, ast.ImportFrom) and node.module:
                 names = (node.module,)
             assert not any(name.startswith("PySide6") for name in names), path
+
+
+def test_export_ort_flag_defaults_off_and_opts_in() -> None:
+    parser = cli_main.build_parser()
+
+    assert parser.parse_args(["export", "p.json", "out"]).ort is False
+    assert parser.parse_args(["export", "p.json", "out", "--ort"]).ort is True
+
+
+def test_run_export_forwards_include_ort(monkeypatch, tmp_path, capsys) -> None:
+    import xrr_fitter.api as api
+    from xrr_fitter.cli import commands, exit_codes
+
+    project_path = tmp_path / "p.json"
+    project_path.write_text("{}", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class _Manifest:
+        run_directory = tmp_path / "run"
+
+    monkeypatch.setattr(commands.api, "load_project", lambda path: object())
+    monkeypatch.setattr(
+        commands.api,
+        "export_result",
+        lambda project, output_dir, *, include_ort: (
+            captured.update(include_ort=include_ort),
+            _Manifest(),
+        )[1],
+    )
+
+    assert cli_main.main(["export", str(project_path), str(tmp_path / "out")]) == exit_codes.SUCCESS
+    assert captured["include_ort"] is False
+
+    assert cli_main.main(["export", str(project_path), str(tmp_path / "out"), "--ort"]) == exit_codes.SUCCESS
+    assert captured["include_ort"] is True
+    assert str(_Manifest.run_directory) in capsys.readouterr().out
+    del api

@@ -460,6 +460,20 @@ class McmcReport:
         return type(self), _pickle_values(self)
 
 
+def _parameter_sigma(
+    value: np.ndarray | None,
+    dimension: int,
+) -> np.ndarray | None:
+    if value is None:
+        return None
+    sigma = _readonly(value, float, "parameter_sigma", 1)
+    if sigma.shape != (dimension,):
+        raise ValueError("parameter_sigma length must match correlation names")
+    if not np.all(np.isfinite(sigma)) or np.any(sigma < 0.0):
+        raise ValueError("parameter_sigma must be finite and nonnegative")
+    return sigma
+
+
 @dataclass(frozen=True, slots=True)
 class UncertaintyReport:
     """Combined covariance, profile, bootstrap, residual, and MCMC evidence."""
@@ -479,6 +493,7 @@ class UncertaintyReport:
     bootstrap_performed: bool = True
     sld_bands: SldUncertaintyBands | None = None
     prior_conflicts: tuple[str, ...] = ()
+    parameter_sigma: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         names = tuple(self.correlation_names)
@@ -503,9 +518,28 @@ class UncertaintyReport:
         _validate_optional_sld_bands(self.sld_bands)
         object.__setattr__(self, "diagnostics", diagnostics)
         object.__setattr__(self, "prior_conflicts", tuple(self.prior_conflicts))
+        sigma = _parameter_sigma(self.parameter_sigma, len(names))
+        if sigma is not None:
+            object.__setattr__(self, "parameter_sigma", sigma)
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)
+
+    @property
+    def covariance(self) -> np.ndarray | None:
+        """协方差 ``sigma ⊗ correlation``（只读），缺逐参数 sigma 时为 ``None``。
+
+        公式与 ``analysis.derivatives.covariance_from_correlation`` 逐字一致，放在
+        model 层是因为架构门禁禁止 ``services.exports`` 依赖 ``analysis`` 或 numpy；
+        ``io.orso`` 由此拿到矩阵而无需服务层做数组运算。``parameter_sigma`` 与
+        ``correlation_matrix`` 已在 ``__post_init__`` 校验为只读、且维度对齐。
+        """
+        if self.parameter_sigma is None:
+            return None
+        sigma = self.parameter_sigma
+        covariance = sigma[:, None] * self.correlation_matrix * sigma[None, :]
+        covariance.setflags(write=False)
+        return covariance
 
 
 def _search_result_fields() -> tuple[str, ...]:

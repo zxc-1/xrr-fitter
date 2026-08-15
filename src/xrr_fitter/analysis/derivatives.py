@@ -37,29 +37,15 @@ def objective_gradient(
     unit_vector: np.ndarray,
 ) -> np.ndarray:
     evaluation, residual, jacobian, weights = _derivative_inputs(problem, unit_vector)
-    influence = (
-        2.0
-        * weights**2
-        * residual
-        / np.sqrt(1.0 + (residual / problem.config.c_decades) ** 2)
-        / residual.size
-    )
+    influence = 2.0 * weights**2 * residual / np.sqrt(1.0 + (residual / problem.config.c_decades) ** 2) / residual.size
     gradient = jacobian.T @ influence
     prior = _scale_prior(problem)
     if prior is not None:
         index, definition = prior
-        scale = next(
-            value.value for value in evaluation.parameters if value.name == "instrument.scale"
-        )
+        scale = next(value.value for value in evaluation.parameters if value.name == "instrument.scale")
         delta = np.log10(scale) - np.log10(problem.scale_prior_center)
         derivative = np.log10(definition.upper / definition.lower)
-        gradient[index] += (
-            2.0
-            * delta
-            * derivative
-            / problem.scale_prior_tau_decades**2
-            / residual.size
-        )
+        gradient[index] += 2.0 * delta * derivative / problem.scale_prior_tau_decades**2 / residual.size
     result = np.array(gradient, dtype=float, copy=True)
     result.setflags(write=False)
     return result
@@ -70,20 +56,12 @@ def objective_information(
     unit_vector: np.ndarray,
 ) -> np.ndarray:
     _evaluation, residual, jacobian, weights = _derivative_inputs(problem, unit_vector)
-    curvature = (
-        2.0
-        * weights**2
-        / residual.size
-        / (1.0 + (residual / problem.config.c_decades) ** 2) ** 1.5
-    )
+    curvature = 2.0 * weights**2 / residual.size / (1.0 + (residual / problem.config.c_decades) ** 2) ** 1.5
     information = jacobian.T @ (curvature[:, None] * jacobian)
     prior = _scale_prior(problem)
     if prior is not None:
         index, definition = prior
-        derivative = (
-            np.log10(definition.upper / definition.lower)
-            / problem.scale_prior_tau_decades
-        )
+        derivative = np.log10(definition.upper / definition.lower) / problem.scale_prior_tau_decades
         information[index, index] += 2.0 * derivative**2 / residual.size
     result = np.array(information, dtype=float, copy=True)
     result.setflags(write=False)
@@ -114,9 +92,7 @@ def physical_parameter_jacobian(
         upper[index] += upper_step
         lower_values = values_by_name(problem, lower)
         upper_values = values_by_name(problem, upper)
-        columns.append(
-            np.asarray([upper_values[name] - lower_values[name] for name in names]) / span
-        )
+        columns.append(np.asarray([upper_values[name] - lower_values[name] for name in names]) / span)
     result = np.column_stack(columns)
     result.setflags(write=False)
     return result
@@ -139,6 +115,18 @@ def correlation_from_covariance(covariance: np.ndarray) -> np.ndarray:
     correlation[np.diag_indices_from(correlation)] = np.where(diagonal > 0.0, 1.0, 0.0)
     correlation.setflags(write=False)
     return correlation
+
+
+def covariance_from_correlation(sigma: np.ndarray, correlation: np.ndarray) -> np.ndarray:
+    scale = np.asarray(sigma, dtype=float)
+    matrix = np.asarray(correlation, dtype=float)
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError("correlation must be square")
+    if scale.shape != (matrix.shape[0],):
+        raise ValueError("sigma length must match the correlation dimension")
+    covariance = scale[:, None] * matrix * scale[None, :]
+    covariance.setflags(write=False)
+    return covariance
 
 
 def strong_parameter_correlations(

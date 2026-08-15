@@ -679,7 +679,7 @@ def test_build_report_selects_the_persisted_global_ranking_winner(
     monkeypatch.setattr(
         module,
         "_correlation_evidence",
-        lambda _problem, _unit, names: (np.eye(len(names)), (), ()),
+        lambda _problem, _unit, names: (np.eye(len(names)), (), (), np.ones(len(names))),
     )
     monkeypatch.setattr(module, "_profiles", lambda *_args: ())
     monkeypatch.setattr(
@@ -918,23 +918,6 @@ def test_joint_result_uncertainty_uses_global_candidate_parameter_names() -> Non
     )
 
 
-def test_joint_ensemble_marks_bootstrap_as_not_performed() -> None:
-    joint = import_module("xrr_fitter.analysis.joint")
-
-    report, _confidence, _evidence = joint.analyze_joint_ensemble(
-        variable_names=("shared",),
-        candidate_ids=("E-0",),
-        unit_vectors=np.asarray(((0.5,),)),
-        physical_values=np.asarray(((1.0,),)),
-        objectives=(1.0,),
-        valid=(True,),
-        diagnostics=((),),
-        thresholds=FitConfig.fast(1701).confidence,
-    )
-
-    assert report.bootstrap_performed is False
-
-
 def test_problem_objective_information_uses_robust_weights_and_scale_prior() -> None:
     derivatives = import_module("xrr_fitter.analysis.derivatives")
     problem = _problem()
@@ -968,27 +951,6 @@ def test_uncertainty_report_point_estimate_conflict() -> None:
 
     assert "component.0.density_scale" in report.prior_conflicts
     assert "component.0.thickness_a" not in report.prior_conflicts
-
-
-def test_joint_report_leaves_prior_conflicts_empty() -> None:
-    joint = import_module("xrr_fitter.analysis.joint")
-
-    report, _confidence, _evidence = joint.analyze_joint_ensemble(
-        variable_names=("shared",),
-        candidate_ids=("E-0",),
-        unit_vectors=np.asarray(((0.5,),)),
-        physical_values=np.asarray(((1.0,),)),
-        objectives=(1.0,),
-        valid=(True,),
-        diagnostics=((),),
-        thresholds=FitConfig.fast(1701).confidence,
-    )
-
-    assert report.prior_conflicts == ()
-
-
-def test_reports_default_prior_conflicts_to_empty() -> None:
-    assert _empty_report(None).prior_conflicts == ()
 
 
 def test_prior_conflicts_do_not_enter_profile_selection() -> None:

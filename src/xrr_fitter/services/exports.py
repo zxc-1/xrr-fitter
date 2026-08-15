@@ -25,6 +25,7 @@ from xrr_fitter.io.export_tables import (
     dataset_workbook_bytes,
     run_log_bytes,
 )
+from xrr_fitter.io.orso import orso_bytes
 from xrr_fitter.model.export import ExportManifest
 from xrr_fitter.model.operations import ProjectFitResult
 from xrr_fitter.model.project import DatasetProject, XrrProject
@@ -129,18 +130,23 @@ def _contexts(project: XrrProject) -> tuple[DatasetExportData, ...]:
     )
 
 
-def _dataset_artifacts(context: DatasetExportData) -> DatasetArtifacts:
-    return DatasetArtifacts(
-        context.dataset.dataset_id,
-        (
-            ArtifactPayload("fit_result.xlsx", dataset_workbook_bytes(context)),
-            ArtifactPayload("fit_result.json", dataset_json_bytes(context)),
-            ArtifactPayload("fit_overview.png", fit_overview_png(context)),
-            ArtifactPayload("sld_profile.png", sld_profile_png(context)),
-            ArtifactPayload("residuals.png", residuals_png(context)),
-            ArtifactPayload("run_log.txt", run_log_bytes(context)),
-        ),
-    )
+def _dataset_artifacts(context: DatasetExportData, *, include_ort: bool) -> DatasetArtifacts:
+    files = [
+        ArtifactPayload("fit_result.xlsx", dataset_workbook_bytes(context)),
+        ArtifactPayload("fit_result.json", dataset_json_bytes(context)),
+        ArtifactPayload("fit_overview.png", fit_overview_png(context)),
+        ArtifactPayload("sld_profile.png", sld_profile_png(context)),
+        ArtifactPayload("residuals.png", residuals_png(context)),
+        ArtifactPayload("run_log.txt", run_log_bytes(context)),
+    ]
+    if include_ort:
+        # 架构门禁禁止 ``services.exports`` 依赖 ``analysis`` 或 numpy，协方差矩阵改由
+        # model 层 ``UncertaintyReport.covariance`` 派生（修正 9 的合规落点），服务层仅读取
+        # 并透传，缺逐参数 sigma 时为 ``None``，导出即记录缺席原因。
+        report = context.result.uncertainty
+        covariance = None if report is None else report.covariance
+        files.append(ArtifactPayload("fit_result.ort", orso_bytes(context, covariance=covariance)))
+    return DatasetArtifacts(context.dataset.dataset_id, tuple(files))
 
 
 def _root_artifacts(
@@ -165,13 +171,20 @@ def _root_artifacts(
 def export_result(
     result: XrrProject | ProjectFitResult,
     output_dir: str | Path,
+    *,
+    include_ort: bool = False,
 ) -> ExportManifest:
-    """Validate, serialize, then atomically publish one complete export run."""
+    """Validate, serialize, then atomically publish one complete export run.
+
+    ``include_ort`` opts each dataset directory into an additional
+    ``fit_result.ort`` artifact; left ``False`` the published tree is byte-for-byte
+    identical to a run without ORSO support.
+    """
     project = _project(result)
     if not project.datasets:
         raise ValueError("project has no datasets")
     _require_current_sources(project)
     contexts = _contexts(project)
-    datasets = tuple(map(_dataset_artifacts, contexts))
+    datasets = tuple(_dataset_artifacts(context, include_ort=include_ort) for context in contexts)
     root_files = _root_artifacts(contexts)
     return publish_export_run(output_dir, datasets, root_files)

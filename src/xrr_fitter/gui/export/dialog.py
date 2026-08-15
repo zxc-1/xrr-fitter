@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -18,17 +19,52 @@ from PySide6.QtWidgets import (
 import xrr_fitter.api as api
 from xrr_fitter.gui.document import ProjectDocument
 
-
 EXPECTED_EXPORT_ERRORS = (OSError, TypeError, ValueError, RuntimeError)
+
+# 产出 .ort 时追加到摘要末尾：置信度/可复现种子/模型曲线不属于 ORSO 标准反射率列，
+# 分装在三个冻结扩展命名空间里（与 ``io/orso.py`` 的 ``_extensions`` 逐字对应）。
+ORT_EXTENSION_NOTE = (
+    "已随每个数据集导出 ORSO .ort。拟合置信度、可复现种子与拟合配置、模型曲线与残差"
+    "不属于 ORSO 标准反射率列，分别封装在扩展命名空间 xrr_fitter.confidence、"
+    "xrr_fitter.reduction、xrr_fitter.model 中。"
+)
+# 缺逐参数 sigma 或 uncertainty 不属于实际选中候选时，受影响数据集的 .ort 会在
+# ``xrr_fitter.confidence`` 段以 ``covariance_absent_reason`` 记录原因，摘要在此披露。
+COVARIANCE_ABSENT_NOTE = (
+    "注意：本次导出的部分选中候选缺少可用协方差矩阵；受影响数据集的 .ort 已在 "
+    "xrr_fitter.confidence 段以 covariance_absent_reason 字段记录具体原因。"
+)
+
+
+def _selected_candidate(result, selected_id: str | None):
+    if selected_id is None:
+        return result.best_candidate
+    return next(
+        (candidate for candidate in result.candidates if candidate.candidate_id == selected_id),
+        None,
+    )
+
+
+def _covariance_absent(project: api.XrrProject) -> bool:
+    """镜像 ``services.exports`` 的判定：任一导出数据集缺协方差即为真。"""
+    selected_ids = dict(project.ui_state.selected_candidate_ids)
+    for dataset in project.datasets:
+        result = dataset.last_valid_result
+        if result is None:
+            continue
+        selected_id = selected_ids.get(dataset.dataset_id)
+        selected = _selected_candidate(result, selected_id)
+        report = result.uncertainty
+        covariance = None if report is None else report.covariance
+        if selected is None or report is None or report.candidate_id != selected.candidate_id or covariance is None:
+            return True
+    return False
 
 
 def export_summary(manifest: api.ExportManifest) -> str:
     """Render every manifest record as its actual published path."""
     dataset_ids = ", ".join(item.dataset_id for item in manifest.datasets)
-    files = "\n".join(
-        str(manifest.run_directory / record.path)
-        for record in manifest.files
-    )
+    files = "\n".join(str(manifest.run_directory / record.path) for record in manifest.files)
     return f"导出完成：{manifest.run_directory}\n数据集：{dataset_ids}\n{files}"
 
 
@@ -56,6 +92,33 @@ class ExportSummaryDialog(QDialog):
         layout.addWidget(buttons)
 
 
+class OrtOptionDialog(QDialog):
+    """Ask, before choosing a directory, whether to also emit ORSO ``.ort`` files."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ortOptionDialog")
+        self.setWindowTitle("导出选项")
+        self.setAccessibleName("导出选项")
+        checkbox = QCheckBox("额外产出 ORSO .ort 文件")
+        checkbox.setObjectName("ortOptionCheckbox")
+        checkbox.setAccessibleName("额外产出 ORSO .ort 文件")
+        checkbox.setToolTip("为每个数据集额外写出 ORSO 标准 .ort 文件（不勾选则导出内容与不支持 ORSO 时逐位一致）。")
+        checkbox.setChecked(True)
+        self._checkbox = checkbox
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.setObjectName("ortOptionButtons")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(checkbox)
+        layout.addWidget(buttons)
+
+    @property
+    def include_ort(self) -> bool:
+        return self._checkbox.isChecked()
+
+
 class ExportWorkflow:
     """Keep the latest successful summary while delegating export to the API."""
 
@@ -78,11 +141,20 @@ class ExportWorkflow:
     def manifest(self) -> api.ExportManifest | None:
         return self._manifest
 
-    def export_results(self, directory: str | Path) -> api.ExportManifest:
+    def export_results(
+        self,
+        directory: str | Path,
+        *,
+        include_ort: bool = False,
+    ) -> api.ExportManifest:
         if self._is_running():
             raise RuntimeError("cannot export a project while an operation is running")
-        manifest = api.export_result(self._document.project, Path(directory))
+        manifest = api.export_result(self._document.project, Path(directory), include_ort=include_ort)
         summary = export_summary(manifest)
+        if any(str(record.path).endswith(".ort") for record in manifest.files):
+            summary = f"{summary}\n\n{ORT_EXTENSION_NOTE}"
+            if _covariance_absent(self._document.project):
+                summary = f"{summary}\n{COVARIANCE_ABSENT_NOTE}"
         self._manifest = manifest
         self._summary_text = summary
         return manifest
@@ -91,18 +163,21 @@ class ExportWorkflow:
         self,
         parent: QWidget | None,
     ) -> api.ExportManifest | None:
+        option = OrtOptionDialog(parent)
+        if option.exec() != QDialog.DialogCode.Accepted:
+            return None
+        include_ort = option.include_ort
         name = QFileDialog.getExistingDirectory(parent, "导出拟合结果")
         if not name:
             return None
         destination = Path(name)
         try:
-            manifest = self.export_results(destination)
+            manifest = self.export_results(destination, include_ort=include_ort)
         except EXPECTED_EXPORT_ERRORS as error:
             QMessageBox.critical(
                 parent,
                 "导出失败",
-                f"目标目录：{destination}\n{type(error).__name__}: {error}\n"
-                "请检查目标目录的写入权限和可用空间后重试。",
+                f"目标目录：{destination}\n{type(error).__name__}: {error}\n请检查目标目录的写入权限和可用空间后重试。",
             )
             return None
         ExportSummaryDialog(self._summary_text, parent).exec()

@@ -134,6 +134,7 @@ def _uncertainty_report(
         default=None,
     )
     best_vector = None if best_index is None else ensemble.vectors[best_index]
+    sigma = np.std(values, axis=0, ddof=1) if values.shape[0] >= 2 else None
     return UncertaintyReport(
         correlation_names=ensemble.names,
         correlation_matrix=correlation,
@@ -156,6 +157,7 @@ def _uncertainty_report(
         candidate_id=None if best_index is None else ensemble.identifiers[best_index],
         bootstrap_performed=False,
         prior_conflicts=(),
+        parameter_sigma=sigma,
     )
 
 
