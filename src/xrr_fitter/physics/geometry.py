@@ -32,11 +32,17 @@ def _transition_count(layer: LayerSpec) -> int:
 
 
 def _periodic_interface_names(prefix: str, block: PeriodicBlock) -> tuple[str, ...]:
-    """Mirror repeated interfaces back to their shared source coordinates."""
-    ordinary = tuple(map("layer.{}.roughness_a".format, range(len(block.layers))))
-    first = ordinary[0] if block.top_roughness_a is None else "top_roughness_a"
-    suffixes = (first, *ordinary[1:], *(ordinary * (block.repeats - 1)))
-    return tuple(map(f"{prefix}.{{}}".format, suffixes))
+    """Mirror repeated interfaces back to their shared source coordinates.
+
+    Roughness-drift copies resolve to their own ``repeat.{k}`` interface so the
+    dynamic roughness limits track the per-copy values, while every other block
+    keeps the shared base declaration and stays byte-identical.
+    """
+    return tuple(
+        _periodic_roughness_name(prefix, block, repeat_index, layer_index)
+        for repeat_index in range(block.repeats)
+        for layer_index in range(len(block.layers))
+    )
 
 
 def _expanded_interface_names(structure: StructureSpec) -> tuple[str, ...]:
@@ -149,18 +155,24 @@ def _append_periodic_geometry(
     component: PeriodicBlock,
     prefix: str,
     value_jacobians: dict[str, np.ndarray] | None,
+    values: dict[str, float] | None,
 ) -> None:
-    # Every repeated cell keeps the same source-coordinate thickness tangent.
-    for _ in range(component.repeats):
+    # Non-base copies of a thickness-drift block carry their own resolved value
+    # and tangent; every other cell keeps the shared source coordinate untouched.
+    thickness_drift = component.drift is not None and component.drift.target == "thickness"
+    for repeat_index in range(component.repeats):
         for layer_index, layer in enumerate(component.layers):
+            name = _periodic_thickness_name(prefix, component, repeat_index, layer_index)
+            value = layer.thickness_a
+            if thickness_drift and repeat_index > 0:
+                if values is None:
+                    raise ValueError("drifted periodic geometry requires resolved per-copy values")
+                value = values[name]
             _append_geometry(
                 thickness,
                 tangents,
-                layer.thickness_a,
-                _geometry_tangent(
-                    value_jacobians,
-                    f"{prefix}.layer.{layer_index}.thickness_a",
-                ),
+                value,
+                _geometry_tangent(value_jacobians, name),
             )
 
 
@@ -189,6 +201,7 @@ def _append_component_geometry(
     component: LayerSpec | PeriodicBlock | GradientLayerSpec,
     prefix: str,
     value_jacobians: dict[str, np.ndarray] | None,
+    values: dict[str, float] | None,
 ) -> None:
     # Structure validation closes this dispatch over the three component kinds.
     if isinstance(component, LayerSpec):
@@ -201,6 +214,7 @@ def _append_component_geometry(
             component,
             prefix,
             value_jacobians,
+            values,
         )
         return
     _append_gradient_geometry(thickness, tangents, component, prefix, value_jacobians)
@@ -210,8 +224,14 @@ def expand_geometry(
     structure: StructureSpec,
     parameter_count: int | None = None,
     value_jacobians: dict[str, np.ndarray] | None = None,
+    values: dict[str, float] | None = None,
 ) -> GeometryExpansion:
-    """Expand thickness and interface names without evaluating material SLDs."""
+    """Expand thickness and interface names without evaluating material SLDs.
+
+    ``values`` mirrors the primal contract: it is consulted only for the
+    non-base copies of a drifted periodic block, so non-drift expansion keeps
+    every existing thickness row byte-identical whether it is supplied or not.
+    """
     if (parameter_count is None) != (value_jacobians is None):
         raise ValueError("geometry Jacobian inputs must be supplied together")
     if value_jacobians is not None:
@@ -226,6 +246,7 @@ def expand_geometry(
             component,
             f"component.{component_index}",
             value_jacobians,
+            values,
         )
     _append_geometry(
         thickness,
@@ -292,6 +313,23 @@ def _layer_sld_jacobian(
     return layer.material.sld_override_a2 * density_jacobian + density * override_jacobian
 
 
+def _periodic_thickness_name(
+    prefix: str,
+    block: PeriodicBlock,
+    repeat_index: int,
+    layer_index: int,
+) -> str:
+    """Return the thickness source coordinate for one expanded periodic layer.
+
+    Copy zero is the free base cell. Later copies of a thickness-drift block read
+    their own ``repeat.{k}`` coordinate, which the desugared drift rules populate;
+    every other block shares the base declaration so the mapping stays unchanged.
+    """
+    if block.drift is not None and block.drift.target == "thickness" and repeat_index > 0:
+        return f"{prefix}.repeat.{repeat_index}.layer.{layer_index}.thickness_a"
+    return f"{prefix}.layer.{layer_index}.thickness_a"
+
+
 def _periodic_roughness_name(
     prefix: str,
     block: PeriodicBlock,
@@ -301,6 +339,8 @@ def _periodic_roughness_name(
     top_interface = (repeat_index, layer_index, block.top_roughness_a is not None)
     if top_interface == (0, 0, True):
         return f"{prefix}.top_roughness_a"
+    if block.drift is not None and block.drift.target == "roughness" and repeat_index > 0:
+        return f"{prefix}.repeat.{repeat_index}.layer.{layer_index}.roughness_a"
     return f"{prefix}.layer.{layer_index}.roughness_a"
 
 
@@ -342,6 +382,7 @@ class _StackJacobianBuilder:
         self,
         layer: LayerSpec,
         prefix: str,
+        thickness_name: str,
         roughness_name: str,
         values: dict[str, float],
         value_jacobians: dict[str, np.ndarray],
@@ -349,11 +390,12 @@ class _StackJacobianBuilder:
     ) -> None:
         """Append one finite layer and the roughness of its incident interface.
 
-        The caller supplies the roughness source name separately because the
-        first periodic interface may use a block override while all later cells
-        share their ordinary layer declaration.
+        The caller supplies thickness and roughness source names separately from
+        ``prefix``: a drifted periodic copy differentiates its own ``repeat.{k}``
+        coordinate, while SLD and density stay bound to the shared base cell that
+        ``prefix`` still keys, so the per-expansion cache remains correct.
         """
-        self.thickness.append(np.asarray(value_jacobians[f"{prefix}.thickness_a"], dtype=float))
+        self.thickness.append(np.asarray(value_jacobians[thickness_name], dtype=float))
         # Cache scope is one builder and therefore one candidate/wavelength pair.
         # Repeated cells reuse values without sharing mutable state across calls.
         if prefix not in self.sld_cache:
@@ -391,12 +433,8 @@ class _StackJacobianBuilder:
             self.append_layer(
                 block.layers[layer_index],
                 layer_prefix,
-                _periodic_roughness_name(
-                    prefix,
-                    block,
-                    repeat_index,
-                    layer_index,
-                ),
+                _periodic_thickness_name(prefix, block, repeat_index, layer_index),
+                _periodic_roughness_name(prefix, block, repeat_index, layer_index),
                 values,
                 value_jacobians,
                 wavelength_a,
@@ -491,6 +529,7 @@ class _StackJacobianBuilder:
             self.append_layer(
                 component,
                 prefix,
+                f"{prefix}.thickness_a",
                 f"{prefix}.roughness_a",
                 values,
                 value_jacobians,
@@ -550,7 +589,7 @@ def expand_structure_with_jacobian(
 ) -> DifferentiableStack:
     """Expand one wavelength-specific structure and its aligned tangents."""
     rebuilt = rebuild_structure(structure, values)
-    stack = expand_structure(rebuilt, wavelength_a)
+    stack = expand_structure(rebuilt, wavelength_a, values)
     builder = _StackJacobianBuilder.create(parameter_count)
     for component_index, component in enumerate(rebuilt.components):
         builder.append_component(
