@@ -868,16 +868,19 @@ def _primary_wavelength(problem: object) -> float:
 def _expanded_stacks(
     problem: object,
     rebuilt: StructureSpec,
+    values: dict[str, float],
 ) -> tuple[float, SlabStack, SlabStack | None]:
     """Expand primary and optional secondary stacks at their true wavelengths.
 
     Material SLD is wavelength dependent, so a mixed beam cannot reuse one stack
-    even though both expansions share the same rebuilt physical geometry.
+    even though both expansions share the same rebuilt physical geometry. The
+    resolved ``values`` map is forwarded so drifted periodic blocks expand their
+    per-copy geometry rather than the shared base cell.
     """
     primary_wavelength = _primary_wavelength(problem)
-    primary = expand_structure(rebuilt, primary_wavelength)
+    primary = expand_structure(rebuilt, primary_wavelength, values)
     secondary = (
-        expand_structure(rebuilt, problem.data.beam.wavelength_2_a)
+        expand_structure(rebuilt, problem.data.beam.wavelength_2_a, values)
         if problem.data.beam.kind == "mixed_kalpha"
         else None
     )
@@ -1162,6 +1165,7 @@ def _model_evaluation(
         primary_wavelength, primary_stack, secondary_stack = _expanded_stacks(
             problem,
             rebuilt,
+            values,
         )
     except (ValueError, FloatingPointError, OverflowError) as error:
         raise EvaluationConstraintError(f"constraint_violation:{type(error).__name__}") from error

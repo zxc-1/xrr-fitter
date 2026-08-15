@@ -225,13 +225,49 @@ def _append_layer(state: _Expansion, layer: LayerSpec, roughness: float | None =
     return None
 
 
-def _append_periodic(state: _Expansion, block: PeriodicBlock) -> None:
+def _drifted_layer(
+    block: PeriodicBlock,
+    layer: LayerSpec,
+    prefix: str,
+    repeat_index: int,
+    layer_index: int,
+    values: dict[str, float] | None,
+) -> tuple[LayerSpec, float | None]:
+    """Resolve one non-base copy's per-copy thickness or roughness.
+
+    Copy zero is the free base cell (coefficient zero) and never reaches here.
+    Later copies read the constraint-resolved ``.repeat.{k}`` coordinate so the
+    primal consumes the very values the desugared drift rules produced, keeping
+    it identical to what the Jacobian differentiates. A returned roughness (for
+    roughness drift) overrides the base interface; ``None`` leaves it untouched.
+    """
+    if values is None:
+        raise ValueError("drifted periodic expansion requires resolved per-copy values")
+    name = f"{prefix}.repeat.{repeat_index}.layer.{layer_index}"
+    if block.drift.target == "thickness":
+        return replace(layer, thickness_a=values[f"{name}.thickness_a"]), None
+    return layer, values[f"{name}.roughness_a"]
+
+
+def _append_periodic(
+    state: _Expansion,
+    block: PeriodicBlock,
+    prefix: str,
+    values: dict[str, float] | None,
+) -> None:
+    drifted = block.drift is not None
     start = len(state.thickness)
     for repeat_index in range(block.repeats):
         for layer_index, layer in enumerate(block.layers):
             override = block.top_roughness_a if repeat_index == layer_index == 0 else None
+            if drifted and repeat_index > 0:
+                layer, drift_roughness = _drifted_layer(block, layer, prefix, repeat_index, layer_index, values)
+                if drift_roughness is not None:
+                    override = drift_roughness
             _append_layer(state, layer, override)
-    if block.repeats > 1:
+    # A drifted block has non-repeating cells, so the matrix-power fast path
+    # cannot apply; expanding as plain layers keeps the primal exact.
+    if block.repeats > 1 and not drifted:
         state.spans.append(PeriodicSpan(start, len(block.layers), block.repeats))
 
 
@@ -246,11 +282,16 @@ def _append_gradient(state: _Expansion, gradient: GradientLayerSpec) -> None:
         state.roughness.append(gradient.roughness_a if index == 0 else 0.0)
 
 
-def _append_component(state: _Expansion, component: StructureComponent) -> None:
+def _append_component(
+    state: _Expansion,
+    component: StructureComponent,
+    prefix: str,
+    values: dict[str, float] | None,
+) -> None:
     if isinstance(component, LayerSpec):
         _append_layer(state, component)
     elif isinstance(component, PeriodicBlock):
-        _append_periodic(state, component)
+        _append_periodic(state, component, prefix, values)
     else:
         _append_gradient(state, component)
 
@@ -273,14 +314,24 @@ def _validate_roughness(thickness: np.ndarray, roughness: np.ndarray) -> None:
             raise PhysicalValueError(f"interface.{interface}.roughness_a must be below {limit:g} A")
 
 
-def expand_structure(structure: StructureSpec, wavelength_a: float) -> SlabStack:
-    """Expand fronting, declared components, and backing at one wavelength."""
+def expand_structure(
+    structure: StructureSpec,
+    wavelength_a: float,
+    values: dict[str, float] | None = None,
+) -> SlabStack:
+    """Expand fronting, declared components, and backing at one wavelength.
+
+    ``values`` carries the constraint-resolved coordinate map and is only read
+    for drifted periodic blocks, whose per-copy geometry lives in ``.repeat.{k}``
+    entries rather than the shared base cell. Non-drift expansion ignores it, so
+    omitting it keeps every existing stack byte-identical.
+    """
     if not isfinite(wavelength_a) or wavelength_a <= 0.0:
         raise ValueError("wavelength_a must be positive")
     state = _Expansion(wavelength_a)
     state.sld.append(state.sld_for(structure.fronting, 1.0))
-    for component in structure.components:
-        _append_component(state, component)
+    for index, component in enumerate(structure.components):
+        _append_component(state, component, f"component.{index}", values)
     state.thickness.append(0.0)
     state.limit_thickness.append(0.0)
     state.sld.append(state.sld_for(structure.backing, 1.0))
