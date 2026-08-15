@@ -14,7 +14,7 @@ from xrr_fitter.analysis.sld_bands import (
     sld_uncertainty_bands,
 )
 from xrr_fitter.model.analysis import McmcConfig, McmcReport
-from xrr_fitter.model.structure import LayerSpec, MaterialSpec, StructureSpec
+from xrr_fitter.model.structure import LayerSpec, MaterialSpec, PeriodicBlock, StructureSpec
 from xrr_fitter.physics.sld_profile import sld_depth_profile
 from xrr_fitter.physics.stack import expand_structure
 
@@ -40,6 +40,25 @@ def _vacuum_spacer(thickness_a: float = 40.0) -> StructureSpec:
         (LayerSpec("vacuum spacer", VACUUM, thickness_a),),
         SI,
         backing_roughness_a=0.0,
+    )
+
+
+def _periodic_structure(top_roughness_a: float | None = None) -> StructureSpec:
+    return StructureSpec(
+        AIR,
+        (
+            PeriodicBlock(
+                "Mo/Si",
+                (
+                    LayerSpec("Mo", MO, 24.0, roughness_a=3.0),
+                    LayerSpec("Si", SI, 32.0, roughness_a=2.0),
+                ),
+                repeats=2,
+                top_roughness_a=top_roughness_a,
+            ),
+        ),
+        SI,
+        backing_roughness_a=4.0,
     )
 
 
@@ -222,6 +241,42 @@ def test_locked_structure_values_are_used_for_sld_replay() -> None:
     np.testing.assert_array_equal(actual.depth_a, expected.depth_a)
     np.testing.assert_array_equal(actual.real, expected.real)
     np.testing.assert_array_equal(actual.imaginary, expected.imaginary)
+
+
+def test_inherited_periodic_top_roughness_fixed_value_does_not_break_sld_replay() -> None:
+    base_report = _report(np.ones(12), names=("component.0.layer.0.density_scale",))
+    report = replace(
+        base_report,
+        fixed_parameter_values=(("component.0.top_roughness_a", 3.0),),
+    )
+    structure = _periodic_structure(top_roughness_a=None)
+
+    expected = sld_uncertainty_bands(structure, base_report, wavelength_a=WAVELENGTH_A)
+    actual = sld_uncertainty_bands(structure, report, wavelength_a=WAVELENGTH_A)
+
+    np.testing.assert_array_equal(actual.depth_a, expected.depth_a)
+    np.testing.assert_array_equal(actual.real, expected.real)
+    np.testing.assert_array_equal(actual.imaginary, expected.imaginary)
+
+    explicit_structure = _periodic_structure(top_roughness_a=3.0)
+    explicit_report = replace(
+        base_report,
+        fixed_parameter_values=(("component.0.top_roughness_a", 3.0),),
+    )
+    explicit_expected = sld_uncertainty_bands(
+        explicit_structure,
+        base_report,
+        wavelength_a=WAVELENGTH_A,
+    )
+    explicit_actual = sld_uncertainty_bands(
+        explicit_structure,
+        explicit_report,
+        wavelength_a=WAVELENGTH_A,
+    )
+
+    np.testing.assert_array_equal(explicit_actual.depth_a, explicit_expected.depth_a)
+    np.testing.assert_array_equal(explicit_actual.real, explicit_expected.real)
+    np.testing.assert_array_equal(explicit_actual.imaginary, explicit_expected.imaginary)
 
 
 def test_unknown_sample_parameter_name_fails_instead_of_being_ignored() -> None:

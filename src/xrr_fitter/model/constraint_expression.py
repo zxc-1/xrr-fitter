@@ -98,6 +98,11 @@ def _gradient_for_operator(
         )
     if right == 0.0:
         return {reference: 0.0 for reference in grad_left}
+    if left == 0.0 and 0.0 < right < 1.0:
+        # The primal value is finite at this real-domain boundary, but the
+        # analytic derivative is infinite. Keep the legal candidate and publish
+        # a finite no-step tangent rather than reclassifying it as invalid.
+        return {reference: 0.0 for reference in grad_left}
     derivative = right * _safe_pow(left, right - 1.0)
     return {reference: partial * derivative for reference, partial in grad_left.items()}
 

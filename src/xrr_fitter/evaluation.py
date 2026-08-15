@@ -81,6 +81,7 @@ from xrr_fitter.model.parameters import (
     unit_to_physical,
 )
 from xrr_fitter.model.structure import (
+    PeriodicBlock,
     SlabStack,
     StructureSpec,
 )
@@ -350,6 +351,42 @@ def _zero_roughness_values(problem: object) -> dict[str, float]:
     return dict.fromkeys(map(_definition_name, definitions), 0.0)
 
 
+def _roughness_definitions(problem: object) -> dict[str, ParameterDefinition]:
+    return {
+        definition.name: definition
+        for definition in problem.parameter_definitions
+        if _is_roughness_definition(definition)
+    }
+
+
+def _latent_periodic_roughness_names(problem: object) -> tuple[str, ...]:
+    """Return declared periodic roughness coordinates absent from topology.
+
+    Periodic declarations always carry both the cell layer roughnesses and a
+    top-termination roughness. Exactly one of those declarations can be latent:
+    an inherited top sentinel never materializes ``top_roughness_a``, while a
+    single explicit-top repeat consumes the only layer-zero interface.
+    """
+    names: list[str] = []
+    for component_index, component in enumerate(problem.structure.components):
+        if not isinstance(component, PeriodicBlock):
+            continue
+        prefix = f"component.{component_index}"
+        if component.top_roughness_a is None:
+            names.append(f"{prefix}.top_roughness_a")
+        elif component.repeats == 1:
+            names.append(f"{prefix}.layer.0.roughness_a")
+    return tuple(names)
+
+
+def _add_latent_roughness_caps(problem: object, dynamic: dict[str, float]) -> None:
+    definitions = _roughness_definitions(problem)
+    for name in _latent_periodic_roughness_names(problem):
+        definition = definitions.get(name)
+        if definition is not None and name not in dynamic:
+            dynamic[name] = definition.upper
+
+
 def _is_public_interface(item: tuple[int, str]) -> bool:
     return item[1] != GRADIENT_INTERNAL_INTERFACE
 
@@ -380,6 +417,7 @@ def _roughness_dynamic_uppers(
         neighbors = _interface_neighbor_indices(interface, final_medium)
         upper = _interface_upper(geometry.thickness_a, neighbors)
         dynamic[name] = min(dynamic.get(name, np.inf), upper)
+    _add_latent_roughness_caps(problem, dynamic)
     return dynamic
 
 
@@ -474,6 +512,18 @@ def _record_active_upper(
         tie_counts[name] = count + 1
 
 
+def _add_latent_roughness_cap_jacobians(
+    problem: object,
+    dynamic: dict[str, tuple[float, np.ndarray]],
+    parameter_count: int,
+) -> None:
+    definitions = _roughness_definitions(problem)
+    for name in _latent_periodic_roughness_names(problem):
+        definition = definitions.get(name)
+        if definition is not None and name not in dynamic:
+            dynamic[name] = (definition.upper, np.zeros(parameter_count, dtype=float))
+
+
 def _roughness_dynamic_upper_jacobians(
     problem: object,
     nonrough_values: dict[str, float],
@@ -504,6 +554,7 @@ def _roughness_dynamic_upper_jacobians(
             parameter_count,
         )
         _record_active_upper(dynamic, tie_counts, name, upper, tangent)
+    _add_latent_roughness_cap_jacobians(problem, dynamic, parameter_count)
     return dynamic
 
 

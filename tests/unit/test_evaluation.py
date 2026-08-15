@@ -101,6 +101,36 @@ def test_dynamic_roughness_decode_does_not_expand_material_stack(
     assert values["component.0.roughness_a"] > 0.0
 
 
+def test_single_repeat_periodic_latent_layer_roughness_decodes_for_primal_and_jacobian() -> None:
+    base = simple_structure()
+    film = base.components[0]
+    assert isinstance(film, LayerSpec)
+    block = PeriodicBlock(
+        "single",
+        (replace(film, name="only", roughness_a=3.0),),
+        repeats=1,
+        top_roughness_a=2.0,
+    )
+    problem = compile_fit_problem(
+        prepared_data(size=64),
+        StructureSpec(base.fronting, (block,), base.backing, backing_roughness_a=4.0),
+        InstrumentSpec(footprint_mode="none"),
+        replace(FitConfig.fast(master_seed=211), scale_prior_enabled=False),
+    )
+    unit = np.full(len(problem.variables), 0.5)
+    latent = "component.0.layer.0.roughness_a"
+
+    values = evaluation.values_by_name(problem, unit)
+    jacobian_values, value_jacobians = evaluation.values_and_jacobians(problem, unit)
+    residual_jacobian = evaluation.evaluate_model_jacobian(problem, unit)
+
+    assert values[latent] == pytest.approx(jacobian_values[latent])
+    latent_index = next(index for index, coordinate in enumerate(problem.variables) if coordinate.name == latent)
+    assert value_jacobians[latent][latent_index] > 0.0
+    assert np.all(np.isfinite(residual_jacobian))
+    np.testing.assert_allclose(residual_jacobian[:, latent_index], 0.0, atol=1e-12)
+
+
 def test_shared_solver_primitives_match_the_compiled_objective() -> None:
     problem = compile_fit_problem(
         prepared_data(size=48),

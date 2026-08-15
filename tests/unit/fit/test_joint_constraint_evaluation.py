@@ -12,8 +12,11 @@ from tests.support.joint_constraint_cases import (
     cross_roughness_constraint_joint,
     local_problem,
 )
+from tests.support.model_cases import prepared_data, simple_structure
 
 from xrr_fitter.fit.problem import compile_fit_problem
+from xrr_fitter.model.fitting import FitConfig
+from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
     ConstraintNode,
     ConstraintRule,
@@ -71,6 +74,63 @@ def test_cross_dataset_constraint_joint_jacobian_matches_finite_difference() -> 
     finite = ((plus - minus) / (2.0 * step))[:, None]
 
     np.testing.assert_allclose(analytic, finite, rtol=5e-5, atol=5e-8)
+
+
+def _angle_offset_problem(*, seed: int, size: int, free: bool) -> object:
+    base = compile_fit_problem(
+        prepared_data(size=size),
+        simple_structure(),
+        InstrumentSpec(footprint_mode="none"),
+        FitConfig.fast(seed),
+    )
+    free_names = {"instrument.angle_offset_deg"} if free else set()
+    settings = tuple(
+        ParameterSetting(
+            definition.name,
+            definition.initial,
+            definition.lower if definition.name in free_names else definition.initial,
+            definition.upper if definition.name in free_names else definition.initial,
+            locked=definition.name not in free_names,
+        )
+        for definition in base.parameter_definitions
+    )
+    return compile_fit_problem(base.data, base.structure, base.instrument, base.config, settings)
+
+
+def test_cross_dataset_fractional_power_constraint_keeps_joint_callbacks_finite() -> None:
+    joint_api = import_module("xrr_fitter.fit.joint_problem")
+    evaluation_api = import_module("xrr_fitter.fit.joint_evaluation")
+    rule = ConstraintRule(
+        ParameterReference("right", "instrument.background"),
+        ConstraintNode(
+            "pow",
+            operands=(
+                ConstraintNode(
+                    "ref",
+                    reference=ParameterReference("left", "instrument.angle_offset_deg"),
+                ),
+                ConstraintNode("const", value=0.5),
+            ),
+        ),
+    )
+    joint = joint_api.compile_joint_problem(
+        ("left", "right"),
+        (
+            _angle_offset_problem(seed=862, size=40, free=True),
+            _angle_offset_problem(seed=863, size=52, free=True),
+        ),
+        (),
+        (rule,),
+    )
+    unit = np.asarray([0.5, 0.5])
+
+    evaluation = evaluation_api.evaluate_joint_vector(joint, unit)
+    jacobian = evaluation_api.evaluate_joint_jacobian(joint, unit)
+
+    assert evaluation.valid
+    assert not np.all(evaluation.residuals == 1e6)
+    assert jacobian.shape == (evaluation.residuals.size, len(joint.global_variables))
+    assert np.all(np.isfinite(jacobian))
 
 
 def test_cross_dataset_constraint_scatter_jacobian_does_not_perturb_projection(

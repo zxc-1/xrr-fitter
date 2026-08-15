@@ -130,6 +130,14 @@ def _baseline_values(structure: StructureSpec) -> dict[str, float]:
     return values
 
 
+def _inherited_periodic_top_names(structure: StructureSpec) -> set[str]:
+    return {
+        f"component.{index}.top_roughness_a"
+        for index, component in enumerate(structure.components)
+        if isinstance(component, PeriodicBlock) and component.top_roughness_a is None
+    }
+
+
 def _value_map(baseline: dict[str, float], names: Sequence[str], row: np.ndarray) -> dict[str, float]:
     """Overlay structural samples onto the baseline, matching by name.
 
@@ -205,8 +213,11 @@ def _replayed_profiles(
 ) -> Iterator[Profile | None]:
     baseline = _baseline_values(structure)
     if report.fixed_parameter_values:
-        fixed_names, fixed_values = zip(*report.fixed_parameter_values, strict=True)
-        baseline = _value_map(baseline, fixed_names, np.asarray(fixed_values, dtype=float))
+        inherited_top = _inherited_periodic_top_names(structure)
+        fixed_values = [(name, value) for name, value in report.fixed_parameter_values if name not in inherited_top]
+        if fixed_values:
+            fixed_names, fixed_values = zip(*fixed_values, strict=True)
+            baseline = _value_map(baseline, fixed_names, np.asarray(fixed_values, dtype=float))
     names = (*report.parameter_names, *report.derived_parameter_names)
     derived = report.derived_samples_physical
     for index in indices:

@@ -21,6 +21,7 @@ from xrr_fitter.model.structure import LayerSpec, PeriodicBlock, StructureSpec
 
 CURVE = "curve"
 TARGET_SCALE = "instrument.scale"
+TARGET_BACKGROUND = "instrument.background"
 THICK_SOURCE = "component.0.thickness_a"
 DENS_SOURCE = "component.0.density_scale"
 
@@ -138,6 +139,20 @@ def test_zero_power_constraint_is_constant_at_a_zero_source() -> None:
         jacobian[TARGET_SCALE],
         np.zeros(len(problem.variables)),
     )
+
+
+def test_fractional_power_constraint_keeps_a_valid_primal_at_zero_source() -> None:
+    source = "instrument.angle_offset_deg"
+    problem = _constrained_problem((_rule(TARGET_BACKGROUND, _binary("pow", source, 0.5)),))
+    unit = encode_physical_vector(problem, {source: 0.0})
+
+    expected_residual = evaluation.least_squares_residual(problem, unit)
+    expected_jacobian = evaluation.least_squares_residual_jacobian(problem, unit)
+    residual, jacobian = evaluation.least_squares_system(problem, unit)
+
+    assert not np.all(residual == 1e6)
+    np.testing.assert_allclose(residual, expected_residual, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(jacobian, expected_jacobian, rtol=0.0, atol=0.0)
 
 
 def test_roughness_constraint_jacobian_tracks_dynamic_upper_two_phase() -> None:
