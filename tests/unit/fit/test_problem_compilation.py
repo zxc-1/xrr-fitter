@@ -32,6 +32,7 @@ from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec, resolution_to_sigma_q
 from xrr_fitter.model.parameters import ParameterSetting
 from xrr_fitter.model.structure import (
+    DriftSpec,
     GradientLayerSpec,
     LayerSpec,
     MaterialSpec,
@@ -62,9 +63,7 @@ def _problem(
 
 
 def _initial_values(problem) -> dict[str, float]:
-    return {
-        definition.name: definition.initial for definition in problem.parameter_definitions
-    }
+    return {definition.name: definition.initial for definition in problem.parameter_definitions}
 
 
 def test_compilation_returns_the_shared_typed_evaluation_context() -> None:
@@ -125,14 +124,26 @@ def _periodic_structure() -> StructureSpec:
     return StructureSpec(base.fronting, (block,), base.backing, backing_roughness_a=2.0)
 
 
+def _drift_periodic_structure() -> StructureSpec:
+    base = _periodic_structure()
+    block = base.components[0]
+    assert isinstance(block, PeriodicBlock)
+    drifted = replace(block, drift=DriftSpec(kind="linear", target="thickness", amount=0.1))
+    return replace(base, components=(drifted,))
+
+
+def _drift_problem():
+    return _problem(
+        structure=_drift_periodic_structure(),
+        instrument=InstrumentSpec(footprint_mode="none"),
+        seed=29,
+    )
+
+
 def _theta_resolution_problem():
     return _problem(
         instrument=InstrumentSpec(footprint_mode="none", resolution_domain="theta"),
-        settings=(
-            ParameterSetting(
-                "instrument.sigma_theta_deg", 0.01, 0.0, 0.05, locked=False
-            ),
-        ),
+        settings=(ParameterSetting("instrument.sigma_theta_deg", 0.01, 0.0, 0.05, locked=False),),
         seed=18,
     )
 
@@ -141,9 +152,7 @@ def _periodic_jacobian_problem():
     return _problem(
         structure=_periodic_structure(),
         instrument=InstrumentSpec(footprint_mode="none"),
-        settings=(
-            ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, locked=True),
-        ),
+        settings=(ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, locked=True),),
         seed=19,
     )
 
@@ -161,9 +170,7 @@ def _linear_background_jacobian_problem():
     return _problem(
         instrument=InstrumentSpec(footprint_mode="none", background_kind="linear"),
         settings=(
-            ParameterSetting(
-                "instrument.linear_background_per_a_inv", 0.0, -0.01, 0.01
-            ),
+            ParameterSetting("instrument.linear_background_per_a_inv", 0.0, -0.01, 0.01),
             ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, locked=True),
         ),
         seed=20,
@@ -174,12 +181,8 @@ def _powerlaw_background_jacobian_problem():
     return _problem(
         instrument=InstrumentSpec(footprint_mode="none", background_kind="powerlaw"),
         settings=(
-            ParameterSetting(
-                "instrument.powerlaw_background_amplitude", 1e-7, 0.0, 1e-6
-            ),
-            ParameterSetting(
-                "instrument.powerlaw_background_exponent", 2.5, 1.0, 4.0
-            ),
+            ParameterSetting("instrument.powerlaw_background_amplitude", 1e-7, 0.0, 1e-6),
+            ParameterSetting("instrument.powerlaw_background_exponent", 2.5, 1.0, 4.0),
             ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, locked=True),
         ),
         seed=21,
@@ -283,9 +286,7 @@ def _angular_point_resolution_jacobian_problem():
     return _problem(
         data=data,
         instrument=InstrumentSpec(footprint_mode="none"),
-        settings=(
-            ParameterSetting("instrument.absolute_sigma_a_inv", 0.001, 0.0, 0.005),
-        ),
+        settings=(ParameterSetting("instrument.absolute_sigma_a_inv", 0.001, 0.0, 0.005),),
         seed=25,
     )
 
@@ -307,9 +308,7 @@ def _direct_q_point_resolution_jacobian_problem():
     return _problem(
         data=data,
         instrument=InstrumentSpec(footprint_mode="none"),
-        settings=(
-            ParameterSetting("instrument.absolute_sigma_a_inv", 0.001, 0.0, 0.005),
-        ),
+        settings=(ParameterSetting("instrument.absolute_sigma_a_inv", 0.001, 0.0, 0.005),),
         seed=26,
     )
 
@@ -382,11 +381,7 @@ def test_compile_stage_problem_releases_the_exact_stage_parameter_groups() -> No
 
 
 def test_compile_stage_problem_locks_current_values_and_preserves_user_locks() -> None:
-    problem = _problem(
-        settings=(
-            ParameterSetting("instrument.scale", 1.25, 1.25, 1.25, locked=True),
-        )
-    )
+    problem = _problem(settings=(ParameterSetting("instrument.scale", 1.25, 1.25, 1.25, locked=True),))
     values = _initial_values(problem)
     values.update(
         {
@@ -400,9 +395,7 @@ def test_compile_stage_problem_locks_current_values_and_preserves_user_locks() -
     stage_b = compile_stage_problem(problem, "B", values)
     definitions = {value.name: value for value in stage_b.parameter_definitions}
 
-    assert definitions["component.0.thickness_a"].initial == values[
-        "component.0.thickness_a"
-    ]
+    assert definitions["component.0.thickness_a"].initial == values["component.0.thickness_a"]
     assert not definitions["component.0.thickness_a"].locked
     for name in ("component.0.density_scale", "component.0.roughness_a"):
         assert definitions[name].initial == values[name]
@@ -458,9 +451,7 @@ def test_compile_stage_problem_releases_only_active_background_modes(
     background_kind: str,
     active_names: set[str],
 ) -> None:
-    problem = _problem(
-        instrument=InstrumentSpec(footprint_mode="none", background_kind=background_kind)
-    )
+    problem = _problem(instrument=InstrumentSpec(footprint_mode="none", background_kind=background_kind))
 
     stage_b = compile_stage_problem(problem, "B", _initial_values(problem))
 
@@ -502,9 +493,7 @@ def test_declared_two_angstrom_layer_remains_inside_compiled_bounds() -> None:
 
     problem = _problem(structure=structure)
 
-    definition = next(
-        item for item in problem.parameter_definitions if item.name == "component.0.thickness_a"
-    )
+    definition = next(item for item in problem.parameter_definitions if item.name == "component.0.thickness_a")
     assert definition.lower == 2.0
     encode_physical_vector(problem, _initial_values(problem))
 
@@ -597,9 +586,7 @@ def test_fit_dataset_passes_the_same_instrument_to_compile_and_initialization() 
     structure = simple_structure()
 
     problem = _problem(data=data, structure=structure, instrument=instrument)
-    initial = estimate_initial_candidates(
-        data, structure, problem.instrument, np.random.default_rng(12)
-    )
+    initial = estimate_initial_candidates(data, structure, problem.instrument, np.random.default_rng(12))
 
     assert problem.instrument is instrument
     assert 0.0 in initial.footprint_angles_deg
@@ -624,10 +611,7 @@ def test_fit_dataset_preserves_and_deduplicates_input_and_problem_warnings() -> 
 def test_fit_dataset_supports_stages_with_no_free_parameters() -> None:
     problem = _problem()
     values = _initial_values(problem)
-    locked = tuple(
-        ParameterSetting(name, value, value, value, locked=True)
-        for name, value in values.items()
-    )
+    locked = tuple(ParameterSetting(name, value, value, value, locked=True) for name, value in values.items())
     no_free = compile_fit_problem(
         problem.data,
         problem.structure,
@@ -646,9 +630,7 @@ def test_fixed_density_subproblem_locks_density_and_keeps_other_parameters_free(
     fixed = compile_fixed_parameter_problem(problem, "component.0.density_scale", 0.91)
 
     names = {coordinate.name for coordinate in fixed.variables}
-    definition = next(
-        item for item in fixed.parameter_definitions if item.name == "component.0.density_scale"
-    )
+    definition = next(item for item in fixed.parameter_definitions if item.name == "component.0.density_scale")
     assert definition.locked
     assert definition.initial == definition.lower == definition.upper == 0.91
     assert "component.0.density_scale" not in names
@@ -658,24 +640,18 @@ def test_fixed_density_subproblem_locks_density_and_keeps_other_parameters_free(
 def test_footprint_parameter_bounds_and_locking() -> None:
     active = _problem(instrument=InstrumentSpec(footprint_mode="fit"))
     definition = next(
-        item
-        for item in active.parameter_definitions
-        if item.name == "instrument.footprint_spill_angle_deg"
+        item for item in active.parameter_definitions if item.name == "instrument.footprint_spill_angle_deg"
     )
     disabled = _problem(instrument=InstrumentSpec(footprint_mode="none"))
 
     assert definition.lower == 0.0
     assert definition.upper > 0.0
-    assert "instrument.footprint_spill_angle_deg" not in {
-        coordinate.name for coordinate in disabled.variables
-    }
+    assert "instrument.footprint_spill_angle_deg" not in {coordinate.name for coordinate in disabled.variables}
 
 
 def test_log_unit_bounds_decode_to_exact_physical_bounds() -> None:
     problem = _problem()
-    definition = next(
-        item for item in problem.parameter_definitions if item.transform == "log"
-    )
+    definition = next(item for item in problem.parameter_definitions if item.transform == "log")
     definition = replace(
         definition,
         initial=100.0,
@@ -706,6 +682,42 @@ def test_periodic_block_compiles_shared_variables() -> None:
     assert not any("repeat.1" in name for name in names)
 
 
+def test_compile_marks_repeat_targets_constrained() -> None:
+    problem = _drift_problem()
+    definitions = {item.name: item for item in problem.parameter_definitions}
+    variables = {coordinate.name for coordinate in problem.variables}
+    repeat_names = [name for name in definitions if ".repeat." in name]
+
+    assert repeat_names  # per-copy targets were emitted
+    assert all(definitions[name].constrained for name in repeat_names)
+    assert not any(name in variables for name in repeat_names)
+    assert "component.0.drift_scale" in variables  # the scale itself stays free
+
+
+def test_stage_recompile_does_not_accumulate_drift_rules() -> None:
+    problem = _drift_problem()
+
+    restaged = compile_stage_problem(problem, "E", _initial_values(problem))
+
+    assert len(restaged.constraint_rules) == len(problem.constraint_rules)
+    assert all(".repeat." in rule.target.parameter_name for rule in restaged.constraint_rules)
+
+
+def test_drift_rule_values_compose_base_scale_coeff() -> None:
+    problem = _drift_problem()
+
+    values = values_by_name(problem, encode_physical_vector(problem, {}))
+
+    scale = values["component.0.drift_scale"]
+    for layer_index in (0, 1):
+        base = values[f"component.0.layer.{layer_index}.thickness_a"]
+        for k in (1, 2, 3, 4):
+            expected = base * (1.0 + scale * float(k))
+            assert values[f"component.0.repeat.{k}.layer.{layer_index}.thickness_a"] == pytest.approx(
+                expected, rel=1e-9
+            )
+
+
 def test_plateau_free_problem_records_one_dedicated_inactive_reason() -> None:
     problem = compile_fit_problem(
         prepared_data(size=72),
@@ -721,12 +733,7 @@ def test_plateau_free_problem_records_one_dedicated_inactive_reason() -> None:
 
 def test_unit_upper_bound_decodes_to_a_strictly_legal_roughness() -> None:
     problem = _problem()
-    unit = np.array(
-        [
-            1.0 if coordinate.transform == "roughness_fraction" else 0.5
-            for coordinate in problem.variables
-        ]
-    )
+    unit = np.array([1.0 if coordinate.transform == "roughness_fraction" else 0.5 for coordinate in problem.variables])
 
     values = values_by_name(problem, unit)
 
