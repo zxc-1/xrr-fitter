@@ -359,7 +359,8 @@ class ParameterReference:
 
 CONSTRAINT_BINARY_OPS = frozenset({"add", "sub", "mul", "div", "pow"})
 CONSTRAINT_LEAF_OPS = frozenset({"ref", "const"})
-CONSTRAINT_OPS = CONSTRAINT_LEAF_OPS | CONSTRAINT_BINARY_OPS
+CONSTRAINT_UNARY_OPS = frozenset({"sin", "cos"})
+CONSTRAINT_OPS = CONSTRAINT_LEAF_OPS | CONSTRAINT_BINARY_OPS | CONSTRAINT_UNARY_OPS
 MAX_CONSTRAINT_DEPTH = 64
 
 
@@ -395,6 +396,15 @@ def _validate_binary_node(node: ConstraintNode) -> None:
         raise ValueError("pow exponent must be a constant")
 
 
+def _validate_unary_node(node: ConstraintNode) -> None:
+    if node.reference is not None or node.value is not None:
+        raise ValueError(f"unary op {node.op!r} takes no reference/value")
+    if len(node.operands) != 1:
+        raise ValueError(f"unary op {node.op!r} needs exactly one operand")
+    if not isinstance(node.operands[0], ConstraintNode):
+        raise TypeError("unary operand must be a ConstraintNode value")
+
+
 @dataclass(frozen=True, slots=True)
 class ConstraintNode:
     op: str
@@ -410,6 +420,8 @@ class ConstraintNode:
             _validate_ref_node(self)
         elif self.op == "const":
             _validate_const_node(self)
+        elif self.op in CONSTRAINT_UNARY_OPS:
+            _validate_unary_node(self)
         else:
             _validate_binary_node(self)
 
