@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from xrr_fitter.io.source import dataset_index
 from xrr_fitter.model.parameters import (
+    RESERVED_DATASET_ID,
     ConstraintRule,
     ParameterDefinition,
     ParameterPrior,
@@ -480,6 +481,8 @@ def validate_constraint_rules(
     values = tuple(rules)
     if any(not isinstance(rule, ConstraintRule) for rule in values):
         raise TypeError("rules must contain ConstraintRule values")
+    if RESERVED_DATASET_ID in _constraint_dataset_ids(values):
+        raise ValueError(f"constraint rules must not use reserved dataset ID: {RESERVED_DATASET_ID}")
     validation_datasets = _without_constraint_target_priors(
         project.datasets,
         values,

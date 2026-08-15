@@ -391,6 +391,73 @@ def _is_public_interface(item: tuple[int, str]) -> bool:
     return item[1] != GRADIENT_INTERNAL_INTERFACE
 
 
+def _roughness_definition_map(problem: object) -> dict[str, ParameterDefinition]:
+    return {
+        definition.name: definition
+        for definition in problem.parameter_definitions
+        if _is_roughness_definition(definition)
+    }
+
+
+def _allowed_missing_roughness_names(problem: object) -> frozenset[str]:
+    """Return declaration coordinates intentionally absent from expanded interfaces."""
+    allowed: set[str] = set()
+    for index, component in enumerate(problem.structure.components):
+        if not isinstance(component, PeriodicBlock):
+            continue
+        prefix = f"component.{index}"
+        if component.top_roughness_a is None:
+            allowed.add(f"{prefix}.top_roughness_a")
+        if component.top_roughness_a is not None and component.repeats == 1:
+            allowed.add(f"{prefix}.layer.0.roughness_a")
+        if (
+            component.top_roughness_a is not None
+            and component.drift is not None
+            and component.drift.target == "roughness"
+        ):
+            allowed.add(f"{prefix}.layer.0.roughness_a")
+    return frozenset(allowed)
+
+
+def _fill_missing_roughness_caps(
+    problem: object,
+    dynamic: dict[str, float],
+) -> dict[str, float]:
+    definitions = _roughness_definition_map(problem)
+    allowed_missing = _allowed_missing_roughness_names(problem)
+    unknown = set(dynamic) - set(definitions)
+    if unknown:
+        raise ValueError(f"unknown roughness coordinate mapping: {sorted(unknown)}")
+    missing = set(definitions) - set(dynamic) - allowed_missing
+    if missing:
+        raise ValueError(f"roughness coordinate mapping missing: {sorted(missing)}")
+    for name in allowed_missing:
+        definition = definitions.get(name)
+        if definition is not None:
+            dynamic.setdefault(name, definition.upper)
+    for name, definition in definitions.items():
+        dynamic.setdefault(name, definition.upper)
+    return dynamic
+
+
+def _fill_missing_roughness_jacobians(
+    problem: object,
+    dynamic: dict[str, tuple[float, np.ndarray]],
+) -> dict[str, tuple[float, np.ndarray]]:
+    definitions = _roughness_definition_map(problem)
+    allowed_missing = _allowed_missing_roughness_names(problem)
+    unknown = set(dynamic) - set(definitions)
+    if unknown:
+        raise ValueError(f"unknown roughness coordinate mapping: {sorted(unknown)}")
+    missing = set(definitions) - set(dynamic) - allowed_missing
+    if missing:
+        raise ValueError(f"roughness coordinate mapping missing: {sorted(missing)}")
+    zero = np.zeros(len(problem.variables), dtype=float)
+    for name, definition in definitions.items():
+        dynamic.setdefault(name, (definition.upper, zero.copy()))
+    return dynamic
+
+
 def _roughness_dynamic_uppers(
     problem: object,
     nonrough_values: dict[str, float],
@@ -418,8 +485,7 @@ def _roughness_dynamic_uppers(
         neighbors = _interface_neighbor_indices(interface, final_medium)
         upper = _interface_upper(geometry.thickness_a, neighbors)
         dynamic[name] = min(dynamic.get(name, np.inf), upper)
-    _add_latent_roughness_caps(problem, dynamic)
-    return dynamic
+    return _fill_missing_roughness_caps(problem, dynamic)
 
 
 def _expand_structure_with_jacobian(
@@ -555,8 +621,7 @@ def _roughness_dynamic_upper_jacobians(
             parameter_count,
         )
         _record_active_upper(dynamic, tie_counts, name, upper, tangent)
-    _add_latent_roughness_cap_jacobians(problem, dynamic, parameter_count)
-    return dynamic
+    return _fill_missing_roughness_jacobians(problem, dynamic)
 
 
 def _unit_derivative(definition: ParameterDefinition, value: float) -> float:

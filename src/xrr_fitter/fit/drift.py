@@ -7,7 +7,12 @@ from dataclasses import replace
 
 import numpy as np
 
-from xrr_fitter.model.parameters import ConstraintNode, ConstraintRule, ParameterReference
+from xrr_fitter.model.parameters import (
+    RESERVED_DATASET_ID,
+    ConstraintNode,
+    ConstraintRule,
+    ParameterReference,
+)
 from xrr_fitter.model.structure import DriftSpec, PeriodicBlock, StructureSpec
 
 
@@ -24,7 +29,17 @@ def drift_coefficients(drift: DriftSpec, repeats: int) -> tuple[float, ...]:
     return tuple(coeffs)
 
 
-DRIFT_DATASET = "__drift__"  # sentinel; evaluation resolves by parameter_name only
+DRIFT_DATASET = RESERVED_DATASET_ID  # sentinel; evaluation resolves by parameter_name only
+
+
+def _validate_rebind_dataset_id(dataset_id: object) -> str:
+    if not isinstance(dataset_id, str):
+        raise TypeError("drift dataset ID must be a string")
+    if not dataset_id.strip():
+        raise ValueError("drift dataset ID must be nonempty")
+    if dataset_id == DRIFT_DATASET:
+        raise ValueError(f"drift dataset ID is reserved: {DRIFT_DATASET}")
+    return dataset_id
 
 
 def _ref(name: str) -> ConstraintNode:
@@ -68,6 +83,28 @@ def _rebind_node(node: ConstraintNode, dataset_id: str) -> ConstraintNode:
     return ConstraintNode(node.op, operands=tuple(_rebind_node(child, dataset_id) for child in node.operands))
 
 
+def rebind_drift_rules(
+    rules: tuple[ConstraintRule, ...],
+    dataset_id: str,
+) -> tuple[ConstraintRule, ...]:
+    """Bind sentinel-generated rules to one local dataset namespace."""
+    target_dataset = _validate_rebind_dataset_id(dataset_id)
+    rebound: list[ConstraintRule] = []
+    for rule in rules:
+        target = (
+            ParameterReference(target_dataset, rule.target.parameter_name)
+            if rule.target.dataset_id == DRIFT_DATASET
+            else rule.target
+        )
+        expression = _rebind_node(rule.expression, target_dataset)
+        rebound.append(
+            rule
+            if target == rule.target and expression == rule.expression
+            else ConstraintRule(target=target, expression=expression)
+        )
+    return tuple(rebound)
+
+
 def rebind_drift_dataset(problem: object, dataset_id: str) -> object:
     """Rebind a compiled member's ``__drift__`` sentinel rules to its real ``dataset_id``.
 
@@ -79,16 +116,9 @@ def rebind_drift_dataset(problem: object, dataset_id: str) -> object:
     object) when it carries no drift rules, keeping non-drift joint fingerprints
     byte-identical.
     """
+    target_dataset = _validate_rebind_dataset_id(dataset_id)
     rules = problem.constraint_rules
     if not any(rule.target.dataset_id == DRIFT_DATASET for rule in rules):
         return problem
-    rebound = tuple(
-        ConstraintRule(
-            target=ParameterReference(dataset_id, rule.target.parameter_name),
-            expression=_rebind_node(rule.expression, dataset_id),
-        )
-        if rule.target.dataset_id == DRIFT_DATASET
-        else rule
-        for rule in rules
-    )
+    rebound = rebind_drift_rules(rules, target_dataset)
     return replace(problem, constraint_rules=rebound)

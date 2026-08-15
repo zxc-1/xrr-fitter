@@ -24,6 +24,7 @@ from xrr_fitter.model.parameters import (
     _prior_center,
 )
 from xrr_fitter.model.structure import (
+    DriftSpec,
     InterfaceTransition,
     LayerSpec,
     PeriodicBlock,
@@ -129,6 +130,46 @@ def test_single_repeat_periodic_latent_layer_roughness_decodes_for_primal_and_ja
     assert value_jacobians[latent][latent_index] > 0.0
     assert np.all(np.isfinite(residual_jacobian))
     np.testing.assert_allclose(residual_jacobian[:, latent_index], 0.0, atol=1e-12)
+
+
+def test_missing_roughness_cap_mapping_is_rejected_for_public_coordinates() -> None:
+    problem = compile_fit_problem(
+        prepared_data(size=48),
+        simple_structure(),
+        InstrumentSpec(footprint_mode="none"),
+        replace(FitConfig.fast(master_seed=22), scale_prior_enabled=False),
+    )
+
+    with pytest.raises(ValueError, match="roughness coordinate"):
+        evaluation._fill_missing_roughness_caps(problem, {})
+
+
+def test_roughness_drift_without_explicit_top_does_not_allow_missing_base_coordinate() -> None:
+    base = simple_structure()
+    film = base.components[0]
+    assert isinstance(film, LayerSpec)
+    block = PeriodicBlock(
+        "cell",
+        (replace(film, name="film", roughness_a=1.0),),
+        repeats=3,
+        drift=DriftSpec(kind="linear", target="roughness", amount=0.1),
+    )
+    problem = compile_fit_problem(
+        prepared_data(size=48),
+        StructureSpec(base.fronting, (block,), base.backing, backing_roughness_a=2.0),
+        InstrumentSpec(footprint_mode="none"),
+        replace(FitConfig.fast(master_seed=2201), scale_prior_enabled=False),
+    )
+    definitions = {
+        definition.name: definition
+        for definition in problem.parameter_definitions
+        if definition.transform == "roughness_fraction"
+    }
+    missing = "component.0.layer.0.roughness_a"
+    dynamic = {name: definition.upper for name, definition in definitions.items() if name != missing}
+
+    with pytest.raises(ValueError, match="roughness coordinate mapping missing"):
+        evaluation._fill_missing_roughness_caps(problem, dynamic)
 
 
 def test_shared_solver_primitives_match_the_compiled_objective() -> None:

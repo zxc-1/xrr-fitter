@@ -276,6 +276,24 @@ DRIFT_KINDS = frozenset({"linear", "sine", "random"})
 DRIFT_TARGETS = frozenset({"thickness", "roughness"})
 
 
+def _drift_float(field: str, value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+        raise TypeError(f"drift.{field} must be a finite number")
+    result = float(value)
+    if not isfinite(result):
+        raise ValueError(f"drift.{field} must be finite")
+    return result
+
+
+def _drift_seed(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise TypeError("drift.seed must be a non-negative integer")
+    result = int(value)
+    if result < 0:
+        raise ValueError("drift.seed must be a non-negative integer")
+    return result
+
+
 @dataclass(frozen=True, slots=True)
 class DriftSpec:
     """Per-repeat drift law for a periodic block (primitive scalars only)."""
@@ -292,16 +310,17 @@ class DriftSpec:
             raise ValueError(f"drift.kind must be one of {sorted(DRIFT_KINDS)}")
         if self.target not in DRIFT_TARGETS:
             raise ValueError(f"drift.target must be one of {sorted(DRIFT_TARGETS)}")
-        if not isfinite(self.amount):
-            raise ValueError("drift.amount must be finite")
+        amount = _drift_float("amount", self.amount)
+        period = _drift_float("period", self.period)
+        phase = _drift_float("phase", self.phase)
+        seed = _drift_seed(self.seed)
+        object.__setattr__(self, "amount", amount)
+        object.__setattr__(self, "period", period)
+        object.__setattr__(self, "phase", phase)
+        object.__setattr__(self, "seed", seed)
         if self.kind == "sine":
-            if not isfinite(self.period) or self.period <= 0.0:
+            if period <= 0.0:
                 raise ValueError("drift.period must be finite and positive for sine drift")
-            if not isfinite(self.phase):
-                raise ValueError("drift.phase must be finite")
-        if self.kind == "random":
-            if isinstance(self.seed, bool) or not isinstance(self.seed, int) or self.seed < 0:
-                raise ValueError("drift.seed must be a non-negative integer for random drift")
 
 
 @dataclass(frozen=True, slots=True)

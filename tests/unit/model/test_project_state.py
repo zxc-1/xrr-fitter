@@ -8,6 +8,7 @@ from tests.support.model_cases import dataset_project, final_fit_result, fit_can
 
 from xrr_fitter.model.analysis import ConfidenceClass, McmcConfig, McmcReport, UncertaintyReport
 from xrr_fitter.model.parameters import (
+    RESERVED_DATASET_ID,
     ConstraintNode,
     ConstraintRule,
     ParameterPrior,
@@ -108,6 +109,11 @@ def test_project_rejects_empty_or_duplicate_dataset_ids(dataset_ids: tuple[str, 
     with pytest.raises(ValueError, match="dataset_id"):
         datasets = tuple(dataset_project(value) for value in dataset_ids)
         project(*datasets)
+
+
+def test_project_rejects_reserved_drift_dataset_id() -> None:
+    with pytest.raises(ValueError, match="reserved.*dataset_id"):
+        dataset_project(RESERVED_DATASET_ID)
 
 
 @pytest.mark.parametrize(

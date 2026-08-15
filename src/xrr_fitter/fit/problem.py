@@ -8,7 +8,7 @@ from math import isfinite
 import numpy as np
 
 from xrr_fitter.evaluation import assign_fit_regions, region_weights
-from xrr_fitter.fit.drift import drift_constraint_rules
+from xrr_fitter.fit.drift import DRIFT_DATASET, drift_constraint_rules, rebind_drift_rules
 from xrr_fitter.fit.parameters import (
     apply_parameter_settings,
     default_parameter_definitions,
@@ -116,25 +116,32 @@ def _validate_local_constraints(
     """
     if any(not isinstance(rule, ConstraintRule) for rule in constraint_rules):
         raise TypeError("constraint_rules must contain ConstraintRule values")
-    dataset_ids = {
+    dataset_ids = _constraint_dataset_ids(constraint_rules)
+    local_dataset_ids = dataset_ids - {DRIFT_DATASET}
+    if len(local_dataset_ids) > 1:
+        raise ValueError(
+            "cross-dataset constraints require the joint compiler; single-dataset compilation accepts local rules only"
+        )
+    targets = tuple(rule.target.parameter_name for rule in constraint_rules)
+    if len(targets) != len(set(targets)):
+        raise ValueError("constraint targets must be unique")
+    cycle = constraint_cycle_path(constraint_rules)
+    if cycle:
+        raise ValueError(f"constraint rules form a dependency cycle: {' -> '.join(cycle)}")
+    return next(iter(local_dataset_ids), next(iter(dataset_ids), None))
+
+
+def _constraint_dataset_ids(
+    constraint_rules: tuple[ConstraintRule, ...],
+) -> frozenset[str]:
+    return frozenset(
         dataset_id
         for rule in constraint_rules
         for dataset_id in (
             rule.target.dataset_id,
             *(reference.dataset_id for reference in _iter_references(rule.expression)),
         )
-    }
-    if len(dataset_ids) > 1:
-        raise ValueError(
-            "cross-dataset constraints require the joint compiler; single-dataset compilation accepts local rules only"
-        )
-    targets = tuple(rule.target for rule in constraint_rules)
-    if len(targets) != len(set(targets)):
-        raise ValueError("constraint targets must be unique")
-    cycle = constraint_cycle_path(constraint_rules)
-    if cycle:
-        raise ValueError(f"constraint rules form a dependency cycle: {' -> '.join(cycle)}")
-    return next(iter(dataset_ids), None)
+    )
 
 
 def _validate_local_constraint_definitions(
@@ -144,7 +151,12 @@ def _validate_local_constraint_definitions(
 ) -> None:
     if namespace is None:
         return
-    by_reference = {ParameterReference(namespace, definition.name): definition for definition in definitions}
+    namespaces = _constraint_dataset_ids(constraint_rules) | frozenset((namespace,))
+    by_reference = {
+        ParameterReference(dataset_id, definition.name): definition
+        for dataset_id in namespaces
+        for definition in definitions
+    }
     validate_constraint_stage_split(constraint_rules, by_reference)
     targets = {rule.target for rule in constraint_rules}
     if any(definition.prior is not None for reference, definition in by_reference.items() if reference in targets):
@@ -224,6 +236,41 @@ def _scale_prior_state(
     return None, "专家配置已关闭尺度弱先验"
 
 
+def _validate_constraint_rule_values(rules: tuple[ConstraintRule, ...]) -> None:
+    if any(not isinstance(rule, ConstraintRule) for rule in rules):
+        raise TypeError("constraint_rules must contain ConstraintRule values")
+
+
+def _compiled_constraint_rules(
+    structure: StructureSpec,
+    constraint_rules: tuple[ConstraintRule, ...],
+) -> tuple[ConstraintRule, ...]:
+    provided_rules = tuple(constraint_rules)
+    _validate_constraint_rule_values(provided_rules)
+    generated_sentinel = drift_constraint_rules(structure)
+    if any(
+        DRIFT_DATASET in _constraint_dataset_ids((rule,)) and rule not in generated_sentinel for rule in provided_rules
+    ):
+        raise ValueError(f"{DRIFT_DATASET!r} is reserved for generated drift rules")
+    incoming_dataset_ids = _constraint_dataset_ids(provided_rules) - {DRIFT_DATASET}
+    generated = generated_sentinel
+    if len(incoming_dataset_ids) == 1:
+        generated = rebind_drift_rules(generated, next(iter(incoming_dataset_ids)))
+    # Regenerate drift rules on every compile so staged recompiles remain
+    # idempotent, but only discard rules that exactly match a prior generated
+    # rule. A user-authored repeat target must never disappear silently.
+    generated_variants = set(generated_sentinel) | set(generated)
+    incoming = tuple(rule for rule in provided_rules if rule not in generated_variants)
+    conflicts = sorted(
+        rule.target.parameter_name
+        for rule in incoming
+        if rule.target.parameter_name in {item.target.parameter_name for item in generated}
+    )
+    if conflicts:
+        raise ValueError(f"user constraint target conflicts with generated drift rule: {conflicts}")
+    return incoming + generated
+
+
 def compile_fit_problem(
     data: PreparedData,
     structure: StructureSpec,
@@ -235,11 +282,7 @@ def compile_fit_problem(
     _validate_config(config)
     _validate_data_mode(data, instrument)
     _require_explicit_expert_density(structure, tuple(parameter_settings))
-    # Drift ``.repeat.`` targets are regenerated from ``structure`` on every
-    # compile so a staged recompile (which feeds ``problem.constraint_rules``
-    # back in) cannot accumulate duplicates; only foreign rules are carried over.
-    incoming = tuple(rule for rule in constraint_rules if ".repeat." not in rule.target.parameter_name)
-    rules = incoming + drift_constraint_rules(structure)
+    rules = _compiled_constraint_rules(structure, tuple(constraint_rules))
     namespace = _validate_local_constraints(rules)
     definitions = apply_parameter_settings(
         default_parameter_definitions(data, structure, instrument, config),

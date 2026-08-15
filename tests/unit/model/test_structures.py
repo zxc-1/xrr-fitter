@@ -274,6 +274,39 @@ def test_random_requires_nonneg_int_seed() -> None:
         DriftSpec(kind="random", target="roughness", amount=0.1, seed=-1)
 
 
+def test_drift_spec_normalizes_numpy_scalars_to_json_primitives() -> None:
+    drift = DriftSpec(
+        kind="random",
+        target="roughness",
+        amount=np.float32(0.2),
+        period=np.float64(7.0),
+        phase=np.float32(0.5),
+        seed=np.int64(11),
+    )
+
+    assert type(drift.amount) is float
+    assert type(drift.period) is float
+    assert type(drift.phase) is float
+    assert type(drift.seed) is int
+
+
+@pytest.mark.parametrize(
+    ("kind", "kwargs", "expected"),
+    (
+        pytest.param("linear", {"period": float("nan")}, ValueError, id="linear-period-nan"),
+        pytest.param("linear", {"phase": float("nan")}, ValueError, id="linear-phase-nan"),
+        pytest.param("linear", {"seed": 1.5}, TypeError, id="linear-seed-float"),
+        pytest.param("sine", {"period": 4.0, "seed": True}, TypeError, id="sine-seed-bool"),
+        pytest.param("random", {"period": "unused"}, TypeError, id="random-period-string"),
+    ),
+)
+def test_drift_spec_rejects_invalid_unused_fields(
+    kind: str, kwargs: dict[str, object], expected: type[Exception]
+) -> None:
+    with pytest.raises(expected, match="drift\\."):
+        DriftSpec(kind=kind, target="thickness", amount=0.1, **kwargs)
+
+
 def test_periodic_block_accepts_drift_and_requires_two_repeats() -> None:
     block = PeriodicBlock(
         name="p",

@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import pytest
 from tests.support.model_cases import final_fit_result, simple_structure
 
 import xrr_fitter.api as api
@@ -17,6 +18,7 @@ from xrr_fitter.model.automation import (
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
+    RESERVED_DATASET_ID,
     ConstraintNode,
     ConstraintRule,
     ParameterPrior,
@@ -25,6 +27,9 @@ from xrr_fitter.model.parameters import (
     PriorSpec,
 )
 from xrr_fitter.model.project import ProjectUiState, ScalePriorState
+from xrr_fitter.services.datasets import (
+    _dataset_id as _allocate_dataset_id,
+)
 from xrr_fitter.services.datasets import (
     add_dataset,
     preview_source_update,
@@ -94,6 +99,11 @@ def _filename_structure_snapshot(dataset) -> tuple[object, ...]:
         tuple(material.bulk_density_g_cm3 is not None for material in materials),
         tuple(material.sld_override_a2 is not None for material in materials),
     )
+
+
+def test_dataset_id_allocator_rejects_reserved_drift_namespace() -> None:
+    with pytest.raises(ValueError, match="reserved dataset_id"):
+        _allocate_dataset_id(new_project(), RESERVED_DATASET_ID)
 
 
 def test_add_dataset_uses_source_stem_namespace_and_lowest_available_suffix(

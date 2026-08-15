@@ -27,7 +27,7 @@ import xrr_fitter.api as api
 DRIFT_AMOUNT_LABELS = {
     "linear": "每周期增量",
     "sine": "正弦幅度",
-    "random": "随机标准差",
+    "random": "随机幅度",
 }
 
 # QSpinBox stores a signed 32-bit int, so a 64-bit project master seed must be
@@ -282,6 +282,7 @@ class PeriodicDialog(QDialog):
         self.buttons.rejected.connect(self.reject)
         self.drift_kind.currentIndexChanged.connect(self._sync_drift_inputs)
         self.repeats_editor.valueChanged.connect(self._sync_drift_warning)
+        self.drift_seed.valueChanged.connect(self._sync_drift_seed_source)
         self._arrange()
         self._sync_drift_inputs()
 
@@ -304,6 +305,7 @@ class PeriodicDialog(QDialog):
         self.drift_seed.setObjectName("periodicDriftSeed")
         self.drift_seed.setRange(0, DRIFT_SEED_MODULUS - 1)
         seed = (self._master_seed + self._block_offset) % DRIFT_SEED_MODULUS
+        self._default_drift_seed = seed
         self.drift_seed.setValue(seed)
         self.drift_seed_source = QLabel(
             f"种子来源：工程种子 {self._master_seed} + 块偏移 {self._block_offset}，折叠至 32 位 = {seed}"
@@ -379,6 +381,14 @@ class PeriodicDialog(QDialog):
         self.drift_warning.setText(
             f"漂移块退出矩阵幂快路径：{repeats} 个周期的雅可比复杂度为 O({repeats})，而非无漂移时的 O(log {repeats})。"
         )
+
+    def _sync_drift_seed_source(self, *_args: object) -> None:
+        seed = self.drift_seed.value()
+        if seed == self._default_drift_seed:
+            text = f"种子来源：工程种子 {self._master_seed} + 块偏移 {self._block_offset}，折叠至 32 位 = {seed}"
+        else:
+            text = f"种子来源：用户编辑 = {seed}（默认折叠值 {self._default_drift_seed}）"
+        self.drift_seed_source.setText(text)
 
     def _drift_spec(self) -> api.DriftSpec | None:
         kind = self.drift_kind.currentData()

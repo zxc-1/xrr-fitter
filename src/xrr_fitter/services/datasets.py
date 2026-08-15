@@ -47,7 +47,7 @@ from xrr_fitter.model.data import (
 )
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.operations import ProjectImportResult
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import RESERVED_DATASET_ID, ParameterSetting
 from xrr_fitter.model.project import (
     DatasetProject,
     ScalePriorState,
@@ -122,6 +122,8 @@ def import_data(
 
 
 def _dataset_id(project: XrrProject, stem: str) -> str:
+    if stem == RESERVED_DATASET_ID:
+        raise ValueError(f"reserved dataset_id: {RESERVED_DATASET_ID}")
     reserved = {dataset.dataset_id for dataset in project.datasets}
     candidate = stem
     suffix = 2

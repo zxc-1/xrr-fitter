@@ -6,6 +6,8 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from tests.support.drift_cases import drift_structure, drift_values
+from tests.support.model_cases import prepared_data
 
 from xrr_fitter.analysis.sld_bands import (
     MAX_REPLAY_SAMPLES,
@@ -13,10 +15,13 @@ from xrr_fitter.analysis.sld_bands import (
     _common_grid,
     sld_uncertainty_bands,
 )
+from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.analysis import McmcConfig, McmcReport
-from xrr_fitter.model.structure import LayerSpec, MaterialSpec, PeriodicBlock, StructureSpec
+from xrr_fitter.model.fitting import FitConfig
+from xrr_fitter.model.instrument import InstrumentSpec
+from xrr_fitter.model.structure import DriftSpec, LayerSpec, MaterialSpec, PeriodicBlock, StructureSpec
 from xrr_fitter.physics.sld_profile import sld_depth_profile
-from xrr_fitter.physics.stack import expand_structure
+from xrr_fitter.physics.stack import expand_structure, rebuild_structure
 
 WAVELENGTH_A = 1.5406
 AIR = MaterialSpec("Air", None, None, 0j)
@@ -62,6 +67,20 @@ def _periodic_structure(top_roughness_a: float | None = None) -> StructureSpec:
     )
 
 
+def _roughness_drift_with_explicit_top() -> StructureSpec:
+    block = PeriodicBlock(
+        "p",
+        (
+            LayerSpec("a", MO, 20.0, roughness_a=2.0),
+            LayerSpec("b", SI, 500.0, roughness_a=3.0),
+        ),
+        repeats=3,
+        top_roughness_a=1.0,
+        drift=DriftSpec(kind="linear", target="roughness", amount=0.1),
+    )
+    return StructureSpec(AIR, (block,), SI, backing_roughness_a=3.0)
+
+
 def _report(values: np.ndarray, names: tuple[str, ...] = ("component.0.thickness_a",)) -> McmcReport:
     samples = np.asarray(values, dtype=float).reshape(-1, len(names))
     walkers = 4
@@ -76,6 +95,70 @@ def _report(values: np.ndarray, names: tuple[str, ...] = ("component.0.thickness
         split_rhat=np.ones(len(names)),
         effective_sample_size=np.full(len(names), float(steps)),
         boundary_hits=(),
+    )
+
+
+def _compiled_drift_report(structure: StructureSpec, samples: int = 8) -> tuple[McmcReport, dict[str, float]]:
+    problem = compile_fit_problem(
+        prepared_data(size=40),
+        structure,
+        InstrumentSpec(footprint_mode="none"),
+        replace(FitConfig.fast(707), scale_prior_enabled=False),
+    )
+    values = {definition.name: definition.initial for definition in problem.parameter_definitions}
+    values.update(drift_values(structure))
+    names = tuple(variable.name for variable in problem.variables)
+    derived_names = tuple(rule.target.parameter_name for rule in problem.constraint_rules)
+    row = np.asarray([values[name] for name in names], dtype=float)
+    derived_row = np.asarray([values[name] for name in derived_names], dtype=float)
+    return (
+        McmcReport(
+            config=McmcConfig(walkers=4, burn_in=0, production_steps=samples),
+            child_seed=71,
+            parameter_names=names,
+            samples_physical=np.repeat(row[None, :], samples, axis=0),
+            log_probability=np.zeros(samples),
+            acceptance_fraction=np.full(4, 0.4),
+            split_rhat=np.ones(len(names)),
+            effective_sample_size=np.full(len(names), float(samples)),
+            boundary_hits=(),
+            derived_parameter_names=derived_names,
+            derived_samples_physical=np.repeat(derived_row[None, :], samples, axis=0),
+        ),
+        values,
+    )
+
+
+def _assert_median_matches_rebuilt_profile(
+    structure: StructureSpec,
+    report: McmcReport,
+    values: dict[str, float],
+) -> None:
+    step_a = 0.5
+    bands = sld_uncertainty_bands(
+        structure,
+        report,
+        wavelength_a=WAVELENGTH_A,
+        step_a=step_a,
+    )
+    stack = expand_structure(rebuild_structure(structure, values), WAVELENGTH_A)
+    depth, profile = sld_depth_profile(stack, step_a=step_a)
+    backing_depth = depth - float(np.sum(stack.thickness_a[1:-1]))
+
+    assert bands.sample_count == report.samples_physical.shape[0]
+    np.testing.assert_array_equal(bands.real[0], bands.real[-1])
+    np.testing.assert_array_equal(bands.imaginary[0], bands.imaginary[-1])
+    np.testing.assert_allclose(
+        bands.real[2],
+        np.interp(bands.depth_a, backing_depth, profile.real),
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        bands.imaginary[2],
+        np.interp(bands.depth_a, backing_depth, profile.imag),
+        rtol=0.0,
+        atol=0.0,
     )
 
 
@@ -277,6 +360,37 @@ def test_inherited_periodic_top_roughness_fixed_value_does_not_break_sld_replay(
     np.testing.assert_array_equal(explicit_actual.depth_a, explicit_expected.depth_a)
     np.testing.assert_array_equal(explicit_actual.real, explicit_expected.real)
     np.testing.assert_array_equal(explicit_actual.imaginary, explicit_expected.imaginary)
+
+
+def test_inherited_periodic_top_fixed_value_is_ignored_during_drift_sld_replay() -> None:
+    structure = drift_structure()
+    report, _values = _compiled_drift_report(structure)
+    fixed = replace(
+        report,
+        fixed_parameter_values=(("component.0.top_roughness_a", 3.0),),
+    )
+
+    expected = sld_uncertainty_bands(structure, report, wavelength_a=WAVELENGTH_A)
+    actual = sld_uncertainty_bands(structure, fixed, wavelength_a=WAVELENGTH_A)
+
+    np.testing.assert_array_equal(actual.depth_a, expected.depth_a)
+    np.testing.assert_array_equal(actual.real, expected.real)
+    np.testing.assert_array_equal(actual.imaginary, expected.imaginary)
+
+
+@pytest.mark.parametrize(
+    "structure",
+    (
+        pytest.param(drift_structure(), id="thickness-drift-inherited-top"),
+        pytest.param(_roughness_drift_with_explicit_top(), id="roughness-drift-explicit-top"),
+    ),
+)
+def test_drift_mcmc_reports_replay_sampled_scale_and_derived_repeat_coordinates(
+    structure: StructureSpec,
+) -> None:
+    report, values = _compiled_drift_report(structure)
+
+    _assert_median_matches_rebuilt_profile(structure, report, values)
 
 
 def test_unknown_sample_parameter_name_fails_instead_of_being_ignored() -> None:

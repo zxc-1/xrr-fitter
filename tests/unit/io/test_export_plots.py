@@ -19,6 +19,7 @@ from tests.support.model_cases import (
 
 from xrr_fitter.io.export_plots import (
     BAND_PAIRS,
+    PNG_SOFTWARE,
     fit_overview_png,
     parameter_trends_png,
     residuals_png,
@@ -27,6 +28,10 @@ from xrr_fitter.io.export_plots import (
 from xrr_fitter.io.export_tables import DatasetExportData, ExportReplayIdentity
 from xrr_fitter.model.analysis import SldUncertaintyBands, UncertaintyReport
 from xrr_fitter.model.instrument import PhysicsDiagnostic
+
+
+def test_png_software_metadata_matches_locked_matplotlib_version() -> None:
+    assert PNG_SOFTWARE == f"Matplotlib version{matplotlib.__version__}, https://matplotlib.org/"
 
 
 def _context(
@@ -268,9 +273,9 @@ def _context_with_bands() -> DatasetExportData:
 # environment, before SLD-band drawing existed.  A fresh render is compared to
 # both size and digest so this is not the former same-function self-comparison.
 BANDLESS_PNG_BASELINES = {
-    fit_overview_png: (24674, "6c4d698235b052044b8d8502439c526fc4a59411ba15519cc13c57c107ced107"),
-    sld_profile_png: (28382, "2a344e8e2d86aa0a392d3a0111c543d6d916013e1b980101c8c86f485f223d0e"),
-    residuals_png: (27318, "3962537e44db0923454d7d79db3fac0c31e25678c13309be5ddf3c325f3a17d1"),
+    fit_overview_png: (24674, "901e5ee64154b0aa2e2664128d13d1af26c0609df3ee4ddd7be3db1e92eca1f5"),
+    sld_profile_png: (28382, "4d20b19995be2676ce0d7e341738e8745233d5288abcad1372a9d8be47cead86"),
+    residuals_png: (27318, "f2b140ae08a3eb079b9656fa0e50332bfcd2299807be39d915b00f6f853885b4"),
 }
 
 

@@ -84,6 +84,19 @@ def _periodic_values(block: PeriodicBlock, prefix: str) -> dict[str, float]:
     return values
 
 
+def _periodic_overlay_names(block: PeriodicBlock, prefix: str) -> frozenset[str]:
+    if block.drift is None:
+        return frozenset()
+    family = "thickness_a" if block.drift.target == "thickness" else "roughness_a"
+    names = {f"{prefix}.drift_scale"}
+    names.update(
+        f"{prefix}.repeat.{repeat_index}.layer.{layer_index}.{family}"
+        for repeat_index in range(1, block.repeats)
+        for layer_index in range(len(block.layers))
+    )
+    return frozenset(names)
+
+
 def _gradient_values(layer: GradientLayerSpec, prefix: str) -> dict[str, float]:
     return {
         f"{prefix}.upper_sld_real_a2": layer.upper_sld_a2.real,
@@ -110,6 +123,12 @@ def _component_values(component: StructureComponent, prefix: str) -> dict[str, f
     raise TypeError(f"unsupported structure component: {type(component).__name__}")
 
 
+def _component_overlay_names(component: StructureComponent, prefix: str) -> frozenset[str]:
+    if isinstance(component, PeriodicBlock):
+        return _periodic_overlay_names(component, prefix)
+    return frozenset()
+
+
 def _baseline_values(structure: StructureSpec) -> dict[str, float]:
     """Flatten a declaration into the complete map ``rebuild_structure`` reads.
 
@@ -130,6 +149,13 @@ def _baseline_values(structure: StructureSpec) -> dict[str, float]:
     return values
 
 
+def _overlay_names(structure: StructureSpec) -> frozenset[str]:
+    names: set[str] = set()
+    for index, component in enumerate(structure.components):
+        names.update(_component_overlay_names(component, f"component.{index}"))
+    return frozenset(names)
+
+
 def _inherited_periodic_top_names(structure: StructureSpec) -> set[str]:
     return {
         f"component.{index}.top_roughness_a"
@@ -138,7 +164,13 @@ def _inherited_periodic_top_names(structure: StructureSpec) -> set[str]:
     }
 
 
-def _value_map(baseline: dict[str, float], names: Sequence[str], row: np.ndarray) -> dict[str, float]:
+def _value_map(
+    baseline: dict[str, float],
+    names: Sequence[str],
+    row: np.ndarray,
+    *,
+    allowed_names: frozenset[str] | None = None,
+) -> dict[str, float]:
     """Overlay structural samples onto the baseline, matching by name.
 
     Names rather than positions carry the association: retained columns follow
@@ -148,11 +180,12 @@ def _value_map(baseline: dict[str, float], names: Sequence[str], row: np.ndarray
     unknown structural coordinate still fails so a stale structure/report pair
     is never replayed by position or with a silent default.
     """
+    allowed = frozenset() if allowed_names is None else allowed_names
     values = dict(baseline)
     for name, value in zip(names, row, strict=True):
         if name.startswith("instrument."):
             continue
-        if name not in values:
+        if name not in values and name not in allowed:
             raise ValueError(f"sample parameter {name} is not a structure coordinate")
         values[name] = float(value)
     return values
@@ -214,19 +247,25 @@ def _replayed_profiles(
     align: str,
 ) -> Iterator[Profile | None]:
     baseline = _baseline_values(structure)
+    allowed_names = _overlay_names(structure)
     if report.fixed_parameter_values:
         inherited_top = _inherited_periodic_top_names(structure)
         fixed_values = [(name, value) for name, value in report.fixed_parameter_values if name not in inherited_top]
         if fixed_values:
             fixed_names, fixed_values = zip(*fixed_values, strict=True)
-            baseline = _value_map(baseline, fixed_names, np.asarray(fixed_values, dtype=float))
+            baseline = _value_map(
+                baseline,
+                fixed_names,
+                np.asarray(fixed_values, dtype=float),
+                allowed_names=allowed_names,
+            )
     names = (*report.parameter_names, *report.derived_parameter_names)
     derived = report.derived_samples_physical
     for index in indices:
         row = report.samples_physical[index]
         if derived is not None:
             row = np.concatenate((row, derived[index]))
-        values = _value_map(baseline, names, row)
+        values = _value_map(baseline, names, row, allowed_names=allowed_names)
         yield _replay_one(structure, values, wavelength_a, step_a, align)
 
 

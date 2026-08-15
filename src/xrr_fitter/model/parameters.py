@@ -7,6 +7,9 @@ from math import exp, isfinite, log
 import numpy as np
 
 TRANSFORMS = frozenset({"linear", "log", "roughness_fraction"})
+# Reserved namespace used by compile-time generated parameter rules.  User
+# dataset and constraint declarations must never claim this identifier.
+RESERVED_DATASET_ID = "__drift__"
 
 # kind -> number of scalar parameters; PRIOR_KINDS is derived so the two never
 # drift. soft_range carries (low, high, std); normal/lognormal carry (loc, scale).

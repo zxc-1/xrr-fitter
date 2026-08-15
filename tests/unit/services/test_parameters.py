@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 from tests.support.model_cases import dataset_project, final_fit_result, project, simple_structure
 
+from xrr_fitter.fit.drift import DRIFT_DATASET
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
@@ -455,6 +456,14 @@ def test_validate_constraint_rules_rejects_non_constraint_values(tmp_path: Path)
 
     with pytest.raises(TypeError, match="ConstraintRule"):
         validate_constraint_rules(value, ("not-a-rule",))
+
+
+def test_validate_constraint_rules_rejects_reserved_drift_dataset_id(tmp_path: Path) -> None:
+    value = _structured_project(tmp_path)
+    rule = _scaled_rule(DRIFT_DATASET, "component.0.density_scale", "component.0.thickness_a", 0.01)
+
+    with pytest.raises(ValueError, match="reserved dataset"):
+        validate_constraint_rules(value, (rule,))
 
 
 def test_validate_constraint_rules_reports_cycle_path(tmp_path: Path) -> None:

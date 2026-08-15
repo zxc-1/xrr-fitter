@@ -506,6 +506,22 @@ def test_periodic_dialog_accepts_64bit_master_seed_without_overflow(qtbot) -> No
     assert str(seed.value()) in source.text()
 
 
+def test_periodic_dialog_seed_source_tracks_manual_seed_edits(qtbot) -> None:
+    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+
+    dialog = PeriodicDialog(master_seed=123, block_offset=2)
+    qtbot.addWidget(dialog)
+    seed = dialog.findChild(QSpinBox, "periodicDriftSeed")
+    source = dialog.findChild(QLabel, "periodicDriftSeedSource")
+    original = seed.value()
+
+    seed.setValue(original + 1)
+
+    assert "用户编辑" in source.text()
+    assert str(seed.value()) in source.text()
+    assert source.text() != f"种子来源：工程种子 123 + 块偏移 2，折叠至 32 位 = {original}"
+
+
 def test_panel_set_structure_accepts_drifted_block_end_to_end(qtbot, tmp_path) -> None:
     """漂移块经 panel.set_structure → validate_structure → expand_structure 全链不崩，
     且声明逐位回存（终审 Finding #2：补齐 Task 12/13 边界的全链断言）。"""
@@ -547,3 +563,6 @@ def test_periodic_dialog_field_visibility_tracks_drift_kind(qtbot) -> None:
     kind.setCurrentText("线性")
     assert not period.isVisible() and not phase.isVisible()
     assert dialog.drift_amount_label.text() == DRIFT_AMOUNT_LABELS["linear"]
+
+    kind.setCurrentText("随机")
+    assert dialog.drift_amount_label.text() == "随机幅度"

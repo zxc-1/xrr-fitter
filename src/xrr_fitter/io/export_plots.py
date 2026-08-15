@@ -15,7 +15,7 @@ from matplotlib.text import Text
 
 from xrr_fitter.io.export_tables import DatasetExportData, _contexts
 
-PNG_SOFTWARE = "Matplotlib version3.11.0, https://matplotlib.org/"
+PNG_SOFTWARE = "Matplotlib version3.11.1, https://matplotlib.org/"
 P = ParamSpec("P")
 
 # io cannot import the GUI font helper (the dependency contract forbids io->gui

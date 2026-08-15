@@ -46,6 +46,7 @@ from xrr_fitter.model.data import BeamSpec, DataColumnMapping
 from xrr_fitter.model.fitting import FitCheckpoint, FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
+    RESERVED_DATASET_ID,
     ConstraintRule,
     ParameterPrior,
     ParameterSetting,
@@ -67,6 +68,8 @@ def _sha256(value: str, field_name: str) -> None:
 def _dataset_id(value: str) -> None:
     if not value.strip():
         raise ValueError("dataset_id must not be empty")
+    if value == RESERVED_DATASET_ID:
+        raise ValueError(f"reserved dataset_id: {RESERVED_DATASET_ID}")
 
 
 def _selected_candidates(values: object) -> tuple[tuple[str, str], ...]:
@@ -513,7 +516,7 @@ def _validate_project_header(project: XrrProject) -> None:
 def _project_dataset_ids(project: XrrProject) -> tuple[str, ...]:
     identifiers = tuple(dataset.dataset_id for dataset in project.datasets)
     invalid = any(not value.strip() for value in identifiers)
-    if invalid or len(identifiers) != len(set(identifiers)):
+    if invalid or RESERVED_DATASET_ID in identifiers or len(identifiers) != len(set(identifiers)):
         raise ValueError("dataset_id values must be nonempty and unique")
     return identifiers
 

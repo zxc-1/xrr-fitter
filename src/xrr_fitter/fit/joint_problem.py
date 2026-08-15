@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from hashlib import sha256
 
 from xrr_fitter.fit.checkpoint import checkpoint_identity
-from xrr_fitter.fit.drift import rebind_drift_dataset
+from xrr_fitter.fit.drift import DRIFT_DATASET, rebind_drift_dataset
 from xrr_fitter.fit.joint_constraint_compilation import (
     constraint_node_payload,
     joint_constraint_closure,
@@ -49,6 +49,8 @@ def _validate_inputs(dataset_ids: tuple[str, ...], problems: tuple[object, ...])
         raise ValueError("joint fitting requires aligned problems for at least two datasets")
     if any(not value for value in dataset_ids) or len(dataset_ids) != len(set(dataset_ids)):
         raise ValueError("joint dataset IDs must be nonempty and unique")
+    if DRIFT_DATASET in dataset_ids:
+        raise ValueError(f"joint dataset ID is reserved: {DRIFT_DATASET}")
 
 
 def _global_variable(
