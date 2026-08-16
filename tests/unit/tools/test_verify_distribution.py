@@ -72,6 +72,26 @@ version = {attr = "xrr_fitter.version.__version__"}
         module._project_identity(tmp_path)
 
 
+def test_distribution_archive_accepts_cli_only_entry_points_metadata(
+    tmp_path: Path,
+    load_tool_module,
+) -> None:
+    load_tool_module("verify_distribution")
+    module = sys.modules["distribution_archive"]
+    (tmp_path / "pyproject.toml").write_text(
+        """[project]
+name = "xrr-fitter"
+version = "0.2.2"
+
+[project.scripts]
+xrr-fitter-cli = "xrr_fitter.cli.main:main"
+""",
+        encoding="utf-8",
+    )
+
+    assert "xrr_fitter-0.2.2.dist-info/entry_points.txt" in module._wheel_metadata(tmp_path)
+
+
 def _canonical(value: object) -> bytes:
     return (
         json.dumps(

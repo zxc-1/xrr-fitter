@@ -133,7 +133,7 @@ def _wheel_metadata(repository: Path) -> set[str]:
     root = f"{name}-{version}.dist-info"
     result = {f"{root}/{item}" for item in ("METADATA", "RECORD", "WHEEL", "top_level.txt")}
     project = tomllib.loads((repository / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    if project.get("gui-scripts"):
+    if project.get("gui-scripts") or project.get("scripts"):
         result.add(f"{root}/entry_points.txt")
     if project.get("license"):
         result.add(f"{root}/LICENSE")
