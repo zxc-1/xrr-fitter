@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path, PurePosixPath
 import subprocess
 import tarfile
 import tempfile
-from typing import Callable
 import venv
+from collections.abc import Callable
+from pathlib import Path, PurePosixPath
 
 from distribution_archive import verify_wheel_dependencies
 from distribution_source import build_environment
-
 
 Runner = Callable[..., object]
 
@@ -41,12 +40,14 @@ def smoke_installed(
     root = Path(environment_root).resolve()
     python = root / "bin" / "python"
     entrypoint = root / "bin" / "xrr-fitter"
-    if not python.is_file() or not entrypoint.is_file():
+    cli_entrypoint = root / "bin" / "xrr-fitter-cli"
+    if not all(path.is_file() for path in (python, entrypoint, cli_entrypoint)):
         raise ValueError("installed smoke environment is missing absolute executables")
     commands = (
         (python, "-c", "import xrr_fitter.api"),
         (python, "-m", "xrr_fitter", "--help"),
         (entrypoint, "--help"),
+        (cli_entrypoint, "--help"),
     )
     environment = _smoke_environment(root)
     for command in commands:
@@ -106,12 +107,7 @@ def smoke_wheel(repository: Path, wheel: Path) -> None:
 
 
 def _safe_sdist_path(name: str, path: PurePosixPath) -> bool:
-    return bool(name) and not (
-        path.is_absolute()
-        or path.as_posix() != name
-        or ".." in path.parts
-        or "\\" in name
-    )
+    return bool(name) and not (path.is_absolute() or path.as_posix() != name or ".." in path.parts or "\\" in name)
 
 
 def _sdist_member_path(member: tarfile.TarInfo) -> PurePosixPath:

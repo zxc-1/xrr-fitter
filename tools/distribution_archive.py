@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import configparser
 import gzip
 import io
 import os
@@ -153,6 +154,43 @@ def _wheel_members(path: Path) -> set[str]:
     return set(names)
 
 
+def _declared_entry_points(project: Mapping[str, object]) -> dict[str, dict[str, str]]:
+    groups: dict[str, dict[str, str]] = {}
+    for table, group in (("scripts", "console_scripts"), ("gui-scripts", "gui_scripts")):
+        entries = project.get(table)
+        if entries is None:
+            continue
+        if not isinstance(entries, dict) or not entries:
+            raise ValueError(f"project {table} entry points must be a non-empty mapping")
+        if not all(
+            isinstance(name, str) and name and isinstance(target, str) and target for name, target in entries.items()
+        ):
+            raise ValueError(f"project {table} entry points must contain non-empty strings")
+        groups[group] = dict(entries)
+    return groups
+
+
+def _verify_wheel_entry_points(repository: Path, wheel: Path) -> None:
+    payload = tomllib.loads((repository / "pyproject.toml").read_text(encoding="utf-8"))
+    project = payload["project"]
+    expected = _declared_entry_points(project)
+    if not expected:
+        return
+    name, version = _project_identity(repository)
+    member = f"{name}-{version}.dist-info/entry_points.txt"
+    try:
+        with zipfile.ZipFile(wheel) as archive:
+            content = archive.read(member).decode("utf-8")
+        parser = configparser.ConfigParser(interpolation=None, strict=True)
+        parser.optionxform = str
+        parser.read_string(content)
+    except (KeyError, UnicodeDecodeError, configparser.Error) as error:
+        raise ValueError("wheel entry point metadata is invalid") from error
+    observed = {section: dict(parser.items(section, raw=True)) for section in parser.sections()}
+    if parser.defaults() or observed != expected:
+        raise ValueError("wheel entry point metadata does not exactly match pyproject.toml")
+
+
 def _verify_wheel_members(
     repository: Path,
     wheel: Path,
@@ -165,6 +203,7 @@ def _verify_wheel_members(
     observed = _wheel_members(wheel)
     if observed != expected_package | _wheel_metadata(repository):
         raise ValueError("wheel member allowlist drift")
+    _verify_wheel_entry_points(repository, wheel)
     policy_value = spec.get("wheel_content_policy")
     if not isinstance(policy_value, dict):
         raise ValueError("wheel content policy must be a mapping")

@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tarfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -453,8 +453,10 @@ def test_installed_smoke_uses_only_absolute_venv_commands_and_isolated_environme
     bin_dir.mkdir(parents=True)
     python = bin_dir / "python"
     entrypoint = bin_dir / "xrr-fitter"
+    cli_entrypoint = bin_dir / "xrr-fitter-cli"
     python.write_bytes(b"python")
     entrypoint.write_bytes(b"entrypoint")
+    cli_entrypoint.write_bytes(b"cli-entrypoint")
     monkeypatch.setenv("PYTHONPATH", "/caller/source")
     calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
 
@@ -468,6 +470,7 @@ def test_installed_smoke_uses_only_absolute_venv_commands_and_isolated_environme
         (str(resolved / "bin/python"), "-c", "import xrr_fitter.api"),
         (str(resolved / "bin/python"), "-m", "xrr_fitter", "--help"),
         (str(resolved / "bin/xrr-fitter"), "--help"),
+        (str(resolved / "bin/xrr-fitter-cli"), "--help"),
     ]
     for args, kwargs in calls:
         assert Path(args[0]).is_absolute()
@@ -477,6 +480,49 @@ def test_installed_smoke_uses_only_absolute_venv_commands_and_isolated_environme
         assert child["PATH"] == ""
         assert "PYTHONPATH" not in child
         assert all(Path(child[name]).is_relative_to(resolved) for name in ("HOME", "XDG_CACHE_HOME", "MPLCONFIGDIR"))
+
+
+def test_wheel_entry_points_must_exactly_match_declared_scripts(
+    tmp_path: Path,
+    load_tool_module,
+) -> None:
+    load_tool_module("verify_distribution")
+    module = sys.modules["distribution_archive"]
+    pyproject = tmp_path / "pyproject.toml"
+    project_text = """[project]
+name = "xrr-fitter"
+version = "0.2.0"
+
+[project.gui-scripts]
+xrr-fitter = "xrr_fitter.__main__:main"
+
+[project.scripts]
+xrr-fitter-cli = "xrr_fitter.cli.main:main"
+"""
+    pyproject.write_text(project_text, encoding="utf-8")
+    wheel = tmp_path / "xrr_fitter-0.2.0-py3-none-any.whl"
+    root = "xrr_fitter-0.2.0.dist-info"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("xrr_fitter/__init__.py", "")
+        for name in ("METADATA", "RECORD", "WHEEL", "top_level.txt"):
+            archive.writestr(f"{root}/{name}", "")
+        archive.writestr(
+            f"{root}/entry_points.txt",
+            """[console_scripts]
+xrr-fitter-cli = xrr_fitter.cli.main:main
+
+[gui_scripts]
+xrr-fitter = xrr_fitter.__main__:main
+""",
+        )
+
+    inputs = (PurePosixPath("src/xrr_fitter/__init__.py"),)
+    spec = {"wheel_content_policy": {"forbidden_roots": []}}
+    module._verify_wheel_members(tmp_path, wheel, inputs, spec)
+
+    pyproject.write_text(project_text.replace("cli.main", "cli.wrong"), encoding="utf-8")
+    with pytest.raises(ValueError, match="entry point"):
+        module._verify_wheel_members(tmp_path, wheel, inputs, spec)
 
 
 def _write_sdist(path: Path, members: tuple[tuple[str, bytes, str], ...]) -> None:
