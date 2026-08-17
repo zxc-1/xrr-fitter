@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import pickle
+
 import numpy as np
 import pytest
 
+from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
 from xrr_fitter.model.structure import (
+    MAX_EXPANDED_SLABS,
     MAX_TRANSITION_SLABS,
     DriftSpec,
     GradientLayerSpec,
@@ -11,8 +15,6 @@ from xrr_fitter.model.structure import (
     LayerSpec,
     MaterialSpec,
     PeriodicBlock,
-    PeriodicSpan,
-    SlabStack,
     StructureSpec,
     TransitionBranch,
 )
@@ -126,6 +128,21 @@ def test_slab_stack_copies_arrays_and_validates_periodic_spans() -> None:
         SlabStack(thickness, sld, roughness, (PeriodicSpan(0, 1, 2),))
 
 
+def test_slab_stack_remains_read_only_after_pickle_round_trip() -> None:
+    stack = SlabStack(
+        np.array([0.0, 20.0, 20.0, 0.0]),
+        np.array([0.0j, 2e-5, 2e-5, 3e-5]),
+        np.array([1.0, 1.0, 2.0]),
+        (PeriodicSpan(1, 1, 2),),
+    )
+
+    restored = pickle.loads(pickle.dumps(stack))
+
+    assert restored.thickness_a.flags.writeable is False
+    assert restored.sld_a2.flags.writeable is False
+    assert restored.roughness_a.flags.writeable is False
+
+
 def test_slab_stack_rejects_boolean_periodic_span_coordinates() -> None:
     with pytest.raises(ValueError, match="periodic span"):
         SlabStack(
@@ -144,6 +161,56 @@ def test_slab_stack_preserves_finite_nonzero_boundary_thickness() -> None:
     )
 
     assert np.array_equal(stack.thickness_a, np.array([1.0, 20.0, 2.0]))
+
+
+def test_structure_accepts_expanded_slab_budget_boundary() -> None:
+    air, silicon, _ = _materials()
+    layer = LayerSpec("film", silicon, 20.0)
+    block = PeriodicBlock("cell", (layer,), repeats=MAX_EXPANDED_SLABS)
+
+    structure = StructureSpec(air, (block,), silicon)
+
+    assert structure.components[0].repeats == MAX_EXPANDED_SLABS
+
+
+def test_structure_rejects_periodic_expansion_over_slab_budget() -> None:
+    air, silicon, _ = _materials()
+    layer = LayerSpec("film", silicon, 20.0)
+
+    with pytest.raises(ValueError, match="expanded slab count"):
+        StructureSpec(
+            air,
+            (PeriodicBlock("cell", (layer,), repeats=MAX_EXPANDED_SLABS + 1),),
+            silicon,
+        )
+
+
+def test_structure_rejects_gradient_expansion_over_slab_budget() -> None:
+    air, silicon, _ = _materials()
+    gradient = GradientLayerSpec(
+        "ramp",
+        1e-5 + 1e-7j,
+        3e-5 + 3e-7j,
+        float(MAX_EXPANDED_SLABS + 1),
+        microslab_max_a=1.0,
+    )
+
+    with pytest.raises(ValueError, match="expanded slab count"):
+        StructureSpec(air, (gradient,), silicon)
+
+
+def test_structure_budget_sums_multiple_components() -> None:
+    air, silicon, _ = _materials()
+    layer = LayerSpec("film", silicon, 20.0)
+    half = MAX_EXPANDED_SLABS // 2
+    components = (
+        PeriodicBlock("left", (layer,), repeats=half),
+        PeriodicBlock("right", (layer,), repeats=half),
+    )
+
+    assert StructureSpec(air, components, silicon)
+    with pytest.raises(ValueError, match="expanded slab count"):
+        StructureSpec(air, (*components, layer), silicon)
 
 
 @pytest.mark.parametrize(

@@ -312,7 +312,7 @@ def compile_fit_problem(
     validate_transition_modes(definitions, structure)
     labels, weights = _region_layout(data)
     center, reason = _scale_prior_state(data, instrument, config)
-    return FitEvaluationContext(
+    problem = FitEvaluationContext(
         data=data,
         structure=structure,
         instrument=instrument,
@@ -327,6 +327,7 @@ def compile_fit_problem(
         warnings=() if reason is None else (reason,),
         constraint_rules=rules,
     )
+    return problem
 
 
 def compile_stage_problem(

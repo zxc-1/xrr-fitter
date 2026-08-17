@@ -47,6 +47,8 @@ MODE_REGISTRY: Mapping[str, Mode] = {
             PYTEST_PREFIX
             + (
                 "tests/architecture/test_dependency_rules.py",
+                "tests/architecture/test_model_dependency_rules.py",
+                "tests/architecture/test_evaluation_boundary.py",
                 "tests/architecture/test_naming_rules.py",
                 "tests/architecture/test_public_api.py",
                 "tests/architecture/test_distribution.py",
@@ -67,7 +69,10 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/unit/model",
                 "tests/unit/io",
                 "tests/unit/physics",
+                "tests/unit/test_constraint_evaluation.py",
+                "tests/unit/test_constraint_roughness_matrix.py",
                 "tests/unit/test_evaluation.py",
+                "tests/unit/test_evaluation_priors.py",
                 "tests/unit/fit",
                 "tests/unit/analysis",
                 "tests/unit/services",
@@ -76,7 +81,19 @@ MODE_REGISTRY: Mapping[str, Mode] = {
             ),
         )
     ),
-    "gui": Mode((PYTEST_PREFIX + ("tests/gui", "-q"),)),
+    "gui": Mode(
+        (
+            PYTEST_PREFIX
+            + (
+                "tests/gui",
+                "tests/integration/test_gui_project_workflow.py",
+                "tests/integration/test_gui_automatic_workflow.py",
+                "tests/integration/test_gui_synthetic_xy_workflow.py",
+                "tests/integration/test_gui_filename_batch_workflow.py",
+                "-q",
+            ),
+        )
+    ),
     "integration": Mode(
         (
             PYTEST_PREFIX
@@ -88,8 +105,6 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/integration/test_batch_resume.py",
                 "tests/integration/test_export_workflow.py",
                 "tests/integration/test_cli_workflow.py",
-                "tests/integration/test_gui_project_workflow.py",
-                "tests/integration/test_gui_automatic_workflow.py",
                 "-q",
             ),
         )
@@ -104,13 +119,12 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/regression/test_recovery_metrics.py",
                 "tests/regression/test_profile_basin_regressions.py",
                 "tests/regression/test_automatic_recovery.py",
+                "tests/acceptance/test_stack_drift.py",
                 "-q",
             ),
         )
     ),
-    "statistical": Mode(
-        (PYTEST_PREFIX + ("tests/acceptance/test_synthetic_recovery_corpus.py", "-q"),)
-    ),
+    "statistical": Mode((PYTEST_PREFIX + ("tests/acceptance/test_synthetic_recovery_corpus.py", "-q"),)),
     "approved-data": Mode(
         (
             PYTEST_PREFIX + ("tests/acceptance/test_real_data_workflows.py", "-q"),

@@ -6,6 +6,8 @@ import numpy as np
 
 import xrr_fitter.evaluation as evaluation
 from xrr_fitter.model.fitting import ModelEvaluation
+from xrr_fitter.model.parameters import PhysicalValueError
+from xrr_fitter.model.structure import ExpandedSlabLimitError
 
 
 def _invalid_evaluation(
@@ -45,6 +47,21 @@ def evaluate_vector(problem: object, unit_vector: np.ndarray) -> ModelEvaluation
         return evaluation.evaluate_model(problem, unit_vector)
     except evaluation.EvaluationConstraintError as error:
         return _invalid_evaluation(problem, error)
+
+
+def evaluate_declared_initial(problem: object) -> ModelEvaluation:
+    """Evaluate the compiled declaration defaults through the real fit path."""
+    try:
+        unit = evaluation.encode_physical_vector(problem, {})
+    except (
+        evaluation.EvaluationConstraintError,
+        PhysicalValueError,
+        ExpandedSlabLimitError,
+    ) as error:
+        if not isinstance(error, evaluation.EvaluationConstraintError):
+            error = evaluation.EvaluationConstraintError(f"constraint_violation:{type(error).__name__}")
+        return _invalid_evaluation(problem, error)
+    return evaluate_vector(problem, unit)
 
 
 def evaluate_jacobian(problem: object, unit_vector: np.ndarray) -> np.ndarray:

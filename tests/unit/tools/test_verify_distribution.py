@@ -1,18 +1,10 @@
-"""Strict, reproducible installed-distribution verification contracts.
-
-The distribution checker owns the artifact manifest schema and all filesystem
-validation around a wheel/sdist pair.  Heavy package builds remain an
-orchestration concern; these tests pin the pure identity, archive metadata,
-atomic publication, Git epoch, and isolated installed-smoke boundaries.
-"""
+"""Artifact manifest, archive metadata, and smoke validation contracts."""
 
 from __future__ import annotations
 
 import hashlib
 import io
 import json
-import os
-import subprocess
 import sys
 import tarfile
 import zipfile
@@ -315,80 +307,6 @@ def test_manifest_validation_recomputes_artifacts_and_git_identity(
         )
 
 
-def test_atomic_writer_is_repeatable_and_leaves_no_partial_on_replace_failure(
-    tmp_path: Path,
-    load_tool_module,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    module = load_tool_module("verify_distribution")
-    _directory, manifest = _manifest(module, tmp_path)
-    report = tmp_path / "report"
-    report.mkdir()
-    target = report / "artifact-manifest.json"
-
-    assert module.write_artifact_manifest(target, manifest) == target
-    first = target.read_bytes()
-    assert module.write_artifact_manifest(target, manifest) == target
-    assert target.read_bytes() == first
-
-    target.unlink()
-    monkeypatch.setattr(module.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("replace failed")))
-    with pytest.raises(OSError, match="replace failed"):
-        module.write_artifact_manifest(target, manifest)
-    assert not target.exists()
-    assert tuple(report.iterdir()) == ()
-
-
-def _git_repository(path: Path) -> None:
-    path.mkdir()
-    subprocess.run(("git", "init", "-q"), cwd=path, check=True)
-    (path / "tracked.txt").write_text("tracked\n", encoding="utf-8")
-    subprocess.run(("git", "add", "tracked.txt"), cwd=path, check=True)
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "GIT_AUTHOR_DATE": "2024-01-02T03:04:05+00:00",
-            "GIT_COMMITTER_DATE": "2024-01-02T03:04:05+00:00",
-        }
-    )
-    subprocess.run(
-        (
-            "git",
-            "-c",
-            "user.name=Fixture",
-            "-c",
-            "user.email=fixture@example.invalid",
-            "commit",
-            "-qm",
-            "fixture",
-        ),
-        cwd=path,
-        check=True,
-        env=environment,
-    )
-
-
-def test_git_identity_and_source_date_epoch_come_from_clean_head(
-    tmp_path: Path,
-    load_tool_module,
-) -> None:
-    module = load_tool_module("verify_distribution")
-    repository = tmp_path / "repo"
-    _git_repository(repository)
-
-    identity = module.clean_head_identity(repository)
-    expected_commit = subprocess.check_output(("git", "rev-parse", "HEAD"), cwd=repository, text=True).strip()
-    expected_tree = subprocess.check_output(("git", "rev-parse", "HEAD^{tree}"), cwd=repository, text=True).strip()
-    expected_epoch = int(
-        subprocess.check_output(("git", "show", "-s", "--format=%ct", "HEAD"), cwd=repository, text=True).strip()
-    )
-    assert identity == module.GitIdentity(expected_commit, expected_tree, expected_epoch)
-
-    (repository / "tracked.txt").write_text("dirty\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="clean"):
-        module.clean_head_identity(repository)
-
-
 def _wheel(path: Path, dependencies: tuple[str, ...]) -> None:
     metadata = "Metadata-Version: 2.4\nName: xrr-fitter\nVersion: 0.2.0\n"
     metadata += "".join(f"Requires-Dist: {value}\n" for value in dependencies)
@@ -611,23 +529,3 @@ def test_sdist_extraction_rejects_unsafe_or_multiple_roots(
         module.extract_sdist(sdist, destination)
 
     assert tuple(destination.iterdir()) == ()
-
-
-def test_bundle_paths_must_be_external_and_use_exact_layout(
-    tmp_path: Path,
-    load_tool_module,
-) -> None:
-    module = load_tool_module("verify_distribution")
-    repository = tmp_path / "repo"
-    repository.mkdir()
-    report = tmp_path / "bundle"
-    artifacts = report / "artifacts"
-
-    assert module.validate_bundle_paths(repository, report, artifacts) == (
-        report.resolve(),
-        artifacts.resolve(),
-    )
-    with pytest.raises(ValueError, match="artifact|report"):
-        module.validate_bundle_paths(repository, report, tmp_path / "elsewhere")
-    with pytest.raises(ValueError, match="outside"):
-        module.validate_bundle_paths(repository, repository / "report", repository / "report/artifacts")

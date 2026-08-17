@@ -43,10 +43,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from xrr_fitter.model.structure import SlabStack
+from xrr_fitter.model.slab_stack import SlabStack
 from xrr_fitter.physics.parratt import parratt_reflectivity
 from xrr_fitter.physics.resolution import gaussian_smear
-
 
 SUITE = Path(__file__).resolve().parents[1] / "fixtures/orso"
 UNPOLARISED = SUITE / "unpolarised"
@@ -214,8 +213,7 @@ def test_untruncated_production_smearing_agrees_away_from_minima() -> None:
         # Truncation discards outer tails, which at a minimum are brighter than
         # the minimum itself, so the untruncated result can only sit higher.
         assert np.all(actual >= _suite_smeared(_stack(layers), data[:, 0], data[:, 3])), (
-            f"{name}: untruncated smearing fell below the truncated convention; "
-            "the tail contribution changed sign"
+            f"{name}: untruncated smearing fell below the truncated convention; the tail contribution changed sign"
         )
     assert checked == 2, f"expected two smeared cases, covered {checked}"
 

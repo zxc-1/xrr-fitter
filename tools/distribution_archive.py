@@ -22,6 +22,11 @@ from packaging.requirements import Requirement
 from distribution_manifest import ARTIFACT_KINDS, select_artifacts
 from version_source import declared_project_version as _declared_project_version
 
+ENTRY_POINT_TABLES = (
+    ("scripts", "console_scripts"),
+    ("gui-scripts", "gui_scripts"),
+)
+
 
 def _declared_requirements(project: Mapping[str, object]) -> tuple[Requirement, ...]:
     expected = [Requirement(value) for value in project.get("dependencies", ())]
@@ -156,18 +161,47 @@ def _wheel_members(path: Path) -> set[str]:
 
 def _declared_entry_points(project: Mapping[str, object]) -> dict[str, dict[str, str]]:
     groups: dict[str, dict[str, str]] = {}
-    for table, group in (("scripts", "console_scripts"), ("gui-scripts", "gui_scripts")):
-        entries = project.get(table)
-        if entries is None:
-            continue
-        if not isinstance(entries, dict) or not entries:
-            raise ValueError(f"project {table} entry points must be a non-empty mapping")
-        if not all(
-            isinstance(name, str) and name and isinstance(target, str) and target for name, target in entries.items()
-        ):
-            raise ValueError(f"project {table} entry points must contain non-empty strings")
-        groups[group] = dict(entries)
+    for table, group in ENTRY_POINT_TABLES:
+        entries = _declared_entry_point_table(project, table)
+        if entries is not None:
+            groups[group] = entries
     return groups
+
+
+def _declared_entry_point_table(
+    project: Mapping[str, object],
+    table: str,
+) -> dict[str, str] | None:
+    entries = project.get(table)
+    if entries is None:
+        return None
+    if not isinstance(entries, dict) or not entries:
+        raise ValueError(f"project {table} entry points must be a non-empty mapping")
+    if not all(_nonempty_string(value) for item in entries.items() for value in item):
+        raise ValueError(f"project {table} entry points must contain non-empty strings")
+    return dict(entries)
+
+
+def _nonempty_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _entry_point_parser(content: str) -> configparser.ConfigParser:
+    parser = configparser.ConfigParser(interpolation=None, strict=True)
+    parser.optionxform = str
+    parser.read_string(content)
+    return parser
+
+
+def _wheel_entry_point_groups(wheel: Path, member: str) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+    try:
+        with zipfile.ZipFile(wheel) as archive:
+            content = archive.read(member).decode("utf-8")
+        parser = _entry_point_parser(content)
+    except (KeyError, UnicodeDecodeError, configparser.Error) as error:
+        raise ValueError("wheel entry point metadata is invalid") from error
+    observed = {section: dict(parser.items(section, raw=True)) for section in parser.sections()}
+    return dict(parser.defaults()), observed
 
 
 def _verify_wheel_entry_points(repository: Path, wheel: Path) -> None:
@@ -178,16 +212,8 @@ def _verify_wheel_entry_points(repository: Path, wheel: Path) -> None:
         return
     name, version = _project_identity(repository)
     member = f"{name}-{version}.dist-info/entry_points.txt"
-    try:
-        with zipfile.ZipFile(wheel) as archive:
-            content = archive.read(member).decode("utf-8")
-        parser = configparser.ConfigParser(interpolation=None, strict=True)
-        parser.optionxform = str
-        parser.read_string(content)
-    except (KeyError, UnicodeDecodeError, configparser.Error) as error:
-        raise ValueError("wheel entry point metadata is invalid") from error
-    observed = {section: dict(parser.items(section, raw=True)) for section in parser.sections()}
-    if parser.defaults() or observed != expected:
+    defaults, observed = _wheel_entry_point_groups(wheel, member)
+    if defaults or observed != expected:
         raise ValueError("wheel entry point metadata does not exactly match pyproject.toml")
 
 

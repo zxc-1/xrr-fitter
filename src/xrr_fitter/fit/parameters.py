@@ -522,8 +522,21 @@ def _validate_setting(
         raise ValueError(f"invalid bounds: {setting.name}")
     if not setting.lower <= setting.initial <= setting.upper:
         raise ValueError(f"initial outside bounds: {setting.name}")
-    if definition.integer and any(value != int(value) for value in values):
+    _validate_integer_setting(setting, definition, values)
+
+
+def _validate_integer_setting(
+    setting: ParameterSetting,
+    definition: ParameterDefinition,
+    values: tuple[float, float, float],
+) -> None:
+    if not definition.integer:
+        return
+    if any(value != int(value) for value in values):
         raise ValueError(f"integer parameter requires integer values: {setting.name}")
+    declared = (definition.initial, definition.lower, definition.upper)
+    if definition.locked and (not setting.locked or values != declared):
+        raise ValueError(f"locked integer topology setting must match declaration: {setting.name}")
 
 
 def _validate_settings(

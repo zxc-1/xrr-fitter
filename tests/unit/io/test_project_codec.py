@@ -23,6 +23,8 @@ from tests.support.model_cases import dataset_project, project, simple_structure
 from xrr_fitter.io.project_codec import (
     ProjectSchemaError,
     ProjectVersionError,
+    _constraint_node_from_dict,
+    _constraint_node_to_dict,
     fit_result_from_dict,
     fit_result_to_dict,
     load_project,
@@ -43,16 +45,17 @@ from xrr_fitter.model.analysis import (
 from xrr_fitter.model.fitting import FitCandidate, FitCheckpoint, FitStageSummary
 from xrr_fitter.model.instrument import PhysicsDiagnostic
 from xrr_fitter.model.parameters import (
+    ConstraintNode,
     ParameterDefinition,
     ParameterPrior,
+    ParameterReference,
     ParameterValue,
     PriorSpec,
 )
 from xrr_fitter.model.project import ProjectUiState
+from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
 from xrr_fitter.model.structure import (
     InterfaceTransition,
-    PeriodicSpan,
-    SlabStack,
     TransitionBranch,
 )
 
@@ -879,3 +882,32 @@ def test_result_without_prior_conflicts_key_still_decodes() -> None:
 
     assert report.prior_conflicts == ()
     assert report.mcmc.prior_conflicts == ()
+
+
+def _constraint_ref_node(name: str) -> ConstraintNode:
+    return ConstraintNode("ref", reference=ParameterReference("curve", name))
+
+
+def test_sin_constraint_node_codec_round_trips() -> None:
+    node = ConstraintNode("sin", operands=(_constraint_ref_node("angle_rad"),))
+
+    restored = _constraint_node_from_dict(_constraint_node_to_dict(node))
+
+    assert restored == node
+
+
+def test_cos_constraint_node_decodes_from_payload() -> None:
+    expected = ConstraintNode("cos", operands=(_constraint_ref_node("phase_rad"),))
+    payload = {
+        "op": "cos",
+        "operands": [
+            {
+                "op": "ref",
+                "reference": {"dataset_id": "curve", "parameter_name": "phase_rad"},
+            },
+        ],
+    }
+
+    restored = _constraint_node_from_dict(payload)
+
+    assert restored == expected

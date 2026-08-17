@@ -97,6 +97,34 @@ def _validated_global_unit(problem: object, global_unit: np.ndarray) -> np.ndarr
     return unit
 
 
+def _roughness_target_placeholders(
+    local_problem: object,
+    scatter: tuple[int, ...],
+) -> dict[str, float]:
+    values: dict[str, float] = {}
+    for coordinate, global_index in zip(local_problem.variables, scatter, strict=True):
+        if global_index >= 0:
+            continue
+        definition = local_problem.parameter_definitions[coordinate.parameter_index]
+        if definition.transform == "roughness_fraction":
+            values[definition.name] = definition.lower
+    return values
+
+
+def _encode_declared_local(
+    local_problem: object,
+    scatter: tuple[int, ...],
+) -> np.ndarray:
+    return np.array(
+        encode_physical_vector(
+            local_problem,
+            _roughness_target_placeholders(local_problem, scatter),
+        ),
+        dtype=float,
+        copy=True,
+    )
+
+
 def _raw_scatter(problem: object, unit: np.ndarray) -> list[np.ndarray]:
     local = []
     for local_problem, scatter in zip(
@@ -104,11 +132,7 @@ def _raw_scatter(problem: object, unit: np.ndarray) -> list[np.ndarray]:
         problem.scatter_maps,
         strict=True,
     ):
-        vector = np.array(
-            encode_physical_vector(local_problem, {}),
-            dtype=float,
-            copy=True,
-        )
+        vector = _encode_declared_local(local_problem, scatter)
         for local_index, global_index in enumerate(scatter):
             if global_index >= 0:
                 vector[local_index] = unit[global_index]
@@ -132,7 +156,7 @@ def initial_joint_vector(problem: object) -> np.ndarray:
     """Build the global unit vector from the first local owner of each coordinate."""
     global_unit = np.full(len(problem.global_variables), np.nan, dtype=float)
     for local_problem, scatter in zip(problem.problems, problem.scatter_maps, strict=True):
-        local = encode_physical_vector(local_problem, {})
+        local = _encode_declared_local(local_problem, scatter)
         for local_index, global_index in enumerate(scatter):
             if global_index < 0:
                 continue

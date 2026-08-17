@@ -8,7 +8,7 @@ import numpy as np
 
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.instrument import PhysicsDiagnostic
-from xrr_fitter.model.structure import SlabStack
+from xrr_fitter.model.slab_stack import SlabStack
 from xrr_fitter.physics.footprint import footprint_factor
 from xrr_fitter.physics.parratt import parratt_reflectivity
 from xrr_fitter.physics.resolution import gaussian_smear, theta_domain_smear
@@ -18,7 +18,9 @@ def qz_from_theta_deg(theta_deg: np.ndarray, wavelength_a: float) -> np.ndarray:
     return 4.0 * np.pi * np.sin(np.deg2rad(theta_deg)) / wavelength_a
 
 
-def _validate_resolution(domain: str, relative: float, absolute: float, sigma_theta: float, point: np.ndarray | None) -> None:
+def _validate_resolution(
+    domain: str, relative: float, absolute: float, sigma_theta: float, point: np.ndarray | None
+) -> None:
     if domain == "theta":
         if relative != 0.0 or absolute != 0.0 or point is not None:
             raise ValueError("q-domain and theta-domain resolution cannot be combined")
@@ -106,7 +108,9 @@ def instrument_reflectivity(
     theta = np.asarray(theta_deg, dtype=float)
     if np.any(~np.isfinite(theta)) or np.any(theta <= 0.0):
         raise ValueError("theta_deg must be finite and positive")
-    _validate_scalars(scale, background, linear_background_per_a_inv, powerlaw_background_amplitude, powerlaw_background_exponent)
+    _validate_scalars(
+        scale, background, linear_background_per_a_inv, powerlaw_background_amplitude, powerlaw_background_exponent
+    )
     resolution = (resolution_domain, relative_sigma, absolute_sigma_a_inv, sigma_theta_deg)
     if beam.kind == "monochromatic":
         if secondary_stack is not None or secondary_sigma_q_a_inv is not None:
@@ -143,5 +147,7 @@ def instrument_reflectivity(
         )
         smeared = (primary + beam.intensity_ratio_21 * secondary) / (1.0 + beam.intensity_ratio_21)
     qz = qz_from_theta_deg(theta, beam.effective_wavelength_a)
-    sampled_background = _background(qz, background, linear_background_per_a_inv, powerlaw_background_amplitude, powerlaw_background_exponent)
+    sampled_background = _background(
+        qz, background, linear_background_per_a_inv, powerlaw_background_amplitude, powerlaw_background_exponent
+    )
     return scale * smeared * footprint_factor(theta, footprint_spill_angle_deg) + sampled_background

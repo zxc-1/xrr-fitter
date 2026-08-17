@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from tests.support.synthetic_recovery_model import AIR, SILICON, SyntheticCase, _option_dict
+from tests.support.synthetic_recovery_model import SyntheticCase, _option_dict
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.data import BeamSpec, DataColumnMapping, PreparedData
 from xrr_fitter.model.fitting import FitConfig
@@ -19,6 +19,7 @@ from xrr_fitter.services.fitting import PreparedDatasetFit, fit_prepared_dataset
 def _fit_config(case: SyntheticCase) -> FitConfig:
     return FitConfig.fast(master_seed=case.fit_seed)
 
+
 def _render_structure_reflectivity(
     theta_deg: np.ndarray,
     structure: StructureSpec,
@@ -27,11 +28,7 @@ def _render_structure_reflectivity(
 ) -> np.ndarray:
     theta_model = theta_deg + options.get("angle_offset_deg", 0.0)
     primary_wavelength = beam.wavelength_a if beam.kind == "monochromatic" else beam.wavelength_1_a
-    secondary_stack = (
-        expand_structure(structure, beam.wavelength_2_a)
-        if beam.kind == "mixed_kalpha"
-        else None
-    )
+    secondary_stack = expand_structure(structure, beam.wavelength_2_a) if beam.kind == "mixed_kalpha" else None
     return instrument_reflectivity(
         theta_model,
         expand_structure(structure, primary_wavelength),
@@ -103,12 +100,7 @@ def _apply_noise(
 def _prepared_case_data(case: SyntheticCase, observed: np.ndarray) -> PreparedData:
     theta = np.asarray(case.theta_deg, dtype=float)
     two_theta = 2.0 * theta
-    qz = (
-        4.0
-        * np.pi
-        * np.sin(np.deg2rad(theta))
-        / case.fit_beam.effective_wavelength_a
-    )
+    qz = 4.0 * np.pi * np.sin(np.deg2rad(theta)) / case.fit_beam.effective_wavelength_a
     size = theta.size
     fit_mask = np.ones(size, dtype=bool)
     fit_mask[[0, -1]] = False
@@ -116,10 +108,7 @@ def _prepared_case_data(case: SyntheticCase, observed: np.ndarray) -> PreparedDa
     return PreparedData(
         source_path=Path(f"{case.case_id}.xy"),
         source_sha256=digest,
-        raw_rows=tuple(
-            f"{angle:.17g} {value:.17g}"
-            for angle, value in zip(two_theta, observed, strict=True)
-        ),
+        raw_rows=tuple(f"{angle:.17g} {value:.17g}" for angle, value in zip(two_theta, observed, strict=True)),
         raw_parse_status=("data",) * size,
         source_row_groups=tuple((index,) for index in range(size)),
         beam=case.fit_beam,
@@ -159,7 +148,7 @@ def _fit_case(
     prepared = PreparedDatasetFit(
         case.case_id,
         0,
-        SimpleNamespace(checkpoint=None),
+        SimpleNamespace(checkpoint=None, parameter_priors=()),
         problem,
     )
     result = fit_prepared_dataset(

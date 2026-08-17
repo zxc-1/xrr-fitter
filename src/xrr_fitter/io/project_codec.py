@@ -10,6 +10,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from xrr_fitter.io.codec_candidates import (
     _prior_from_dict,
     _prior_to_dict,
@@ -50,6 +52,7 @@ from xrr_fitter.model.automation import (
 )
 from xrr_fitter.model.parameters import (
     CONSTRAINT_BINARY_OPS,
+    CONSTRAINT_UNARY_OPS,
     MAX_CONSTRAINT_DEPTH,
     ConstraintNode,
     ConstraintRule,
@@ -66,6 +69,22 @@ from xrr_fitter.model.project import (
     ScalePriorState,
     XrrProject,
 )
+
+
+def _native_json_value(value: object) -> object:
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, dict):
+        return {key: _native_json_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_native_json_value(item) for item in value]
+    return value
+
+
+def _native_json_document(value: dict[str, object]) -> dict[str, object]:
+    return {key: _native_json_value(item) for key, item in value.items()}
 
 
 def _evidence_to_dict(value: StructureEvidence | None) -> dict[str, object] | None:
@@ -186,7 +205,7 @@ def _constraint_node_from_dict(value: object, depth: int = 0) -> ConstraintNode:
     if op == "const":
         fields = _mapping(value, {"op", "value"}, "constraint const node")
         return ConstraintNode("const", value=fields["value"])
-    if op in CONSTRAINT_BINARY_OPS:
+    if op in CONSTRAINT_BINARY_OPS | CONSTRAINT_UNARY_OPS:
         fields = _mapping(value, {"op", "operands"}, "constraint operator node")
         operands = tuple(
             _constraint_node_from_dict(item, depth + 1) for item in _sequence(fields["operands"], "constraint operands")
@@ -450,7 +469,7 @@ def project_to_dict(project: XrrProject) -> dict[str, object]:
     # before expression constraints existed keep a byte-identical encoding.
     if project.constraint_rules:
         document["constraint_rules"] = [_constraint_rule_to_dict(item) for item in project.constraint_rules]
-    return document
+    return _native_json_document(document)
 
 
 def _validate_version(value: object) -> None:

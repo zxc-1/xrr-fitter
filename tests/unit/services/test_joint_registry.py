@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import dataset_project, final_fit_result, fit_candidate, project
+
 from xrr_fitter.services import batch, fitting
 
 
@@ -53,14 +53,13 @@ def test_joint_failure_invalidates_the_whole_graph_without_independent_fallback(
         ),
         batch_mode="joint",
     )
+    monkeypatch.setattr(fitting, "preflight_fit", lambda _project: SimpleNamespace(ready=True, message="ready"))
     monkeypatch.setattr(batch, "inspect_sources", lambda _project: SimpleValidation())
     monkeypatch.setattr(
         fitting,
         "prepare_dataset_fit",
         lambda project, dataset_id, seed: SimpleNamespace(
-            updated_dataset=next(
-                dataset for dataset in project.datasets if dataset.dataset_id == dataset_id
-            ),
+            updated_dataset=next(dataset for dataset in project.datasets if dataset.dataset_id == dataset_id),
             dataset_id=dataset_id,
             seed=seed,
         ),

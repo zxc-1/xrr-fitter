@@ -4,14 +4,13 @@ import numpy as np
 import pytest
 
 from xrr_fitter.model.parameters import PhysicalValueError
+from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
     InterfaceTransition,
     LayerSpec,
     MaterialSpec,
     PeriodicBlock,
-    PeriodicSpan,
-    SlabStack,
     StructureSpec,
     TransitionBranch,
 )

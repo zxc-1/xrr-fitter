@@ -26,9 +26,7 @@ def test_distribution_mode_materializes_exact_external_artifact_directory(
         runner=lambda args, **_kwargs: calls.append(tuple(args)),
     )
 
-    distribution = next(
-        command for command in calls if "tools/verify_distribution.py" in command
-    )
+    distribution = next(command for command in calls if "tools/verify_distribution.py" in command)
     assert distribution[-4:] == (
         "--report-dir",
         str(report.resolve()),
@@ -72,14 +70,8 @@ def test_approved_capture_passes_only_explicit_owner_paths_to_both_workflows(
     assert len(pytest_calls) == 2
     assert "tests/acceptance/test_real_data_workflows.py" in pytest_calls[0][0]
     assert "tests/acceptance/test_gui_real_data_workflows.py" in pytest_calls[1][0]
-    assert all(
-        kwargs["env"]["XRR_APPROVED_DATA_ROOT"] == str(owner.resolve())
-        for _args, kwargs in pytest_calls
-    )
-    assert all(
-        kwargs["env"]["XRR_APPROVED_REPORT_DIR"] == str(report.resolve())
-        for _args, kwargs in pytest_calls
-    )
+    assert all(kwargs["env"]["XRR_APPROVED_DATA_ROOT"] == str(owner.resolve()) for _args, kwargs in pytest_calls)
+    assert all(kwargs["env"]["XRR_APPROVED_REPORT_DIR"] == str(report.resolve()) for _args, kwargs in pytest_calls)
 
 
 def test_missing_signed_approved_evidence_returns_three_without_output(
@@ -168,6 +160,25 @@ def test_identity_materializes_one_bound_artifact_bundle(
     assert all(str(manifest.resolve()) in args for args in identity_calls)
 
 
+def test_release_identity_build_accepts_a_precreated_empty_report(
+    tmp_path: Path,
+    load_tool_module,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_tool_module("release_identity")
+    report = tmp_path / "identity-report"
+    report.mkdir()
+    artifacts = tmp_path / "bundle/artifacts"
+    manifest = tmp_path / "bundle/artifact-manifest.json"
+    monkeypatch.setattr(module, "calculate_release_identity", lambda *_args: object())
+    monkeypatch.setattr(module, "canonical_identity_bytes", lambda _identity: b"identity\n")
+
+    target = module.build_release_identity(tmp_path / "repo", report, artifacts, manifest)
+
+    assert target == report / "release-identity.json"
+    assert target.read_bytes() == b"identity\n"
+
+
 def test_identity_rejects_a_report_bundle_inside_the_repository(
     tmp_path: Path,
     load_tool_module,
@@ -209,11 +220,11 @@ def test_release_runs_every_software_gate_in_order_without_approved_data(
                 name,
                 Path(kwargs["report_dir"]),
                 None if kwargs.get("artifact_dir") is None else Path(kwargs["artifact_dir"]),
-                None
-                if kwargs.get("artifact_manifest") is None
-                else Path(kwargs["artifact_manifest"]),
+                None if kwargs.get("artifact_manifest") is None else Path(kwargs["artifact_manifest"]),
             )
         )
+        if name == "distribution":
+            report.mkdir()
 
     monkeypatch.setattr(module, "run_mode", run)
     module.run_release(root, report, artifacts)

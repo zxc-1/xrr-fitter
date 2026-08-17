@@ -39,6 +39,9 @@ def _compile_preflight_fit(
     prepare_dataset_fit: Callable,
     compile_joint_problem: Callable,
     validate_parameter_priors: Callable,
+    evaluate_declared_initial: Callable,
+    initial_joint_vector: Callable,
+    evaluate_joint_vector: Callable,
 ) -> None:
     seeds = _preflight_seeds(project)
     prepared = tuple(
@@ -49,13 +52,30 @@ def _compile_preflight_fit(
             item.problem.parameter_definitions,
             item.updated_dataset.parameter_priors,
         )
+        if project.batch_mode == "independent":
+            _require_valid_initial(evaluate_declared_initial(item.problem))
     if project.batch_mode == "joint":
-        compile_joint_problem(
+        joint = compile_joint_problem(
             tuple(item.dataset_id for item in prepared),
             tuple(item.problem for item in prepared),
             project.sharing_rules,
             project.constraint_rules,
         )
+        initial = initial_joint_vector(joint)
+        _require_valid_initial(evaluate_joint_vector(joint, initial))
+
+
+def _require_valid_initial(evaluation: object) -> None:
+    if evaluation.valid:
+        return
+    reason = getattr(evaluation, "reason", None)
+    if reason is None:
+        invalid = next(
+            (item for item in evaluation.local_evaluations if not item.valid),
+            None,
+        )
+        reason = None if invalid is None else invalid.reason
+    raise ValueError(reason or "declared initial candidate is invalid")
 
 
 def preflight_fit(
@@ -64,6 +84,9 @@ def preflight_fit(
     prepare_dataset_fit: Callable,
     compile_joint_problem: Callable,
     validate_parameter_priors: Callable,
+    evaluate_declared_initial: Callable,
+    initial_joint_vector: Callable,
+    evaluate_joint_vector: Callable,
 ) -> FitReadiness:
     """Load and compile the complete declared fit without mutating the project."""
     if not project.datasets:
@@ -78,6 +101,9 @@ def preflight_fit(
             prepare_dataset_fit=prepare_dataset_fit,
             compile_joint_problem=compile_joint_problem,
             validate_parameter_priors=validate_parameter_priors,
+            evaluate_declared_initial=evaluate_declared_initial,
+            initial_joint_vector=initial_joint_vector,
+            evaluate_joint_vector=evaluate_joint_vector,
         )
     except Exception as error:
         return FitReadiness(False, str(error) or type(error).__name__)
@@ -105,6 +131,8 @@ def preflight_automatic_fit(
     import_batch_id: str | None = None,
     *,
     prepare_dataset_fit: Callable,
+    validate_parameter_priors: Callable,
+    evaluate_declared_initial: Callable,
 ) -> FitReadiness:
     """Validate only runnable automatic datasets without mutating state."""
     if project.measurement_preset is None:
@@ -124,7 +152,12 @@ def preflight_automatic_fit(
             record = records[dataset_id]
             if record.status.value != "ok":
                 return FitReadiness(False, record.message)
-            prepare_dataset_fit(project, dataset_id, seeds[dataset_id])
+            prepared = prepare_dataset_fit(project, dataset_id, seeds[dataset_id])
+            validate_parameter_priors(
+                prepared.problem.parameter_definitions,
+                prepared.updated_dataset.parameter_priors,
+            )
+            _require_valid_initial(evaluate_declared_initial(prepared.problem))
     except Exception as error:
         return FitReadiness(False, str(error) or type(error).__name__)
     return FitReadiness(True, "ready")
@@ -138,6 +171,8 @@ def fit_automatically(
     *,
     fit_automatic_transaction: Callable,
     prepare_dataset_fit: Callable,
+    validate_parameter_priors: Callable,
+    evaluate_declared_initial: Callable,
     fit_automatic_prepared_dataset: Callable,
     fit_automatic_joint_group: Callable,
 ) -> ProjectFitResult:
@@ -146,6 +181,8 @@ def fit_automatically(
         project,
         import_batch_id,
         prepare_dataset_fit=prepare_dataset_fit,
+        validate_parameter_priors=validate_parameter_priors,
+        evaluate_declared_initial=evaluate_declared_initial,
     )
     if not readiness.ready:
         raise ValueError(readiness.message)
@@ -167,6 +204,7 @@ def fit_project(
     progress_callback: ProgressCallback | None = None,
     checkpoint_callback: CheckpointCallback | None = None,
     *,
+    preflight_fit: Callable,
     fit_project_transaction: Callable,
     prepare_dataset_fit: Callable,
     fit_prepared_dataset: Callable,
@@ -178,6 +216,7 @@ def fit_project(
         progress_callback,
         checkpoint_callback,
         None,
+        preflight_fit=preflight_fit,
         fit_project_transaction=fit_project_transaction,
         prepare_dataset_fit=prepare_dataset_fit,
         fit_prepared_dataset=fit_prepared_dataset,
@@ -191,6 +230,7 @@ def _dispatch_project(
     checkpoint_callback: CheckpointCallback | None,
     cancelled: CancellationProbe | None,
     *,
+    preflight_fit: Callable,
     fit_project_transaction: Callable,
     prepare_dataset_fit: Callable,
     fit_prepared_dataset: Callable,
@@ -204,6 +244,9 @@ def _dispatch_project(
             **kwargs,
         )
 
+    readiness = preflight_fit(project)
+    if not readiness.ready:
+        raise ValueError(readiness.message)
     return fit_project_transaction(
         project,
         progress_callback,
@@ -339,6 +382,7 @@ def fit_worker_handler(
     checkpoint_callback: CheckpointCallback | None,
     cancelled: CancellationProbe | None,
     *,
+    preflight_fit: Callable,
     fit_project_transaction: Callable,
     prepare_dataset_fit: Callable,
     fit_prepared_dataset: Callable,
@@ -349,6 +393,7 @@ def fit_worker_handler(
         progress_callback,
         checkpoint_callback,
         cancelled,
+        preflight_fit=preflight_fit,
         fit_project_transaction=fit_project_transaction,
         prepare_dataset_fit=prepare_dataset_fit,
         fit_prepared_dataset=fit_prepared_dataset,
@@ -365,11 +410,22 @@ def automatic_worker_handler(
     *,
     fit_automatic_transaction: Callable,
     prepare_dataset_fit: Callable,
+    validate_parameter_priors: Callable,
+    evaluate_declared_initial: Callable,
     fit_automatic_prepared_dataset: Callable,
     fit_automatic_joint_group: Callable,
 ) -> ProjectFitResult:
     if _has_cross_dataset_constraints(project):
         raise ValueError("automatic fit does not support cross-dataset constraints")
+    readiness = preflight_automatic_fit(
+        project,
+        import_batch_id,
+        prepare_dataset_fit=prepare_dataset_fit,
+        validate_parameter_priors=validate_parameter_priors,
+        evaluate_declared_initial=evaluate_declared_initial,
+    )
+    if not readiness.ready:
+        raise ValueError(readiness.message)
     return fit_automatic_transaction(
         project,
         import_batch_id,

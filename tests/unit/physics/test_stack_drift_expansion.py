@@ -13,7 +13,11 @@ from tests.support.drift_cases import (
     wavelength,
 )
 
-from xrr_fitter.model.structure import DriftSpec, PeriodicSpan, StructureSpec
+from xrr_fitter.model.slab_stack import PeriodicSpan
+from xrr_fitter.model.structure import (
+    DriftSpec,
+    StructureSpec,
+)
 from xrr_fitter.physics.stack import expand_structure, rebuild_structure
 
 

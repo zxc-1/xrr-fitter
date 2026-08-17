@@ -18,6 +18,7 @@ from xrr_fitter.model.fitting import (
     ModelEvaluation,
     SearchBudget,
 )
+from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
 
 
 def test_fit_config_standard_is_versioned_finite_and_immutable() -> None:
@@ -121,6 +122,36 @@ def test_published_fitting_arrays_remain_read_only_after_pickle() -> None:
     assert restored_search.region_labels.flags.writeable is False
     assert restored_search.region_weights.flags.writeable is False
     assert restored_search.candidates[0].unit_vector.flags.writeable is False
+
+
+def test_nested_expanded_stack_remains_read_only_after_pickle() -> None:
+    stack = SlabStack(
+        np.array([0.0, 20.0, 20.0, 0.0]),
+        np.array([0.0j, 2e-5, 2e-5, 3e-5]),
+        np.array([1.0, 1.0, 2.0]),
+        (PeriodicSpan(1, 1, 2),),
+    )
+    candidate = replace(fit_candidate(), expanded_stack=stack)
+    evaluation = ModelEvaluation(
+        valid=True,
+        reason="evaluated",
+        parameters=candidate.parameters,
+        qz_a_inv=candidate.qz_a_inv,
+        model_normalized=candidate.model_normalized,
+        fit_log_residuals_decades=candidate.log_residuals_decades,
+        fit_weighted_residuals=candidate.weighted_residuals,
+        objective=candidate.objective,
+        expanded_stack=stack,
+        diagnostics=(),
+    )
+
+    restored_candidate, restored_evaluation = pickle.loads(pickle.dumps((candidate, evaluation)))
+
+    for restored in (restored_candidate.expanded_stack, restored_evaluation.expanded_stack):
+        assert restored is not None
+        assert restored.thickness_a.flags.writeable is False
+        assert restored.sld_a2.flags.writeable is False
+        assert restored.roughness_a.flags.writeable is False
 
 
 def test_search_budget_allows_disabled_de_stages() -> None:
@@ -233,6 +264,45 @@ def test_fit_progress_stage_summary_and_checkpoint_validate_schema() -> None:
     assert checkpoint.stage_summaries == (summary,)
     with pytest.raises(ValueError, match="completed"):
         FitProgress("curve", "stage-a", 11, 10, 1.5, "bad")
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("instrument_fingerprint", "parameter_settings_fingerprint", "joint_layout_fingerprint"),
+)
+def test_checkpoint_rejects_invalid_optional_fingerprint(field: str) -> None:
+    values = {
+        "data_sha256": "a" * 64,
+        "structure_fingerprint": "b" * 64,
+        "config_fingerprint": "c" * 64,
+        "stage": "stage-a",
+        "candidates": (fit_candidate(),),
+        "child_seeds": (101,),
+        field: "not-a-sha256",
+    }
+
+    with pytest.raises(ValueError, match=field):
+        FitCheckpoint(**values)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("instrument_fingerprint", "parameter_settings_fingerprint", "joint_layout_fingerprint"),
+)
+@pytest.mark.parametrize("value", [0, False, None])
+def test_checkpoint_rejects_falsy_non_string_optional_fingerprint(field: str, value: object) -> None:
+    values = {
+        "data_sha256": "a" * 64,
+        "structure_fingerprint": "b" * 64,
+        "config_fingerprint": "c" * 64,
+        "stage": "stage-a",
+        "candidates": (fit_candidate(),),
+        "child_seeds": (101,),
+        field: value,
+    }
+
+    with pytest.raises(ValueError, match=field):
+        FitCheckpoint(**values)
 
 
 def test_confidence_thresholds_default_prior_conflict_sigmas_is_three() -> None:

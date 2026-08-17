@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from xrr_fitter.model.structure import SlabStack
+from xrr_fitter.model.slab_stack import SlabStack
 from xrr_fitter.physics.sld_profile import sld_depth_profile
 
 
@@ -21,7 +21,9 @@ def test_rough_interface_midpoint_is_average_sld() -> None:
 
 
 def test_passive_absorbing_sld_profile_keeps_nonnegative_absorption_with_overlapping_roughness() -> None:
-    _, sld = sld_depth_profile(SlabStack([0, 10, 8, 0], [0j, 20e-6 + 2e-6j, 5e-6 + 0.2e-6j, 30e-6 + 3e-6j], [4, 3, 4]), step_a=0.25)
+    _, sld = sld_depth_profile(
+        SlabStack([0, 10, 8, 0], [0j, 20e-6 + 2e-6j, 5e-6 + 0.2e-6j, 30e-6 + 3e-6j], [4, 3, 4]), step_a=0.25
+    )
     assert np.all(sld.imag >= 0)
 
 

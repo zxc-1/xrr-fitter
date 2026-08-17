@@ -65,7 +65,8 @@ from xrr_fitter.model.parameters import (
     ParameterValue,
 )
 from xrr_fitter.model.progress import FitProgress  # noqa: F401 -- re-exported via xrr_fitter.api
-from xrr_fitter.model.structure import SlabStack, StructureSpec
+from xrr_fitter.model.slab_stack import SlabStack
+from xrr_fitter.model.structure import StructureSpec
 
 
 def _positive_integer(value: int, field: str, *, allow_zero: bool = False) -> None:
@@ -93,7 +94,7 @@ def _pickle_values(value: object) -> tuple[object, ...]:
 
 
 def _sha256(value: str, field: str) -> None:
-    valid = len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+    valid = isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
     if not valid:
         raise ValueError(f"{field} must be a lowercase SHA-256")
 
@@ -566,6 +567,10 @@ class FitCheckpoint:
     def __post_init__(self) -> None:
         for field in ("data_sha256", "structure_fingerprint", "config_fingerprint"):
             _sha256(getattr(self, field), field)
+        for field in ("instrument_fingerprint", "parameter_settings_fingerprint", "joint_layout_fingerprint"):
+            value = getattr(self, field)
+            if not isinstance(value, str) or value != "":
+                _sha256(value, field)
         _nonempty(self.stage, "stage")
         candidates = _checkpoint_candidates(self.candidates)
         seeds = _checkpoint_seeds(self.child_seeds)

@@ -14,8 +14,14 @@ import numpy as np
 import pytest
 from tests.support.model_cases import prepared_data, simple_structure
 
-from xrr_fitter.evaluation import encode_physical_vector
+from xrr_fitter.evaluation import (
+    encode_physical_vector,
+    roughness_dynamic_uppers,
+    values_and_jacobians,
+    values_by_name,
+)
 from xrr_fitter.fit.local_search import local_jacobian, solve_local
+from xrr_fitter.fit.objective import evaluate_declared_initial
 from xrr_fitter.fit.problem import compile_fit_problem, compile_stage_problem
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
@@ -129,6 +135,42 @@ def test_transition_local_solver_accepts_thickness_at_declared_width() -> None:
     result = solve_local(problem, unit, max_nfev=2)
 
     assert result.evaluation.valid
+
+
+def test_transition_width_boundary_preserves_legal_backing_roughness() -> None:
+    problem = _problem(_transition_structure())
+    physical = {
+        "component.0.thickness_a": 8.0,
+        "backing.roughness_a": 3.0,
+    }
+
+    unit = encode_physical_vector(problem, physical)
+    dynamic = roughness_dynamic_uppers(problem, unit)
+    values = values_by_name(problem, unit)
+    values_with_jacobians, jacobians = values_and_jacobians(problem, unit)
+
+    assert dynamic["backing.roughness_a"] == np.nextafter(0.49 * 8.0, 0.0)
+    assert values["backing.roughness_a"] == pytest.approx(3.0)
+    assert values_with_jacobians["backing.roughness_a"] == pytest.approx(3.0)
+    assert np.all(np.isfinite(jacobians["backing.roughness_a"]))
+
+
+def test_declared_transition_width_boundary_is_a_valid_initial_candidate() -> None:
+    structure = _transition_structure()
+    layer = structure.components[0]
+    assert isinstance(layer, LayerSpec)
+    boundary = replace(
+        structure,
+        components=(replace(layer, thickness_a=8.0),),
+        backing_roughness_a=0.0,
+    )
+    problem = _problem(boundary)
+
+    unit = encode_physical_vector(problem, {})
+    result = evaluate_declared_initial(problem)
+
+    assert np.all(np.isfinite(unit))
+    assert result.valid
 
 
 def test_unlocking_transition_roughness_is_rejected_at_compile_time() -> None:

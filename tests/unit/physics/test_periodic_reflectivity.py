@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import numpy as np
-import pytest
 from time import perf_counter
 
-from xrr_fitter.model.structure import PeriodicSpan, SlabStack
+import numpy as np
+import pytest
+
+from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
 from xrr_fitter.physics.parratt import normalize_mobius, parratt_reflectivity
 
 
@@ -18,15 +19,20 @@ def _periodic(repeats: int = 20) -> tuple[SlabStack, SlabStack]:
 def test_periodic_mobius_parratt_matches_expanded_recurrence() -> None:
     periodic, expanded = _periodic()
     q = np.r_[np.geomspace(1e-4, 0.03, 180), np.linspace(0.03, 1, 420)]
-    np.testing.assert_allclose(parratt_reflectivity(q, periodic), parratt_reflectivity(q, expanded), rtol=5e-12, atol=2e-14)
+    np.testing.assert_allclose(
+        parratt_reflectivity(q, periodic), parratt_reflectivity(q, expanded), rtol=5e-12, atol=2e-14
+    )
 
 
 def test_periodic_bragg_spacing_is_two_pi_over_bilayer_period() -> None:
     from scipy.signal import find_peaks
+
     q = np.linspace(0.08, 0.9, 16000)
     periodic, _ = _periodic()
     expected = 2 * np.pi / 70
-    peaks, properties = find_peaks(parratt_reflectivity(q, periodic), prominence=1e-10, distance=int(0.5 * expected / (q[1] - q[0])))
+    peaks, properties = find_peaks(
+        parratt_reflectivity(q, periodic), prominence=1e-10, distance=int(0.5 * expected / (q[1] - q[0]))
+    )
     strongest = np.sort(q[peaks[np.argsort(properties["prominences"])[-8:]]])
     assert np.median(np.diff(strongest)) == pytest.approx(expected, rel=0.03)
 

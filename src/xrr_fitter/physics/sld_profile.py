@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.special import erf
 
-from xrr_fitter.model.structure import SlabStack
+from xrr_fitter.model.slab_stack import SlabStack
 
 
 def _depth_grid(stack: SlabStack, step_a: float) -> tuple[np.ndarray, np.ndarray]:
@@ -27,10 +27,12 @@ def _transition(depth: np.ndarray, interface: float, sigma: float) -> np.ndarray
 
 
 def _profile(depth: np.ndarray, interfaces: np.ndarray, stack: SlabStack) -> np.ndarray:
-    transitions = np.asarray([
-        np.clip(_transition(depth, interface, stack.roughness_a[index]), 0.0, 1.0)
-        for index, interface in enumerate(interfaces)
-    ])
+    transitions = np.asarray(
+        [
+            np.clip(_transition(depth, interface, stack.roughness_a[index]), 0.0, 1.0)
+            for index, interface in enumerate(interfaces)
+        ]
+    )
     ordered = np.minimum.accumulate(transitions, axis=0)
     weights = np.empty((stack.sld_a2.size, depth.size), dtype=float)
     weights[0] = 1.0 - ordered[0]
@@ -54,7 +56,11 @@ def sld_depth_profile(stack: SlabStack, step_a: float = 0.5) -> tuple[np.ndarray
     if not np.isfinite(step_a) or step_a <= 0.0:
         raise ValueError("step_a must be finite and positive")
     depth, interfaces = _depth_grid(stack, step_a)
-    profile = _sharp_profile(depth, interfaces, stack) if np.all(stack.roughness_a == 0.0) else _profile(depth, interfaces, stack)
+    profile = (
+        _sharp_profile(depth, interfaces, stack)
+        if np.all(stack.roughness_a == 0.0)
+        else _profile(depth, interfaces, stack)
+    )
     depth = np.array(depth, copy=True)
     profile = np.array(profile, copy=True)
     depth.setflags(write=False)

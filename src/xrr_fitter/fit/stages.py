@@ -47,7 +47,12 @@ from functools import partial
 
 import numpy as np
 
-from xrr_fitter.evaluation import PhysicalValueError, encode_physical_vector, values_by_name
+from xrr_fitter.evaluation import (
+    EvaluationConstraintError,
+    PhysicalValueError,
+    encode_physical_vector,
+    values_by_name,
+)
 from xrr_fitter.fit.candidates import (
     CandidateStart,
     archive_stage_b_candidates,
@@ -289,7 +294,7 @@ def _ensure_two_starts(starts: tuple[CandidateStart, ...]) -> tuple[CandidateSta
 def _stage_a_candidate(problem: object, start: CandidateStart, index: int) -> FitCandidate | None:
     try:
         unit = encode_physical_vector(problem, dict(start.values))
-    except PhysicalValueError:
+    except (EvaluationConstraintError, PhysicalValueError):
         return None
     evaluation = evaluate_vector(problem, unit)
     return candidate_from_evaluation(

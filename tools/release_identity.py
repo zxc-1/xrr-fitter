@@ -7,23 +7,16 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Sequence
-
+from collections.abc import Sequence
+from pathlib import Path, PurePosixPath
 
 TOOL_DIRECTORY = str(Path(__file__).resolve().parent)
 if TOOL_DIRECTORY not in sys.path:
     sys.path.insert(0, TOOL_DIRECTORY)
 
-from verify_distribution import (  # noqa: E402
-    clean_head_identity,
-    read_artifact_manifest,
-    validate_artifact_manifest,
-)
 from release_identity_model import (  # noqa: E402
     FREEZE_SCHEMA,
     NOT_RUN,
@@ -39,10 +32,24 @@ from release_identity_schema import (  # noqa: E402
     _object_pairs,
     _sha256,
     canonical_identity_bytes,
-    identity_value,
+    identity_value,  # noqa: F401
     parse_release_identity,
 )
-
+from verify_distribution import (  # noqa: E402
+    clean_head_identity,
+    committed_blob,
+    committed_tree_files,
+    git_oid,
+    read_artifact_manifest,
+    validate_artifact_manifest,
+)
+from verify_report import (  # noqa: E402
+    _make_report_anchor,
+    _prepare_report_directory,
+    _require_same_directory,
+    _resolve_output_path,
+    _write_new_file_in_anchored_directory,
+)
 
 RELEASE_SPEC_PATH = "verification/release-spec.json"
 LOCK_PATH = "requirements-macos-arm64-py312.lock"
@@ -95,20 +102,18 @@ def _canonical_value(value: object) -> bytes:
     return (text + "\n").encode("utf-8")
 
 
-def _json_file(path: Path, label: str) -> tuple[dict[str, object], bytes]:
-    content = _read_regular(path, label)
+def _json_content(content: bytes, label: str) -> dict[str, object]:
     try:
         value = json.loads(content.decode("utf-8"), object_pairs_hook=_object_pairs)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"invalid {label} JSON") from error
     if not isinstance(value, dict) or content != _canonical_value(value):
         raise ValueError(f"{label} must be a canonical JSON object")
-    return value, content
+    return value
 
 
-def _repo_file(repository: Path, relative: str) -> RepoFileRecord:
-    path = repository.joinpath(*relative.split("/"))
-    content = _read_regular(path, relative)
+def _repo_file(repository: Path, commit: str, relative: str) -> RepoFileRecord:
+    content = committed_blob(repository, commit, relative)
     return RepoFileRecord(relative, len(content), hashlib.sha256(content).hexdigest())
 
 
@@ -119,14 +124,14 @@ def _external_file(path: Path, expected_name: str) -> ExternalFileRecord:
     return ExternalFileRecord(expected_name, len(content), hashlib.sha256(content).hexdigest())
 
 
-def _release_spec(repository: Path, lock: RepoFileRecord) -> RepoFileRecord:
-    path = repository / RELEASE_SPEC_PATH
-    value, _content = _json_file(path, "release spec")
+def _release_spec(repository: Path, commit: str, lock: RepoFileRecord) -> RepoFileRecord:
+    content = committed_blob(repository, commit, RELEASE_SPEC_PATH)
+    value = _json_content(content, "release spec")
     if value.get("schema") != "xrr-r23-release-spec-v1":
         raise ValueError("release spec schema drift")
     if value.get("lock_sha256") != lock.sha256:
         raise ValueError("release spec dependency lock hash drift")
-    return _repo_file(repository, RELEASE_SPEC_PATH)
+    return RepoFileRecord(RELEASE_SPEC_PATH, len(content), hashlib.sha256(content).hexdigest())
 
 
 def _file_record(value: object, label: str) -> dict[str, object]:
@@ -153,26 +158,18 @@ def _declared_test_tree(value: object) -> list[dict[str, object]]:
     return records
 
 
-def _current_test_tree(repository: Path) -> list[dict[str, object]]:
-    root = repository / "tests"
-    if root.is_symlink() or not root.is_dir():
-        raise ValueError("tests must be a regular directory")
+def _current_test_tree(repository: Path, commit: str) -> list[dict[str, object]]:
     records = []
-    for path in root.rglob("*"):
-        relative = path.relative_to(repository)
+    for relative, content in committed_tree_files(repository, commit, PurePosixPath("tests")).items():
         if any(part in PRUNED_TEST_PARTS for part in relative.parts):
             continue
-        if path.is_symlink():
-            raise ValueError(f"test tree contains a symlink: {relative.as_posix()}")
-        if path.is_file():
-            content = path.read_bytes()
-            records.append(
-                {
-                    "path": relative.as_posix(),
-                    "size": len(content),
-                    "sha256": hashlib.sha256(content).hexdigest(),
-                }
-            )
+        records.append(
+            {
+                "path": relative.as_posix(),
+                "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
     return sorted(records, key=lambda item: str(item["path"]))
 
 
@@ -188,18 +185,22 @@ def _validate_test_nodes(value: dict[str, object]) -> None:
         raise ValueError("test manifest node registry drift")
 
 
-def _validate_test_source(repository: Path, source_commit: str) -> None:
-    _git(repository, "cat-file", "-e", f"{source_commit}^{{commit}}")
-    head = _git(repository, "rev-parse", "HEAD")
-    if _git(repository, "merge-base", "--is-ancestor", source_commit, head):
+def _validate_test_source(repository: Path, source_commit: str, head_commit: str) -> None:
+    try:
+        object_type = _git(repository, "cat-file", "-t", source_commit)
+    except ValueError as error:
+        raise ValueError("test source commit must be an existing commit object") from error
+    if object_type != "commit":
+        raise ValueError("test source commit must be a commit object")
+    if _git(repository, "merge-base", "--is-ancestor", source_commit, head_commit):
         raise ValueError("unexpected merge-base output")
-    if _git(repository, "diff", "--name-only", source_commit, head, "--", "tests"):
+    if _git(repository, "diff", "--name-only", source_commit, head_commit, "--", "tests"):
         raise ValueError("test tree differs from test manifest source commit")
 
 
-def _test_manifest(repository: Path, lock: RepoFileRecord) -> TestManifestBinding:
-    path = repository / TEST_MANIFEST_PATH
-    value, content = _json_file(path, "test manifest")
+def _test_manifest(repository: Path, commit: str, lock: RepoFileRecord) -> TestManifestBinding:
+    content = committed_blob(repository, commit, TEST_MANIFEST_PATH)
+    value = _json_content(content, "test manifest")
     if set(value) != TEST_MANIFEST_FIELDS or value.get("schema") != "xrr-test-manifest-v1":
         raise ValueError("test manifest schema or field set drift")
     if value.get("suite") != "tests" or value.get("lock_sha256") != lock.sha256:
@@ -210,13 +211,11 @@ def _test_manifest(repository: Path, lock: RepoFileRecord) -> TestManifestBindin
     collection = _sha256(value.get("collection_sha256"), "test collection")
     if collection != expected_collection:
         raise ValueError("test manifest collection hash drift")
-    if _declared_test_tree(value.get("test_tree")) != _current_test_tree(repository):
+    if _declared_test_tree(value.get("test_tree")) != _current_test_tree(repository, commit):
         raise ValueError("test manifest filesystem tree drift")
     _validate_test_nodes(value)
-    source_commit = value.get("source_commit")
-    if not isinstance(source_commit, str):
-        raise ValueError("test manifest source commit drift")
-    _validate_test_source(repository, source_commit)
+    source_commit = git_oid(value.get("source_commit"), "test source commit")
+    _validate_test_source(repository, source_commit, commit)
     file = RepoFileRecord(TEST_MANIFEST_PATH, len(content), hashlib.sha256(content).hexdigest())
     return TestManifestBinding(file, source_commit, collection)
 
@@ -250,9 +249,9 @@ def calculate_release_identity(
     artifacts = Path(artifact_dir).resolve()
     manifest_path = Path(artifact_manifest).resolve()
     git = clean_head_identity(repository)
-    lock = _repo_file(repository, LOCK_PATH)
-    release_spec = _release_spec(repository, lock)
-    tests = _test_manifest(repository, lock)
+    lock = _repo_file(repository, git.head_commit, LOCK_PATH)
+    release_spec = _release_spec(repository, git.head_commit, lock)
+    tests = _test_manifest(repository, git.head_commit, lock)
     manifest = _artifact_bundle(artifacts, manifest_path, git.head_commit, git.head_tree)
     return R23ReleaseIdentity(
         SCHEMA,
@@ -292,13 +291,6 @@ def validate_release_identity(
         _validate_tag(Path(repo_root).resolve(), expected_tag, identity.head_commit)
 
 
-def _write_file(path: Path, content: bytes) -> None:
-    with path.open("xb") as handle:
-        handle.write(content)
-        handle.flush()
-        os.fsync(handle.fileno())
-
-
 def _fsync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY)
     try:
@@ -314,11 +306,33 @@ def _is_distribution_bundle(
 ) -> bool:
     if report.is_symlink() or not report.is_dir():
         raise ValueError("existing identity report must be a regular directory")
+    members = {path.name for path in report.iterdir()}
+    if not members:
+        return False
     if artifact_dir.parent != report or artifact_manifest.parent != report:
         raise ValueError("existing identity report must own the artifact bundle")
-    if {path.name for path in report.iterdir()} != {"artifacts", "artifact-manifest.json"}:
+    if members != {"artifacts", "artifact-manifest.json"}:
         raise ValueError("existing identity report member drift")
     return True
+
+
+def _safe_output_path(value: str | Path, label: str) -> Path:
+    raw = Path(value).absolute()
+    current = raw
+    while current != current.parent:
+        if current.is_symlink():
+            raise ValueError(f"{label} must not contain symlink components")
+        current = current.parent
+    return _resolve_output_path(raw, label)
+
+
+def _cleanup_created_identity_report(report: Path, report_identity) -> None:
+    try:
+        _require_same_directory(report, report_identity, "identity report directory")
+    except ValueError:
+        return
+    if report.is_dir() and not any(report.iterdir()):
+        report.rmdir()
 
 
 def build_release_identity(
@@ -327,28 +341,34 @@ def build_release_identity(
     artifact_dir: str | Path,
     artifact_manifest: str | Path,
 ) -> Path:
-    report = Path(report_dir).resolve()
-    artifacts = Path(artifact_dir).resolve()
-    manifest = Path(artifact_manifest).resolve()
-    parent = report.parent
-    if parent.is_symlink() or not parent.is_dir():
-        raise ValueError("identity report parent must be a regular directory")
-    if os.path.lexists(report):
-        _is_distribution_bundle(report, artifacts, manifest)
-        identity = calculate_release_identity(repo_root, artifacts, manifest)
-        target = report / "release-identity.json"
-        _atomic_file(target, canonical_identity_bytes(identity))
-        return target
-    identity = calculate_release_identity(repo_root, artifacts, manifest)
-    staging = Path(tempfile.mkdtemp(prefix=f".{report.name}.", dir=parent))
+    repository = Path(repo_root).resolve()
+    report = _safe_output_path(report_dir, "identity report directory")
+    artifacts = _safe_output_path(artifact_dir, "artifact directory")
+    manifest = _safe_output_path(artifact_manifest, "artifact manifest")
+    if report == repository or report.is_relative_to(repository):
+        raise ValueError("identity report directory must be outside the repository")
+    anchor = _make_report_anchor(report)
+    identity = calculate_release_identity(repository, artifacts, manifest)
+    created = False
+    report_identity = None
     try:
-        _write_file(staging / "release-identity.json", canonical_identity_bytes(identity))
-        _fsync_directory(staging)
-        os.replace(staging, report)
-        _fsync_directory(parent)
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging)
+        report_identity = _prepare_report_directory(report, anchor)
+        created = anchor.leaf_identity is None
+        if not created:
+            _is_distribution_bundle(report, artifacts, manifest)
+        _require_same_directory(report, report_identity, "identity report directory")
+        _write_new_file_in_anchored_directory(
+            report,
+            report_identity,
+            "release-identity.json",
+            canonical_identity_bytes(identity),
+            directory_label="identity report directory",
+            file_label="release identity",
+        )
+    except BaseException:
+        if created and report_identity is not None:
+            _cleanup_created_identity_report(report, report_identity)
+        raise
     return report / "release-identity.json"
 
 

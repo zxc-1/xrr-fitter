@@ -6,11 +6,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from xrr_fitter.model.slab_stack import SlabStack
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
     LayerSpec,
     PeriodicBlock,
-    SlabStack,
     StructureSpec,
     _ExpandedDriftBlock,
 )
@@ -147,6 +147,8 @@ class GeometryExpansion:
     thickness_a: np.ndarray
     thickness_jacobian: np.ndarray | None
     interface_names: tuple[str, ...]
+    limit_thickness_a: np.ndarray
+    limit_thickness_jacobian: np.ndarray | None
 
 
 def _append_geometry(
@@ -304,6 +306,110 @@ def _append_component_geometry(
     _append_gradient_geometry(thickness, tangents, component, prefix, value_jacobians)
 
 
+def _append_limit_rows(
+    thickness: list[float],
+    tangents: list[np.ndarray] | None,
+    value: float,
+    tangent: np.ndarray | None,
+    count: int,
+) -> None:
+    """Repeat one declared roughness-limit thickness across expanded slabs."""
+    for _ in range(count):
+        _append_geometry(thickness, tangents, value, tangent)
+
+
+def _append_component_limit_geometry(
+    thickness: list[float],
+    tangents: list[np.ndarray] | None,
+    component: LayerSpec | PeriodicBlock | GradientLayerSpec | _ExpandedDriftBlock,
+    prefix: str,
+    value_jacobians: dict[str, np.ndarray] | None,
+) -> None:
+    """Mirror ``physics.stack`` roughness limits without evaluating material SLDs."""
+    if isinstance(component, LayerSpec):
+        name = f"{prefix}.thickness_a"
+        count = _transition_count(component) + 1 if component.transition is not None else 1
+        _append_limit_rows(
+            thickness,
+            tangents,
+            component.thickness_a,
+            _geometry_tangent(value_jacobians, name),
+            count,
+        )
+        return
+    if isinstance(component, _ExpandedDriftBlock):
+        drifts_thickness = component.target == "thickness"
+        for flat_index, layer in enumerate(component.layers):
+            repeat_index, layer_index = divmod(flat_index, component.layer_count)
+            name = _expanded_thickness_name(
+                prefix,
+                repeat_index,
+                layer_index,
+                drifts_thickness=drifts_thickness,
+            )
+            _append_limit_rows(
+                thickness,
+                tangents,
+                layer.thickness_a,
+                _geometry_tangent(value_jacobians, name),
+                1,
+            )
+        return
+    if isinstance(component, PeriodicBlock):
+        for repeat_index in range(component.repeats):
+            for layer_index, layer in enumerate(component.layers):
+                name = _expanded_thickness_name(
+                    prefix,
+                    repeat_index,
+                    layer_index,
+                    drifts_thickness=False,
+                )
+                _append_limit_rows(
+                    thickness,
+                    tangents,
+                    layer.thickness_a,
+                    _geometry_tangent(value_jacobians, name),
+                    1,
+                )
+        return
+    count = int(np.ceil(component.thickness_a / component.microslab_max_a))
+    _append_limit_rows(
+        thickness,
+        tangents,
+        component.thickness_a,
+        _geometry_tangent(value_jacobians, f"{prefix}.thickness_a"),
+        count,
+    )
+
+
+def _expand_limit_geometry(
+    structure: StructureSpec,
+    parameter_count: int | None,
+    value_jacobians: dict[str, np.ndarray] | None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Expand the declared thicknesses used by stack roughness validation."""
+    thickness: list[float] = [0.0]
+    tangents = None if value_jacobians is None else [np.zeros(parameter_count, dtype=float)]
+    for component_index, component in enumerate(structure.components):
+        _append_component_limit_geometry(
+            thickness,
+            tangents,
+            component,
+            f"component.{component_index}",
+            value_jacobians,
+        )
+    _append_geometry(
+        thickness,
+        tangents,
+        0.0,
+        None if value_jacobians is None else np.zeros(parameter_count, dtype=float),
+    )
+    return (
+        np.asarray(thickness, dtype=float),
+        None if tangents is None else np.asarray(tangents, dtype=float),
+    )
+
+
 def expand_geometry(
     structure: StructureSpec,
     parameter_count: int | None = None,
@@ -337,13 +443,20 @@ def expand_geometry(
         None if value_jacobians is None else np.zeros(parameter_count, dtype=float),
     )
     names = _expanded_interface_names(structure)
+    limit_thickness, limit_tangents = _expand_limit_geometry(
+        structure,
+        parameter_count,
+        value_jacobians,
+    )
     # Source labels and expanded media must remain positionally aligned.
-    if len(names) != len(thickness) - 1:
+    if len(names) != len(thickness) - 1 or limit_thickness.size != len(thickness):
         raise RuntimeError("expanded geometry interface mapping mismatch")
     return GeometryExpansion(
         np.asarray(thickness, dtype=float),
         None if tangents is None else np.asarray(tangents, dtype=float),
         names,
+        limit_thickness,
+        limit_tangents,
     )
 
 

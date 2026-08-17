@@ -87,6 +87,8 @@ def _export_mask(context: DatasetExportData) -> np.ndarray:
     ]
     if data.intensity_sigma_normalized is not None:
         arrays.append(data.intensity_sigma_normalized)
+    if data.sigma_q_a_inv is not None:
+        arrays.append(data.sigma_q_a_inv)
     for values in arrays:
         mask &= np.isfinite(np.asarray(values, dtype=float))
     if not np.any(mask):
@@ -97,10 +99,10 @@ def _export_mask(context: DatasetExportData) -> np.ndarray:
 def _data_segment(data, mask):
     """Build the ORSO column spec and the row-filtered numeric matrix.
 
-    ORSO 反射率 schema 通过 ``prefixItems`` 把前四列位置固定为 ``Qz, R, sR, sQz``：
-    位置 2/3 若出现非误差列会直接校验失败。因此这里只发出诚实的约减反射率列——
-    ``Qz, R``，以及导入携带 ``intensity_sigma_normalized`` 时的 ``sR``——绝不臆造
-    ``sQz`` 分辨率列。拟合模型曲线与残差不是实测反射率，改由 ``xrr_fitter.model``
+    ORSO 反射率 schema 通过 ``prefixItems`` 把前四列位置固定为 ``Qz, R, sR, sQz``。
+    因此只有在实测反射率不确定度 ``sR`` 存在时，才把逐点 ``sQz`` 作为第 4
+    个标准误差列写入；否则不臆造 ``sR``，逐点 Q 分辨率由 ``xrr_fitter.reduction``
+    扩展段承载。拟合模型曲线与残差不是实测反射率，改由 ``xrr_fitter.model``
     扩展段承载，而非数据列。
     """
     qz = np.asarray(data.qz_a_inv, dtype=float)[mask]
@@ -111,6 +113,9 @@ def _data_segment(data, mask):
     if sigma is not None:
         columns.append(fileio.ErrorColumn(error_of="R", error_type="uncertainty", value_is="sigma"))
         arrays.append(np.asarray(sigma, dtype=float)[mask])
+        if data.sigma_q_a_inv is not None:
+            columns.append(fileio.ErrorColumn(error_of="Qz", error_type="resolution", value_is="sigma"))
+            arrays.append(np.asarray(data.sigma_q_a_inv, dtype=float)[mask])
     return columns, np.column_stack(arrays)
 
 
@@ -200,6 +205,9 @@ def _extensions(context, result, selected, mask, covariance):
         "fit_config": project_to_dict(context.project)["fit_config"],
         "beam": _beam_payload(context.data.beam),
     }
+    pointwise_resolution = _pointwise_resolution_payload(context.data, mask)
+    if pointwise_resolution is not None:
+        reduction["pointwise_resolution"] = pointwise_resolution
     model = {
         "qz_a_inv": np.asarray(selected.qz_a_inv, dtype=float)[mask].tolist(),
         "reflectivity": np.asarray(selected.model_normalized, dtype=float)[mask].tolist(),
@@ -209,6 +217,19 @@ def _extensions(context, result, selected, mask, covariance):
         "xrr_fitter.confidence": confidence,
         "xrr_fitter.reduction": reduction,
         "xrr_fitter.model": model,
+    }
+
+
+def _pointwise_resolution_payload(data, mask):
+    sigma_q = data.sigma_q_a_inv
+    if sigma_q is None or data.intensity_sigma_normalized is not None:
+        return None
+    return {
+        "error_of": "Qz",
+        "error_type": "resolution",
+        "value_is": "sigma",
+        "unit": "1/angstrom",
+        "values": np.asarray(sigma_q, dtype=float)[mask].tolist(),
     }
 
 

@@ -74,7 +74,7 @@ ALLOWED = {
     "model": {"model"},
     "io": {"io", "model"},
     "physics": {"physics", "model"},
-    "evaluation": {"model", "physics"},
+    "evaluation": {"model", "physics", "evaluation"},
     "fit": {"fit", "model", "physics", "evaluation"},
     "analysis": {"analysis", "model", "physics", "evaluation"},
     "services": {"services", "model", "io", "physics", "fit", "analysis"},
@@ -85,6 +85,8 @@ ALLOWED = {
     "__main__": {"gui", "cli"},
     "__init__": set(),
 }
+EVALUATION_IMPLEMENTATION_MODULES = {"evaluation_geometry"}
+EVALUATION_FACADE_MODULE = "evaluation"
 PACKAGE_EDGE_EXCEPTIONS = {
     "io.examples": {"physics.reflectivity", "physics.stack"},
     "io.orso": {"version"},
@@ -125,7 +127,8 @@ MODEL_ALLOWED = {
     "progress": set(),
     "mcmc_samples": set(),
     "sld_bands": set(),
-    "fitting": {"data", "instrument", "structure", "parameters", "progress"},
+    "slab_stack": set(),
+    "fitting": {"data", "instrument", "structure", "parameters", "progress", "slab_stack"},
     "provenance": {"fitting"},
     "analysis": {
         "data",
@@ -270,7 +273,7 @@ def _internal_targets(tree: ast.AST, module: str, known_modules: set[str]) -> se
 
 
 def _owner(module: str) -> str:
-    return module.split(".", 1)[0]
+    return EVALUATION_FACADE_MODULE if module in EVALUATION_IMPLEMENTATION_MODULES else module.split(".", 1)[0]
 
 
 def _package_violations(module: str, targets: set[str], node: ast.AST) -> list[RuleViolation]:
@@ -279,8 +282,8 @@ def _package_violations(module: str, targets: set[str], node: ast.AST) -> list[R
         return [_violation("package-owner", module, owner, node)]
     allowed = ALLOWED[owner]
     exceptions = PACKAGE_EDGE_EXCEPTIONS.get(module, set())
-    forbidden = sorted(target for target in targets if _owner(target) not in allowed and target not in exceptions)
-    return [_violation("package-edge", module, target, node) for target in forbidden]
+    forbidden = sorted(target for target in targets if (_owner(target) not in allowed or (target in EVALUATION_IMPLEMENTATION_MODULES and module != EVALUATION_FACADE_MODULE)) and target not in exceptions)  # fmt: skip
+    return [_violation(("package-edge", "evaluation-boundary")[target in EVALUATION_IMPLEMENTATION_MODULES], module, target, node) for target in forbidden]  # fmt: skip
 
 
 def _model_violations(module: str, targets: set[str], node: ast.AST) -> list[RuleViolation]:
@@ -523,7 +526,7 @@ def _internal_owner(name: str) -> str | None:
     if name != "xrr_fitter" and not name.startswith("xrr_fitter."):
         return None
     parts = name.split(".")
-    return parts[1] if len(parts) > 1 else "__init__"
+    return _owner(parts[1] if len(parts) > 1 else "__init__")
 
 
 def _internal_imports(path: Path) -> set[str]:
@@ -539,7 +542,7 @@ def _internal_imports(path: Path) -> set[str]:
 def _package_owner(path: Path) -> tuple[Path, str]:
     relative = path.relative_to(PACKAGE)
     owner = relative.parts[0] if len(relative.parts) > 1 else path.stem
-    return relative, owner
+    return relative, _owner(owner)
 
 
 def _assert_import_policy(path: Path) -> None:
@@ -579,6 +582,8 @@ def test_shared_evaluation_and_fit_have_one_declared_numerical_boundary() -> Non
     assert (PACKAGE / "fit" / "__init__.py").read_bytes() == b""
     assert not (PACKAGE / "fit" / "evaluation.py").exists()
     assert not (PACKAGE / "fit" / "jacobian.py").exists()
+    physics_boundaries = sorted((PACKAGE / "physics").glob("*evaluation*.py"))
+    assert physics_boundaries == []
 
 
 def test_fit_defines_no_process_queue_worker_executor_or_ipc_modules() -> None:

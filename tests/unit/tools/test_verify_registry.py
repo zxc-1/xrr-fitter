@@ -1,12 +1,30 @@
 from __future__ import annotations
 
+from collections import defaultdict
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+
 
 def _commands(module) -> tuple[tuple[str, ...], ...]:
-    return tuple(
-        command
-        for mode in module.MODE_REGISTRY.values()
-        for command in mode.commands
-    )
+    return tuple(command for mode in module.MODE_REGISTRY.values() for command in mode.commands)
+
+
+def _registered_test_owners(module) -> dict[str, set[str]]:
+    owners: defaultdict[str, set[str]] = defaultdict(set)
+    for mode_name, mode in module.MODE_REGISTRY.items():
+        for command in mode.commands:
+            for token in command:
+                path = ROOT / token
+                if path.is_dir():
+                    files = path.rglob("test_*.py")
+                elif path.is_file() and path.match("test_*.py"):
+                    files = (path,)
+                else:
+                    continue
+                for file in files:
+                    owners[file.relative_to(ROOT).as_posix()].add(mode_name)
+    return dict(owners)
 
 
 def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
@@ -27,15 +45,17 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
             ),
             pytest_prefix
             + (
-                    "tests/architecture/test_dependency_rules.py",
-                    "tests/architecture/test_naming_rules.py",
-                    "tests/architecture/test_public_api.py",
-                    "tests/architecture/test_distribution.py",
-                    "tests/architecture/test_pr_verify_workflow.py",
-                    "tests/architecture/test_windows_executable_workflow.py",
-                    "tests/architecture/test_quality_gate.py",
-                    "tests/architecture/test_release_workflow.py",
-                    "tests/architecture/test_removed_legacy_modules.py",
+                "tests/architecture/test_dependency_rules.py",
+                "tests/architecture/test_model_dependency_rules.py",
+                "tests/architecture/test_evaluation_boundary.py",
+                "tests/architecture/test_naming_rules.py",
+                "tests/architecture/test_public_api.py",
+                "tests/architecture/test_distribution.py",
+                "tests/architecture/test_pr_verify_workflow.py",
+                "tests/architecture/test_windows_executable_workflow.py",
+                "tests/architecture/test_quality_gate.py",
+                "tests/architecture/test_release_workflow.py",
+                "tests/architecture/test_removed_legacy_modules.py",
                 "-q",
             ),
         ),
@@ -46,7 +66,10 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
                 "tests/unit/model",
                 "tests/unit/io",
                 "tests/unit/physics",
+                "tests/unit/test_constraint_evaluation.py",
+                "tests/unit/test_constraint_roughness_matrix.py",
                 "tests/unit/test_evaluation.py",
+                "tests/unit/test_evaluation_priors.py",
                 "tests/unit/fit",
                 "tests/unit/analysis",
                 "tests/unit/services",
@@ -54,7 +77,17 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
                 "-q",
             ),
         ),
-        "gui": (pytest_prefix + ("tests/gui", "-q"),),
+        "gui": (
+            pytest_prefix
+            + (
+                "tests/gui",
+                "tests/integration/test_gui_project_workflow.py",
+                "tests/integration/test_gui_automatic_workflow.py",
+                "tests/integration/test_gui_synthetic_xy_workflow.py",
+                "tests/integration/test_gui_filename_batch_workflow.py",
+                "-q",
+            ),
+        ),
         "integration": (
             pytest_prefix
             + (
@@ -65,14 +98,10 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
                 "tests/integration/test_batch_resume.py",
                 "tests/integration/test_export_workflow.py",
                 "tests/integration/test_cli_workflow.py",
-                "tests/integration/test_gui_project_workflow.py",
-                "tests/integration/test_gui_automatic_workflow.py",
                 "-q",
             ),
         ),
-        "spawn": (
-            pytest_prefix + ("tests/integration/test_process_workers.py", "-q"),
-        ),
+        "spawn": (pytest_prefix + ("tests/integration/test_process_workers.py", "-q"),),
         "regression": (
             pytest_prefix
             + (
@@ -81,18 +110,14 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
                 "tests/regression/test_recovery_metrics.py",
                 "tests/regression/test_profile_basin_regressions.py",
                 "tests/regression/test_automatic_recovery.py",
+                "tests/acceptance/test_stack_drift.py",
                 "-q",
             ),
         ),
-        "statistical": (
-            pytest_prefix
-            + ("tests/acceptance/test_synthetic_recovery_corpus.py", "-q"),
-        ),
+        "statistical": (pytest_prefix + ("tests/acceptance/test_synthetic_recovery_corpus.py", "-q"),),
         "approved-data": (
-            pytest_prefix
-            + ("tests/acceptance/test_real_data_workflows.py", "-q"),
-            pytest_prefix
-            + ("tests/acceptance/test_gui_real_data_workflows.py", "-q"),
+            pytest_prefix + ("tests/acceptance/test_real_data_workflows.py", "-q"),
+            pytest_prefix + ("tests/acceptance/test_gui_real_data_workflows.py", "-q"),
         ),
         "distribution": (
             (
@@ -146,9 +171,7 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
 
 def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
     module = load_tool_module("verify")
-    observed = {
-        name: mode.commands for name, mode in module.MODE_REGISTRY.items()
-    }
+    observed = {name: mode.commands for name, mode in module.MODE_REGISTRY.items()}
     assert observed == _expected_registry(module)
     assert module.RELEASE_ORDER == (
         "quality",
@@ -162,6 +185,16 @@ def test_registry_is_exact_for_completed_suites(load_tool_module) -> None:
         "distribution",
         "identity",
     )
+
+
+def test_every_test_module_belongs_to_exactly_one_mode(load_tool_module) -> None:
+    module = load_tool_module("verify_registry")
+    expected = {path.relative_to(ROOT).as_posix() for path in (ROOT / "tests").rglob("test_*.py")}
+    owners = _registered_test_owners(module)
+    observed = set(owners)
+    duplicates = {path: modes for path, modes in owners.items() if len(modes) != 1}
+
+    assert (expected - observed, observed - expected, duplicates) == (set(), set(), {})
 
 
 def test_registry_uses_nonempty_argument_vectors(load_tool_module) -> None:

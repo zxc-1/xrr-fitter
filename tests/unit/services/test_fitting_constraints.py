@@ -226,6 +226,12 @@ def test_automatic_preflight_rejects_cross_dataset_constraints_before_routing() 
         prepare_dataset_fit=lambda *_args, **_kwargs: pytest.fail(
             "automatic routing compiled a cross-dataset constrained project"
         ),
+        validate_parameter_priors=lambda *_args, **_kwargs: pytest.fail(
+            "automatic routing validated a cross-dataset constrained project"
+        ),
+        evaluate_declared_initial=lambda _problem: pytest.fail(
+            "automatic routing evaluated a cross-dataset constrained project"
+        ),
     )
 
     assert readiness.ready is False
@@ -298,6 +304,10 @@ def test_automatic_worker_rejects_cross_dataset_constraints_before_transaction()
                 "automatic worker started an unsupported constrained transaction"
             ),
             prepare_dataset_fit=lambda *_args, **_kwargs: None,
+            validate_parameter_priors=lambda *_args, **_kwargs: None,
+            evaluate_declared_initial=lambda _problem: pytest.fail(
+                "automatic worker evaluated an unsupported constrained project"
+            ),
             fit_automatic_prepared_dataset=lambda *_args, **_kwargs: None,
             fit_automatic_joint_group=lambda *_args, **_kwargs: (),
         )

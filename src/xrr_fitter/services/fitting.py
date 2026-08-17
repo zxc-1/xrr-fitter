@@ -30,10 +30,12 @@ from xrr_fitter.fit.joint_candidates import (
     consensus_joint_vector,
     joint_candidate_vectors,
 )
+from xrr_fitter.fit.joint_evaluation import evaluate_joint_vector
 from xrr_fitter.fit.joint_pipeline import JointFitRequest, run_joint_fit
 from xrr_fitter.fit.joint_problem import compile_joint_problem
+from xrr_fitter.fit.joint_sharing import initial_joint_vector
 from xrr_fitter.fit.local_search import SearchCancelled
-from xrr_fitter.fit.objective import evaluate_vector
+from xrr_fitter.fit.objective import evaluate_declared_initial, evaluate_vector
 from xrr_fitter.fit.parameters import (
     apply_parameter_settings,
     default_parameter_definitions,
@@ -79,6 +81,8 @@ def _validate_parameter_priors(definitions, priors) -> None:
         definition = by_name.get(prior.name)
         if definition is None:
             raise ValueError(f"unknown parameter name: {prior.name}")
+        if definition.constrained:
+            raise ValueError(f"cannot assign a prior to constrained parameter: {prior.name}")
         replace(definition, prior=prior.prior)
 
 
@@ -137,7 +141,7 @@ def _reconciled_priors(definitions, priors) -> tuple:
         if prior.name in seen:
             continue
         definition = by_name.get(prior.name)
-        if definition is None or definition.locked:
+        if definition is None or definition.locked or definition.constrained:
             continue
         try:
             replace(definition, prior=prior.prior)
@@ -435,6 +439,9 @@ def preflight_fit(project: XrrProject) -> FitReadiness:
         prepare_dataset_fit=prepare_dataset_fit,
         compile_joint_problem=compile_joint_problem,
         validate_parameter_priors=_validate_parameter_priors,
+        evaluate_declared_initial=evaluate_declared_initial,
+        initial_joint_vector=initial_joint_vector,
+        evaluate_joint_vector=evaluate_joint_vector,
     )
 
 
@@ -454,6 +461,8 @@ def preflight_automatic_fit(
         project,
         import_batch_id,
         prepare_dataset_fit=prepare_dataset_fit,
+        validate_parameter_priors=_validate_parameter_priors,
+        evaluate_declared_initial=evaluate_declared_initial,
     )
 
 
@@ -473,6 +482,8 @@ def fit_automatically(
         checkpoint_callback,
         fit_automatic_transaction=fit_automatic_transaction,
         prepare_dataset_fit=prepare_dataset_fit,
+        validate_parameter_priors=_validate_parameter_priors,
+        evaluate_declared_initial=evaluate_declared_initial,
         fit_automatic_prepared_dataset=fit_automatic_prepared_dataset,
         fit_automatic_joint_group=fit_automatic_joint_group,
     )
@@ -491,6 +502,7 @@ def _dispatch_project(
         progress_callback,
         checkpoint_callback,
         cancelled,
+        preflight_fit=preflight_fit,
         fit_project_transaction=fit_project_transaction,
         prepare_dataset_fit=prepare_dataset_fit,
         fit_prepared_dataset=fit_prepared_dataset,
@@ -601,6 +613,8 @@ def automatic_worker_handler(
         cancelled,
         fit_automatic_transaction=fit_automatic_transaction,
         prepare_dataset_fit=prepare_dataset_fit,
+        validate_parameter_priors=_validate_parameter_priors,
+        evaluate_declared_initial=evaluate_declared_initial,
         fit_automatic_prepared_dataset=fit_automatic_prepared_dataset,
         fit_automatic_joint_group=fit_automatic_joint_group,
     )

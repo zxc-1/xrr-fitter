@@ -6,8 +6,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from xrr_fitter.model.structure import PeriodicSpan, SlabStack
-
+from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
 
 BRANCH_EPSILON_A2 = 1e-36
 
@@ -115,13 +114,7 @@ class _PeriodicOptics:
         relative = complex(self.stack.sld_a2[medium] - self.stack.sld_a2[0])
         if relative.imag == 0.0:
             relative = complex(relative.real, BRANCH_EPSILON_A2)
-        kz = select_decaying_branch(
-            np.sqrt(
-                ((self.flat_qz / 2.0) ** 2 - 4.0 * np.pi * relative).astype(
-                    np.complex128
-                )
-            )
-        )
+        kz = select_decaying_branch(np.sqrt(((self.flat_qz / 2.0) ** 2 - 4.0 * np.pi * relative).astype(np.complex128)))
         self.kz_cache[medium] = kz
         return kz
 
@@ -181,7 +174,9 @@ def _apply_range(optics: _PeriodicOptics, amplitude: np.ndarray, indices: range)
     return amplitude
 
 
-def _apply_span(optics: _PeriodicOptics, amplitude: np.ndarray, cursor: int, span: PeriodicSpan) -> tuple[np.ndarray, int]:
+def _apply_span(
+    optics: _PeriodicOptics, amplitude: np.ndarray, cursor: int, span: PeriodicSpan
+) -> tuple[np.ndarray, int]:
     stop = span.start_medium + span.layer_count * span.repeats
     amplitude = _apply_range(optics, amplitude, range(cursor, stop - 1, -1))
     normal = _layer_product(optics, span.start_medium + span.layer_count, span.layer_count)

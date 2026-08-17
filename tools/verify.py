@@ -4,12 +4,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from typing import Callable, Mapping, Sequence
-
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 
 if __name__ == "__main__":
     sys.dont_write_bytecode = True
@@ -23,38 +22,32 @@ from verify_registry import (  # noqa: E402
     ARTIFACT,
     ARTIFACT_MANIFEST,
     MODE_REGISTRY,
-    PYTEST_PREFIX,
+    PYTEST_PREFIX,  # noqa: F401 - re-exported for registry contract tests.
     PYTHON,
     RELEASE_ORDER,
     REPORT,
     ROOT,
     Mode,
 )
-
+from verify_report import (  # noqa: E402
+    DirectoryIdentity,
+    ReportAnchor,
+    ReportGuard,
+    _directory_identity,
+    _make_report_anchor,
+    _make_report_guard,
+    _prepare_regular_report,
+    _prepare_report_directory,
+    _require_same_directory,
+    _resolve_output_path,
+    build_environment,
+)
 
 Runner = Callable[..., object]
 
 
 class MissingApprovedEvidence(RuntimeError):
     """The post-delivery owner sign-off has not been frozen yet."""
-
-
-def build_environment(repo_root: str | Path, report_dir: str | Path) -> dict[str, str]:
-    root = Path(repo_root).resolve()
-    report = Path(report_dir).resolve()
-    mpl = report / "mpl-cache"
-    xdg = report / "xdg-cache"
-    mpl.mkdir(parents=True, exist_ok=True)
-    xdg.mkdir(parents=True, exist_ok=True)
-    environment = os.environ.copy()
-    for name in tuple(environment):
-        if name.startswith("PYTEST_") or name == "PYTHONOPTIMIZE":
-            environment.pop(name)
-    environment["PYTHONPATH"] = str(root / "src")
-    environment["PYTHONDONTWRITEBYTECODE"] = "1"
-    environment["MPLCONFIGDIR"] = str(mpl)
-    environment["XDG_CACHE_HOME"] = str(xdg)
-    return environment
 
 
 def _materialize(
@@ -101,7 +94,10 @@ def _invoke(
     *,
     root: Path,
     environment: Mapping[str, str],
+    report_guard: ReportGuard | None = None,
 ) -> None:
+    if report_guard is not None:
+        report_guard()
     runner(tuple(command), cwd=root, env=dict(environment), check=True)
 
 
@@ -115,20 +111,21 @@ def _execute_mode(
     environment: Mapping[str, str],
     runner: Runner,
     require_git_clean: bool = False,
+    report_guard: ReportGuard | None = None,
 ) -> None:
     hygiene = (sys.executable, "tools/check_hygiene.py")
     if require_git_clean:
         hygiene = (*hygiene, "--require-git-clean")
-    _invoke(runner, hygiene, root=root, environment=environment)
+    _invoke(runner, hygiene, root=root, environment=environment, report_guard=report_guard)
     failure: BaseException | None = None
     try:
         for command in mode.commands:
             args = _materialize(command, report, root, artifact, artifact_manifest)
-            _invoke(runner, args, root=root, environment=environment)
+            _invoke(runner, args, root=root, environment=environment, report_guard=report_guard)
     except BaseException as error:
         failure = error
     try:
-        _invoke(runner, hygiene, root=root, environment=environment)
+        _invoke(runner, hygiene, root=root, environment=environment, report_guard=report_guard)
     except BaseException as error:
         if failure is None:
             failure = error
@@ -146,13 +143,17 @@ def run_mode(
     artifact_manifest: str | Path | None = None,
     approved_data_root: str | Path | None = None,
     capture_candidate: bool = False,
+    expected_report_identity: DirectoryIdentity | None = None,
     runner: Runner = subprocess.run,
 ) -> None:
     root = Path(repo_root).resolve()
-    report = Path(report_dir).resolve()
-    artifact = Path(artifact_dir).resolve() if artifact_dir is not None else None
-    manifest = Path(artifact_manifest).resolve() if artifact_manifest is not None else None
+    report = _resolve_output_path(report_dir, "report directory")
+    artifact = _resolve_output_path(artifact_dir, "artifact directory") if artifact_dir is not None else None
+    manifest = _resolve_output_path(artifact_manifest, "artifact manifest") if artifact_manifest is not None else None
     approved = Path(approved_data_root).resolve() if approved_data_root is not None else None
+    if expected_report_identity is not None:
+        _require_same_directory(report, expected_report_identity, "report directory")
+    report_anchor = _make_report_anchor(report)
     _validate_mode_inputs(name, root, report, artifact, manifest, approved, capture_candidate)
     if _run_special_mode(
         name,
@@ -163,6 +164,8 @@ def run_mode(
         manifest=manifest,
         approved=approved,
         capture_candidate=capture_candidate,
+        report_anchor=report_anchor,
+        expected_report_identity=expected_report_identity,
         runner=runner,
     ):
         return
@@ -173,6 +176,7 @@ def run_mode(
         report=report,
         artifact=artifact,
         manifest=manifest,
+        report_anchor=report_anchor,
         runner=runner,
     )
 
@@ -186,6 +190,8 @@ def _validate_mode_inputs(
     approved: Path | None,
     capture_candidate: bool,
 ) -> None:
+    if report.is_relative_to(root):
+        raise ValueError("report directory must be external")
     _require_option_scope(
         artifact is not None,
         name,
@@ -236,6 +242,8 @@ def _run_special_mode(
     manifest: Path | None,
     approved: Path | None,
     capture_candidate: bool,
+    report_anchor: ReportAnchor,
+    expected_report_identity: DirectoryIdentity | None,
     runner: Runner,
 ) -> bool:
     if name == "approved-data":
@@ -245,6 +253,7 @@ def _run_special_mode(
             report=report,
             approved=approved,
             capture_candidate=capture_candidate,
+            report_anchor=report_anchor,
             runner=runner,
         )
         return True
@@ -260,6 +269,8 @@ def _run_special_mode(
             report=report,
             artifact=artifact,
             artifact_manifest=manifest,
+            report_anchor=report_anchor,
+            expected_report_identity=expected_report_identity,
             runner=runner,
             prefix="xrr-r23-identity-runtime-",
         )
@@ -275,11 +286,22 @@ def _run_regular_mode(
     report: Path,
     artifact: Path | None,
     manifest: Path | None,
+    report_anchor: ReportAnchor,
     runner: Runner,
 ) -> None:
-    report.mkdir(parents=True, exist_ok=True)
+    report_identity = _prepare_regular_report(report, report_anchor)
     if name != "distribution":
-        environment = build_environment(root, report)
+        _require_same_directory(report, report_identity, "report directory")
+        environment = build_environment(root, report, expected_identity=report_identity)
+        _require_same_directory(report, report_identity, "report directory")
+        report_guard = _make_report_guard(
+            report,
+            report_identity,
+            watched=(
+                (report / "mpl-cache", "matplotlib cache directory"),
+                (report / "xdg-cache", "XDG cache directory"),
+            ),
+        )
         _execute_mode(
             mode,
             root=root,
@@ -289,10 +311,13 @@ def _run_regular_mode(
             environment=environment,
             runner=runner,
             require_git_clean=name == "distribution",
+            report_guard=report_guard,
         )
         return
     with tempfile.TemporaryDirectory(prefix="xrr-r23-distribution-runtime-") as directory:
         environment = build_environment(root, Path(directory))
+        _require_same_directory(report, report_identity, "report directory")
+        report_guard = _make_report_guard(report, report_identity)
         _execute_mode(
             mode,
             root=root,
@@ -302,6 +327,7 @@ def _run_regular_mode(
             environment=environment,
             runner=runner,
             require_git_clean=True,
+            report_guard=report_guard,
         )
 
 
@@ -344,6 +370,7 @@ def _run_approved_data(
     report: Path,
     approved: Path | None,
     capture_candidate: bool,
+    report_anchor: ReportAnchor,
     runner: Runner,
 ) -> None:
     if approved is None:
@@ -353,7 +380,8 @@ def _run_approved_data(
     if os.path.lexists(report):
         raise ValueError("approved-data report directory must not already exist")
     binding = None if capture_candidate else _approved_binding(root, approved)
-    report.mkdir(parents=True)
+    report_identity = _prepare_report_directory(report, report_anchor)
+    report_guard = _make_report_guard(report, report_identity)
     with tempfile.TemporaryDirectory(prefix="xrr-r23-approved-runtime-") as directory:
         environment = build_environment(root, Path(directory))
         environment["XRR_APPROVED_DATA_ROOT"] = str(approved)
@@ -366,7 +394,9 @@ def _run_approved_data(
             artifact_manifest=None,
             environment=environment,
             runner=runner,
+            report_guard=report_guard,
         )
+    report_guard()
     if binding is not None:
         candidate = report / "approved-data-candidate.json"
         if not candidate.is_file():
@@ -382,9 +412,15 @@ def _run_isolated(
     report: Path,
     artifact: Path | None,
     artifact_manifest: Path | None,
+    report_anchor: ReportAnchor,
+    expected_report_identity: DirectoryIdentity | None,
     runner: Runner,
     prefix: str,
 ) -> None:
+    report_identity = _prepare_report_directory(report, report_anchor)
+    if expected_report_identity is not None and report_identity != expected_report_identity:
+        raise ValueError("report directory changed during validation")
+    report_guard = _make_report_guard(report, report_identity)
     with tempfile.TemporaryDirectory(prefix=prefix) as directory:
         environment = build_environment(root, Path(directory))
         _execute_mode(
@@ -395,7 +431,39 @@ def _run_isolated(
             artifact_manifest=artifact_manifest,
             environment=environment,
             runner=runner,
+            report_guard=report_guard,
         )
+
+
+def _release_mode_kwargs(
+    name: str,
+    root: Path,
+    report: Path,
+    artifact: Path,
+    scratch: Path,
+    report_identity: DirectoryIdentity | None,
+    runner: Runner,
+) -> dict[str, object]:
+    subreport = report if name in {"distribution", "identity"} else scratch / name
+    kwargs: dict[str, object] = {"repo_root": root, "report_dir": subreport, "runner": runner}
+    if name in {"distribution", "identity"}:
+        kwargs["artifact_dir"] = artifact
+    if name == "identity":
+        kwargs["artifact_manifest"] = report / "artifact-manifest.json"
+        kwargs["expected_report_identity"] = report_identity
+    return kwargs
+
+
+def _advance_release_report_identity(
+    name: str,
+    report: Path,
+    identity: DirectoryIdentity | None,
+) -> DirectoryIdentity | None:
+    if name == "distribution":
+        return _directory_identity(report, "release report directory")
+    if name == "identity" and identity is not None:
+        _require_same_directory(report, identity, "release report directory")
+    return identity
 
 
 def run_release(
@@ -406,26 +474,19 @@ def run_release(
     runner: Runner = subprocess.run,
 ) -> None:
     root = Path(repo_root).resolve()
-    report = Path(report_dir).resolve()
-    artifact = Path(artifact_dir).resolve()
+    report = _resolve_output_path(report_dir, "release report directory")
+    artifact = _resolve_output_path(artifact_dir, "release artifact directory")
     if artifact != report / "artifacts":
         raise ValueError("release artifact directory must equal report-dir/artifacts")
     if report.is_relative_to(root) or os.path.lexists(report):
         raise ValueError("release report directory must be a new external path")
     with tempfile.TemporaryDirectory(prefix="xrr-r23-release-gates-") as directory:
         scratch = Path(directory)
+        report_identity: DirectoryIdentity | None = None
         for name in RELEASE_ORDER:
-            subreport = report if name in {"distribution", "identity"} else scratch / name
-            kwargs: dict[str, object] = {
-                "repo_root": root,
-                "report_dir": subreport,
-                "runner": runner,
-            }
-            if name in {"distribution", "identity"}:
-                kwargs["artifact_dir"] = artifact
-            if name == "identity":
-                kwargs["artifact_manifest"] = report / "artifact-manifest.json"
+            kwargs = _release_mode_kwargs(name, root, report, artifact, scratch, report_identity, runner)
             run_mode(name, MODE_REGISTRY[name], **kwargs)
+            report_identity = _advance_release_report_identity(name, report, report_identity)
 
 
 def _run_with_report(
@@ -460,43 +521,42 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+REQUIRED_ARGUMENT_ERRORS = {
+    "distribution": (("report_dir", "artifact_dir"), "distribution requires --report-dir and --artifact-dir"),
+    "approved-data": (
+        ("report_dir", "approved_data_root"),
+        "approved-data requires --report-dir and --approved-data-root",
+    ),
+    "identity": (
+        ("report_dir", "artifact_dir", "artifact_manifest"),
+        "identity requires --report-dir, --artifact-dir, and --artifact-manifest",
+    ),
+    "release": (("report_dir", "artifact_dir"), "release requires --report-dir and --artifact-dir"),
+}
+
+OPTION_SCOPE_ERRORS = (
+    ("capture_candidate", {"approved-data"}, "--capture-candidate is only valid with approved-data"),
+    ("approved_data_root", {"approved-data"}, "--approved-data-root is only valid with approved-data"),
+    (
+        "artifact_dir",
+        {"distribution", "identity", "release"},
+        "--artifact-dir is only valid with distribution, identity, or release",
+    ),
+    ("artifact_manifest", {"identity"}, "--artifact-manifest is only valid with identity"),
+)
+
+
 def _require_mode_arguments(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
-    _require_distribution_arguments(args, parser)
-    _require_approved_arguments(args, parser)
-    _require_identity_arguments(args, parser)
-    _require_release_arguments(args, parser)
-
-
-def _require_distribution_arguments(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
-    if args.mode == "distribution" and None in (args.report_dir, args.artifact_dir):
-        parser.error("distribution requires --report-dir and --artifact-dir")
-
-
-def _require_approved_arguments(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
-    if args.mode == "approved-data" and None in (args.report_dir, args.approved_data_root):
-        parser.error("approved-data requires --report-dir and --approved-data-root")
-
-
-def _require_identity_arguments(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
-    required = (args.report_dir, args.artifact_dir, args.artifact_manifest)
-    if args.mode == "identity" and None in required:
-        parser.error("identity requires --report-dir, --artifact-dir, and --artifact-manifest")
-
-
-def _require_release_arguments(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
-    if args.mode == "release" and None in (args.report_dir, args.artifact_dir):
-        parser.error("release requires --report-dir and --artifact-dir")
+    required, message = REQUIRED_ARGUMENT_ERRORS.get(args.mode, ((), ""))
+    if any(getattr(args, name) is None for name in required):
+        parser.error(message)
 
 
 def _validate_argument_scopes(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
-    if args.capture_candidate and args.mode != "approved-data":
-        parser.error("--capture-candidate is only valid with approved-data")
-    if args.approved_data_root is not None and args.mode != "approved-data":
-        parser.error("--approved-data-root is only valid with approved-data")
-    if args.artifact_dir is not None and args.mode not in {"distribution", "identity", "release"}:
-        parser.error("--artifact-dir is only valid with distribution, identity, or release")
-    if args.artifact_manifest is not None and args.mode != "identity":
-        parser.error("--artifact-manifest is only valid with identity")
+    for attribute, modes, message in OPTION_SCOPE_ERRORS:
+        value = getattr(args, attribute)
+        if value is not None and value is not False and args.mode not in modes:
+            parser.error(message)
 
 
 def _run_explicit(args: argparse.Namespace) -> int:

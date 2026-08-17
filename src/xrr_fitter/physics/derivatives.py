@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from xrr_fitter.model.structure import PeriodicSpan, SlabStack
+from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
 from xrr_fitter.physics.parratt import BRANCH_EPSILON_A2, parratt_reflectivity
 from xrr_fitter.physics.resolution import (
     MAX_QUERY_VALUES,
@@ -15,7 +15,6 @@ from xrr_fitter.physics.resolution import (
     gauss_hermite_values,
     gh_converged,
 )
-
 
 DifferentiableFunction = Callable[[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]
 ComplexTangent = tuple[np.ndarray, np.ndarray]
@@ -129,7 +128,9 @@ def _standard_jacobian(stack: SlabStack, inputs: _Inputs) -> tuple[np.ndarray, n
         lower = interface + 1
         thickness = stack.thickness_a[lower]
         exponent = -2j * kz[:, lower] * thickness
-        exponent_tangent = -2j * (kz_tangent[:, lower] * thickness + kz[:, lower, None] * inputs.thickness_jacobian[lower])
+        exponent_tangent = -2j * (
+            kz_tangent[:, lower] * thickness + kz[:, lower, None] * inputs.thickness_jacobian[lower]
+        )
         phase = np.exp(exponent)
         phase_tangent = phase[:, None] * exponent_tangent
         propagated = amplitude * phase
@@ -139,9 +140,13 @@ def _standard_jacobian(stack: SlabStack, inputs: _Inputs) -> tuple[np.ndarray, n
         denominator = 1.0 + reflection[:, interface] * propagated
         if np.any(denominator == 0.0):
             raise FloatingPointError("zero Parratt denominator")
-        denominator_tangent = reflection_tangent[:, interface] * propagated[:, None] + reflection[:, interface, None] * propagated_tangent
+        denominator_tangent = (
+            reflection_tangent[:, interface] * propagated[:, None] + reflection[:, interface, None] * propagated_tangent
+        )
         amplitude = numerator / denominator
-        amplitude_tangent = (numerator_tangent * denominator[:, None] - numerator[:, None] * denominator_tangent) / denominator[:, None] ** 2
+        amplitude_tangent = (
+            numerator_tangent * denominator[:, None] - numerator[:, None] * denominator_tangent
+        ) / denominator[:, None] ** 2
     intensity = np.abs(amplitude) ** 2
     jacobian = 2.0 * np.real(np.conjugate(amplitude)[:, None] * amplitude_tangent)
     return intensity.reshape(inputs.qz.shape), jacobian.reshape(inputs.qz.shape + (inputs.parameter_count,))
@@ -155,7 +160,9 @@ def _normalize(matrix: np.ndarray, tangent: np.ndarray) -> ComplexTangent:
     return matrix / scale[:, None, None], tangent / scale[:, None, None, None]
 
 
-def _compose(left: np.ndarray, left_tangent: np.ndarray, right: np.ndarray, right_tangent: np.ndarray) -> ComplexTangent:
+def _compose(
+    left: np.ndarray, left_tangent: np.ndarray, right: np.ndarray, right_tangent: np.ndarray
+) -> ComplexTangent:
     matrix = np.empty_like(left)
     # Preserve the primal element order while batching the parameter-axis work.
     for row in range(2):
@@ -261,11 +268,17 @@ class _PeriodicTangents:
             raise FloatingPointError("zero Fresnel denominator")
         numerator = upper - lower
         bare = numerator / denominator
-        bare_tangent = ((upper_tangent - lower_tangent) * denominator[:, None] - numerator[:, None] * (upper_tangent + lower_tangent)) / denominator[:, None] ** 2
+        bare_tangent = (
+            (upper_tangent - lower_tangent) * denominator[:, None]
+            - numerator[:, None] * (upper_tangent + lower_tangent)
+        ) / denominator[:, None] ** 2
         sigma = self.stack.roughness_a[interface]
         sigma_tangent = self.inputs.roughness_jacobian[interface]
         exponent = -2.0 * upper * lower * sigma**2
-        exponent_tangent = -2.0 * ((upper_tangent * lower[:, None] + upper[:, None] * lower_tangent) * sigma**2 + upper[:, None] * lower[:, None] * 2.0 * sigma * sigma_tangent)
+        exponent_tangent = -2.0 * (
+            (upper_tangent * lower[:, None] + upper[:, None] * lower_tangent) * sigma**2
+            + upper[:, None] * lower[:, None] * 2.0 * sigma * sigma_tangent
+        )
         factor = np.exp(exponent)
         reflection = bare * factor
         factor_tangent = factor[:, None] * exponent_tangent
@@ -303,17 +316,31 @@ def _layer_product_tangent(optics: _PeriodicTangents, start: int, count: int) ->
     return result, tangent
 
 
-def _apply_transform_tangent(matrix: np.ndarray, matrix_tangent: np.ndarray, amplitude: np.ndarray, amplitude_tangent: np.ndarray) -> ComplexTangent:
+def _apply_transform_tangent(
+    matrix: np.ndarray, matrix_tangent: np.ndarray, amplitude: np.ndarray, amplitude_tangent: np.ndarray
+) -> ComplexTangent:
     numerator = matrix[:, 0, 0] * amplitude + matrix[:, 0, 1]
-    numerator_tangent = matrix_tangent[:, 0, 0] * amplitude[:, None] + matrix[:, 0, 0, None] * amplitude_tangent + matrix_tangent[:, 0, 1]
+    numerator_tangent = (
+        matrix_tangent[:, 0, 0] * amplitude[:, None]
+        + matrix[:, 0, 0, None] * amplitude_tangent
+        + matrix_tangent[:, 0, 1]
+    )
     denominator = matrix[:, 1, 0] * amplitude + matrix[:, 1, 1]
     if np.any(denominator == 0.0):
         raise FloatingPointError("zero periodic Parratt denominator")
-    denominator_tangent = matrix_tangent[:, 1, 0] * amplitude[:, None] + matrix[:, 1, 0, None] * amplitude_tangent + matrix_tangent[:, 1, 1]
-    return numerator / denominator, (numerator_tangent * denominator[:, None] - numerator[:, None] * denominator_tangent) / denominator[:, None] ** 2
+    denominator_tangent = (
+        matrix_tangent[:, 1, 0] * amplitude[:, None]
+        + matrix[:, 1, 0, None] * amplitude_tangent
+        + matrix_tangent[:, 1, 1]
+    )
+    return numerator / denominator, (
+        numerator_tangent * denominator[:, None] - numerator[:, None] * denominator_tangent
+    ) / denominator[:, None] ** 2
 
 
-def _apply_layer_tangent(optics: _PeriodicTangents, amplitude: np.ndarray, amplitude_tangent: np.ndarray, medium: int) -> ComplexTangent:
+def _apply_layer_tangent(
+    optics: _PeriodicTangents, amplitude: np.ndarray, amplitude_tangent: np.ndarray, medium: int
+) -> ComplexTangent:
     reflection, reflection_tangent = optics.interface_at(medium - 1)
     phase, phase_tangent = optics.phase_at(medium)
     propagated = amplitude * phase
@@ -324,16 +351,22 @@ def _apply_layer_tangent(optics: _PeriodicTangents, amplitude: np.ndarray, ampli
     if np.any(denominator == 0.0):
         raise FloatingPointError("zero periodic Parratt denominator")
     denominator_tangent = reflection_tangent * propagated[:, None] + reflection[:, None] * propagated_tangent
-    return numerator / denominator, (numerator_tangent * denominator[:, None] - numerator[:, None] * denominator_tangent) / denominator[:, None] ** 2
+    return numerator / denominator, (
+        numerator_tangent * denominator[:, None] - numerator[:, None] * denominator_tangent
+    ) / denominator[:, None] ** 2
 
 
-def _apply_range_tangent(optics: _PeriodicTangents, amplitude: np.ndarray, tangent: np.ndarray, indices: range) -> ComplexTangent:
+def _apply_range_tangent(
+    optics: _PeriodicTangents, amplitude: np.ndarray, tangent: np.ndarray, indices: range
+) -> ComplexTangent:
     for medium in indices:
         amplitude, tangent = _apply_layer_tangent(optics, amplitude, tangent, medium)
     return amplitude, tangent
 
 
-def _apply_span_tangent(optics: _PeriodicTangents, amplitude: np.ndarray, tangent: np.ndarray, cursor: int, span: PeriodicSpan) -> tuple[np.ndarray, np.ndarray, int]:
+def _apply_span_tangent(
+    optics: _PeriodicTangents, amplitude: np.ndarray, tangent: np.ndarray, cursor: int, span: PeriodicSpan
+) -> tuple[np.ndarray, np.ndarray, int]:
     stop = span.start_medium + span.layer_count * span.repeats
     amplitude, tangent = _apply_range_tangent(optics, amplitude, tangent, range(cursor, stop - 1, -1))
     # Power only the normal cells; the first cell retains its declared top roughness.
@@ -411,10 +444,7 @@ def _jacobian_for_inputs(
     inputs: _Inputs,
 ) -> tuple[np.ndarray, np.ndarray]:
     if stack.periodic_spans:
-        if all(
-            _span_normal_tangents_repeat(span, inputs)
-            for span in stack.periodic_spans
-        ):
+        if all(_span_normal_tangents_repeat(span, inputs) for span in stack.periodic_spans):
             return _periodic_jacobian(stack, inputs)
         # Keep the public periodic primal grouping while expanding only the
         # analytic tangent recurrence for independently moving cells.
@@ -465,7 +495,9 @@ def _quadrature_tangent(
     for start in range(0, samples.size, chunk):
         stop = min(start + chunk, samples.size)
         query = samples[start:stop, None] + np.sqrt(2.0) * widths[start:stop, None] * nodes
-        query_tangent = sample_tangent[start:stop, None] + np.sqrt(2.0) * width_tangent[start:stop, None] * nodes[None, :, None]
+        query_tangent = (
+            sample_tangent[start:stop, None] + np.sqrt(2.0) * width_tangent[start:stop, None] * nodes[None, :, None]
+        )
         keep = query >= 0.0
         # Negative-q nodes carry zero weight, followed by retained-weight normalization.
         safe_query = np.where(keep, query, 0.0)
@@ -526,7 +558,9 @@ def _adaptive_tangent(
         )
         needs_65 = ~gh_converged(primal_17, values)
     if np.any(needs_65):
-        values[needs_65], tangent[needs_65] = _quadrature_tangent(samples[needs_65], sample_tangent[needs_65], widths[needs_65], width_tangent[needs_65], function, 65)
+        values[needs_65], tangent[needs_65] = _quadrature_tangent(
+            samples[needs_65], sample_tangent[needs_65], widths[needs_65], width_tangent[needs_65], function, 65
+        )
     return values, tangent
 
 
@@ -552,12 +586,7 @@ def _validate_smearing_values(
     sample_tangent: np.ndarray,
     width_tangent: np.ndarray,
 ) -> None:
-    if (
-        np.any(~np.isfinite(samples))
-        or np.any(samples < 0.0)
-        or np.any(~np.isfinite(widths))
-        or np.any(widths < 0.0)
-    ):
+    if np.any(~np.isfinite(samples)) or np.any(samples < 0.0) or np.any(~np.isfinite(widths)) or np.any(widths < 0.0):
         raise ValueError("differentiable smearing inputs must be finite and nonnegative")
     if np.any(~np.isfinite(sample_tangent)) or np.any(~np.isfinite(width_tangent)):
         raise ValueError("differentiable smearing inputs must be finite")
@@ -623,5 +652,7 @@ def smear_with_widths_jacobian(
         )
         values[zero], tangent[zero] = exact
     if np.any(~zero):
-        values[~zero], tangent[~zero] = _adaptive_tangent(samples[~zero], sample_tangent[~zero], widths[~zero], width_tangent[~zero], function, primal_function)
+        values[~zero], tangent[~zero] = _adaptive_tangent(
+            samples[~zero], sample_tangent[~zero], widths[~zero], width_tangent[~zero], function, primal_function
+        )
     return values, tangent

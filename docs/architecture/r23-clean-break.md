@@ -3088,16 +3088,22 @@ candidate 不可隐式生成、专用返回码和 release/identity/CI 拒绝规�
 pytest suite 所有权固定如下：
 
 ```text
+quality:
+  tests/architecture/test_*.py（registry 显式逐文件登记）
 tools:
   tests/unit/tools
 unit:
+  tests/unit/test_constraint_evaluation.py
+  tests/unit/test_constraint_roughness_matrix.py
   tests/unit/test_evaluation.py
+  tests/unit/test_evaluation_priors.py
   tests/unit/model
   tests/unit/io
   tests/unit/physics
   tests/unit/fit
   tests/unit/analysis
   tests/unit/services
+  tests/unit/cli
 integration:
   tests/integration/test_entrypoints.py
   tests/integration/test_project_roundtrip.py
@@ -3105,25 +3111,32 @@ integration:
   tests/integration/test_joint_fit_workflow.py
   tests/integration/test_batch_resume.py
   tests/integration/test_export_workflow.py
+  tests/integration/test_cli_workflow.py
 gui:
   tests/gui
   tests/integration/test_gui_project_workflow.py
+  tests/integration/test_gui_automatic_workflow.py
+  tests/integration/test_gui_synthetic_xy_workflow.py
+  tests/integration/test_gui_filename_batch_workflow.py
 spawn:
   tests/integration/test_process_workers.py
 regression:
   tests/regression/test_numerical_reference.py
+  tests/regression/test_orso_validation.py
   tests/regression/test_profile_basin_regressions.py
   tests/regression/test_recovery_metrics.py
+  tests/regression/test_automatic_recovery.py
+  tests/acceptance/test_stack_drift.py
 statistical:
   tests/acceptance/test_synthetic_recovery_corpus.py
-r22-reference:
-  tests/acceptance/test_r22_reference_equivalence.py
 approved-data:
   tests/acceptance/test_real_data_workflows.py
   tests/acceptance/test_gui_real_data_workflows.py
 ```
 
-`quality`、`distribution`、`identity` 是显式 checker/orchestrator mode，不通过扩大 pytest
+`tests/unit/tools/test_verify_registry.py` 展开这些显式文件和目录，并断言每个
+`tests/**/test_*.py` 恰好属于一个 mode；新增测试若未登记或重复登记都会让 tools gate
+失败。`distribution`、`identity` 是显式 checker/orchestrator mode，不通过扩大 pytest
 path 重复收集上述 suite。
 
 每个验证器 pytest 子进程都加载 `tests/outcome_gate.py`。所有 mode（不仅是 `release`）在终端统计包含 `skipped`、`xfailed`、`xpassed` 或 `deselected` 时都将 pytest 退出状态改为失败；空 collection 同样失败。有意的测试套件分区使用显式路径完成，不使用宽泛路径加 `-m` 取消选择。平台专属测试只在支持该平台的显式 job 中收集，不靠 skip 维持其他 job 为绿。

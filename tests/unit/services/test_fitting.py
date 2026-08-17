@@ -30,6 +30,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from tests.support.drift_cases import one_drift_block_structure
 from tests.support.model_cases import (
     dataset_project,
     final_fit_result,
@@ -662,6 +663,24 @@ def test_reconcile_parameter_sidecars_validates_priors_against_retained_settings
     assert reconciled.datasets[0].parameter_priors == ()
 
 
+def test_reconcile_parameter_sidecars_drops_generated_constraint_prior(
+    tmp_path: Path,
+) -> None:
+    value = set_structure(_project(tmp_path), "curve", one_drift_block_structure())
+    prior = ParameterPrior(
+        "component.0.repeat.1.layer.0.thickness_a",
+        PriorSpec("uniform"),
+    )
+    value = replace(
+        value,
+        datasets=(replace(value.datasets[0], parameter_priors=(prior,)),),
+    )
+
+    reconciled = fitting._reconcile_parameter_sidecars(value, "curve")
+
+    assert reconciled.datasets[0].parameter_priors == ()
+
+
 def test_fitting_composes_search_profile_recovery_and_analysis_in_order(
     tmp_path: Path,
 ) -> None:
@@ -854,7 +873,13 @@ def test_automatic_operations_phase_injects_spawn_safe_service_functions(
         return expected
 
     def prepare_dataset(*_args, **_kwargs):
-        return SimpleNamespace()
+        return SimpleNamespace(
+            problem=SimpleNamespace(parameter_definitions=()),
+            updated_dataset=SimpleNamespace(parameter_priors=()),
+        )
+
+    def evaluate_declared_initial(_problem):
+        return SimpleNamespace(valid=True)
 
     def fit_dataset(*_args, **_kwargs):
         return None
@@ -869,6 +894,8 @@ def test_automatic_operations_phase_injects_spawn_safe_service_functions(
         checkpoint_callback=checkpoint,
         fit_automatic_transaction=transaction,
         prepare_dataset_fit=prepare_dataset,
+        validate_parameter_priors=lambda *_args, **_kwargs: None,
+        evaluate_declared_initial=evaluate_declared_initial,
         fit_automatic_prepared_dataset=fit_dataset,
         fit_automatic_joint_group=fit_joint,
     )
@@ -887,8 +914,28 @@ def test_automatic_operations_phase_injects_spawn_safe_service_functions(
     ]
 
 
-def test_automatic_worker_phase_injects_spawn_safe_service_functions() -> None:
-    current = project(_automatic_dataset("pending", "batch-1", AutomaticStatus.PENDING))
+def test_automatic_worker_phase_injects_spawn_safe_service_functions(
+    tmp_path: Path,
+) -> None:
+    base = _project(tmp_path)
+    current = replace(
+        base,
+        datasets=(
+            replace(
+                base.datasets[0],
+                automation=DatasetAutomation(
+                    import_batch_id="batch-1",
+                    role=AutomaticRole.UNROUTED,
+                    status=AutomaticStatus.PENDING,
+                ),
+            ),
+        ),
+        measurement_preset=MeasurementPreset(
+            "lab",
+            BeamSpec("monochromatic"),
+            InstrumentSpec(instrument_id="lab"),
+        ),
+    )
     expected = ProjectFitResult("automatic", (), (), current)
     observed = []
 
@@ -900,7 +947,13 @@ def test_automatic_worker_phase_injects_spawn_safe_service_functions() -> None:
         return False
 
     def prepare_dataset(*_args, **_kwargs):
-        return SimpleNamespace()
+        return SimpleNamespace(
+            problem=SimpleNamespace(parameter_definitions=()),
+            updated_dataset=SimpleNamespace(parameter_priors=()),
+        )
+
+    def evaluate_declared_initial(_problem):
+        return SimpleNamespace(valid=True)
 
     def fit_dataset(*_args, **_kwargs):
         return None
@@ -916,6 +969,8 @@ def test_automatic_worker_phase_injects_spawn_safe_service_functions() -> None:
         cancelled,
         fit_automatic_transaction=transaction,
         prepare_dataset_fit=prepare_dataset,
+        validate_parameter_priors=lambda *_args, **_kwargs: None,
+        evaluate_declared_initial=evaluate_declared_initial,
         fit_automatic_prepared_dataset=fit_dataset,
         fit_automatic_joint_group=fit_joint,
     )

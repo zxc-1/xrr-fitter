@@ -66,7 +66,10 @@ def run_fit(arguments) -> int:
 
 def _fit_result(project, arguments, sink) -> api.ProjectFitResult:
     if arguments.auto:
-        return api.fit_automatically(project, progress_callback=sink)
+        try:
+            return api.fit_automatically(project, progress_callback=sink)
+        except (ValueError, TypeError, KeyError) as error:
+            raise CommandError(f"自动拟合失败：{error}", exit_codes.INVALID_INPUT) from error
     readiness = api.preflight_fit(project)
     if not readiness.ready:
         raise CommandError(readiness.message, exit_codes.INVALID_INPUT)
@@ -77,18 +80,21 @@ def run_mcmc(arguments) -> int:
     """Sample the selected candidate and persist the augmented project."""
     project = _load(arguments.project)
     _require_fresh_sources(project)
-    config = api.McmcConfig(
-        walkers=arguments.walkers,
-        burn_in=arguments.burn_in,
-        production_steps=arguments.steps,
-    )
-    updated = api.run_mcmc(
-        project,
-        arguments.dataset,
-        arguments.candidate,
-        config,
-        progress_callback=_progress_sink(arguments.json_progress),
-    )
+    try:
+        config = api.McmcConfig(
+            walkers=arguments.walkers,
+            burn_in=arguments.burn_in,
+            production_steps=arguments.steps,
+        )
+        updated = api.run_mcmc(
+            project,
+            arguments.dataset,
+            arguments.candidate,
+            config,
+            progress_callback=_progress_sink(arguments.json_progress),
+        )
+    except (ValueError, TypeError, KeyError) as error:
+        raise CommandError(f"MCMC 失败：{error}", exit_codes.INVALID_INPUT) from error
     api.save_project(updated, arguments.output or arguments.project)
     return exit_codes.SUCCESS
 
@@ -96,6 +102,10 @@ def run_mcmc(arguments) -> int:
 def run_export(arguments) -> int:
     """Publish an existing project's results atomically."""
     project = _load(arguments.project)
-    manifest = api.export_result(project, arguments.output_dir, include_ort=arguments.ort)
+    _require_fresh_sources(project)
+    try:
+        manifest = api.export_result(project, arguments.output_dir, include_ort=arguments.ort)
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        raise CommandError(f"结果导出失败：{error}", exit_codes.INVALID_INPUT) from error
     print(manifest.run_directory)
     return exit_codes.SUCCESS

@@ -111,12 +111,15 @@ def _orso_context(
     *,
     two_theta_deg: np.ndarray | None = None,
     with_sigma: bool = True,
+    sigma_q_a_inv: np.ndarray | None = None,
     beam: BeamSpec | None = None,
     fit_mask: np.ndarray | None = None,
 ) -> DatasetExportData:
     data = prepared_data(two_theta_deg=two_theta_deg, beam=beam, fit_mask=fit_mask)
     if with_sigma:
         data = replace(data, intensity_sigma_normalized=data.intensity_normalized * 0.05)
+    if sigma_q_a_inv is not None:
+        data = replace(data, sigma_q_a_inv=np.asarray(sigma_q_a_inv, dtype=float))
     model = data.intensity_normalized * 0.97
     fit_residual = np.log10(model + data.r_floor) - np.log10(data.intensity_normalized + data.r_floor)
     residual = np.full(data.qz_a_inv.shape, np.nan, dtype=float)
@@ -247,6 +250,68 @@ def test_orso_bytes_roundtrips_data_parameters_and_extension() -> None:
     _assert_roundtrip_model(loaded, context, mask)
     _assert_roundtrip_confidence(loaded, context, covariance)
     _assert_roundtrip_reduction(loaded, context)
+
+
+def test_orso_bytes_roundtrips_pointwise_q_resolution_as_standard_error_column() -> None:
+    base = _orso_context()
+    sigma_q = np.linspace(1.0e-4, 4.0e-4, base.data.qz_a_inv.size)
+    context = _orso_context(sigma_q_a_inv=sigma_q)
+
+    raw = orso_bytes(context, covariance=None)
+    loaded = _load_single(raw)
+
+    header_dicts, _rows, _version = _read_header_data(io.StringIO(raw.decode("utf-8")))
+    _validate_header_data(header_dicts)
+    assert [column.to_dict() for column in loaded.info.columns] == [
+        {"name": "Qz", "unit": "1/angstrom"},
+        {"name": "R"},
+        {"error_of": "R", "error_type": "uncertainty", "value_is": "sigma"},
+        {"error_of": "Qz", "error_type": "resolution", "value_is": "sigma"},
+    ]
+    mask = context.data.validation_mask
+    assert loaded.data.shape[1] == 4
+    np.testing.assert_array_equal(loaded.data[:, 0], context.data.qz_a_inv[mask])
+    np.testing.assert_array_equal(loaded.data[:, 1], context.data.intensity_normalized[mask])
+    np.testing.assert_array_equal(loaded.data[:, 2], context.data.intensity_sigma_normalized[mask])
+    np.testing.assert_array_equal(loaded.data[:, 3], context.data.sigma_q_a_inv[mask])
+
+
+def test_orso_bytes_excludes_rows_without_finite_pointwise_q_resolution() -> None:
+    base = _orso_context()
+    sigma_q = np.linspace(1.0e-4, 4.0e-4, base.data.qz_a_inv.size)
+    sigma_q[7] = np.nan
+    context = _orso_context(sigma_q_a_inv=sigma_q)
+
+    loaded = _load_single(orso_bytes(context, covariance=None))
+
+    expected_mask = context.data.validation_mask & np.isfinite(context.data.sigma_q_a_inv)
+    assert loaded.data.shape[0] == int(expected_mask.sum())
+    np.testing.assert_array_equal(loaded.data[:, 3], context.data.sigma_q_a_inv[expected_mask])
+    excluded = loaded.info.user_data["xrr_fitter.confidence"]["excluded_rows"]
+    assert excluded["count"] == int(np.count_nonzero(~expected_mask))
+    assert excluded["reason"] == "non_finite_or_nonpositive_export_row"
+
+
+def test_orso_bytes_keeps_q_resolution_in_reduction_extension_without_reflectivity_sigma() -> None:
+    base = _orso_context(with_sigma=False)
+    sigma_q = np.linspace(1.0e-4, 4.0e-4, base.data.qz_a_inv.size)
+    context = _orso_context(with_sigma=False, sigma_q_a_inv=sigma_q)
+
+    loaded = _load_single(orso_bytes(context, covariance=None))
+
+    assert [column.to_dict() for column in loaded.info.columns] == [
+        {"name": "Qz", "unit": "1/angstrom"},
+        {"name": "R"},
+    ]
+    assert loaded.data.shape[1] == 2
+    pointwise = loaded.info.user_data["xrr_fitter.reduction"]["pointwise_resolution"]
+    assert {key: pointwise[key] for key in ("error_of", "error_type", "value_is", "unit")} == {
+        "error_of": "Qz",
+        "error_type": "resolution",
+        "value_is": "sigma",
+        "unit": "1/angstrom",
+    }
+    np.testing.assert_array_equal(pointwise["values"], context.data.sigma_q_a_inv[context.data.validation_mask])
 
 
 def test_orso_bytes_keeps_prepared_and_fitted_qz_axes_distinct() -> None:

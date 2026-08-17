@@ -77,15 +77,15 @@ The frozen replay itself lives in a dedicated focused test module.
 
 from __future__ import annotations
 
+import pickle
 from dataclasses import fields, replace
 from importlib import import_module
-import pickle
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data, simple_structure
+
 from xrr_fitter.evaluation import encode_physical_vector, values_by_name
 from xrr_fitter.fit.candidates import CandidateStart, candidate_from_evaluation
 from xrr_fitter.fit.objective import evaluate_vector
@@ -197,9 +197,7 @@ def _assert_candidate_lineage(by_stage, candidate_ids) -> None:
 
 def _assert_stage_progress(progress, stage: str, expected_total: int) -> None:
     stage_events = tuple(value for value in progress if value.stage == stage)
-    assert tuple(value.completed for value in stage_events) == tuple(
-        range(1, expected_total + 1)
-    )
+    assert tuple(value.completed for value in stage_events) == tuple(range(1, expected_total + 1))
     assert {value.total for value in stage_events} == {expected_total}
 
 
@@ -214,9 +212,7 @@ def _assert_progress_schedule(progress) -> None:
     _assert_stage_progress(progress, "B", 2)
     _assert_stage_progress(progress, "E", 4)
     stage_a = tuple(value for value in progress if value.stage == "A")
-    assert tuple(value.completed for value in stage_a) == tuple(
-        range(1, len(stage_a) + 1)
-    )
+    assert tuple(value.completed for value in stage_a) == tuple(range(1, len(stage_a) + 1))
     assert {value.total for value in stage_a} == {len(stage_a)}
 
 
@@ -226,10 +222,7 @@ def _best_stage_b_values(stage_problem, trial_units: np.ndarray) -> dict[str, fl
         (index for index, value in enumerate(trial_evaluations) if value.valid),
         key=lambda index: trial_evaluations[index].objective,
     )
-    return {
-        value.name: value.value
-        for value in trial_evaluations[best_index].parameters
-    }
+    return {value.name: value.value for value in trial_evaluations[best_index].parameters}
 
 
 def _stage_b_alternatives(problem, stage_problem, trial_units: np.ndarray):
@@ -249,10 +242,7 @@ def _stage_b_alternatives(problem, stage_problem, trial_units: np.ndarray):
 
 
 def _stage_b_baseline_case(problem):
-    initial_values = {
-        definition.name: definition.initial
-        for definition in problem.parameter_definitions
-    }
+    initial_values = {definition.name: definition.initial for definition in problem.parameter_definitions}
     initial_stage = compile_stage_problem(problem, "B", initial_values)
     trial_units = np.random.default_rng(751).random((64, len(initial_stage.variables)))
     values = _best_stage_b_values(initial_stage, trial_units)
@@ -284,9 +274,7 @@ def test_child_seed_lineage_is_deterministic_and_order_independent() -> None:
 
     assert tuple(item.stream_id for item in forward) == streams
     assert tuple(item.stream_id for item in reverse) == tuple(reversed(streams))
-    assert {item.stream_id: item.seed for item in forward} == {
-        item.stream_id: item.seed for item in reverse
-    }
+    assert {item.stream_id: item.seed for item in forward} == {item.stream_id: item.seed for item in reverse}
     assert len({item.seed for item in forward}) == len(streams)
     assert all(0 <= item.seed < 2**64 for item in forward)
     assert tuple(item.seed for item in forward) == (
@@ -428,9 +416,7 @@ def test_profile_continuation_publishes_a_resumable_stage_e_checkpoint(
     assert checkpoint.child_seeds == continued.child_seeds
     assert checkpoint.stage_summaries == continued.stage_summaries
 
-    resumed = api.run_fit_search(
-        api.FitSearchRequest("curve", problem, checkpoint)
-    )
+    resumed = api.run_fit_search(api.FitSearchRequest("curve", problem, checkpoint))
     _assert_resumed_profile_result(continued, resumed)
 
 
@@ -452,10 +438,7 @@ def test_checkpoint_callback_failure_is_not_converted_to_search_success() -> Non
 
 def test_dynamic_roughness_encoding_round_trips_initial_structure() -> None:
     problem = _problem(seed=747, structure=_implicit_periodic_structure())
-    initial = {
-        definition.name: definition.initial
-        for definition in problem.parameter_definitions
-    }
+    initial = {definition.name: definition.initial for definition in problem.parameter_definitions}
 
     unit = encode_physical_vector(problem, initial)
     decoded = values_by_name(problem, unit)
@@ -475,9 +458,7 @@ def test_implicit_periodic_top_roughness_tracks_first_layer() -> None:
     assert evaluation.valid
     assert isinstance(structure.components[0], PeriodicBlock)
     assert structure.components[0].top_roughness_a is None
-    assert next(
-        value.value for value in evaluation.parameters if value.name == first_roughness
-    ) == pytest.approx(4.0)
+    assert next(value.value for value in evaluation.parameters if value.name == first_roughness) == pytest.approx(4.0)
     assert evaluation.expanded_stack is not None
     np.testing.assert_allclose(
         evaluation.expanded_stack.roughness_a[[0, 2]],
@@ -510,11 +491,7 @@ def test_ideal_reflectivity_above_one_records_full_dataset_indices(
 
     evaluation = evaluate_vector(problem, unit)
 
-    diagnostic = next(
-        value
-        for value in evaluation.diagnostics
-        if value.code == "ideal_reflectivity_above_one"
-    )
+    diagnostic = next(value for value in evaluation.diagnostics if value.code == "ideal_reflectivity_above_one")
     assert diagnostic.point_indices == (3, 38)
 
 
@@ -552,9 +529,7 @@ def test_stage_b_keeps_declared_baseline_alongside_a_distant_de_result(
         problem,
         {value.name: value.value for value in case.drift_evaluation.parameters},
     )
-    assert np.linalg.norm(expected_de - case.baseline_unit) > (
-        problem.config.confidence.cluster_join_distance
-    )
+    assert np.linalg.norm(expected_de - case.baseline_unit) > (problem.config.confidence.cluster_join_distance)
     assert tuple(candidate.candidate_id for candidate in outcome.candidates) == (
         "B-declared-start",
         "B-0",
@@ -679,9 +654,7 @@ def test_pipeline_archives_stage_b_evidence_and_routes_only_active_clusters(
             unit_vector=np.array(start, copy=True),
             evaluation=evaluate_vector(problem_value, start),
             population=np.array(population, copy=True),
-            population_energies=np.asarray(
-                [evaluate_vector(problem_value, row).objective for row in population]
-            ),
+            population_energies=np.asarray([evaluate_vector(problem_value, row).objective for row in population]),
             trace=(),
             stop_reason="captured global",
             nfev=1,
@@ -696,16 +669,11 @@ def test_pipeline_archives_stage_b_evidence_and_routes_only_active_clusters(
     monkeypatch.setattr(stages, "solve_local", _unchanged_local_solution)
     monkeypatch.setattr(stages, "archive_stage_b_candidates", forced_archive)
 
-    result = pipeline.run_fit_search(
-        pipeline.FitSearchRequest("curve", _problem(seed=759))
-    )
+    result = pipeline.run_fit_search(pipeline.FitSearchRequest("curve", _problem(seed=759)))
     candidate_ids = tuple(value.candidate_id for value in result.candidates)
 
     assert archive_calls == [("B-0", "B-1")]
-    assert any(
-        value.candidate_id == "B-1" and value.stop_reason == "early_eliminated"
-        for value in result.candidates
-    )
+    assert any(value.candidate_id == "B-1" and value.stop_reason == "early_eliminated" for value in result.candidates)
     assert tuple(value for value in candidate_ids if value.startswith("C-0-")) == tuple(
         f"C-0-{index}" for index in range(6)
     )
@@ -753,10 +721,7 @@ def test_stage_e_runs_de_four_ranked_locals_and_two_restarts(
 ) -> None:
     api = _stages_api()
     problem = _problem(seed=761)
-    declared_values = {
-        definition.name: definition.initial
-        for definition in problem.parameter_definitions
-    }
+    declared_values = {definition.name: definition.initial for definition in problem.parameter_definitions}
     declared_unit = encode_physical_vector(problem, declared_values)
     shifted_unit = np.clip(declared_unit + 0.03, 0.0, 1.0)
     parents = (
@@ -804,10 +769,7 @@ def test_stage_e_carries_only_a_materially_improved_elite_to_later_seeds(
     api = _stages_api()
     problem = _problem(seed=769)
     rng = np.random.default_rng(769)
-    evaluated = tuple(
-        (unit, evaluate_vector(problem, unit))
-        for unit in rng.random((96, len(problem.variables)))
-    )
+    evaluated = tuple((unit, evaluate_vector(problem, unit)) for unit in rng.random((96, len(problem.variables))))
     valid = sorted(
         (item for item in evaluated if item[1].valid),
         key=lambda item: item[1].objective,
@@ -816,8 +778,7 @@ def test_stage_e_carries_only_a_materially_improved_elite_to_later_seeds(
     elite_unit, elite_evaluation = valid[0]
     baseline_unit, baseline_evaluation = valid[-1]
     required = max(
-        problem.config.confidence.equivalent_cost_fraction
-        * abs(baseline_evaluation.objective),
+        problem.config.confidence.equivalent_cost_fraction * abs(baseline_evaluation.objective),
         problem.config.confidence.equivalent_cost_floor,
     )
     assert elite_evaluation.objective + required < baseline_evaluation.objective
@@ -840,9 +801,7 @@ def test_stage_e_carries_only_a_materially_improved_elite_to_later_seeds(
             unit_vector=np.array(start, copy=True),
             evaluation=evaluate_vector(problem_value, start),
             population=np.array(population, copy=True),
-            population_energies=np.asarray(
-                [evaluate_vector(problem_value, row).objective for row in population]
-            ),
+            population_energies=np.asarray([evaluate_vector(problem_value, row).objective for row in population]),
             trace=(),
             stop_reason=f"captured global {current}",
             nfev=1,
@@ -874,8 +833,7 @@ def test_stage_e_carries_only_a_materially_improved_elite_to_later_seeds(
     assert tuple(len(starts_by_seed[index]) for index in range(4)) == (8, 8, 8, 9)
     seed_three_incumbents = starts_by_seed[3][:3]
     assert any(
-        not np.array_equal(start, elite_unit)
-        and np.max(np.abs(start - elite_unit)) <= 0.01
+        not np.array_equal(start, elite_unit) and np.max(np.abs(start - elite_unit)) <= 0.01
         for start in seed_three_incumbents
     )
 
@@ -902,9 +860,7 @@ def test_stage_e_does_not_publish_progress_for_a_cancelled_seed(
             unit_vector=np.array(start, copy=True),
             evaluation=evaluate_vector(problem_value, start),
             population=np.array(population, copy=True),
-            population_energies=np.asarray(
-                [evaluate_vector(problem_value, row).objective for row in population]
-            ),
+            population_energies=np.asarray([evaluate_vector(problem_value, row).objective for row in population]),
             trace=(),
             stop_reason="captured global",
             nfev=1,

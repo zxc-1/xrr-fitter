@@ -355,10 +355,49 @@ jobs:
           for ASSET in "${ASSETS[@]}"; do
             test -f "$ASSET"
           done
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${ASSETS[@]}" \
-              --repo "$GITHUB_REPOSITORY" --clobber
+          RELEASE_JSON="$RUNNER_TEMP/release.json"
+          RELEASE_VIEW_ERROR="$RUNNER_TEMP/release-view.err"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets \
+            >"$RELEASE_JSON" 2>"$RELEASE_VIEW_ERROR"; then
+            python3 - "$RELEASE_JSON" "${ASSETS[@]}" <<'PY'
+          import json
+          import os
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              payload = json.load(stream)
+          if payload.get("isDraft") is not True:
+              raise SystemExit("existing GitHub Release is not a draft")
+          local_names = [os.path.basename(path) for path in sys.argv[2:]]
+          if len(set(local_names)) != len(local_names):
+              raise SystemExit(f"local release asset names are not unique: {sorted(local_names)!r}")
+          remote_names = [asset.get("name") for asset in payload.get("assets", [])]
+          if sorted(remote_names) != sorted(local_names):
+              raise SystemExit("remote release asset names differ from local bundle: "
+                               f"remote={sorted(remote_names)!r} local={sorted(local_names)!r}")
+          PY
+            REMOTE_ASSET_DIR="$RUNNER_TEMP/release-assets"
+            test ! -e "$REMOTE_ASSET_DIR"
+            mkdir "$REMOTE_ASSET_DIR"
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$REMOTE_ASSET_DIR"
+            python3 - "$REMOTE_ASSET_DIR" "${ASSETS[@]}" <<'PY'
+          import os
+          import sys
+
+          downloaded_names = sorted(os.listdir(sys.argv[1]))
+          local_names = sorted(os.path.basename(path) for path in sys.argv[2:])
+          if downloaded_names != local_names:
+              raise SystemExit("downloaded release asset names differ from local bundle: "
+                               f"downloaded={downloaded_names!r} local={local_names!r}")
+          PY
+            for ASSET in "${ASSETS[@]}"; do
+              cmp "$ASSET" "$REMOTE_ASSET_DIR/$(basename "$ASSET")"
+            done
           else
+            if ! grep -Eiq "not found|HTTP 404" "$RELEASE_VIEW_ERROR"; then
+              cat "$RELEASE_VIEW_ERROR" >&2
+              exit 1
+            fi
             gh release create "$TAG" "${ASSETS[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \

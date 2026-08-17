@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from math import isfinite
+from math import cos, isfinite, sin
 
-from xrr_fitter.model.parameters import ConstraintNode, ParameterReference
+from xrr_fitter.model.parameters import CONSTRAINT_UNARY_OPS, ConstraintNode, ParameterReference
 
 
 class ConstraintArithmeticError(Exception):
@@ -51,6 +51,9 @@ def evaluate_constraint_value(
         return float(node.value)
     if node.op == "ref":
         return _lookup(values, node.reference)
+    if node.op in CONSTRAINT_UNARY_OPS:
+        inner = evaluate_constraint_value(node.operands[0], values)
+        return sin(inner) if node.op == "sin" else cos(inner)
     left, right = node.operands
     return _value_for_operator(
         node.op,
@@ -96,6 +99,14 @@ def _gradient_for_operator(
             grad_right,
             -left * inverse * inverse,
         )
+    return _power_gradient(left, right, grad_left)
+
+
+def _power_gradient(
+    left: float,
+    right: float,
+    grad_left: dict[ParameterReference, float],
+) -> dict[ParameterReference, float]:
     if right == 0.0:
         return {reference: 0.0 for reference in grad_left}
     if left == 0.0 and 0.0 < right < 1.0:
@@ -117,6 +128,14 @@ def constraint_value_and_grad(
     if node.op == "ref":
         reference = node.reference
         return _lookup(values, reference), {reference: 1.0}
+    if node.op in CONSTRAINT_UNARY_OPS:
+        inner_value, inner_grad = constraint_value_and_grad(node.operands[0], values)
+        if node.op == "sin":
+            value, multiplier = sin(inner_value), cos(inner_value)
+        else:
+            value, multiplier = cos(inner_value), -sin(inner_value)
+        gradient = {reference: multiplier * partial for reference, partial in inner_grad.items()}
+        return value, gradient
     left, right = node.operands
     left_value, left_grad = constraint_value_and_grad(left, values)
     right_value, right_grad = constraint_value_and_grad(right, values)

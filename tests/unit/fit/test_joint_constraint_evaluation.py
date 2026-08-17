@@ -24,6 +24,8 @@ from xrr_fitter.model.parameters import (
     ParameterSetting,
 )
 
+ROUGHNESS_NAME = "component.0.roughness_a"
+
 
 def test_cross_dataset_constraint_removes_target_and_drives_local_projection() -> None:
     api = import_module("xrr_fitter.fit.joint_evaluation")
@@ -202,6 +204,71 @@ def test_cross_dataset_roughness_constraint_jacobian_matches_finite_difference()
         rtol=5e-5,
         atol=5e-8,
     )
+
+
+def _locked_roughness_problem(*, seed: int, size: int, roughness_initial: float | None = None) -> object:
+    base = compile_fit_problem(
+        prepared_data(size=size),
+        simple_structure(),
+        InstrumentSpec(footprint_mode="none"),
+        FitConfig.fast(seed),
+    )
+    settings = []
+    for definition in base.parameter_definitions:
+        initial = (
+            roughness_initial
+            if definition.name == ROUGHNESS_NAME and roughness_initial is not None
+            else definition.initial
+        )
+        lower = definition.lower if definition.name == ROUGHNESS_NAME and roughness_initial is not None else initial
+        upper = definition.upper if definition.name == ROUGHNESS_NAME and roughness_initial is not None else initial
+        settings.append(
+            ParameterSetting(
+                definition.name,
+                initial,
+                lower,
+                upper,
+                locked=True,
+            )
+        )
+    return compile_fit_problem(
+        base.data,
+        base.structure,
+        base.instrument,
+        base.config,
+        tuple(settings),
+    )
+
+
+def test_initial_joint_vector_lets_roughness_constraint_replace_invalid_declared_target() -> None:
+    joint_api = import_module("xrr_fitter.fit.joint_problem")
+    sharing = import_module("xrr_fitter.fit.joint_sharing")
+    evaluation = import_module("xrr_fitter.fit.joint_evaluation")
+    rule = ConstraintRule(
+        ParameterReference("left", ROUGHNESS_NAME),
+        ConstraintNode(
+            "ref",
+            reference=ParameterReference("right", ROUGHNESS_NAME),
+        ),
+    )
+    joint = joint_api.compile_joint_problem(
+        ("left", "right"),
+        (
+            _locked_roughness_problem(seed=858, size=40, roughness_initial=15.0),
+            _locked_roughness_problem(seed=858, size=52),
+        ),
+        (),
+        (rule,),
+    )
+
+    initial = sharing.initial_joint_vector(joint)
+    result = evaluation.evaluate_joint_vector(joint, initial)
+    left = {parameter.name: parameter.value for parameter in result.local_evaluations[0].parameters}
+    right = {parameter.name: parameter.value for parameter in result.local_evaluations[1].parameters}
+
+    assert result.valid
+    assert left[ROUGHNESS_NAME] == pytest.approx(right[ROUGHNESS_NAME])
+    assert left[ROUGHNESS_NAME] == pytest.approx(2.0)
 
 
 def test_joint_layout_fingerprint_binds_cross_dataset_expression() -> None:

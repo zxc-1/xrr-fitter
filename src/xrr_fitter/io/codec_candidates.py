@@ -18,7 +18,7 @@ from xrr_fitter.io.codec_common import (
 from xrr_fitter.model.fitting import FitCandidate, FitStageSummary
 from xrr_fitter.model.instrument import PhysicsDiagnostic
 from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue, PriorSpec
-from xrr_fitter.model.structure import PeriodicSpan, SlabStack
+from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
 
 
 def _diagnostic_to_dict(value: PhysicsDiagnostic) -> dict[str, object]:

@@ -5,15 +5,19 @@ from importlib import import_module
 import numpy as np
 import pytest
 
-from xrr_fitter.model.structure import PeriodicSpan, SlabStack
+from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
 from xrr_fitter.physics.derivatives import parratt_reflectivity_jacobian, smear_with_widths_jacobian
 
 
 def _tangents(stack: SlabStack, q: np.ndarray, count: int = 3):
-    q_jac = np.zeros((q.size, count)); q_jac[:, 0] = 1e-3
-    thickness_jac = np.zeros((stack.thickness_a.size, count)); thickness_jac[1:-1:2, 1] = 0.7
-    sld_jac = np.zeros((stack.sld_a2.size, count), complex); sld_jac[2:-1:2, 2] = 1e-7 + 2e-8j
-    roughness_jac = np.zeros((stack.roughness_a.size, count)); roughness_jac[:, 0] = 0.03
+    q_jac = np.zeros((q.size, count))
+    q_jac[:, 0] = 1e-3
+    thickness_jac = np.zeros((stack.thickness_a.size, count))
+    thickness_jac[1:-1:2, 1] = 0.7
+    sld_jac = np.zeros((stack.sld_a2.size, count), complex)
+    sld_jac[2:-1:2, 2] = 1e-7 + 2e-8j
+    roughness_jac = np.zeros((stack.roughness_a.size, count))
+    roughness_jac[:, 0] = 0.03
     return q_jac, thickness_jac, sld_jac, roughness_jac
 
 
@@ -43,9 +47,12 @@ def test_periodic_jacobian_falls_back_for_nonrepeating_cell_tangents() -> None:
     periodic = SlabStack(thickness, sld, roughness, (PeriodicSpan(1, 2, repeats),))
     q = np.linspace(0.01, 0.5, 60)
     q_jacobian = np.zeros((q.size, 3))
-    thickness_jacobian = np.zeros((thickness.size, 3)); thickness_jacobian[5, 0] = 0.7
-    sld_jacobian = np.zeros((sld.size, 3), complex); sld_jacobian[7, 1] = 1.1e-7 + 0.4e-8j
-    roughness_jacobian = np.zeros((roughness.size, 3)); roughness_jacobian[6, 2] = 0.03
+    thickness_jacobian = np.zeros((thickness.size, 3))
+    thickness_jacobian[5, 0] = 0.7
+    sld_jacobian = np.zeros((sld.size, 3), complex)
+    sld_jacobian[7, 1] = 1.1e-7 + 0.4e-8j
+    roughness_jacobian = np.zeros((roughness.size, 3))
+    roughness_jacobian[6, 2] = 0.03
     tangents = q_jacobian, thickness_jacobian, sld_jacobian, roughness_jacobian
 
     expected = parratt_reflectivity_jacobian(q, expanded, *tangents)
@@ -158,6 +165,7 @@ def test_periodic_tangents_reuse_identical_expanded_optics() -> None:
 
 def test_analytic_tangent_matches_centered_difference() -> None:
     from xrr_fitter.physics.parratt import parratt_reflectivity
+
     q = np.linspace(0.01, 0.3, 80)
     stack = SlabStack([0, 80, 0], [0j, 25e-6 + 0.2e-6j, 20e-6 + 0.1e-6j], [2, 3])
     tangents = (np.zeros((q.size, 1)), np.array([[0], [1], [0]], float), np.zeros((3, 1), complex), np.zeros((2, 1)))
@@ -186,8 +194,7 @@ def test_compose_batches_periodic_tangent_product_rule(monkeypatch) -> None:
     for row in range(2):
         for column in range(2):
             expected_matrix[:, row, column] = (
-                left[:, row, 0] * right[:, 0, column]
-                + left[:, row, 1] * right[:, 1, column]
+                left[:, row, 0] * right[:, 0, column] + left[:, row, 1] * right[:, 1, column]
             )
             expected_tangent[:, row, column] = (
                 left_tangent[:, row, 0] * right[:, 0, column, None]
@@ -214,13 +221,23 @@ def test_compose_batches_periodic_tangent_product_rule(monkeypatch) -> None:
 def test_quadrature_jacobian_reuses_fine_tangent_values_for_order_selection() -> None:
     samples = np.linspace(0.02, 0.4, 80)
     primal_calls, tangent_calls = [], []
+
     def primal(query):
         primal_calls.append(query.shape)
         return query**2
+
     def tangent(query, query_jacobian):
         tangent_calls.append(query.shape)
         return query**2, 2 * query[..., None] * query_jacobian
-    values, jacobian = smear_with_widths_jacobian(samples, np.ones((samples.size, 1)), np.full(samples.size, 0.002), np.zeros((samples.size, 1)), tangent, primal_function=primal)
+
+    values, jacobian = smear_with_widths_jacobian(
+        samples,
+        np.ones((samples.size, 1)),
+        np.full(samples.size, 0.002),
+        np.zeros((samples.size, 1)),
+        tangent,
+        primal_function=primal,
+    )
     np.testing.assert_allclose(values, samples**2 + 0.002**2)
     np.testing.assert_allclose(jacobian[:, 0], 2 * samples)
     assert {shape[1] for shape in primal_calls} == {17}
@@ -229,11 +246,13 @@ def test_quadrature_jacobian_reuses_fine_tangent_values_for_order_selection() ->
 
 def test_adaptive_jacobian_evaluates_sixty_five_nodes_only_for_unresolved_points() -> None:
     calls = []
+
     def needle(query, query_jacobian):
         calls.append(query.shape)
         values = np.exp(-4e6 * (query - 0.02137) ** 2)
         derivative = -8e6 * (query - 0.02137) * values
         return values, derivative[..., None] * query_jacobian
+
     smear_with_widths_jacobian(
         np.array([0.02, 0.2]),
         np.ones((2, 1)),
@@ -247,9 +266,11 @@ def test_adaptive_jacobian_evaluates_sixty_five_nodes_only_for_unresolved_points
 def test_quadrature_jacobian_chunks_large_query_grids() -> None:
     samples = np.linspace(0.02, 0.4, 600)
     calls = []
+
     def smooth(query, query_jacobian):
         calls.append(query.shape)
         return query**2, 2 * query[..., None] * query_jacobian
+
     values, jacobian = smear_with_widths_jacobian(
         samples,
         np.ones((samples.size, 1)),
@@ -331,22 +352,40 @@ def test_zero_width_jacobian_validates_differentiable_callback(
 
 def test_parratt_jacobian_tracks_q_complex_sld_and_roughness_tangents() -> None:
     from xrr_fitter.physics.parratt import parratt_reflectivity
+
     q = np.linspace(0.01, 0.3, 80)
     stack = SlabStack([0, 80, 0], [0j, 25e-6 + 0.2e-6j, 20e-6 + 0.1e-6j], [2, 3])
-    q_jacobian = np.zeros((q.size, 3)); q_jacobian[:, 0] = 0.4
+    q_jacobian = np.zeros((q.size, 3))
+    q_jacobian[:, 0] = 0.4
     thickness_jacobian = np.zeros((3, 3))
-    sld_jacobian = np.zeros((3, 3), complex); sld_jacobian[1, 1] = 0.7e-6 + 0.2e-6j
-    roughness_jacobian = np.zeros((2, 3)); roughness_jacobian[0, 2] = 0.3
-    _, actual = parratt_reflectivity_jacobian(q, stack, q_jacobian, thickness_jacobian, sld_jacobian, roughness_jacobian)
+    sld_jacobian = np.zeros((3, 3), complex)
+    sld_jacobian[1, 1] = 0.7e-6 + 0.2e-6j
+    roughness_jacobian = np.zeros((2, 3))
+    roughness_jacobian[0, 2] = 0.3
+    _, actual = parratt_reflectivity_jacobian(
+        q, stack, q_jacobian, thickness_jacobian, sld_jacobian, roughness_jacobian
+    )
     eps = 1e-6
     expected = np.empty_like(actual)
-    expected[:, 0] = (parratt_reflectivity(q + eps * 0.4, stack) - parratt_reflectivity(q - eps * 0.4, stack)) / (2 * eps)
+    expected[:, 0] = (parratt_reflectivity(q + eps * 0.4, stack) - parratt_reflectivity(q - eps * 0.4, stack)) / (
+        2 * eps
+    )
     eps = 1e-4
     delta_sld = eps * (0.7e-6 + 0.2e-6j)
-    plus_sld = stack.sld_a2.copy(); plus_sld[1] += delta_sld
-    minus_sld = stack.sld_a2.copy(); minus_sld[1] -= delta_sld
-    expected[:, 1] = (parratt_reflectivity(q, SlabStack(stack.thickness_a, plus_sld, stack.roughness_a)) - parratt_reflectivity(q, SlabStack(stack.thickness_a, minus_sld, stack.roughness_a))) / (2 * eps)
-    plus_roughness = stack.roughness_a.copy(); plus_roughness[0] += eps * 0.3
-    minus_roughness = stack.roughness_a.copy(); minus_roughness[0] -= eps * 0.3
-    expected[:, 2] = (parratt_reflectivity(q, SlabStack(stack.thickness_a, stack.sld_a2, plus_roughness)) - parratt_reflectivity(q, SlabStack(stack.thickness_a, stack.sld_a2, minus_roughness))) / (2 * eps)
+    plus_sld = stack.sld_a2.copy()
+    plus_sld[1] += delta_sld
+    minus_sld = stack.sld_a2.copy()
+    minus_sld[1] -= delta_sld
+    expected[:, 1] = (
+        parratt_reflectivity(q, SlabStack(stack.thickness_a, plus_sld, stack.roughness_a))
+        - parratt_reflectivity(q, SlabStack(stack.thickness_a, minus_sld, stack.roughness_a))
+    ) / (2 * eps)
+    plus_roughness = stack.roughness_a.copy()
+    plus_roughness[0] += eps * 0.3
+    minus_roughness = stack.roughness_a.copy()
+    minus_roughness[0] -= eps * 0.3
+    expected[:, 2] = (
+        parratt_reflectivity(q, SlabStack(stack.thickness_a, stack.sld_a2, plus_roughness))
+        - parratt_reflectivity(q, SlabStack(stack.thickness_a, stack.sld_a2, minus_roughness))
+    ) / (2 * eps)
     np.testing.assert_allclose(actual, expected, rtol=3e-6, atol=2e-10)

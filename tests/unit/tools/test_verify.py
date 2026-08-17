@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 
 def _commands(module) -> tuple[tuple[str, ...], ...]:
-    return tuple(
-        command
-        for mode in module.MODE_REGISTRY.values()
-        for command in mode.commands
-    )
+    return tuple(command for mode in module.MODE_REGISTRY.values() for command in mode.commands)
 
 
 def _registry_names() -> tuple[str, ...]:
@@ -52,6 +48,8 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
         module.PYTEST_PREFIX
         + (
             "tests/architecture/test_dependency_rules.py",
+            "tests/architecture/test_model_dependency_rules.py",
+            "tests/architecture/test_evaluation_boundary.py",
             "tests/architecture/test_naming_rules.py",
             "tests/architecture/test_public_api.py",
             "tests/architecture/test_distribution.py",
@@ -70,7 +68,10 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
             "tests/unit/model",
             "tests/unit/io",
             "tests/unit/physics",
+            "tests/unit/test_constraint_evaluation.py",
+            "tests/unit/test_constraint_roughness_matrix.py",
             "tests/unit/test_evaluation.py",
+            "tests/unit/test_evaluation_priors.py",
             "tests/unit/fit",
             "tests/unit/analysis",
             "tests/unit/services",
@@ -86,10 +87,21 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
             "tests/regression/test_recovery_metrics.py",
             "tests/regression/test_profile_basin_regressions.py",
             "tests/regression/test_automatic_recovery.py",
+            "tests/acceptance/test_stack_drift.py",
             "-q",
         ),
     )
-    expected_gui = (module.PYTEST_PREFIX + ("tests/gui", "-q"),)
+    expected_gui = (
+        module.PYTEST_PREFIX
+        + (
+            "tests/gui",
+            "tests/integration/test_gui_project_workflow.py",
+            "tests/integration/test_gui_automatic_workflow.py",
+            "tests/integration/test_gui_synthetic_xy_workflow.py",
+            "tests/integration/test_gui_filename_batch_workflow.py",
+            "-q",
+        ),
+    )
     expected_integration = (
         module.PYTEST_PREFIX
         + (
@@ -100,15 +112,10 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
             "tests/integration/test_batch_resume.py",
             "tests/integration/test_export_workflow.py",
             "tests/integration/test_cli_workflow.py",
-            "tests/integration/test_gui_project_workflow.py",
-            "tests/integration/test_gui_automatic_workflow.py",
             "-q",
         ),
     )
-    expected_spawn = (
-        module.PYTEST_PREFIX
-        + ("tests/integration/test_process_workers.py", "-q"),
-    )
+    expected_spawn = (module.PYTEST_PREFIX + ("tests/integration/test_process_workers.py", "-q"),)
     expected_distribution = (
         (
             module.PYTHON,
@@ -171,10 +178,10 @@ def test_subprocess_environment_is_root_relative_and_drops_caller_pythonpath(
     assert Path(env["MPLCONFIGDIR"]).is_relative_to(tmp_path / "report")
 
 
-def test_runner_propagates_nonzero_and_checks_hygiene_before_and_after(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_runner_propagates_nonzero_and_checks_hygiene_before_and_after(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("verify")
+    root = tmp_path / "repo"
+    root.mkdir()
     calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
 
     def runner(args, **kwargs):
@@ -185,25 +192,107 @@ def test_runner_propagates_nonzero_and_checks_hygiene_before_and_after(
 
     mode = module.Mode(commands=(("ok",), ("fail",)))
     with pytest.raises(module.subprocess.CalledProcessError):
-        module.run_mode("fixture", mode, repo_root=tmp_path, report_dir=tmp_path / "report", runner=runner)
+        module.run_mode("fixture", mode, repo_root=root, report_dir=tmp_path / "report", runner=runner)
     commands = [command for command, _kwargs in calls]
     assert commands[0][-1] == "tools/check_hygiene.py"
     assert ("ok",) in commands and ("fail",) in commands
     assert commands[-1][-1] == "tools/check_hygiene.py"
     for _command, kwargs in calls:
         assert set(kwargs) == {"cwd", "env", "check"}
-        assert kwargs["cwd"] == tmp_path.resolve()
+        assert kwargs["cwd"] == root.resolve()
         assert kwargs["check"] is True
         assert "shell" not in kwargs
 
 
-def test_distribution_keeps_runtime_caches_outside_bundle_until_publication(
-    tmp_path: Path, load_tool_module
+@pytest.mark.parametrize("mode", ("quality", "distribution"))
+def test_mode_rejects_report_directory_inside_repository_before_creating_it(
+    tmp_path: Path,
+    load_tool_module,
+    mode: str,
 ) -> None:
     module = load_tool_module("verify")
     root = tmp_path / "repo"
     root.mkdir()
+    report = root / "reports-audit"
+    kwargs = {"artifact_dir": report / "artifacts"} if mode == "distribution" else {}
+
+    with pytest.raises(ValueError, match="report directory must be external"):
+        module.run_mode(
+            mode,
+            module.MODE_REGISTRY[mode],
+            repo_root=root,
+            report_dir=report,
+            runner=lambda *_args, **_kwargs: pytest.fail("validation ran too late"),
+            **kwargs,
+        )
+
+    assert not report.exists()
+
+
+def test_mode_rejects_report_symlink_before_resolving(
+    tmp_path: Path,
+    load_tool_module,
+) -> None:
+    module = load_tool_module("verify")
+    root = tmp_path / "repo"
+    root.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    report = tmp_path / "report"
+    report.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        module.run_mode(
+            "quality",
+            module.MODE_REGISTRY["quality"],
+            repo_root=root,
+            report_dir=report,
+            runner=lambda *_args, **_kwargs: pytest.fail("validation ran too late"),
+        )
+
+    assert tuple(target.iterdir()) == ()
+
+
+@pytest.mark.parametrize("target_location", ("inside-repo", "outside-repo"))
+def test_regular_mode_rejects_report_symlink_swapped_after_validation_without_side_effects(
+    tmp_path: Path,
+    load_tool_module,
+    monkeypatch: pytest.MonkeyPatch,
+    target_location: str,
+) -> None:
+    module = load_tool_module("verify")
+    root = tmp_path / "repo"
+    root.mkdir()
+    target = {"inside-repo": root, "outside-repo": tmp_path}[target_location] / "reports-target"
+    target.mkdir()
+    report = tmp_path / "report"
+    original_validate = module._validate_mode_inputs
+
+    def validate_then_swap(*args, **kwargs) -> None:
+        original_validate(*args, **kwargs)
+        report.symlink_to(target, target_is_directory=True)
+
+    monkeypatch.setattr(module, "_validate_mode_inputs", validate_then_swap)
+    with pytest.raises(ValueError, match="symlink"):
+        module.run_mode(
+            "fixture",
+            module.Mode(commands=(("would-run",),)),
+            repo_root=root,
+            report_dir=report,
+            runner=lambda *_args, **_kwargs: pytest.fail("runner executed"),
+        )
+
+    assert not (target / "mpl-cache").exists()
+    assert not (target / "xdg-cache").exists()
+
+
+def test_distribution_keeps_runtime_caches_outside_bundle_until_publication(tmp_path: Path, load_tool_module) -> None:
+    module = load_tool_module("verify")
+    root = tmp_path / "repo"
+    root.mkdir()
     report = tmp_path / "bundle"
+    report.mkdir()
+    initial_identity = (report.lstat().st_dev, report.lstat().st_ino)
     artifact = report / "artifacts"
     verifier_seen = False
 
@@ -213,6 +302,7 @@ def test_distribution_keeps_runtime_caches_outside_bundle_until_publication(
             return None
         verifier_seen = True
         assert report.is_dir()
+        assert (report.lstat().st_dev, report.lstat().st_ino) == initial_identity
         assert tuple(report.iterdir()) == ()
         assert not Path(kwargs["env"]["MPLCONFIGDIR"]).is_relative_to(report)
         assert not Path(kwargs["env"]["XDG_CACHE_HOME"]).is_relative_to(report)
@@ -238,6 +328,7 @@ def _write_verifier_fixture(root: Path, verifier: Path, outcome_gate: Path) -> N
     (root / "tests/__init__.py").write_bytes(b"")
     shutil.copy2(verifier, root / "tools/verify.py")
     shutil.copy2(verifier.parent / "verify_registry.py", root / "tools/verify_registry.py")
+    shutil.copy2(verifier.parent / "verify_report.py", root / "tools/verify_report.py")
     shutil.copy2(outcome_gate, root / "tests/outcome_gate.py")
     checker = (
         "from pathlib import Path\n"
@@ -265,6 +356,8 @@ def _write_verifier_fixture(root: Path, verifier: Path, outcome_gate: Path) -> N
     )
     for name in (
         "test_dependency_rules.py",
+        "test_model_dependency_rules.py",
+        "test_evaluation_boundary.py",
         "test_naming_rules.py",
         "test_public_api.py",
         "test_distribution.py",
@@ -306,7 +399,7 @@ def test_copied_verifier_derives_each_repository_root_from_its_own_file(
             text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        assert len(execution_log.read_text(encoding="utf-8").splitlines()) == 9
+        assert len(execution_log.read_text(encoding="utf-8").splitlines()) == 11
         assert str(other) not in result.stdout + result.stderr
         assert not (root / "tools/__pycache__").exists()
 

@@ -10,7 +10,7 @@ legible against either background.
 
 from __future__ import annotations
 
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import QApplication
 
 from xrr_fitter.gui import theme
 
@@ -27,20 +27,6 @@ def _relative_luminance(value: tuple[float, ...]) -> float:
 def _contrast(first: tuple[float, ...], second: tuple[float, ...]) -> float:
     values = sorted((_relative_luminance(first), _relative_luminance(second)))
     return (values[1] + 0.05) / (values[0] + 0.05)
-
-
-def _dark_palette() -> QPalette:
-    palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor("#1E1E1E"))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor("#FFFFFF"))
-    return palette
-
-
-def _light_palette() -> QPalette:
-    palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor("#FFFFFF"))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor("#000000"))
-    return palette
 
 
 def test_plot_palette_differs_between_light_and_dark_tokens() -> None:
@@ -73,7 +59,9 @@ def test_diagnostic_views_paint_the_resolved_background(qtbot) -> None:
 
     tabs, views = build_tabs()
     qtbot.addWidget(tabs)
-    expected = theme.plot_palette(theme.palette_tokens(_light_palette())).background
+    application = QApplication.instance()
+    assert application is not None
+    expected = theme.plot_palette(theme.palette_tokens(application.palette())).background
 
     for view in views.values():
         assert view.figure.get_facecolor() == expected
@@ -89,6 +77,7 @@ def test_palette_survives_a_real_draw_that_clears_the_axes(qtbot, monkeypatch) -
     """
     import numpy as np
     from tests.support.model_cases import prepared_data
+
     from xrr_fitter.gui.plots import diagnostics
     from xrr_fitter.gui.plots.reflectivity import draw_log
 
@@ -120,5 +109,7 @@ def test_empty_state_message_uses_the_palette_rather_than_a_fixed_grey(qtbot) ->
     draw_empty(view, "标题")
 
     message = next(text for text in view.axes.texts if text.get_text() == "暂无可用数据")
-    expected = theme.plot_palette(theme.palette_tokens(_light_palette())).muted
+    application = QApplication.instance()
+    assert application is not None
+    expected = theme.plot_palette(theme.palette_tokens(application.palette())).muted
     assert message.get_color() == expected

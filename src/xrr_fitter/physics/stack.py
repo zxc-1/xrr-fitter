@@ -9,13 +9,12 @@ from math import ceil, isfinite
 import numpy as np
 
 from xrr_fitter.model.parameters import PhysicalValueError
+from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
     LayerSpec,
     MaterialSpec,
     PeriodicBlock,
-    PeriodicSpan,
-    SlabStack,
     StructureComponent,
     StructureSpec,
     _ExpandedDriftBlock,
