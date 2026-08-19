@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 
+from xrr_fitter.io.export_log import run_log_bytes
 from xrr_fitter.io.export_plots import (
     fit_overview_png,
     parameter_trends_png,
@@ -11,22 +14,24 @@ from xrr_fitter.io.export_plots import (
     sld_profile_png,
 )
 from xrr_fitter.io.export_run import (
-    ArtifactPayload,
+    ArtifactProducer,
     DatasetArtifacts,
     _dataset_directory,
     publish_export_run,
 )
 from xrr_fitter.io.export_tables import (
+    PROJECT_SNAPSHOT_PATH,
     DatasetExportData,
     ExportReplayIdentity,
     batch_workbook_bytes,
     compatibility_workbook_bytes,
     dataset_json_bytes,
     dataset_workbook_bytes,
-    run_log_bytes,
 )
 from xrr_fitter.io.orso import orso_bytes
-from xrr_fitter.model.export import ExportManifest
+from xrr_fitter.io.project_codec import project_to_bytes
+from xrr_fitter.io.source import resolve_source_path
+from xrr_fitter.model.export import ExportFileRecord, ExportManifest
 from xrr_fitter.model.operations import ProjectFitResult
 from xrr_fitter.model.project import DatasetProject, XrrProject
 from xrr_fitter.services.datasets import _prepared_current, service_seed_branches
@@ -105,7 +110,10 @@ def _matching_surface_rejection(dataset: DatasetProject) -> bool:
     )
 
 
-def _contexts(project: XrrProject) -> tuple[DatasetExportData, ...]:
+def _contexts(
+    project: XrrProject,
+    project_reference: ExportFileRecord,
+) -> tuple[DatasetExportData, ...]:
     mapping = tuple(
         (dataset.dataset_id, _dataset_directory(order, dataset.dataset_id))
         for order, dataset in enumerate(project.datasets, start=1)
@@ -125,44 +133,59 @@ def _contexts(project: XrrProject) -> tuple[DatasetExportData, ...]:
                 joint,
             ),
             matching_surface_oxide_rejection=_matching_surface_rejection(dataset),
+            project_reference=project_reference,
         )
         for dataset in project.datasets
     )
 
 
+def _snapshot_project(project: XrrProject) -> XrrProject:
+    datasets = tuple(
+        replace(
+            dataset,
+            source_path=str(resolve_source_path(project, dataset).resolve()),
+        )
+        for dataset in project.datasets
+    )
+    return replace(project, datasets=datasets, base_directory=None)
+
+
 def _dataset_artifacts(context: DatasetExportData, *, include_ort: bool) -> DatasetArtifacts:
     files = [
-        ArtifactPayload("fit_result.xlsx", dataset_workbook_bytes(context)),
-        ArtifactPayload("fit_result.json", dataset_json_bytes(context)),
-        ArtifactPayload("fit_overview.png", fit_overview_png(context)),
-        ArtifactPayload("sld_profile.png", sld_profile_png(context)),
-        ArtifactPayload("residuals.png", residuals_png(context)),
-        ArtifactPayload("run_log.txt", run_log_bytes(context)),
+        ArtifactProducer("fit_result.xlsx", lambda: dataset_workbook_bytes(context)),
+        ArtifactProducer("fit_result.json", lambda: dataset_json_bytes(context)),
+        ArtifactProducer("fit_overview.png", lambda: fit_overview_png(context)),
+        ArtifactProducer("sld_profile.png", lambda: sld_profile_png(context)),
+        ArtifactProducer("residuals.png", lambda: residuals_png(context)),
+        ArtifactProducer("run_log.txt", lambda: run_log_bytes(context)),
     ]
     if include_ort:
         # 架构门禁禁止 ``services.exports`` 依赖 ``analysis`` 或 numpy，协方差矩阵改由
         # model 层 ``UncertaintyReport.covariance`` 派生（修正 9 的合规落点），服务层仅读取
         # 并透传，缺逐参数 sigma 时为 ``None``，导出即记录缺席原因。
-        report = context.result.uncertainty
-        covariance = None if report is None else report.covariance
-        files.append(ArtifactPayload("fit_result.ort", orso_bytes(context, covariance=covariance)))
+        def render_orso() -> bytes:
+            report = context.selected_uncertainty
+            covariance = None if report is None else report.covariance
+            return orso_bytes(context, covariance=covariance)
+
+        files.append(ArtifactProducer("fit_result.ort", render_orso))
     return DatasetArtifacts(context.dataset.dataset_id, tuple(files))
 
 
 def _root_artifacts(
     contexts: tuple[DatasetExportData, ...],
-) -> tuple[ArtifactPayload, ...]:
+) -> tuple[ArtifactProducer, ...]:
     values = [
-        ArtifactPayload(
+        ArtifactProducer(
             "compatibility_summary.xlsx",
-            compatibility_workbook_bytes(contexts),
+            lambda: compatibility_workbook_bytes(contexts),
         )
     ]
     if len(contexts) > 1:
         values.extend(
             (
-                ArtifactPayload("batch_summary.xlsx", batch_workbook_bytes(contexts)),
-                ArtifactPayload("parameter_trends.png", parameter_trends_png(contexts)),
+                ArtifactProducer("batch_summary.xlsx", lambda: batch_workbook_bytes(contexts)),
+                ArtifactProducer("parameter_trends.png", lambda: parameter_trends_png(contexts)),
             )
         )
     return tuple(values)
@@ -184,7 +207,16 @@ def export_result(
     if not project.datasets:
         raise ValueError("project has no datasets")
     _require_current_sources(project)
-    contexts = _contexts(project)
+    snapshot = project_to_bytes(_snapshot_project(project))
+    project_reference = ExportFileRecord(
+        PROJECT_SNAPSHOT_PATH,
+        len(snapshot),
+        sha256(snapshot).hexdigest(),
+    )
+    contexts = _contexts(project, project_reference)
     datasets = tuple(_dataset_artifacts(context, include_ort=include_ort) for context in contexts)
-    root_files = _root_artifacts(contexts)
+    root_files = (
+        ArtifactProducer(PROJECT_SNAPSHOT_PATH, lambda: snapshot),
+        *_root_artifacts(contexts),
+    )
     return publish_export_run(output_dir, datasets, root_files)

@@ -19,8 +19,8 @@ from jsonschema import ValidationError
 from orsopy import fileio
 from orsopy.fileio.base import ContentHash, _read_header_data, _validate_header_data
 
+from xrr_fitter.io.codec_declarations import _fit_config_to_dict
 from xrr_fitter.io.export_tables import DatasetExportData
-from xrr_fitter.io.project_codec import project_to_dict
 from xrr_fitter.version import __version__ as PACKAGE_VERSION
 
 # Measurement start date is not recorded anywhere in the export context; a fixed
@@ -64,8 +64,8 @@ def _validate_serialized_header(text: str) -> None:
     # 此处集中封装私有 ``_read_header_data`` / ``_validate_header_data`` 依赖。
     # 校验对象是「序列化后再由 orsopy 自身 reader 解析回来」的 header：
     # ``Orso.to_dict()`` 直出 ``datetime`` 对象，会被 jsonschema 的字符串日期约束拒绝，
-    # 故改走 ``_read_header_data`` 得到字符串化 header 再校验。失败直接抛、不降级
-    # （``publish_export_run`` 此刻尚未建目录，天然不留半成品）。
+    # 故改走 ``_read_header_data`` 得到字符串化 header 再校验。失败直接抛、不降级，
+    # ``publish_export_run`` 会清理由当前调用持有的 private partial 目录。
     header_dicts, _rows, _version = _read_header_data(io.StringIO(text))
     try:
         _validate_header_data(header_dicts)
@@ -173,7 +173,7 @@ def _extensions(context, result, selected, mask, covariance):
     live here instead. The fitted Qz is explicit because an optimized angle
     offset can make it differ from the imported data Qz column.
     """
-    uncertainty, mismatch_reason = _selected_uncertainty(result, selected)
+    uncertainty = context.selected_uncertainty
     covariance_names = _covariance_names(uncertainty)
     selected_covariance = (
         _validated_covariance(covariance, covariance_names)
@@ -191,7 +191,7 @@ def _extensions(context, result, selected, mask, covariance):
         "excluded_rows": {"count": int(np.count_nonzero(~mask)), "reason": EXCLUDED_ROW_REASON},
     }
     if selected_covariance is None:
-        confidence["covariance_absent_reason"] = mismatch_reason or COVARIANCE_ABSENT_REASON
+        confidence["covariance_absent_reason"] = context.uncertainty_absent_reason or COVARIANCE_ABSENT_REASON
     else:
         confidence["covariance"] = {
             "names": covariance_names,
@@ -202,7 +202,7 @@ def _extensions(context, result, selected, mask, covariance):
         "project_master_seed": context.project.master_seed,
         "algorithm_version": str(context.project.algorithm_version),
         "schema_version": int(context.project.schema_version),
-        "fit_config": project_to_dict(context.project)["fit_config"],
+        "fit_config": _fit_config_to_dict(context.project.fit_config),
         "beam": _beam_payload(context.data.beam),
     }
     pointwise_resolution = _pointwise_resolution_payload(context.data, mask)
@@ -231,18 +231,6 @@ def _pointwise_resolution_payload(data, mask):
         "unit": "1/angstrom",
         "values": np.asarray(sigma_q, dtype=float)[mask].tolist(),
     }
-
-
-def _selected_uncertainty(result, selected):
-    uncertainty = result.uncertainty
-    if uncertainty is None:
-        return None, None
-    if uncertainty.candidate_id == selected.candidate_id:
-        return uncertainty, None
-    return (
-        None,
-        f"uncertainty candidate mismatch: selected={selected.candidate_id}, owner={uncertainty.candidate_id}",
-    )
 
 
 def _beam_payload(beam):

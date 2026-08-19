@@ -8,6 +8,8 @@ import pytest
 from tests.support.model_cases import final_fit_result, fit_candidate, simple_structure
 
 from xrr_fitter.io.xy import xy_bytes
+from xrr_fitter.model.analysis import UncertaintyReport
+from xrr_fitter.model.export import ExportFileRecord
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.services import exports
 from xrr_fitter.services.datasets import add_dataset
@@ -92,7 +94,53 @@ def test_export_builds_the_fixed_artifact_set_before_publication(
     assert result == "manifest"
     dataset = captured["datasets"][0]
     assert tuple(item.path for item in dataset.files) == DATASET_FILES
-    assert tuple(item.path for item in captured["root_files"]) == ("compatibility_summary.xlsx",)
+    assert tuple(item.path for item in captured["root_files"]) == (
+        "project_snapshot.xrrproj.json",
+        "compatibility_summary.xlsx",
+    )
+
+
+def test_export_defers_serializers_until_artifact_render(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = _fitted_project(tmp_path)
+    captured: dict[str, object] = {}
+    calls: list[str] = []
+    for name in (
+        "dataset_json_bytes",
+        "dataset_workbook_bytes",
+        "fit_overview_png",
+        "sld_profile_png",
+        "residuals_png",
+        "run_log_bytes",
+        "compatibility_workbook_bytes",
+    ):
+        monkeypatch.setattr(
+            exports,
+            name,
+            lambda *_args, _name=name: (calls.append(_name), _name.encode())[1],
+        )
+    monkeypatch.setattr(exports, "publish_export_run", _capture_publish(captured))
+
+    exports.export_result(value, tmp_path / "exports")
+
+    assert calls == []
+    producers = (
+        *captured["root_files"],
+        *captured["datasets"][0].files,
+    )
+    rendered = {producer.path: producer.render() for producer in producers}
+    assert set(calls) == {
+        "dataset_json_bytes",
+        "dataset_workbook_bytes",
+        "fit_overview_png",
+        "sld_profile_png",
+        "residuals_png",
+        "run_log_bytes",
+        "compatibility_workbook_bytes",
+    }
+    assert rendered["project_snapshot.xrrproj.json"].startswith(b"{")
 
 
 def test_export_rechecks_source_after_initial_inspection_before_allocating(
@@ -158,4 +206,57 @@ def test_export_appends_single_ort_when_requested(
 
     dataset = captured["datasets"][0]
     assert tuple(item.path for item in dataset.files) == DATASET_FILES_WITH_ORT
-    assert tuple(item.path for item in captured["root_files"]) == ("compatibility_summary.xlsx",)
+    assert tuple(item.path for item in captured["root_files"]) == (
+        "project_snapshot.xrrproj.json",
+        "compatibility_summary.xlsx",
+    )
+
+
+def test_export_omits_ort_covariance_owned_by_another_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = _fitted_project(tmp_path)
+    first = value.datasets[0].last_valid_result.best_candidate
+    selected = replace(first, candidate_id="candidate-b")
+    uncertainty = UncertaintyReport(
+        correlation_names=("scale",),
+        correlation_matrix=np.ones((1, 1)),
+        profiles=(),
+        bootstrap_intervals=(),
+        bootstrap_failure_rate=0.0,
+        boundary_hits=(),
+        strong_correlations=(),
+        systematic_residual=False,
+        diagnostics=(),
+        candidate_id=first.candidate_id,
+        parameter_sigma=np.array([0.1]),
+    )
+    fit_result = replace(
+        value.datasets[0].last_valid_result,
+        candidates=(first, selected),
+        uncertainty=uncertainty,
+    )
+    dataset = replace(value.datasets[0], last_valid_result=fit_result)
+    ui_state = replace(
+        value.ui_state,
+        selected_candidate_ids=((dataset.dataset_id, selected.candidate_id),),
+    )
+    value = replace(value, datasets=(dataset,), ui_state=ui_state)
+    context = exports._contexts(
+        value,
+        ExportFileRecord("project_snapshot.xrrproj.json", 123, "b" * 64),
+    )[0]
+    captured: dict[str, object] = {}
+    _stub_serializers(monkeypatch)
+
+    def serialize_orso(_context, *, covariance):
+        captured["covariance"] = covariance
+        return b"orso-document"
+
+    monkeypatch.setattr(exports, "orso_bytes", serialize_orso)
+
+    artifacts = exports._dataset_artifacts(context, include_ort=True)
+    next(item for item in artifacts.files if item.path == "fit_result.ort").render()
+
+    assert captured["covariance"] is None

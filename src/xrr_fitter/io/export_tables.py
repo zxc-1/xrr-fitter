@@ -46,12 +46,14 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from xrr_fitter.io.codec_declarations import _fit_config_to_dict
 from xrr_fitter.io.codec_results import fit_result_to_dict
-from xrr_fitter.io.project_codec import project_to_dict
-from xrr_fitter.model.analysis import FitResult
+from xrr_fitter.io.project_codec import _dataset_to_dict
+from xrr_fitter.model.analysis import FitResult, UncertaintyReport
 from xrr_fitter.model.data import PreparedData
+from xrr_fitter.model.export import ExportFileRecord
 from xrr_fitter.model.fitting import FitCandidate
-from xrr_fitter.model.instrument import PhysicsDiagnostic
+from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue
 from xrr_fitter.model.project import DatasetProject, XrrProject
 
 WORKBOOK_CREATED = datetime(2000, 1, 1)
@@ -60,6 +62,8 @@ WORKBOOK_OPTIONS = {
     "strings_to_urls": False,
     "strings_to_numbers": False,
 }
+EXPORT_SCHEMA_VERSION = 2
+PROJECT_SNAPSHOT_PATH = "project_snapshot.xrrproj.json"
 
 
 def _mapping_pairs(values: object) -> tuple[tuple[str, str], ...]:
@@ -157,6 +161,7 @@ class DatasetExportData:
     selected: FitCandidate
     replay_identity: ExportReplayIdentity
     matching_surface_oxide_rejection: bool
+    project_reference: ExportFileRecord
 
     def __post_init__(self) -> None:
         _validate_export_roots(self)
@@ -169,6 +174,10 @@ class DatasetExportData:
             raise TypeError("replay_identity must be an ExportReplayIdentity")
         if not isinstance(self.matching_surface_oxide_rejection, bool):
             raise TypeError("matching_surface_oxide_rejection must be bool")
+        if not isinstance(self.project_reference, ExportFileRecord):
+            raise TypeError("project_reference must be an ExportFileRecord")
+        if self.project_reference.path != PROJECT_SNAPSHOT_PATH:
+            raise ValueError(f"project_reference path must be {PROJECT_SNAPSHOT_PATH}")
         object.__setattr__(self, "directory_mapping", mapping)
 
     @property
@@ -178,18 +187,34 @@ class DatasetExportData:
             raise ValueError("dataset has no fit result")
         return result
 
+    def parameter_definition(self, name: str) -> ParameterDefinition:
+        matches = tuple(item for item in self.result.parameter_definitions if item.name == name)
+        if len(matches) != 1:
+            raise ValueError(f"selected parameter has no unique definition: {name}")
+        return matches[0]
+
+    @property
+    def selected_uncertainty(self) -> UncertaintyReport | None:
+        report = self.result.uncertainty
+        if report is None or report.candidate_id != self.selected.candidate_id:
+            return None
+        return report
+
+    @property
+    def uncertainty_absent_reason(self) -> str | None:
+        report = self.result.uncertainty
+        selected = self.selected.candidate_id
+        if report is None:
+            return "uncertainty not estimated for this fit result"
+        if report.candidate_id is None:
+            return f"uncertainty candidate is unowned: selected={selected}"
+        if report.candidate_id != selected:
+            return f"uncertainty candidate mismatch: selected={selected}, owner={report.candidate_id}"
+        return None
+
 
 def _project_dataset_document(context: DatasetExportData) -> dict[str, Any]:
-    document = project_to_dict(context.project)
-    index = next(index for index, dataset in enumerate(context.project.datasets) if dataset is context.dataset)
-    return document["datasets"][index]
-
-
-def _export_project_document(project: XrrProject) -> dict[str, Any]:
-    document = project_to_dict(project)
-    for dataset in document["datasets"]:
-        dataset.pop("display_name", None)
-    return document
+    return _dataset_to_dict(context.dataset)
 
 
 def _finite_scalar(value: object) -> object:
@@ -265,16 +290,16 @@ def _run_info_payload(
 ) -> dict[str, object]:
     result = context.result
     identity = context.replay_identity
-    project_document = project_to_dict(context.project)
     config = context.project.fit_config
     fitted_instrument = {
         value.name: value.value for value in context.selected.parameters if value.name.startswith("instrument.")
     }
-    mcmc = result.uncertainty.mcmc if result.uncertainty is not None else None
+    report = context.selected_uncertainty
+    mcmc = None if report is None else report.mcmc
     return {
         "schema_version": context.project.schema_version,
         "algorithm_version": context.project.algorithm_version,
-        "fit_config": project_document["fit_config"],
+        "fit_config": _fit_config_to_dict(config),
         "project_master_seed": context.project.master_seed,
         "service_seed_tree_version": identity.service_seed_tree_version,
         "independent_root_child": identity.independent_root_child,
@@ -282,6 +307,7 @@ def _run_info_payload(
         "optimizer_child_seeds": list(result.child_seeds),
         "mcmc_child_seed": None if mcmc is None else mcmc.child_seed,
         "selected_candidate_id": context.selected.candidate_id,
+        "uncertainty_absent_reason": context.uncertainty_absent_reason,
         "fitted_instrument_parameters": fitted_instrument,
         "dataset_id": context.dataset.dataset_id,
         "source_path": context.dataset.source_path,
@@ -325,14 +351,22 @@ def _convergence_payload(result: FitResult) -> dict[str, object]:
     }
 
 
+def _project_reference(record: ExportFileRecord) -> dict[str, object]:
+    return {
+        "path": record.path,
+        "size": record.size,
+        "sha256": record.sha256,
+    }
+
+
 def dataset_payload(context: DatasetExportData) -> dict[str, object]:
     """Build the complete strict-JSON payload for one selected dataset."""
     if not isinstance(context, DatasetExportData):
         raise TypeError("context must be DatasetExportData")
-    project_document = _export_project_document(context.project)
     dataset_document = _project_dataset_document(context)
     fit_result, candidates = _candidate_views(context.result)
     return {
+        "export_schema_version": EXPORT_SCHEMA_VERSION,
         "dataset_id": context.dataset.dataset_id,
         "source_path": context.dataset.source_path,
         "source_sha256": context.dataset.source_sha256,
@@ -344,7 +378,7 @@ def dataset_payload(context: DatasetExportData) -> dict[str, object]:
         "raw_data": _raw_data_payload(context, dataset_document),
         "model_residuals": _model_residuals_payload(context),
         "fit_result": fit_result,
-        "project": project_document,
+        "project": _project_reference(context.project_reference),
         "candidates": candidates,
         "convergence": _convergence_payload(context.result),
         "run_info": _run_info_payload(context, dataset_document),
@@ -359,15 +393,6 @@ def _strict_json(value: object, *, pretty: bool) -> str:
     if pretty:
         return json.dumps(value, indent=2, **options)
     return json.dumps(value, **options)
-
-
-def _compact_json(value: object) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        separators=(",", ":"),
-    )
 
 
 def json_text(value: object) -> str:
@@ -529,7 +554,7 @@ def _model_frame(context: DatasetExportData) -> pd.DataFrame:
 
 
 def _correlation_frame(context: DatasetExportData) -> pd.DataFrame:
-    report = context.result.uncertainty
+    report = context.selected_uncertainty
     if report is None:
         return pd.DataFrame(columns=["parameter"])
     rows = []
@@ -550,7 +575,7 @@ def _correlation_frame(context: DatasetExportData) -> pd.DataFrame:
 
 def _profiles_frame(context: DatasetExportData) -> pd.DataFrame:
     columns = ["name", "value", "objective", "lower_closed", "upper_closed"]
-    report = context.result.uncertainty
+    report = context.selected_uncertainty
     if report is None:
         return pd.DataFrame(columns=columns)
     rows = [
@@ -588,6 +613,7 @@ def _run_info_frame(context: DatasetExportData) -> pd.DataFrame:
         "optimizer_child_seeds": json_text(info["optimizer_child_seeds"]),
         "mcmc_child_seed": info["mcmc_child_seed"],
         "selected_candidate_id": info["selected_candidate_id"],
+        "uncertainty_absent_reason": info["uncertainty_absent_reason"],
         "fitted_instrument_parameters": json_text(info["fitted_instrument_parameters"]),
         "confidence": info["confidence"],
         "candidate_count": len(context.result.candidates),
@@ -742,89 +768,36 @@ def compatibility_workbook_bytes(contexts: object) -> bytes:
     )
 
 
+def _batch_parameter_row(
+    context: DatasetExportData,
+    parameter: ParameterValue,
+) -> dict[str, object]:
+    definition = context.parameter_definition(parameter.name)
+    return {
+        "dataset_id": context.dataset.dataset_id,
+        "parameter_name": parameter.name,
+        "display_name": definition.display_name,
+        "category": definition.category,
+        "value": parameter.value,
+        "lower": parameter.lower,
+        "upper": parameter.upper,
+        "unit": definition.unit,
+    }
+
+
 def batch_workbook_bytes(contexts: object) -> bytes:
     """Serialize deterministic multi-dataset summary and parameter sheets."""
     values = _contexts(contexts)
-    columns = ["dataset_id", "parameter_name", "value", "lower", "upper"]
-    rows = [
-        {
-            "dataset_id": context.dataset.dataset_id,
-            "parameter_name": parameter.name,
-            "value": parameter.value,
-            "lower": parameter.lower,
-            "upper": parameter.upper,
-        }
-        for context in values
-        for parameter in context.selected.parameters
+    columns = [
+        "dataset_id",
+        "parameter_name",
+        "display_name",
+        "category",
+        "value",
+        "lower",
+        "upper",
+        "unit",
     ]
+    rows = [_batch_parameter_row(context, parameter) for context in values for parameter in context.selected.parameters]
     parameters = pd.DataFrame(rows, columns=columns)
     return _workbook_bytes((("Summary", _summary_frame(values)), ("Parameters", parameters)))
-
-
-def _diagnostic_qz_range(
-    context: DatasetExportData,
-    indices: tuple[int, ...],
-) -> str:
-    size = context.data.qz_a_inv.size
-    valid = tuple(index for index in indices if 0 <= index < size)
-    if not valid:
-        return "[]"
-    qz = context.data.qz_a_inv[list(valid)]
-    return f"[{float(np.min(qz)):.12g},{float(np.max(qz)):.12g}]"
-
-
-def _diagnostic_line(
-    context: DatasetExportData,
-    diagnostic: PhysicsDiagnostic,
-) -> str:
-    indices = _compact_json(diagnostic.point_indices)
-    qz_range = _diagnostic_qz_range(context, diagnostic.point_indices)
-    return f"{diagnostic.code}: {diagnostic.message}; full_data_indices={indices}; qz_a_inv_range={qz_range}"
-
-
-def _persisted_diagnostics(
-    context: DatasetExportData,
-) -> tuple[PhysicsDiagnostic, ...]:
-    uncertainty = context.result.uncertainty
-    if uncertainty is None:
-        return context.selected.diagnostics
-    return (*context.selected.diagnostics, *uncertainty.diagnostics)
-
-
-def _rejected_surface_oxide(
-    context: DatasetExportData,
-    diagnostics: tuple[PhysicsDiagnostic, ...],
-) -> bool:
-    residual = any(value.code == "surface_thin_layer_residual" for value in diagnostics)
-    return context.matching_surface_oxide_rejection and residual
-
-
-def run_log_bytes(context: DatasetExportData) -> bytes:
-    """Serialize stable warnings, seed lineage, stages, and diagnostics."""
-    result = context.result
-    identity = context.replay_identity
-    mcmc = result.uncertainty.mcmc if result.uncertainty is not None else None
-    lines = [
-        f"dataset_id: {context.dataset.dataset_id}",
-        f"confidence: {result.confidence.value}",
-        f"candidate_count: {len(result.candidates)}",
-        f"project_master_seed: {context.project.master_seed}",
-        f"service_seed_tree_version: {identity.service_seed_tree_version}",
-        f"independent_root_child: {identity.independent_root_child}",
-        f"joint_root_child: {identity.joint_root_child}",
-        f"optimizer_child_seeds: {_compact_json(result.child_seeds)}",
-        f"mcmc_child_seed: {None if mcmc is None else mcmc.child_seed}",
-    ]
-    lines.extend(f"warning: {value}" for value in result.warnings)
-    lines.extend(
-        "stage "
-        f"{stage.stage}: candidate_ids={_compact_json(stage.candidate_ids)}; "
-        f"best_objective={stage.best_objective}; total_nfev={stage.total_nfev}; "
-        f"stop_reasons={_compact_json(stage.stop_reasons)}"
-        for stage in result.stage_summaries
-    )
-    diagnostics = _persisted_diagnostics(context)
-    lines.extend(_diagnostic_line(context, value) for value in diagnostics)
-    if _rejected_surface_oxide(context, diagnostics):
-        lines.append("疑似缺失自然氧化层（此前已拒绝建议）")
-    return ("\n".join(lines) + "\n").encode("utf-8")

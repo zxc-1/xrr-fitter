@@ -35,6 +35,7 @@ from xrr_fitter.io.export_tables import DatasetExportData, ExportReplayIdentity
 from xrr_fitter.io.orso import orso_bytes
 from xrr_fitter.model.analysis import UncertaintyReport
 from xrr_fitter.model.data import BeamSpec
+from xrr_fitter.model.export import ExportFileRecord
 from xrr_fitter.model.parameters import ParameterValue
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -167,6 +168,7 @@ def _orso_context(
         selected=candidate,
         replay_identity=ExportReplayIdentity(1, 10101, 20202),
         matching_surface_oxide_rejection=False,
+        project_reference=ExportFileRecord("project_snapshot.xrrproj.json", 123, "b" * 64),
     )
 
 
@@ -250,6 +252,22 @@ def test_orso_bytes_roundtrips_data_parameters_and_extension() -> None:
     _assert_roundtrip_model(loaded, context, mask)
     _assert_roundtrip_confidence(loaded, context, covariance)
     _assert_roundtrip_reduction(loaded, context)
+
+
+def test_orso_bytes_does_not_reencode_the_complete_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _orso_context()
+    monkeypatch.setattr(
+        orso_module,
+        "project_to_dict",
+        lambda _project: pytest.fail("ORSO export re-encoded the complete project"),
+        raising=False,
+    )
+
+    loaded = _load_single(orso_bytes(context, covariance=None))
+
+    assert loaded.info.user_data["xrr_fitter.reduction"]["project_master_seed"] == context.project.master_seed
 
 
 def test_orso_bytes_roundtrips_pointwise_q_resolution_as_standard_error_column() -> None:
@@ -486,6 +504,7 @@ def test_orso_bytes_omits_uncertainty_owned_by_another_candidate() -> None:
     assert confidence["parameters"][0]["value"] == selected.parameters[0].value
     assert confidence["error_bars"] == []
     assert "covariance" not in confidence
+    assert confidence["covariance_absent_reason"] == mismatched.uncertainty_absent_reason
     assert first.candidate_id in confidence["covariance_absent_reason"]
     assert selected.candidate_id in confidence["covariance_absent_reason"]
 

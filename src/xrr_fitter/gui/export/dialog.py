@@ -64,7 +64,10 @@ def _covariance_absent(project: api.XrrProject) -> bool:
 def export_summary(manifest: api.ExportManifest) -> str:
     """Render every manifest record as its actual published path."""
     dataset_ids = ", ".join(item.dataset_id for item in manifest.datasets)
-    files = "\n".join(str(manifest.run_directory / record.path) for record in manifest.files)
+    files = "\n".join(
+        f"{manifest.run_directory / record.path} ({record.size} bytes, sha256 {record.sha256})"
+        for record in manifest.files
+    )
     return f"导出完成：{manifest.run_directory}\n数据集：{dataset_ids}\n{files}"
 
 

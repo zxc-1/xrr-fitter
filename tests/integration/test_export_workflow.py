@@ -55,6 +55,10 @@ def _fitted_project() -> api.XrrProject:
     return api.fit_project(value).updated_project
 
 
+def _root_file_paths(manifest: api.ExportManifest) -> tuple[str, ...]:
+    return tuple(record.path for record in manifest.root_files)
+
+
 def _export_tree(manifest: api.ExportManifest) -> dict[str, object]:
     datasets = {}
     for dataset in manifest.datasets:
@@ -70,7 +74,7 @@ def _export_tree(manifest: api.ExportManifest) -> dict[str, object]:
         "is_directory": manifest.run_directory.is_dir(),
         "partial_directories": tuple(manifest.run_directory.parent.glob(".partial-*")),
         "dataset_order": tuple(item.dataset_id for item in manifest.datasets),
-        "root_files": tuple(record.path for record in manifest.root_files),
+        "root_files": _root_file_paths(manifest),
         "datasets": datasets,
     }
 
@@ -85,6 +89,14 @@ def test_export_multi_dataset_writes_complete_atomic_artifact_tree(
 
     manifest = api.export_result(value, tmp_path / "exports")
 
+    snapshot = manifest.run_directory / "project_snapshot.xrrproj.json"
+    assert snapshot.is_file()
+    reopened = api.load_project(snapshot)
+    assert tuple(item.dataset_id for item in reopened.datasets) == tuple(item.dataset_id for item in value.datasets)
+    assert all(item.last_valid_result is not None for item in reopened.datasets)
+    assert reopened.ui_state.selected_candidate_ids == value.ui_state.selected_candidate_ids
+    assert all(Path(item.source_path).is_absolute() for item in reopened.datasets)
+
     assert _export_tree(manifest) == {
         "parent": tmp_path / "exports",
         "is_directory": True,
@@ -93,7 +105,9 @@ def test_export_multi_dataset_writes_complete_atomic_artifact_tree(
         "root_files": (
             "batch_summary.xlsx",
             "compatibility_summary.xlsx",
+            "export_manifest.json",
             "parameter_trends.png",
+            "project_snapshot.xrrproj.json",
         ),
         "datasets": {
             original.dataset_id: {

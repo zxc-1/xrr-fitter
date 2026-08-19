@@ -47,7 +47,22 @@ def _fitted_project(tmp_path: Path, *, datasets: int = 1) -> api.XrrProject:
         log_residuals_decades=np.zeros(data.qz_a_inv.size),
         weighted_residuals=np.zeros(data.qz_a_inv.size),
     )
-    result = final_fit_result(candidate)
+    result = replace(
+        final_fit_result(candidate),
+        parameter_definitions=(
+            api.ParameterDefinition(
+                "scale",
+                "Scale",
+                "",
+                "instrument",
+                1.0,
+                0.5,
+                1.5,
+                "linear",
+                False,
+            ),
+        ),
+    )
     first = replace(value.datasets[0], last_valid_result=result)
     rows = [first]
     if datasets == 2:
@@ -67,13 +82,15 @@ def _workflow(project: api.XrrProject):
 
 def _manifest(directory: Path):
     records = (
-        SimpleNamespace(path="compatibility_summary.xlsx"),
-        SimpleNamespace(path="01-curve/fit_result.json"),
+        SimpleNamespace(path="compatibility_summary.xlsx", size=101, sha256="a" * 64),
+        SimpleNamespace(path="export_manifest.json", size=202, sha256="b" * 64),
+        SimpleNamespace(path="01-curve/fit_result.json", size=303, sha256="c" * 64),
     )
     return SimpleNamespace(
         run_directory=directory / "run",
         datasets=(SimpleNamespace(dataset_id="curve"),),
         files=records,
+        root_files=records[:2],
     )
 
 
@@ -169,7 +186,10 @@ def test_export_dialog_uses_scrollable_summary_after_success(
     assert workflow.export_results_dialog(None) is manifest
 
     assert shown == [(workflow.summary_text, None), "exec"]
-    assert str(manifest.run_directory / manifest.files[1].path) in workflow.summary_text
+    record = manifest.files[1]
+    assert (
+        f"{manifest.run_directory / record.path} ({record.size} bytes, sha256 {record.sha256})"
+    ) in workflow.summary_text
 
 
 def test_export_failure_preserves_previous_summary_and_published_run(
@@ -305,7 +325,13 @@ def test_export_results_discloses_covariance_absence_for_selected_candidate_mism
     manifest = SimpleNamespace(
         run_directory=tmp_path / "exports" / "run",
         datasets=(SimpleNamespace(dataset_id="curve"),),
-        files=(SimpleNamespace(path="01-curve/fit_result.ort"),),
+        files=(
+            SimpleNamespace(
+                path="01-curve/fit_result.ort",
+                size=123,
+                sha256="d" * 64,
+            ),
+        ),
     )
     monkeypatch.setattr(api, "export_result", lambda *_args, **_kwargs: manifest)
     workflow = _workflow(project)

@@ -27,7 +27,11 @@ from xrr_fitter.io.export_plots import (
 )
 from xrr_fitter.io.export_tables import DatasetExportData, ExportReplayIdentity
 from xrr_fitter.model.analysis import SldUncertaintyBands, UncertaintyReport
+from xrr_fitter.model.export import ExportFileRecord
 from xrr_fitter.model.instrument import PhysicsDiagnostic
+from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue
+
+PROJECT_REFERENCE = ExportFileRecord("project_snapshot.xrrproj.json", 123, "b" * 64)
 
 
 def test_png_software_metadata_matches_locked_matplotlib_version() -> None:
@@ -57,7 +61,22 @@ def _context(
         sld_profile_a2=np.array([0.0, 2.0e-5 + 1.0e-7j, 1.0e-5], dtype=complex),
         diagnostics=diagnostics,
     )
-    result = final_fit_result(candidate)
+    result = replace(
+        final_fit_result(candidate),
+        parameter_definitions=(
+            ParameterDefinition(
+                "scale",
+                "Scale",
+                "",
+                "instrument",
+                1.0,
+                0.5,
+                1.5,
+                "linear",
+                False,
+            ),
+        ),
+    )
     dataset = dataset_project(dataset_id, result=result)
     dataset = replace(
         dataset,
@@ -77,6 +96,7 @@ def _context(
         candidate,
         ExportReplayIdentity(1, 10101, 20202),
         False,
+        PROJECT_REFERENCE,
     )
 
 
@@ -95,9 +115,69 @@ def _project_contexts(*dataset_ids: str) -> tuple[DatasetExportData, ...]:
             selected=context.selected,
             replay_identity=context.replay_identity,
             matching_surface_oxide_rejection=(context.matching_surface_oxide_rejection),
+            project_reference=context.project_reference,
         )
         for context in originals
     )
+
+
+def _trend_context(dataset_id: str, mixed_unit: str) -> DatasetExportData:
+    original = _context(dataset_id)
+    selected = replace(
+        original.selected,
+        parameters=(
+            ParameterValue("scale", 1.0, 0.5, 1.5),
+            ParameterValue("thickness", 20.0, 2.0, 100.0),
+            ParameterValue("mixed-unit", 3.0, 0.0, 10.0),
+        ),
+    )
+    definitions = (
+        ParameterDefinition("scale", "Scale", "", "instrument", 1.0, 0.5, 1.5, "linear", False),
+        ParameterDefinition(
+            "thickness",
+            "Thickness",
+            "angstrom",
+            "structure",
+            20.0,
+            2.0,
+            100.0,
+            "linear",
+            False,
+        ),
+        ParameterDefinition(
+            "mixed-unit",
+            "Mixed unit",
+            mixed_unit,
+            "test",
+            3.0,
+            0.0,
+            10.0,
+            "linear",
+            False,
+        ),
+    )
+    result = replace(
+        original.result,
+        parameter_definitions=definitions,
+        candidates=(selected,),
+    )
+    dataset = replace(original.dataset, last_valid_result=result)
+    return replace(
+        original,
+        project=project(dataset),
+        dataset=dataset,
+        selected=selected,
+    )
+
+
+def _unit_trend_contexts() -> tuple[DatasetExportData, ...]:
+    originals = (_trend_context("first", "unit-a"), _trend_context("second", "unit-b"))
+    value = project(*(context.dataset for context in originals))
+    mapping = (
+        ("first", "001-first-aaaaaaaa"),
+        ("second", "002-second-aaaaaaaa"),
+    )
+    return tuple(replace(context, project=value, directory_mapping=mapping) for context in originals)
 
 
 def test_export_plots_are_deterministic_pngs_and_close_every_figure() -> None:
@@ -132,6 +212,37 @@ def test_export_parameter_trends_are_deterministic_and_use_project_order() -> No
     assert first == second
     assert first.startswith(b"\x89PNG\r\n\x1a\n")
     assert tuple(Gcf.get_all_fig_managers()) == before
+
+
+def test_export_parameter_trends_group_common_parameters_by_unit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.axes import Axes
+
+    plotted_names: list[str] = []
+    labels: list[str] = []
+    original_plot = Axes.plot
+    original_label = Axes.set_ylabel
+
+    def capture_plot(axis, *args, **kwargs):
+        plotted_names.append(kwargs["label"])
+        return original_plot(axis, *args, **kwargs)
+
+    def capture_label(axis, label, *args, **kwargs):
+        labels.append(label)
+        return original_label(axis, label, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "plot", capture_plot)
+    monkeypatch.setattr(Axes, "set_ylabel", capture_label)
+
+    payload = parameter_trends_png(_unit_trend_contexts())
+
+    assert payload.startswith(b"\x89PNG\r\n\x1a\n")
+    assert set(labels) == {
+        "Selected value (dimensionless)",
+        "Selected value (angstrom)",
+    }
+    assert "mixed-unit" not in plotted_names
 
 
 def test_export_parameter_trends_use_stable_order_labels_for_unicode_dataset_ids(
@@ -255,6 +366,7 @@ def _context_with_bands() -> DatasetExportData:
         systematic_residual=False,
         diagnostics=(),
         sld_bands=_zero_width_bands(),
+        candidate_id=base.selected.candidate_id,
     )
     result = replace(base.result, uncertainty=report)
     dataset = replace(base.dataset, last_valid_result=result)
@@ -266,7 +378,32 @@ def _context_with_bands() -> DatasetExportData:
         base.selected,
         base.replay_identity,
         base.matching_surface_oxide_rejection,
+        base.project_reference,
     )
+
+
+def _mismatched_and_absent_band_contexts() -> tuple[DatasetExportData, DatasetExportData]:
+    original = _context_with_bands()
+    selected = replace(original.selected, candidate_id="candidate-b")
+    mismatched_result = replace(
+        original.result,
+        candidates=(original.selected, selected),
+    )
+    mismatched_dataset = replace(original.dataset, last_valid_result=mismatched_result)
+    mismatched = replace(
+        original,
+        project=project(mismatched_dataset),
+        dataset=mismatched_dataset,
+        selected=selected,
+    )
+    absent_result = replace(mismatched_result, uncertainty=None)
+    absent_dataset = replace(mismatched_dataset, last_valid_result=absent_result)
+    absent = replace(
+        mismatched,
+        project=project(absent_dataset),
+        dataset=absent_dataset,
+    )
+    return mismatched, absent
 
 
 # Frozen from the three renderers at ``bb5f253^`` in the locked Matplotlib
@@ -298,6 +435,13 @@ def test_sld_profile_png_with_bands_differs_and_stays_deterministic() -> None:
     first = sld_profile_png(banded)
     assert first == sld_profile_png(banded)
     assert first != sld_profile_png(_context())
+
+
+def test_sld_profile_omits_bands_owned_by_another_candidate() -> None:
+    mismatched, absent = _mismatched_and_absent_band_contexts()
+
+    assert mismatched.result.uncertainty.candidate_id != mismatched.selected.candidate_id
+    assert sld_profile_png(mismatched) == sld_profile_png(absent)
 
 
 def test_sld_profile_png_takes_its_caption_from_the_band_object(monkeypatch) -> None:
