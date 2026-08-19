@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -24,6 +25,7 @@ from tools.verify_distribution import canonicalize_sdist
 ROOT = Path(__file__).resolve().parents[2]
 RELEASE_SPEC = ROOT / "verification" / "release-spec.json"
 BUILD_VERSIONS = {"setuptools": "75.8.2", "wheel": "0.45.1"}
+PINNED_VCS_URL = re.compile(r"@[0-9a-f]{40}$")
 
 
 def _release_spec() -> dict[str, object]:
@@ -46,6 +48,27 @@ def test_gui_entrypoint_and_shell_modules_are_explicit() -> None:
         ROOT / "src/xrr_fitter/cli/main.py",
     }
     assert all(path.is_file() and not path.is_symlink() for path in required)
+
+
+def test_all_declared_package_dependencies_are_exactly_pinned() -> None:
+    payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    groups = {
+        "build-system.requires": payload["build-system"]["requires"],
+        "project.dependencies": payload["project"]["dependencies"],
+        "project.optional-dependencies.test": payload["project"]["optional-dependencies"]["test"],
+        "tool.xrr.windows-packaging.requires": payload["tool"]["xrr"]["windows-packaging"]["requires"],
+    }
+    unpinned = []
+    for group, values in groups.items():
+        for value in values:
+            requirement = Requirement(value)
+            specifiers = tuple(requirement.specifier)
+            exact_version = len(specifiers) == 1 and specifiers[0].operator == "==" and "*" not in specifiers[0].version
+            exact_vcs_commit = requirement.url is not None and PINNED_VCS_URL.search(requirement.url)
+            if not exact_version and not exact_vcs_commit:
+                unpinned.append(f"{group}: {value}")
+
+    assert unpinned == []
 
 
 def test_release_spec_renders_both_script_tables() -> None:
