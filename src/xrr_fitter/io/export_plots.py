@@ -219,6 +219,17 @@ def _common_parameter_names(values: tuple[DatasetExportData, ...]) -> tuple[str,
     return tuple(sorted(set.intersection(*parameter_sets)))
 
 
+def _common_parameter_units(
+    values: tuple[DatasetExportData, ...],
+) -> dict[str, tuple[str, ...]]:
+    groups: dict[str, list[str]] = {}
+    for name in _common_parameter_names(values):
+        units = tuple(value.parameter_definition(name).unit for value in values)
+        if len(set(units)) == 1:
+            groups.setdefault(units[0], []).append(name)
+    return {unit: tuple(names) for unit, names in sorted(groups.items())}
+
+
 def _parameter_sample(context: DatasetExportData, name: str) -> float:
     return next(parameter.value for parameter in context.selected.parameters if parameter.name == name)
 
@@ -243,18 +254,23 @@ def _plot_parameter_lines(
 def parameter_trends_png(contexts: object) -> bytes:
     """Render selected parameter values in project dataset order."""
     values = _trend_contexts(contexts)
-    names = _common_parameter_names(values)
-    figure = Figure(figsize=(7.2, 4.2), layout="constrained")
-    axis = figure.subplots()
-    positions = np.arange(len(values), dtype=int)
-    _plot_parameter_lines(axis, values, names, positions)
-    axis.set_xticks(
-        positions,
-        tuple(str(index + 1) for index in positions),
-        rotation=20,
+    unit_groups = _common_parameter_units(values)
+    plot_groups = unit_groups or {"": ()}
+    figure = Figure(
+        figsize=(7.2, max(4.2, 2.8 * max(1, len(plot_groups)))),
+        layout="constrained",
     )
-    axis.set_xlabel("Dataset order")
-    axis.set_ylabel("Selected value")
-    if names:
-        axis.legend(fontsize="small")
+    axes = figure.subplots(len(plot_groups), 1, squeeze=False).ravel()
+    positions = np.arange(len(values), dtype=int)
+    for axis, (unit, names) in zip(axes, plot_groups.items(), strict=True):
+        _plot_parameter_lines(axis, values, names, positions)
+        axis.set_xticks(
+            positions,
+            tuple(str(index + 1) for index in positions),
+            rotation=20,
+        )
+        axis.set_xlabel("Dataset order")
+        axis.set_ylabel(f"Selected value ({unit or 'dimensionless'})")
+        if names:
+            axis.legend(fontsize="small")
     return _png(figure)

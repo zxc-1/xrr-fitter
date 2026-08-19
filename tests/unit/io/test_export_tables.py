@@ -102,8 +102,8 @@ def _context(dataset_id: str = "curve") -> DatasetExportData:
     )
 
 
-def _context_with_parameter_metadata() -> DatasetExportData:
-    original = _context()
+def _context_with_parameter_metadata(dataset_id: str = "curve") -> DatasetExportData:
+    original = _context(dataset_id)
     definitions = (
         ParameterDefinition(
             "scale",
@@ -178,7 +178,7 @@ def _context_with_length_parameter(dataset_id: str = "curve") -> DatasetExportDa
 
 
 def _project_contexts(*dataset_ids: str) -> tuple[DatasetExportData, ...]:
-    originals = tuple(_context(dataset_id) for dataset_id in dataset_ids)
+    originals = tuple(_context_with_parameter_metadata(dataset_id) for dataset_id in dataset_ids)
     value = project(*(context.dataset for context in originals))
     mapping = tuple(
         (dataset_id, f"{index:03d}-dataset-aaaaaaaa") for index, dataset_id in enumerate(dataset_ids, start=1)
@@ -733,14 +733,21 @@ def test_export_batch_parameters_put_dataset_identity_first() -> None:
     first, second = _project_contexts("first", "second")
 
     workbook = batch_workbook_bytes((second, first))
-    parameters = pd.read_excel(BytesIO(workbook), sheet_name="Parameters")
+    parameters = pd.read_excel(
+        BytesIO(workbook),
+        sheet_name="Parameters",
+        keep_default_na=False,
+    )
 
     assert parameters.columns.tolist() == [
         "dataset_id",
         "parameter_name",
+        "display_name",
+        "category",
         "value",
         "lower",
         "upper",
+        "unit",
     ]
     assert parameters["dataset_id"].tolist() == [
         "first",
@@ -748,6 +755,28 @@ def test_export_batch_parameters_put_dataset_identity_first() -> None:
         "second",
         "second",
     ]
+    scale = parameters[parameters["parameter_name"] == "scale"]
+    assert scale["display_name"].eq("Scale").all()
+    assert scale["category"].eq("instrument").all()
+    assert scale["unit"].eq("").all()
+
+
+def test_export_batch_rejects_selected_parameter_without_definition() -> None:
+    first, second = _project_contexts("first", "second")
+    selected = replace(
+        first.selected,
+        parameters=(*first.selected.parameters, ParameterValue("missing-name", 1.0, 0.0, 2.0)),
+    )
+    result = replace(first.result, candidates=(selected,))
+    dataset = replace(first.dataset, last_valid_result=result)
+    value = replace(first.project, datasets=(dataset, second.dataset))
+    contexts = (
+        replace(first, project=value, dataset=dataset, selected=selected),
+        replace(second, project=value),
+    )
+
+    with pytest.raises(ValueError, match="selected parameter has no unique definition: missing-name"):
+        batch_workbook_bytes(contexts)
 
 
 def test_export_batch_rejects_contexts_from_different_projects() -> None:

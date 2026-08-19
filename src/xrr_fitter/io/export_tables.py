@@ -53,6 +53,7 @@ from xrr_fitter.model.analysis import FitResult, UncertaintyReport
 from xrr_fitter.model.data import PreparedData
 from xrr_fitter.model.export import ExportFileRecord
 from xrr_fitter.model.fitting import FitCandidate
+from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue
 from xrr_fitter.model.project import DatasetProject, XrrProject
 
 WORKBOOK_CREATED = datetime(2000, 1, 1)
@@ -185,6 +186,12 @@ class DatasetExportData:
         if result is None:
             raise ValueError("dataset has no fit result")
         return result
+
+    def parameter_definition(self, name: str) -> ParameterDefinition:
+        matches = tuple(item for item in self.result.parameter_definitions if item.name == name)
+        if len(matches) != 1:
+            raise ValueError(f"selected parameter has no unique definition: {name}")
+        return matches[0]
 
     @property
     def selected_uncertainty(self) -> UncertaintyReport | None:
@@ -761,20 +768,36 @@ def compatibility_workbook_bytes(contexts: object) -> bytes:
     )
 
 
+def _batch_parameter_row(
+    context: DatasetExportData,
+    parameter: ParameterValue,
+) -> dict[str, object]:
+    definition = context.parameter_definition(parameter.name)
+    return {
+        "dataset_id": context.dataset.dataset_id,
+        "parameter_name": parameter.name,
+        "display_name": definition.display_name,
+        "category": definition.category,
+        "value": parameter.value,
+        "lower": parameter.lower,
+        "upper": parameter.upper,
+        "unit": definition.unit,
+    }
+
+
 def batch_workbook_bytes(contexts: object) -> bytes:
     """Serialize deterministic multi-dataset summary and parameter sheets."""
     values = _contexts(contexts)
-    columns = ["dataset_id", "parameter_name", "value", "lower", "upper"]
-    rows = [
-        {
-            "dataset_id": context.dataset.dataset_id,
-            "parameter_name": parameter.name,
-            "value": parameter.value,
-            "lower": parameter.lower,
-            "upper": parameter.upper,
-        }
-        for context in values
-        for parameter in context.selected.parameters
+    columns = [
+        "dataset_id",
+        "parameter_name",
+        "display_name",
+        "category",
+        "value",
+        "lower",
+        "upper",
+        "unit",
     ]
+    rows = [_batch_parameter_row(context, parameter) for context in values for parameter in context.selected.parameters]
     parameters = pd.DataFrame(rows, columns=columns)
     return _workbook_bytes((("Summary", _summary_frame(values)), ("Parameters", parameters)))
