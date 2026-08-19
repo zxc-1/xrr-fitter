@@ -1,9 +1,9 @@
 """Atomic publication for deterministic export artifact trees.
 
 This module is the only directory-publication path used by result exports and
-the fixed example bundle. Callers provide immutable bytes and normalized
-relative names; project validation and numerical serialization remain outside
-this filesystem boundary.
+the fixed example bundle. Export runs provide lazy renderers; exact-tree callers
+provide immutable bytes. Both use normalized relative names, while project
+validation and numerical serialization remain outside this filesystem boundary.
 
 Run publication reserves a hidden sibling directory, writes every artifact,
 re-reads it to construct size and digest records, flushes files and owned
@@ -28,12 +28,14 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import json
 import os
 import re
 import secrets
 import shutil
 import sys
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -48,6 +50,10 @@ from xrr_fitter.model.export import (
 TIMESTAMP_PATTERN = re.compile(r"\d{8}T\d{6}Z?")
 UNSAFE_SLUG_PATTERN = re.compile(r"[^\w-]+", flags=re.UNICODE)
 UNSUPPORTED_DIRECTORY_FSYNC = frozenset({errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP} - {None})
+HASH_CHUNK_SIZE = 1024 * 1024
+EXPORT_MANIFEST_PATH = "export_manifest.json"
+PROJECT_SNAPSHOT_PATH = "project_snapshot.xrrproj.json"
+EXPORT_MANIFEST_SCHEMA = "xrr-fitter-export-manifest-v2"
 
 
 def _relative_path(value: str) -> str:
@@ -89,6 +95,27 @@ class ArtifactPayload:
         object.__setattr__(self, "path", path)
 
 
+@dataclass(frozen=True, slots=True)
+class ArtifactProducer:
+    """One lazily rendered nonempty payload at a relative publication path."""
+
+    path: str
+    renderer: Callable[[], bytes]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "path", _relative_path(self.path))
+        if not callable(self.renderer):
+            raise TypeError("artifact renderer must be callable")
+
+    def render(self) -> bytes:
+        content = self.renderer()
+        if not isinstance(content, bytes):
+            raise TypeError("artifact renderer must return bytes")
+        if not content:
+            raise ValueError("artifact content must not be empty")
+        return content
+
+
 def _payloads(values: object, field: str) -> tuple[ArtifactPayload, ...]:
     payloads = tuple(values)
     if any(not isinstance(value, ArtifactPayload) for value in payloads):
@@ -99,17 +126,27 @@ def _payloads(values: object, field: str) -> tuple[ArtifactPayload, ...]:
     return ordered
 
 
+def _producers(values: object, field: str) -> tuple[ArtifactProducer, ...]:
+    producers = tuple(values)
+    if any(not isinstance(value, ArtifactProducer) for value in producers):
+        raise TypeError(f"{field} must contain ArtifactProducer values")
+    ordered = tuple(sorted(producers, key=lambda value: value.path))
+    paths = tuple(value.path for value in ordered)
+    _validate_path_set(paths, field)
+    return ordered
+
+
 @dataclass(frozen=True, slots=True)
 class DatasetArtifacts:
     """Serialized artifacts owned by one exact dataset identity."""
 
     dataset_id: str
-    files: tuple[ArtifactPayload, ...]
+    files: tuple[ArtifactProducer, ...]
 
     def __post_init__(self) -> None:
         if not isinstance(self.dataset_id, str) or not self.dataset_id.strip():
             raise ValueError("dataset_id must not be empty")
-        files = _payloads(self.files, "dataset files")
+        files = _producers(self.files, "dataset files")
         if not files:
             raise ValueError("dataset files must not be empty")
         object.__setattr__(self, "files", files)
@@ -172,14 +209,22 @@ def _write_payload(path: Path, content: bytes) -> None:
         stream.write(content)
 
 
+def _file_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(HASH_CHUNK_SIZE):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _record(root: Path, path: Path) -> ExportFileRecord:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"export artifact is not a regular file: {path.name}")
-    content = path.read_bytes()
-    if not content:
+    size = path.stat().st_size
+    if size <= 0:
         raise ValueError(f"export artifact is empty: {path.name}")
     relative = path.relative_to(root).as_posix()
-    return ExportFileRecord(relative, len(content), sha256(content).hexdigest())
+    return ExportFileRecord(relative, size, _file_sha256(path))
 
 
 def _sync_file(path: Path) -> None:
@@ -295,29 +340,104 @@ def _write_artifacts(root: Path, values: tuple[ArtifactPayload, ...]) -> tuple[P
     return tuple(paths)
 
 
+def _render_artifacts(
+    publication_root: Path,
+    artifact_root: Path,
+    values: tuple[ArtifactProducer, ...],
+) -> tuple[tuple[ExportFileRecord, ...], tuple[Path, ...]]:
+    records: list[ExportFileRecord] = []
+    paths: list[Path] = []
+    for producer in values:
+        path = artifact_root / PurePosixPath(producer.path)
+        content = producer.render()
+        _write_payload(path, content)
+        del content
+        paths.append(path)
+        records.append(_record(publication_root, path))
+    return tuple(records), tuple(paths)
+
+
+def _record_value(record: ExportFileRecord) -> dict[str, object]:
+    return {
+        "path": record.path,
+        "size": record.size,
+        "sha256": record.sha256,
+    }
+
+
+def _manifest_bytes(
+    datasets: tuple[DatasetExportManifest, ...],
+    root_files: tuple[ExportFileRecord, ...],
+) -> bytes:
+    files = tuple(
+        sorted(
+            (
+                *root_files,
+                *(record for dataset in datasets for record in dataset.files),
+            ),
+            key=lambda item: item.path,
+        )
+    )
+    snapshot = next(item for item in root_files if item.path == PROJECT_SNAPSHOT_PATH)
+    payload = {
+        "schema": EXPORT_MANIFEST_SCHEMA,
+        "export_schema_version": 2,
+        "project_snapshot": _record_value(snapshot),
+        "datasets": [
+            {
+                "dataset_id": item.dataset_id,
+                "directory": item.directory,
+            }
+            for item in datasets
+        ],
+        "files": [_record_value(item) for item in files],
+    }
+    return (
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
 def _stage_export(
     partial: Path,
     datasets: tuple[DatasetArtifacts, ...],
-    root_files: tuple[ArtifactPayload, ...],
+    root_files: tuple[ArtifactProducer, ...],
 ) -> tuple[ExportManifest, tuple[Path, ...]]:
-    written = list(_write_artifacts(partial, root_files))
-    root_records = tuple(_record(partial, path) for path in written)
+    root_records, root_paths = _render_artifacts(partial, partial, root_files)
+    written = list(root_paths)
     dataset_records: list[DatasetExportManifest] = []
     for order, dataset in enumerate(datasets, start=1):
         directory = _dataset_directory(order, dataset.dataset_id)
-        paths = _write_artifacts(partial / directory, dataset.files)
+        records, paths = _render_artifacts(
+            partial,
+            partial / directory,
+            dataset.files,
+        )
         written.extend(paths)
-        records = tuple(_record(partial, path) for path in paths)
         dataset_records.append(DatasetExportManifest(dataset.dataset_id, directory, records))
-    manifest = ExportManifest(partial, tuple(dataset_records), root_records)
+    datasets_manifest = tuple(dataset_records)
+    manifest_path = partial / EXPORT_MANIFEST_PATH
+    _write_payload(manifest_path, _manifest_bytes(datasets_manifest, root_records))
+    written.append(manifest_path)
+    manifest_record = _record(partial, manifest_path)
+    returned_root_records = tuple(sorted((*root_records, manifest_record), key=lambda item: item.path))
+    manifest = ExportManifest(partial, datasets_manifest, returned_root_records)
     return manifest, tuple(written)
 
 
 def _validate_export_layout(
     datasets: tuple[DatasetArtifacts, ...],
-    root_files: tuple[ArtifactPayload, ...],
+    root_files: tuple[ArtifactProducer, ...],
 ) -> None:
-    paths = [value.path for value in root_files]
+    root_paths = tuple(value.path for value in root_files)
+    if PROJECT_SNAPSHOT_PATH not in root_paths:
+        raise ValueError(f"root files must contain {PROJECT_SNAPSHOT_PATH}")
+    paths = [EXPORT_MANIFEST_PATH, *root_paths]
     for order, dataset in enumerate(datasets, start=1):
         directory = _dataset_directory(order, dataset.dataset_id)
         paths.extend(f"{directory}/{value.path}" for value in dataset.files)
@@ -333,7 +453,7 @@ def publish_export_run(
 ) -> ExportManifest:
     """Atomically publish one collision-safe export run."""
     dataset_values = _datasets(datasets)
-    root_values = _payloads(root_files, "root files")
+    root_values = _producers(root_files, "root files")
     _validate_export_layout(dataset_values, root_values)
     timestamp = _validate_timestamp(_utc_timestamp() if run_timestamp is None else run_timestamp)
     partial, final = _allocate_run(Path(output_dir), timestamp)

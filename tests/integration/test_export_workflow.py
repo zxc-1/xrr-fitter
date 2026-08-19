@@ -55,6 +55,10 @@ def _fitted_project() -> api.XrrProject:
     return api.fit_project(value).updated_project
 
 
+def _root_file_paths(manifest: api.ExportManifest) -> tuple[str, ...]:
+    return tuple(record.path for record in manifest.root_files)
+
+
 def _export_tree(manifest: api.ExportManifest) -> dict[str, object]:
     datasets = {}
     for dataset in manifest.datasets:
@@ -70,7 +74,7 @@ def _export_tree(manifest: api.ExportManifest) -> dict[str, object]:
         "is_directory": manifest.run_directory.is_dir(),
         "partial_directories": tuple(manifest.run_directory.parent.glob(".partial-*")),
         "dataset_order": tuple(item.dataset_id for item in manifest.datasets),
-        "root_files": tuple(record.path for record in manifest.root_files),
+        "root_files": _root_file_paths(manifest),
         "datasets": datasets,
     }
 
@@ -101,6 +105,7 @@ def test_export_multi_dataset_writes_complete_atomic_artifact_tree(
         "root_files": (
             "batch_summary.xlsx",
             "compatibility_summary.xlsx",
+            "export_manifest.json",
             "parameter_trends.png",
             "project_snapshot.xrrproj.json",
         ),

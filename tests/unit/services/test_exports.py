@@ -100,6 +100,49 @@ def test_export_builds_the_fixed_artifact_set_before_publication(
     )
 
 
+def test_export_defers_serializers_until_artifact_render(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = _fitted_project(tmp_path)
+    captured: dict[str, object] = {}
+    calls: list[str] = []
+    for name in (
+        "dataset_json_bytes",
+        "dataset_workbook_bytes",
+        "fit_overview_png",
+        "sld_profile_png",
+        "residuals_png",
+        "run_log_bytes",
+        "compatibility_workbook_bytes",
+    ):
+        monkeypatch.setattr(
+            exports,
+            name,
+            lambda *_args, _name=name: (calls.append(_name), _name.encode())[1],
+        )
+    monkeypatch.setattr(exports, "publish_export_run", _capture_publish(captured))
+
+    exports.export_result(value, tmp_path / "exports")
+
+    assert calls == []
+    producers = (
+        *captured["root_files"],
+        *captured["datasets"][0].files,
+    )
+    rendered = {producer.path: producer.render() for producer in producers}
+    assert set(calls) == {
+        "dataset_json_bytes",
+        "dataset_workbook_bytes",
+        "fit_overview_png",
+        "sld_profile_png",
+        "residuals_png",
+        "run_log_bytes",
+        "compatibility_workbook_bytes",
+    }
+    assert rendered["project_snapshot.xrrproj.json"].startswith(b"{")
+
+
 def test_export_rechecks_source_after_initial_inspection_before_allocating(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -213,6 +256,7 @@ def test_export_omits_ort_covariance_owned_by_another_candidate(
 
     monkeypatch.setattr(exports, "orso_bytes", serialize_orso)
 
-    exports._dataset_artifacts(context, include_ort=True)
+    artifacts = exports._dataset_artifacts(context, include_ort=True)
+    next(item for item in artifacts.files if item.path == "fit_result.ort").render()
 
     assert captured["covariance"] is None

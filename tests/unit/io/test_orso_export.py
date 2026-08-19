@@ -254,6 +254,22 @@ def test_orso_bytes_roundtrips_data_parameters_and_extension() -> None:
     _assert_roundtrip_reduction(loaded, context)
 
 
+def test_orso_bytes_does_not_reencode_the_complete_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _orso_context()
+    monkeypatch.setattr(
+        orso_module,
+        "project_to_dict",
+        lambda _project: pytest.fail("ORSO export re-encoded the complete project"),
+        raising=False,
+    )
+
+    loaded = _load_single(orso_bytes(context, covariance=None))
+
+    assert loaded.info.user_data["xrr_fitter.reduction"]["project_master_seed"] == context.project.master_seed
+
+
 def test_orso_bytes_roundtrips_pointwise_q_resolution_as_standard_error_column() -> None:
     base = _orso_context()
     sigma_q = np.linspace(1.0e-4, 4.0e-4, base.data.qz_a_inv.size)

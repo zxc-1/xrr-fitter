@@ -46,13 +46,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from xrr_fitter.io.codec_declarations import _fit_config_to_dict
 from xrr_fitter.io.codec_results import fit_result_to_dict
-from xrr_fitter.io.project_codec import project_to_dict
+from xrr_fitter.io.project_codec import _dataset_to_dict
 from xrr_fitter.model.analysis import FitResult, UncertaintyReport
 from xrr_fitter.model.data import PreparedData
 from xrr_fitter.model.export import ExportFileRecord
 from xrr_fitter.model.fitting import FitCandidate
-from xrr_fitter.model.instrument import PhysicsDiagnostic
 from xrr_fitter.model.project import DatasetProject, XrrProject
 
 WORKBOOK_CREATED = datetime(2000, 1, 1)
@@ -207,9 +207,7 @@ class DatasetExportData:
 
 
 def _project_dataset_document(context: DatasetExportData) -> dict[str, Any]:
-    document = project_to_dict(context.project)
-    index = next(index for index, dataset in enumerate(context.project.datasets) if dataset is context.dataset)
-    return document["datasets"][index]
+    return _dataset_to_dict(context.dataset)
 
 
 def _finite_scalar(value: object) -> object:
@@ -285,7 +283,6 @@ def _run_info_payload(
 ) -> dict[str, object]:
     result = context.result
     identity = context.replay_identity
-    project_document = project_to_dict(context.project)
     config = context.project.fit_config
     fitted_instrument = {
         value.name: value.value for value in context.selected.parameters if value.name.startswith("instrument.")
@@ -295,7 +292,7 @@ def _run_info_payload(
     return {
         "schema_version": context.project.schema_version,
         "algorithm_version": context.project.algorithm_version,
-        "fit_config": project_document["fit_config"],
+        "fit_config": _fit_config_to_dict(config),
         "project_master_seed": context.project.master_seed,
         "service_seed_tree_version": identity.service_seed_tree_version,
         "independent_root_child": identity.independent_root_child,
@@ -389,15 +386,6 @@ def _strict_json(value: object, *, pretty: bool) -> str:
     if pretty:
         return json.dumps(value, indent=2, **options)
     return json.dumps(value, **options)
-
-
-def _compact_json(value: object) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        separators=(",", ":"),
-    )
 
 
 def json_text(value: object) -> str:
@@ -790,75 +778,3 @@ def batch_workbook_bytes(contexts: object) -> bytes:
     ]
     parameters = pd.DataFrame(rows, columns=columns)
     return _workbook_bytes((("Summary", _summary_frame(values)), ("Parameters", parameters)))
-
-
-def _diagnostic_qz_range(
-    context: DatasetExportData,
-    indices: tuple[int, ...],
-) -> str:
-    size = context.data.qz_a_inv.size
-    valid = tuple(index for index in indices if 0 <= index < size)
-    if not valid:
-        return "[]"
-    qz = context.data.qz_a_inv[list(valid)]
-    return f"[{float(np.min(qz)):.12g},{float(np.max(qz)):.12g}]"
-
-
-def _diagnostic_line(
-    context: DatasetExportData,
-    diagnostic: PhysicsDiagnostic,
-) -> str:
-    indices = _compact_json(diagnostic.point_indices)
-    qz_range = _diagnostic_qz_range(context, diagnostic.point_indices)
-    return f"{diagnostic.code}: {diagnostic.message}; full_data_indices={indices}; qz_a_inv_range={qz_range}"
-
-
-def _persisted_diagnostics(
-    context: DatasetExportData,
-) -> tuple[PhysicsDiagnostic, ...]:
-    uncertainty = context.selected_uncertainty
-    if uncertainty is None:
-        return context.selected.diagnostics
-    return (*context.selected.diagnostics, *uncertainty.diagnostics)
-
-
-def _rejected_surface_oxide(
-    context: DatasetExportData,
-    diagnostics: tuple[PhysicsDiagnostic, ...],
-) -> bool:
-    residual = any(value.code == "surface_thin_layer_residual" for value in diagnostics)
-    return context.matching_surface_oxide_rejection and residual
-
-
-def run_log_bytes(context: DatasetExportData) -> bytes:
-    """Serialize stable warnings, seed lineage, stages, and diagnostics."""
-    result = context.result
-    identity = context.replay_identity
-    report = context.selected_uncertainty
-    mcmc = None if report is None else report.mcmc
-    lines = [
-        f"dataset_id: {context.dataset.dataset_id}",
-        f"confidence: {result.confidence.value}",
-        f"candidate_count: {len(result.candidates)}",
-        f"project_master_seed: {context.project.master_seed}",
-        f"service_seed_tree_version: {identity.service_seed_tree_version}",
-        f"independent_root_child: {identity.independent_root_child}",
-        f"joint_root_child: {identity.joint_root_child}",
-        f"optimizer_child_seeds: {_compact_json(result.child_seeds)}",
-        f"mcmc_child_seed: {None if mcmc is None else mcmc.child_seed}",
-    ]
-    if context.uncertainty_absent_reason is not None:
-        lines.append(f"uncertainty_absent_reason: {context.uncertainty_absent_reason}")
-    lines.extend(f"warning: {value}" for value in result.warnings)
-    lines.extend(
-        "stage "
-        f"{stage.stage}: candidate_ids={_compact_json(stage.candidate_ids)}; "
-        f"best_objective={stage.best_objective}; total_nfev={stage.total_nfev}; "
-        f"stop_reasons={_compact_json(stage.stop_reasons)}"
-        for stage in result.stage_summaries
-    )
-    diagnostics = _persisted_diagnostics(context)
-    lines.extend(_diagnostic_line(context, value) for value in diagnostics)
-    if _rejected_surface_oxide(context, diagnostics):
-        lines.append("疑似缺失自然氧化层（此前已拒绝建议）")
-    return ("\n".join(lines) + "\n").encode("utf-8")

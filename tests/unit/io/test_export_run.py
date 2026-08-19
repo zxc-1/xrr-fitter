@@ -10,10 +10,18 @@ import pytest
 
 from xrr_fitter.io import export_run
 from xrr_fitter.io.export_run import (
-    ArtifactPayload,
+    ArtifactProducer,
     DatasetArtifacts,
     publish_export_run,
 )
+
+
+def _producer(path: str, content: bytes) -> ArtifactProducer:
+    return ArtifactProducer(path, lambda: content)
+
+
+def _root(*values: ArtifactProducer) -> tuple[ArtifactProducer, ...]:
+    return (_producer("project_snapshot.xrrproj.json", b"project"), *values)
 
 
 def _dataset(
@@ -22,7 +30,7 @@ def _dataset(
     name: str = "fit_result.json",
     content: bytes = b"{}\n",
 ) -> DatasetArtifacts:
-    return DatasetArtifacts(dataset_id, (ArtifactPayload(name, content),))
+    return DatasetArtifacts(dataset_id, (_producer(name, content),))
 
 
 def test_export_run_records_complete_relative_size_and_digest_manifest(
@@ -34,12 +42,16 @@ def test_export_run_records_complete_relative_size_and_digest_manifest(
     manifest = publish_export_run(
         tmp_path,
         (_dataset(),),
-        (ArtifactPayload("compatibility_summary.xlsx", b"workbook"),),
+        _root(_producer("compatibility_summary.xlsx", b"workbook")),
         run_timestamp="20260715T120000",
     )
 
     assert manifest.run_directory == tmp_path / "20260715T120000-11111111"
-    assert tuple(record.path for record in manifest.root_files) == ("compatibility_summary.xlsx",)
+    assert tuple(record.path for record in manifest.root_files) == (
+        "compatibility_summary.xlsx",
+        "export_manifest.json",
+        "project_snapshot.xrrproj.json",
+    )
     dataset = manifest.datasets[0]
     assert dataset.dataset_id == "sample-a"
     assert dataset.directory.startswith("001-sample-a-")
@@ -69,6 +81,7 @@ def test_export_retries_existing_final_and_partial_run_names(
     manifest = publish_export_run(
         tmp_path,
         (_dataset(),),
+        _root(),
         run_timestamp=timestamp,
     )
 
@@ -87,7 +100,12 @@ def test_export_allocation_treats_dangling_final_symlink_as_collision(
     tokens = iter(("11111111", "22222222"))
     monkeypatch.setattr(export_run.secrets, "token_hex", lambda _size: next(tokens))
 
-    manifest = publish_export_run(tmp_path, (_dataset(),), run_timestamp=timestamp)
+    manifest = publish_export_run(
+        tmp_path,
+        (_dataset(),),
+        _root(),
+        run_timestamp=timestamp,
+    )
 
     assert manifest.run_directory.name == f"{timestamp}-22222222"
     assert dangling.is_symlink()
@@ -118,11 +136,13 @@ def test_export_dataset_directories_are_traversal_safe_and_deterministic(
     first = publish_export_run(
         tmp_path,
         tuple(_dataset(value) for value in identifiers),
+        _root(),
         run_timestamp="20260715T120000",
     )
     second = publish_export_run(
         tmp_path,
         tuple(_dataset(value) for value in identifiers),
+        _root(),
         run_timestamp="20260715T120000",
     )
 
@@ -159,7 +179,12 @@ def test_export_rejects_invalid_timestamp_before_writing(
     destination = tmp_path / "exports"
 
     with pytest.raises(ValueError, match="run_timestamp"):
-        publish_export_run(destination, (_dataset(),), run_timestamp=timestamp)
+        publish_export_run(
+            destination,
+            (_dataset(),),
+            _root(),
+            run_timestamp=timestamp,
+        )
 
     assert not destination.exists()
 
@@ -180,7 +205,7 @@ def test_export_rejects_unsafe_artifact_paths_before_writing(
     path: str,
 ) -> None:
     with pytest.raises(ValueError, match="relative POSIX path"):
-        ArtifactPayload(path, b"payload")
+        ArtifactProducer(path, lambda: b"payload")
 
     assert tuple(tmp_path.iterdir()) == ()
 
@@ -190,14 +215,14 @@ def test_export_rejects_unsafe_artifact_paths_before_writing(
     (
         (
             (
-                ArtifactPayload("a", b"file"),
-                ArtifactPayload("a/b", b"descendant"),
+                _producer("a", b"file"),
+                _producer("a/b", b"descendant"),
             ),
             "file/ancestor",
         ),
         (
             (
-                ArtifactPayload(
+                _producer(
                     export_run._dataset_directory(1, "sample-a"),
                     b"blocks dataset directory",
                 ),
@@ -206,7 +231,7 @@ def test_export_rejects_unsafe_artifact_paths_before_writing(
         ),
         (
             (
-                ArtifactPayload(
+                _producer(
                     f"{export_run._dataset_directory(1, 'sample-a')}/fit_result.json",
                     b"duplicates dataset file",
                 ),
@@ -222,7 +247,7 @@ def test_export_rejects_unsafe_artifact_paths_before_writing(
 )
 def test_export_rejects_artifact_tree_conflicts_before_writing(
     tmp_path: Path,
-    root_files: tuple[ArtifactPayload, ...],
+    root_files: tuple[ArtifactProducer, ...],
     message: str,
 ) -> None:
     destination = tmp_path / "exports"
@@ -231,7 +256,7 @@ def test_export_rejects_artifact_tree_conflicts_before_writing(
         publish_export_run(
             destination,
             (_dataset(),),
-            root_files,
+            _root(*root_files),
             run_timestamp="20260715T120000",
         )
 
@@ -254,6 +279,7 @@ def test_export_writer_failure_exposes_no_final_run(
         publish_export_run(
             destination,
             (_dataset(),),
+            _root(),
             run_timestamp="20260715T120000",
         )
 
@@ -284,7 +310,7 @@ def test_export_fsyncs_written_files_and_directories_before_publish(
     manifest = publish_export_run(
         tmp_path,
         (_dataset(),),
-        (ArtifactPayload("root.txt", b"root"),),
+        _root(_producer("root.txt", b"root")),
         run_timestamp="20260715T120000",
     )
 
@@ -312,6 +338,7 @@ def test_export_fsync_failure_cleans_owned_partial_and_preserves_existing_run(
         publish_export_run(
             tmp_path,
             (_dataset(),),
+            _root(),
             run_timestamp="20260715T120000",
         )
 
@@ -387,6 +414,7 @@ def test_export_publication_failure_cleans_only_owned_partial(
         publish_export_run(
             tmp_path,
             (_dataset(),),
+            _root(),
             run_timestamp="20260715T120000",
         )
 
@@ -414,6 +442,7 @@ def test_export_cleanup_failure_is_never_silenced(
         publish_export_run(
             tmp_path,
             (_dataset(),),
+            _root(),
             run_timestamp="20260715T120000",
         )
 
