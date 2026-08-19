@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 
 import xrr_fitter.api as api
@@ -50,6 +51,13 @@ def _fast_single_project() -> api.XrrProject:
 def _write_example_project(tmp_path: Path) -> Path:
     project_path = tmp_path / "project.xrrproj.json"
     api.save_project(_fast_single_project(), project_path)
+    return project_path
+
+
+def _write_fitted_project(tmp_path: Path) -> Path:
+    project_path = tmp_path / "fitted.xrrproj.json"
+    fitted = api.fit_project(_fast_single_project()).updated_project
+    api.save_project(fitted, project_path)
     return project_path
 
 
@@ -139,3 +147,21 @@ def test_cli_fit_matches_the_in_process_api_fit(tmp_path: Path) -> None:
     api.save_project(direct.updated_project, direct_output)
 
     assert json.loads(cli_output.read_text(encoding="utf-8")) == json.loads(direct_output.read_text(encoding="utf-8"))
+
+
+def test_cli_export_prints_verifiable_manifest_evidence(tmp_path: Path) -> None:
+    project_path = _write_fitted_project(tmp_path)
+    output_directory = tmp_path / "exports"
+
+    result = _run(
+        ("export", str(project_path), str(output_directory)),
+        _guarded_environment(tmp_path),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    run_line, manifest_line, digest_line = result.stdout.splitlines()
+    run_directory = Path(run_line)
+    manifest_path = Path(manifest_line.removeprefix("manifest: "))
+    manifest_digest = digest_line.removeprefix("manifest_sha256: ")
+    assert manifest_path == run_directory / "export_manifest.json"
+    assert manifest_digest == sha256(manifest_path.read_bytes()).hexdigest()

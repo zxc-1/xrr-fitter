@@ -99,13 +99,23 @@ def run_mcmc(arguments) -> int:
     return exit_codes.SUCCESS
 
 
+def _export_manifest_record(manifest: api.ExportManifest):
+    records = tuple(record for record in manifest.root_files if record.path == "export_manifest.json")
+    if len(records) != 1:
+        raise RuntimeError("export result must contain exactly one root export_manifest.json record")
+    return records[0]
+
+
 def run_export(arguments) -> int:
     """Publish an existing project's results atomically."""
     project = _load(arguments.project)
     _require_fresh_sources(project)
     try:
         manifest = api.export_result(project, arguments.output_dir, include_ort=arguments.ort)
-    except (OSError, ValueError, TypeError, KeyError) as error:
+        record = _export_manifest_record(manifest)
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
         raise CommandError(f"结果导出失败：{error}", exit_codes.INVALID_INPUT) from error
     print(manifest.run_directory)
+    print(f"manifest: {manifest.run_directory / record.path}")
+    print(f"manifest_sha256: {record.sha256}")
     return exit_codes.SUCCESS

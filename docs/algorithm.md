@@ -701,11 +701,44 @@ fresh fit; joint failure never falls back to independent fitting.
 
 Export preflight validates the persisted project graph, selected candidates,
 source freshness, reporting-array shapes, and legal finite/null state before
-allocating a run. All dataset and root artifacts are written into one private
-`.partial-*` sibling directory. The manifest is checked for containment and
-nonempty files, then files and direct-child directories are fsynced.
+allocating a run. Export schema version 2 writes one shared
+`project_snapshot.xrrproj.json` at the run root. Each dataset's
+`fit_result.json` contains only that snapshot's relative path, byte size, and
+SHA-256 instead of embedding the complete project. Relative source paths in the
+snapshot are resolved to absolute paths, so the snapshot can be loaded directly
+with its fit results and selected candidates intact.
+
+Candidate-owned evidence is exported only when its `candidate_id` matches the
+explicitly selected candidate. A mismatch omits MCMC seed/diagnostics,
+correlation, profiles, SLD bands, ORSO error bars, and covariance, and records an
+explicit absence reason. Multi-dataset workbook rows obtain display name,
+category, and unit from the owning parameter definition. Trend plots compare
+only names present with one identical unit in every dataset and use a separate
+y-axis subplot for each unit.
+
+Artifacts are rendered lazily in sorted path order and released after each
+write. Files are hashed in bounded chunks, so one shared snapshot plus the
+current artifact bounds serialization memory instead of retaining the complete
+batch tree. All dataset and root artifacts are written into one private
+`.partial-*` sibling directory. `export_manifest.json` is canonical compact
+JSON with a trailing LF and records the relative path, byte size, and SHA-256 of
+every other artifact. It excludes itself to avoid a recursive self-hash; the
+public `ExportManifest` still includes the manifest file's own record. Files and
+direct-child directories are then fsynced.
 
 Only after the complete tree is durable is it published by an exclusive,
 same-filesystem, no-replace rename to `<UTC timestamp>-<8hex>`. Any exception
 removes only the partial directory owned by that call and propagates the
 original error. Existing completed runs are never overwritten.
+
+The CLI prints successful export evidence as exactly three stdout lines while
+preserving the run directory on line 1:
+
+```text
+<run-directory>
+manifest: <run-directory>/export_manifest.json
+manifest_sha256: <64-character-lowercase-sha256>
+```
+
+The GUI completion summary lists every published path with its byte size and
+full lowercase SHA-256.

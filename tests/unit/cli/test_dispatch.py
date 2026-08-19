@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from xrr_fitter.cli import main as cli_main
@@ -122,6 +124,7 @@ def test_export_checks_sources_before_writing(monkeypatch, tmp_path) -> None:
         OSError("cannot write manifest"),
         TypeError("unsupported export value"),
         KeyError("selected_candidate"),
+        RuntimeError("invalid export manifest"),
     ],
 )
 def test_run_export_maps_expected_export_errors_to_input_error(export_error, monkeypatch, tmp_path) -> None:
@@ -183,8 +186,11 @@ def test_run_export_forwards_include_ort(monkeypatch, tmp_path, capsys) -> None:
     project_path.write_text("{}", encoding="utf-8")
     captured: dict[str, object] = {}
 
-    class _Manifest:
-        run_directory = tmp_path / "run"
+    record = SimpleNamespace(path="export_manifest.json", sha256="a" * 64)
+    manifest = SimpleNamespace(
+        run_directory=tmp_path / "run",
+        root_files=(record,),
+    )
 
     monkeypatch.setattr(commands.api, "load_project", lambda path: object())
     monkeypatch.setattr(
@@ -197,16 +203,48 @@ def test_run_export_forwards_include_ort(monkeypatch, tmp_path, capsys) -> None:
         "export_result",
         lambda project, output_dir, *, include_ort: (
             captured.update(include_ort=include_ort),
-            _Manifest(),
+            manifest,
         )[1],
     )
 
     assert cli_main.main(["export", str(project_path), str(tmp_path / "out")]) == exit_codes.SUCCESS
     assert captured["include_ort"] is False
+    capsys.readouterr()
 
     assert cli_main.main(["export", str(project_path), str(tmp_path / "out"), "--ort"]) == exit_codes.SUCCESS
     assert captured["include_ort"] is True
-    assert str(_Manifest.run_directory) in capsys.readouterr().out
+    assert capsys.readouterr().out.splitlines() == [
+        str(manifest.run_directory),
+        f"manifest: {manifest.run_directory / record.path}",
+        f"manifest_sha256: {record.sha256}",
+    ]
+
+
+def test_run_export_rejects_missing_manifest_record(monkeypatch, tmp_path) -> None:
+    from argparse import Namespace
+
+    from xrr_fitter.cli import commands, exit_codes
+
+    project_path = tmp_path / "p.json"
+    project_path.write_text("{}", encoding="utf-8")
+    manifest = SimpleNamespace(run_directory=tmp_path / "run", root_files=())
+    monkeypatch.setattr(commands.api, "load_project", lambda path: object())
+    monkeypatch.setattr(
+        commands.api,
+        "inspect_sources",
+        lambda project: commands.api.ProjectValidation(datasets=(), issues=()),
+    )
+    monkeypatch.setattr(
+        commands.api,
+        "export_result",
+        lambda project, output_dir, *, include_ort: manifest,
+    )
+
+    with pytest.raises(commands.CommandError) as excinfo:
+        commands.run_export(Namespace(project=str(project_path), output_dir=tmp_path / "out", ort=False))
+
+    assert excinfo.value.code == exit_codes.INVALID_INPUT
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
 
 
 def test_mcmc_invalid_config_maps_to_input_error_without_traceback(monkeypatch, tmp_path, capsys) -> None:
