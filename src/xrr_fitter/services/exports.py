@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 
 from xrr_fitter.io.export_plots import (
@@ -17,6 +19,7 @@ from xrr_fitter.io.export_run import (
     publish_export_run,
 )
 from xrr_fitter.io.export_tables import (
+    PROJECT_SNAPSHOT_PATH,
     DatasetExportData,
     ExportReplayIdentity,
     batch_workbook_bytes,
@@ -26,7 +29,9 @@ from xrr_fitter.io.export_tables import (
     run_log_bytes,
 )
 from xrr_fitter.io.orso import orso_bytes
-from xrr_fitter.model.export import ExportManifest
+from xrr_fitter.io.project_codec import project_to_bytes
+from xrr_fitter.io.source import resolve_source_path
+from xrr_fitter.model.export import ExportFileRecord, ExportManifest
 from xrr_fitter.model.operations import ProjectFitResult
 from xrr_fitter.model.project import DatasetProject, XrrProject
 from xrr_fitter.services.datasets import _prepared_current, service_seed_branches
@@ -105,7 +110,10 @@ def _matching_surface_rejection(dataset: DatasetProject) -> bool:
     )
 
 
-def _contexts(project: XrrProject) -> tuple[DatasetExportData, ...]:
+def _contexts(
+    project: XrrProject,
+    project_reference: ExportFileRecord,
+) -> tuple[DatasetExportData, ...]:
     mapping = tuple(
         (dataset.dataset_id, _dataset_directory(order, dataset.dataset_id))
         for order, dataset in enumerate(project.datasets, start=1)
@@ -125,9 +133,21 @@ def _contexts(project: XrrProject) -> tuple[DatasetExportData, ...]:
                 joint,
             ),
             matching_surface_oxide_rejection=_matching_surface_rejection(dataset),
+            project_reference=project_reference,
         )
         for dataset in project.datasets
     )
+
+
+def _snapshot_project(project: XrrProject) -> XrrProject:
+    datasets = tuple(
+        replace(
+            dataset,
+            source_path=str(resolve_source_path(project, dataset).resolve()),
+        )
+        for dataset in project.datasets
+    )
+    return replace(project, datasets=datasets, base_directory=None)
 
 
 def _dataset_artifacts(context: DatasetExportData, *, include_ort: bool) -> DatasetArtifacts:
@@ -184,7 +204,16 @@ def export_result(
     if not project.datasets:
         raise ValueError("project has no datasets")
     _require_current_sources(project)
-    contexts = _contexts(project)
+    snapshot = project_to_bytes(_snapshot_project(project))
+    project_reference = ExportFileRecord(
+        PROJECT_SNAPSHOT_PATH,
+        len(snapshot),
+        sha256(snapshot).hexdigest(),
+    )
+    contexts = _contexts(project, project_reference)
     datasets = tuple(_dataset_artifacts(context, include_ort=include_ort) for context in contexts)
-    root_files = _root_artifacts(contexts)
+    root_files = (
+        ArtifactPayload(PROJECT_SNAPSHOT_PATH, snapshot),
+        *_root_artifacts(contexts),
+    )
     return publish_export_run(output_dir, datasets, root_files)

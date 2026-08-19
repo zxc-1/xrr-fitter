@@ -85,6 +85,14 @@ def test_export_multi_dataset_writes_complete_atomic_artifact_tree(
 
     manifest = api.export_result(value, tmp_path / "exports")
 
+    snapshot = manifest.run_directory / "project_snapshot.xrrproj.json"
+    assert snapshot.is_file()
+    reopened = api.load_project(snapshot)
+    assert tuple(item.dataset_id for item in reopened.datasets) == tuple(item.dataset_id for item in value.datasets)
+    assert all(item.last_valid_result is not None for item in reopened.datasets)
+    assert reopened.ui_state.selected_candidate_ids == value.ui_state.selected_candidate_ids
+    assert all(Path(item.source_path).is_absolute() for item in reopened.datasets)
+
     assert _export_tree(manifest) == {
         "parent": tmp_path / "exports",
         "is_directory": True,
@@ -94,6 +102,7 @@ def test_export_multi_dataset_writes_complete_atomic_artifact_tree(
             "batch_summary.xlsx",
             "compatibility_summary.xlsx",
             "parameter_trends.png",
+            "project_snapshot.xrrproj.json",
         ),
         "datasets": {
             original.dataset_id: {

@@ -27,7 +27,10 @@ from xrr_fitter.io.export_plots import (
 )
 from xrr_fitter.io.export_tables import DatasetExportData, ExportReplayIdentity
 from xrr_fitter.model.analysis import SldUncertaintyBands, UncertaintyReport
+from xrr_fitter.model.export import ExportFileRecord
 from xrr_fitter.model.instrument import PhysicsDiagnostic
+
+PROJECT_REFERENCE = ExportFileRecord("project_snapshot.xrrproj.json", 123, "b" * 64)
 
 
 def test_png_software_metadata_matches_locked_matplotlib_version() -> None:
@@ -77,6 +80,7 @@ def _context(
         candidate,
         ExportReplayIdentity(1, 10101, 20202),
         False,
+        PROJECT_REFERENCE,
     )
 
 
@@ -95,6 +99,7 @@ def _project_contexts(*dataset_ids: str) -> tuple[DatasetExportData, ...]:
             selected=context.selected,
             replay_identity=context.replay_identity,
             matching_surface_oxide_rejection=(context.matching_surface_oxide_rejection),
+            project_reference=context.project_reference,
         )
         for context in originals
     )
@@ -267,6 +272,7 @@ def _context_with_bands() -> DatasetExportData:
         base.selected,
         base.replay_identity,
         base.matching_surface_oxide_rejection,
+        base.project_reference,
     )
 
 

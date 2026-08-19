@@ -45,12 +45,18 @@ from xrr_fitter.model.analysis import (
     UncertaintyReport,
 )
 from xrr_fitter.model.data import PreparedData
+from xrr_fitter.model.export import ExportFileRecord
 from xrr_fitter.model.fitting import FitStageSummary
 from xrr_fitter.model.instrument import PhysicsDiagnostic
 from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue
 from xrr_fitter.model.project import OxideDecision
 
 SOURCE_FIXTURE = Path(__file__).resolve().parents[2] / "fixtures/source/header_and_duplicates.xy"
+PROJECT_REFERENCE = ExportFileRecord(
+    "project_snapshot.xrrproj.json",
+    123,
+    "b" * 64,
+)
 
 
 def _context(dataset_id: str = "curve") -> DatasetExportData:
@@ -92,6 +98,7 @@ def _context(dataset_id: str = "curve") -> DatasetExportData:
         selected=candidate,
         replay_identity=ExportReplayIdentity(1, 10101, 20202),
         matching_surface_oxide_rejection=False,
+        project_reference=PROJECT_REFERENCE,
     )
 
 
@@ -143,6 +150,7 @@ def _context_with_parameter_metadata() -> DatasetExportData:
         selected=original.selected,
         replay_identity=original.replay_identity,
         matching_surface_oxide_rejection=original.matching_surface_oxide_rejection,
+        project_reference=original.project_reference,
     )
 
 
@@ -170,6 +178,7 @@ def _context_with_length_parameter(dataset_id: str = "curve") -> DatasetExportDa
         selected=selected,
         replay_identity=original.replay_identity,
         matching_surface_oxide_rejection=original.matching_surface_oxide_rejection,
+        project_reference=original.project_reference,
     )
 
 
@@ -188,6 +197,7 @@ def _project_contexts(*dataset_ids: str) -> tuple[DatasetExportData, ...]:
             selected=context.selected,
             replay_identity=context.replay_identity,
             matching_surface_oxide_rejection=(context.matching_surface_oxide_rejection),
+            project_reference=context.project_reference,
         )
         for context in originals
     )
@@ -267,6 +277,7 @@ def _context_with_mcmc_diagnostics() -> DatasetExportData:
         selected=selected,
         replay_identity=original.replay_identity,
         matching_surface_oxide_rejection=True,
+        project_reference=original.project_reference,
     )
 
 
@@ -328,6 +339,7 @@ def _context_from_prepared_data(data: PreparedData) -> DatasetExportData:
         selected=selected,
         replay_identity=original.replay_identity,
         matching_surface_oxide_rejection=False,
+        project_reference=original.project_reference,
     )
 
 
@@ -346,11 +358,15 @@ def _assert_json_identity(payload: dict[str, object], context: DatasetExportData
         "fitted_instrument_parameters": info["fitted_instrument_parameters"],
     }
     expected = {
-        "project": project_to_dict(context.project),
+        "project": {
+            "path": context.project_reference.path,
+            "size": context.project_reference.size,
+            "sha256": context.project_reference.sha256,
+        },
         "dataset_id": context.dataset.dataset_id,
         "source_sha256": context.data.source_sha256,
         "directory_mapping": {"curve": "001-curve-aaaaaaaa"},
-        "fit_config": payload["project"]["fit_config"],
+        "fit_config": project_to_dict(context.project)["fit_config"],
         "service_seed_tree_version": 1,
         "independent_root_child": 10101,
         "joint_root_child": 20202,
@@ -404,7 +420,7 @@ def test_export_json_uses_project_codec_and_complete_provenance() -> None:
     _assert_json_provenance(payload, context)
 
 
-def test_export_json_matches_the_frozen_r22_field_shape() -> None:
+def test_export_json_v2_keeps_dataset_provenance_shape() -> None:
     original = _context()
     dataset = replace(original.dataset, display_name="Measured curve")
     value = replace(original.project, datasets=(dataset,))
@@ -413,7 +429,11 @@ def test_export_json_matches_the_frozen_r22_field_shape() -> None:
     payload = json.loads(dataset_json_bytes(context))
 
     assert project_to_dict(value)["datasets"][0]["display_name"] == "Measured curve"
-    assert "display_name" not in payload["project"]["datasets"][0]
+    assert payload["project"] == {
+        "path": context.project_reference.path,
+        "size": context.project_reference.size,
+        "sha256": context.project_reference.sha256,
+    }
     assert payload["raw_data"]["beam_kind"] == context.data.beam.kind
     assert "beam" not in payload["raw_data"]
     assert "candidate_count" not in payload["run_info"]
@@ -421,11 +441,44 @@ def test_export_json_matches_the_frozen_r22_field_shape() -> None:
     assert "diagnostics" not in payload["model_residuals"]
 
 
-def test_export_json_preserves_the_frozen_r22_field_order() -> None:
+def test_export_json_v2_references_one_shared_project_snapshot() -> None:
+    context = _context()
+
+    payload = json.loads(dataset_json_bytes(context))
+
+    assert tuple(payload) == (
+        "export_schema_version",
+        "dataset_id",
+        "source_path",
+        "source_sha256",
+        "beam",
+        "instrument",
+        "scale_prior",
+        "structure_evidence",
+        "oxide_decisions",
+        "raw_data",
+        "model_residuals",
+        "fit_result",
+        "project",
+        "candidates",
+        "convergence",
+        "run_info",
+    )
+    assert payload["export_schema_version"] == 2
+    assert payload["project"] == {
+        "path": PROJECT_REFERENCE.path,
+        "size": PROJECT_REFERENCE.size,
+        "sha256": PROJECT_REFERENCE.sha256,
+    }
+    assert "datasets" not in payload["project"]
+
+
+def test_export_json_v2_preserves_the_documented_field_order() -> None:
     content = dataset_json_bytes(_context())
     payload = json.loads(content)
 
     assert tuple(payload) == (
+        "export_schema_version",
         "dataset_id",
         "source_path",
         "source_sha256",
@@ -513,6 +566,7 @@ def test_export_json_encodes_nonfinite_excluded_points_as_null() -> None:
         selected=updated,
         replay_identity=original.replay_identity,
         matching_surface_oxide_rejection=original.matching_surface_oxide_rejection,
+        project_reference=original.project_reference,
     )
 
     payload = json.loads(dataset_json_bytes(context))
@@ -548,6 +602,7 @@ def test_export_uses_explicit_selected_candidate_without_rewriting_result() -> N
         selected=selected,
         replay_identity=original.replay_identity,
         matching_surface_oxide_rejection=original.matching_surface_oxide_rejection,
+        project_reference=original.project_reference,
     )
 
     payload = json.loads(dataset_json_bytes(context))
@@ -555,7 +610,8 @@ def test_export_uses_explicit_selected_candidate_without_rewriting_result() -> N
     assert payload["model_residuals"]["candidate_id"] == selected.candidate_id
     assert payload["model_residuals"]["model_normalized"] == pytest.approx(selected.model_normalized)
     assert payload["fit_result"]["best_index"] == 0
-    assert payload["project"]["ui_state"]["selected_candidate_ids"] == [[dataset.dataset_id, selected.candidate_id]]
+    assert value.ui_state.selected_candidate_ids == ((dataset.dataset_id, selected.candidate_id),)
+    assert payload["project"]["path"] == PROJECT_REFERENCE.path
 
 
 def test_export_rejects_selected_candidate_outside_persisted_result() -> None:
@@ -574,6 +630,7 @@ def test_export_rejects_selected_candidate_outside_persisted_result() -> None:
             selected=outsider,
             replay_identity=original.replay_identity,
             matching_surface_oxide_rejection=original.matching_surface_oxide_rejection,
+            project_reference=original.project_reference,
         )
 
 
@@ -1060,6 +1117,7 @@ def test_export_log_ignores_unrelated_surface_oxide_rejection() -> None:
         selected=selected,
         replay_identity=original.replay_identity,
         matching_surface_oxide_rejection=False,
+        project_reference=original.project_reference,
     )
 
     text = run_log_bytes(context).decode("utf-8")
@@ -1088,6 +1146,7 @@ def test_export_log_retains_stale_diagnostic_indices_without_indexing_them() -> 
         selected=selected,
         replay_identity=original.replay_identity,
         matching_surface_oxide_rejection=original.matching_surface_oxide_rejection,
+        project_reference=original.project_reference,
     )
 
     text = run_log_bytes(context).decode("utf-8")

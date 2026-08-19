@@ -35,6 +35,7 @@ from xrr_fitter.io.export_tables import DatasetExportData, ExportReplayIdentity
 from xrr_fitter.io.orso import orso_bytes
 from xrr_fitter.model.analysis import UncertaintyReport
 from xrr_fitter.model.data import BeamSpec
+from xrr_fitter.model.export import ExportFileRecord
 from xrr_fitter.model.parameters import ParameterValue
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -167,6 +168,7 @@ def _orso_context(
         selected=candidate,
         replay_identity=ExportReplayIdentity(1, 10101, 20202),
         matching_surface_oxide_rejection=False,
+        project_reference=ExportFileRecord("project_snapshot.xrrproj.json", 123, "b" * 64),
     )
 
 

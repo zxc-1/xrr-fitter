@@ -50,6 +50,7 @@ from xrr_fitter.io.codec_results import fit_result_to_dict
 from xrr_fitter.io.project_codec import project_to_dict
 from xrr_fitter.model.analysis import FitResult, UncertaintyReport
 from xrr_fitter.model.data import PreparedData
+from xrr_fitter.model.export import ExportFileRecord
 from xrr_fitter.model.fitting import FitCandidate
 from xrr_fitter.model.instrument import PhysicsDiagnostic
 from xrr_fitter.model.project import DatasetProject, XrrProject
@@ -60,6 +61,8 @@ WORKBOOK_OPTIONS = {
     "strings_to_urls": False,
     "strings_to_numbers": False,
 }
+EXPORT_SCHEMA_VERSION = 2
+PROJECT_SNAPSHOT_PATH = "project_snapshot.xrrproj.json"
 
 
 def _mapping_pairs(values: object) -> tuple[tuple[str, str], ...]:
@@ -157,6 +160,7 @@ class DatasetExportData:
     selected: FitCandidate
     replay_identity: ExportReplayIdentity
     matching_surface_oxide_rejection: bool
+    project_reference: ExportFileRecord
 
     def __post_init__(self) -> None:
         _validate_export_roots(self)
@@ -169,6 +173,10 @@ class DatasetExportData:
             raise TypeError("replay_identity must be an ExportReplayIdentity")
         if not isinstance(self.matching_surface_oxide_rejection, bool):
             raise TypeError("matching_surface_oxide_rejection must be bool")
+        if not isinstance(self.project_reference, ExportFileRecord):
+            raise TypeError("project_reference must be an ExportFileRecord")
+        if self.project_reference.path != PROJECT_SNAPSHOT_PATH:
+            raise ValueError(f"project_reference path must be {PROJECT_SNAPSHOT_PATH}")
         object.__setattr__(self, "directory_mapping", mapping)
 
     @property
@@ -202,13 +210,6 @@ def _project_dataset_document(context: DatasetExportData) -> dict[str, Any]:
     document = project_to_dict(context.project)
     index = next(index for index, dataset in enumerate(context.project.datasets) if dataset is context.dataset)
     return document["datasets"][index]
-
-
-def _export_project_document(project: XrrProject) -> dict[str, Any]:
-    document = project_to_dict(project)
-    for dataset in document["datasets"]:
-        dataset.pop("display_name", None)
-    return document
 
 
 def _finite_scalar(value: object) -> object:
@@ -346,14 +347,22 @@ def _convergence_payload(result: FitResult) -> dict[str, object]:
     }
 
 
+def _project_reference(record: ExportFileRecord) -> dict[str, object]:
+    return {
+        "path": record.path,
+        "size": record.size,
+        "sha256": record.sha256,
+    }
+
+
 def dataset_payload(context: DatasetExportData) -> dict[str, object]:
     """Build the complete strict-JSON payload for one selected dataset."""
     if not isinstance(context, DatasetExportData):
         raise TypeError("context must be DatasetExportData")
-    project_document = _export_project_document(context.project)
     dataset_document = _project_dataset_document(context)
     fit_result, candidates = _candidate_views(context.result)
     return {
+        "export_schema_version": EXPORT_SCHEMA_VERSION,
         "dataset_id": context.dataset.dataset_id,
         "source_path": context.dataset.source_path,
         "source_sha256": context.dataset.source_sha256,
@@ -365,7 +374,7 @@ def dataset_payload(context: DatasetExportData) -> dict[str, object]:
         "raw_data": _raw_data_payload(context, dataset_document),
         "model_residuals": _model_residuals_payload(context),
         "fit_result": fit_result,
-        "project": project_document,
+        "project": _project_reference(context.project_reference),
         "candidates": candidates,
         "convergence": _convergence_payload(context.result),
         "run_info": _run_info_payload(context, dataset_document),

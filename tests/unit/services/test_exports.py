@@ -9,6 +9,7 @@ from tests.support.model_cases import final_fit_result, fit_candidate, simple_st
 
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.analysis import UncertaintyReport
+from xrr_fitter.model.export import ExportFileRecord
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.services import exports
 from xrr_fitter.services.datasets import add_dataset
@@ -93,7 +94,10 @@ def test_export_builds_the_fixed_artifact_set_before_publication(
     assert result == "manifest"
     dataset = captured["datasets"][0]
     assert tuple(item.path for item in dataset.files) == DATASET_FILES
-    assert tuple(item.path for item in captured["root_files"]) == ("compatibility_summary.xlsx",)
+    assert tuple(item.path for item in captured["root_files"]) == (
+        "project_snapshot.xrrproj.json",
+        "compatibility_summary.xlsx",
+    )
 
 
 def test_export_rechecks_source_after_initial_inspection_before_allocating(
@@ -159,7 +163,10 @@ def test_export_appends_single_ort_when_requested(
 
     dataset = captured["datasets"][0]
     assert tuple(item.path for item in dataset.files) == DATASET_FILES_WITH_ORT
-    assert tuple(item.path for item in captured["root_files"]) == ("compatibility_summary.xlsx",)
+    assert tuple(item.path for item in captured["root_files"]) == (
+        "project_snapshot.xrrproj.json",
+        "compatibility_summary.xlsx",
+    )
 
 
 def test_export_omits_ort_covariance_owned_by_another_candidate(
@@ -193,7 +200,10 @@ def test_export_omits_ort_covariance_owned_by_another_candidate(
         selected_candidate_ids=((dataset.dataset_id, selected.candidate_id),),
     )
     value = replace(value, datasets=(dataset,), ui_state=ui_state)
-    context = exports._contexts(value)[0]
+    context = exports._contexts(
+        value,
+        ExportFileRecord("project_snapshot.xrrproj.json", 123, "b" * 64),
+    )[0]
     captured: dict[str, object] = {}
     _stub_serializers(monkeypatch)
 
