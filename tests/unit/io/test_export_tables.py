@@ -38,7 +38,12 @@ from xrr_fitter.io.export_tables import (
 )
 from xrr_fitter.io.project_codec import project_to_dict
 from xrr_fitter.io.xy import read_xy_bytes
-from xrr_fitter.model.analysis import McmcConfig, McmcReport, UncertaintyReport
+from xrr_fitter.model.analysis import (
+    McmcConfig,
+    McmcReport,
+    ParameterProfile,
+    UncertaintyReport,
+)
 from xrr_fitter.model.data import PreparedData
 from xrr_fitter.model.fitting import FitStageSummary
 from xrr_fitter.model.instrument import PhysicsDiagnostic
@@ -220,9 +225,17 @@ def _context_with_mcmc_diagnostics() -> DatasetExportData:
         candidate_id=selected.candidate_id,
     )
     uncertainty = UncertaintyReport(
-        correlation_names=(),
-        correlation_matrix=np.empty((0, 0)),
-        profiles=(),
+        correlation_names=("scale",),
+        correlation_matrix=np.ones((1, 1)),
+        profiles=(
+            ParameterProfile(
+                "scale",
+                np.array([0.9, 1.0, 1.1]),
+                np.array([1.1, 1.0, 1.1]),
+                True,
+                True,
+            ),
+        ),
         bootstrap_intervals=(),
         bootstrap_failure_rate=0.0,
         boundary_hits=(),
@@ -254,6 +267,31 @@ def _context_with_mcmc_diagnostics() -> DatasetExportData:
         selected=selected,
         replay_identity=original.replay_identity,
         matching_surface_oxide_rejection=True,
+    )
+
+
+def _context_with_mismatched_uncertainty() -> DatasetExportData:
+    original = _context_with_mcmc_diagnostics()
+    selected = replace(
+        original.selected,
+        candidate_id="candidate-b",
+        diagnostics=(),
+    )
+    result = replace(
+        original.result,
+        candidates=(original.selected, selected),
+    )
+    dataset = replace(original.dataset, last_valid_result=result)
+    ui_state = replace(
+        original.project.ui_state,
+        selected_candidate_ids=((dataset.dataset_id, selected.candidate_id),),
+    )
+    value = replace(original.project, datasets=(dataset,), ui_state=ui_state)
+    return replace(
+        original,
+        project=value,
+        dataset=dataset,
+        selected=selected,
     )
 
 
@@ -422,6 +460,7 @@ def test_export_json_preserves_the_frozen_r22_field_order() -> None:
         "optimizer_child_seeds",
         "mcmc_child_seed",
         "selected_candidate_id",
+        "uncertainty_absent_reason",
         "fitted_instrument_parameters",
         "dataset_id",
         "source_path",
@@ -762,6 +801,7 @@ def test_export_workbook_run_info_matches_json_and_keeps_strings_literal() -> No
         "optimizer_child_seeds",
         "mcmc_child_seed",
         "selected_candidate_id",
+        "uncertainty_absent_reason",
         "fitted_instrument_parameters",
         "confidence",
         "candidate_count",
@@ -818,6 +858,38 @@ def test_export_json_and_workbook_retain_nonempty_mcmc_replay_identity() -> None
     }
     assert observed_json == expected_json
     assert observed_workbook == expected_workbook
+
+
+def test_export_omits_uncertainty_owned_by_another_selected_candidate() -> None:
+    context = _context_with_mismatched_uncertainty()
+
+    payload = json.loads(dataset_json_bytes(context))
+    workbook_bytes = dataset_workbook_bytes(context)
+    workbook = pd.ExcelFile(BytesIO(workbook_bytes))
+    correlation = pd.read_excel(BytesIO(workbook_bytes), sheet_name="Correlation")
+    profiles = pd.read_excel(BytesIO(workbook_bytes), sheet_name="Profiles")
+    run_info = pd.read_excel(BytesIO(workbook_bytes), sheet_name="RunInfo").iloc[0]
+    log = run_log_bytes(context).decode("utf-8")
+
+    assert context.selected.candidate_id == "candidate-b"
+    assert context.result.uncertainty.candidate_id != context.selected.candidate_id
+    assert payload["run_info"]["mcmc_child_seed"] is None
+    assert "uncertainty candidate mismatch" in payload["run_info"]["uncertainty_absent_reason"]
+    assert "uncertainty candidate mismatch" in run_info["uncertainty_absent_reason"]
+    assert correlation.empty
+    assert profiles.empty
+    assert "mcmc_child_seed: None" in log
+    assert "uncertainty-code" not in log
+    assert "uncertainty candidate mismatch" in log
+    assert workbook.sheet_names == [
+        "Parameters",
+        "Candidates",
+        "RawData",
+        "ModelResiduals",
+        "Correlation",
+        "Profiles",
+        "RunInfo",
+    ]
 
 
 def test_export_workbook_json_codec_rejects_unknown_objects() -> None:

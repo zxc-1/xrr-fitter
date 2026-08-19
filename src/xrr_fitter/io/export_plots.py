@@ -147,10 +147,7 @@ def _draw_bands(axis: object, bands: object) -> None:
 
 
 def _selected_bands(context: DatasetExportData) -> object | None:
-    # Bands hang off the persisted result rather than the selected candidate:
-    # MCMC replay attaches them to the dataset's last valid uncertainty report.
-    result = context.dataset.last_valid_result
-    report = None if result is None else result.uncertainty
+    report = context.selected_uncertainty
     return None if report is None else report.sld_bands
 
 

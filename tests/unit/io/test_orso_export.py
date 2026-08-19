@@ -486,6 +486,7 @@ def test_orso_bytes_omits_uncertainty_owned_by_another_candidate() -> None:
     assert confidence["parameters"][0]["value"] == selected.parameters[0].value
     assert confidence["error_bars"] == []
     assert "covariance" not in confidence
+    assert confidence["covariance_absent_reason"] == mismatched.uncertainty_absent_reason
     assert first.candidate_id in confidence["covariance_absent_reason"]
     assert selected.candidate_id in confidence["covariance_absent_reason"]
 

@@ -143,7 +143,7 @@ def _dataset_artifacts(context: DatasetExportData, *, include_ort: bool) -> Data
         # 架构门禁禁止 ``services.exports`` 依赖 ``analysis`` 或 numpy，协方差矩阵改由
         # model 层 ``UncertaintyReport.covariance`` 派生（修正 9 的合规落点），服务层仅读取
         # 并透传，缺逐参数 sigma 时为 ``None``，导出即记录缺席原因。
-        report = context.result.uncertainty
+        report = context.selected_uncertainty
         covariance = None if report is None else report.covariance
         files.append(ArtifactPayload("fit_result.ort", orso_bytes(context, covariance=covariance)))
     return DatasetArtifacts(context.dataset.dataset_id, tuple(files))

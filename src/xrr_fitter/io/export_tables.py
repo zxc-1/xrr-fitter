@@ -48,7 +48,7 @@ import pandas as pd
 
 from xrr_fitter.io.codec_results import fit_result_to_dict
 from xrr_fitter.io.project_codec import project_to_dict
-from xrr_fitter.model.analysis import FitResult
+from xrr_fitter.model.analysis import FitResult, UncertaintyReport
 from xrr_fitter.model.data import PreparedData
 from xrr_fitter.model.fitting import FitCandidate
 from xrr_fitter.model.instrument import PhysicsDiagnostic
@@ -178,6 +178,25 @@ class DatasetExportData:
             raise ValueError("dataset has no fit result")
         return result
 
+    @property
+    def selected_uncertainty(self) -> UncertaintyReport | None:
+        report = self.result.uncertainty
+        if report is None or report.candidate_id != self.selected.candidate_id:
+            return None
+        return report
+
+    @property
+    def uncertainty_absent_reason(self) -> str | None:
+        report = self.result.uncertainty
+        selected = self.selected.candidate_id
+        if report is None:
+            return "uncertainty not estimated for this fit result"
+        if report.candidate_id is None:
+            return f"uncertainty candidate is unowned: selected={selected}"
+        if report.candidate_id != selected:
+            return f"uncertainty candidate mismatch: selected={selected}, owner={report.candidate_id}"
+        return None
+
 
 def _project_dataset_document(context: DatasetExportData) -> dict[str, Any]:
     document = project_to_dict(context.project)
@@ -270,7 +289,8 @@ def _run_info_payload(
     fitted_instrument = {
         value.name: value.value for value in context.selected.parameters if value.name.startswith("instrument.")
     }
-    mcmc = result.uncertainty.mcmc if result.uncertainty is not None else None
+    report = context.selected_uncertainty
+    mcmc = None if report is None else report.mcmc
     return {
         "schema_version": context.project.schema_version,
         "algorithm_version": context.project.algorithm_version,
@@ -282,6 +302,7 @@ def _run_info_payload(
         "optimizer_child_seeds": list(result.child_seeds),
         "mcmc_child_seed": None if mcmc is None else mcmc.child_seed,
         "selected_candidate_id": context.selected.candidate_id,
+        "uncertainty_absent_reason": context.uncertainty_absent_reason,
         "fitted_instrument_parameters": fitted_instrument,
         "dataset_id": context.dataset.dataset_id,
         "source_path": context.dataset.source_path,
@@ -529,7 +550,7 @@ def _model_frame(context: DatasetExportData) -> pd.DataFrame:
 
 
 def _correlation_frame(context: DatasetExportData) -> pd.DataFrame:
-    report = context.result.uncertainty
+    report = context.selected_uncertainty
     if report is None:
         return pd.DataFrame(columns=["parameter"])
     rows = []
@@ -550,7 +571,7 @@ def _correlation_frame(context: DatasetExportData) -> pd.DataFrame:
 
 def _profiles_frame(context: DatasetExportData) -> pd.DataFrame:
     columns = ["name", "value", "objective", "lower_closed", "upper_closed"]
-    report = context.result.uncertainty
+    report = context.selected_uncertainty
     if report is None:
         return pd.DataFrame(columns=columns)
     rows = [
@@ -588,6 +609,7 @@ def _run_info_frame(context: DatasetExportData) -> pd.DataFrame:
         "optimizer_child_seeds": json_text(info["optimizer_child_seeds"]),
         "mcmc_child_seed": info["mcmc_child_seed"],
         "selected_candidate_id": info["selected_candidate_id"],
+        "uncertainty_absent_reason": info["uncertainty_absent_reason"],
         "fitted_instrument_parameters": json_text(info["fitted_instrument_parameters"]),
         "confidence": info["confidence"],
         "candidate_count": len(context.result.candidates),
@@ -785,7 +807,7 @@ def _diagnostic_line(
 def _persisted_diagnostics(
     context: DatasetExportData,
 ) -> tuple[PhysicsDiagnostic, ...]:
-    uncertainty = context.result.uncertainty
+    uncertainty = context.selected_uncertainty
     if uncertainty is None:
         return context.selected.diagnostics
     return (*context.selected.diagnostics, *uncertainty.diagnostics)
@@ -803,7 +825,8 @@ def run_log_bytes(context: DatasetExportData) -> bytes:
     """Serialize stable warnings, seed lineage, stages, and diagnostics."""
     result = context.result
     identity = context.replay_identity
-    mcmc = result.uncertainty.mcmc if result.uncertainty is not None else None
+    report = context.selected_uncertainty
+    mcmc = None if report is None else report.mcmc
     lines = [
         f"dataset_id: {context.dataset.dataset_id}",
         f"confidence: {result.confidence.value}",
@@ -815,6 +838,8 @@ def run_log_bytes(context: DatasetExportData) -> bytes:
         f"optimizer_child_seeds: {_compact_json(result.child_seeds)}",
         f"mcmc_child_seed: {None if mcmc is None else mcmc.child_seed}",
     ]
+    if context.uncertainty_absent_reason is not None:
+        lines.append(f"uncertainty_absent_reason: {context.uncertainty_absent_reason}")
     lines.extend(f"warning: {value}" for value in result.warnings)
     lines.extend(
         "stage "

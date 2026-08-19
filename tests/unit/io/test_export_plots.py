@@ -255,6 +255,7 @@ def _context_with_bands() -> DatasetExportData:
         systematic_residual=False,
         diagnostics=(),
         sld_bands=_zero_width_bands(),
+        candidate_id=base.selected.candidate_id,
     )
     result = replace(base.result, uncertainty=report)
     dataset = replace(base.dataset, last_valid_result=result)
@@ -267,6 +268,30 @@ def _context_with_bands() -> DatasetExportData:
         base.replay_identity,
         base.matching_surface_oxide_rejection,
     )
+
+
+def _mismatched_and_absent_band_contexts() -> tuple[DatasetExportData, DatasetExportData]:
+    original = _context_with_bands()
+    selected = replace(original.selected, candidate_id="candidate-b")
+    mismatched_result = replace(
+        original.result,
+        candidates=(original.selected, selected),
+    )
+    mismatched_dataset = replace(original.dataset, last_valid_result=mismatched_result)
+    mismatched = replace(
+        original,
+        project=project(mismatched_dataset),
+        dataset=mismatched_dataset,
+        selected=selected,
+    )
+    absent_result = replace(mismatched_result, uncertainty=None)
+    absent_dataset = replace(mismatched_dataset, last_valid_result=absent_result)
+    absent = replace(
+        mismatched,
+        project=project(absent_dataset),
+        dataset=absent_dataset,
+    )
+    return mismatched, absent
 
 
 # Frozen from the three renderers at ``bb5f253^`` in the locked Matplotlib
@@ -298,6 +323,13 @@ def test_sld_profile_png_with_bands_differs_and_stays_deterministic() -> None:
     first = sld_profile_png(banded)
     assert first == sld_profile_png(banded)
     assert first != sld_profile_png(_context())
+
+
+def test_sld_profile_omits_bands_owned_by_another_candidate() -> None:
+    mismatched, absent = _mismatched_and_absent_band_contexts()
+
+    assert mismatched.result.uncertainty.candidate_id != mismatched.selected.candidate_id
+    assert sld_profile_png(mismatched) == sld_profile_png(absent)
 
 
 def test_sld_profile_png_takes_its_caption_from_the_band_object(monkeypatch) -> None:

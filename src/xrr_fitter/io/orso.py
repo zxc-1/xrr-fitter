@@ -173,7 +173,7 @@ def _extensions(context, result, selected, mask, covariance):
     live here instead. The fitted Qz is explicit because an optimized angle
     offset can make it differ from the imported data Qz column.
     """
-    uncertainty, mismatch_reason = _selected_uncertainty(result, selected)
+    uncertainty = context.selected_uncertainty
     covariance_names = _covariance_names(uncertainty)
     selected_covariance = (
         _validated_covariance(covariance, covariance_names)
@@ -191,7 +191,7 @@ def _extensions(context, result, selected, mask, covariance):
         "excluded_rows": {"count": int(np.count_nonzero(~mask)), "reason": EXCLUDED_ROW_REASON},
     }
     if selected_covariance is None:
-        confidence["covariance_absent_reason"] = mismatch_reason or COVARIANCE_ABSENT_REASON
+        confidence["covariance_absent_reason"] = context.uncertainty_absent_reason or COVARIANCE_ABSENT_REASON
     else:
         confidence["covariance"] = {
             "names": covariance_names,
@@ -231,18 +231,6 @@ def _pointwise_resolution_payload(data, mask):
         "unit": "1/angstrom",
         "values": np.asarray(sigma_q, dtype=float)[mask].tolist(),
     }
-
-
-def _selected_uncertainty(result, selected):
-    uncertainty = result.uncertainty
-    if uncertainty is None:
-        return None, None
-    if uncertainty.candidate_id == selected.candidate_id:
-        return uncertainty, None
-    return (
-        None,
-        f"uncertainty candidate mismatch: selected={selected.candidate_id}, owner={uncertainty.candidate_id}",
-    )
 
 
 def _beam_payload(beam):

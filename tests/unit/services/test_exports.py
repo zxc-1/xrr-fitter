@@ -8,6 +8,7 @@ import pytest
 from tests.support.model_cases import final_fit_result, fit_candidate, simple_structure
 
 from xrr_fitter.io.xy import xy_bytes
+from xrr_fitter.model.analysis import UncertaintyReport
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.services import exports
 from xrr_fitter.services.datasets import add_dataset
@@ -159,3 +160,49 @@ def test_export_appends_single_ort_when_requested(
     dataset = captured["datasets"][0]
     assert tuple(item.path for item in dataset.files) == DATASET_FILES_WITH_ORT
     assert tuple(item.path for item in captured["root_files"]) == ("compatibility_summary.xlsx",)
+
+
+def test_export_omits_ort_covariance_owned_by_another_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = _fitted_project(tmp_path)
+    first = value.datasets[0].last_valid_result.best_candidate
+    selected = replace(first, candidate_id="candidate-b")
+    uncertainty = UncertaintyReport(
+        correlation_names=("scale",),
+        correlation_matrix=np.ones((1, 1)),
+        profiles=(),
+        bootstrap_intervals=(),
+        bootstrap_failure_rate=0.0,
+        boundary_hits=(),
+        strong_correlations=(),
+        systematic_residual=False,
+        diagnostics=(),
+        candidate_id=first.candidate_id,
+        parameter_sigma=np.array([0.1]),
+    )
+    fit_result = replace(
+        value.datasets[0].last_valid_result,
+        candidates=(first, selected),
+        uncertainty=uncertainty,
+    )
+    dataset = replace(value.datasets[0], last_valid_result=fit_result)
+    ui_state = replace(
+        value.ui_state,
+        selected_candidate_ids=((dataset.dataset_id, selected.candidate_id),),
+    )
+    value = replace(value, datasets=(dataset,), ui_state=ui_state)
+    context = exports._contexts(value)[0]
+    captured: dict[str, object] = {}
+    _stub_serializers(monkeypatch)
+
+    def serialize_orso(_context, *, covariance):
+        captured["covariance"] = covariance
+        return b"orso-document"
+
+    monkeypatch.setattr(exports, "orso_bytes", serialize_orso)
+
+    exports._dataset_artifacts(context, include_ort=True)
+
+    assert captured["covariance"] is None
