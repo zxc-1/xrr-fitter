@@ -6,10 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
-from typing import Sequence
 import urllib.request
-
+from collections.abc import Sequence
+from pathlib import Path
 
 SUITE_COMMIT = "6a01b4a4febfc52cd3881d2147c732dd1701bc8e"
 INDEX_SCHEMA = "xrr-r23-orso-suite-index-v1"
@@ -30,11 +29,7 @@ def canonical_json_bytes(value: object) -> bytes:
 
 
 def manifest_references(text: str) -> tuple[str, ...]:
-    lines = tuple(
-        stripped
-        for line in text.splitlines()
-        if (stripped := line.strip()) and not stripped.startswith("#")
-    )
+    lines = tuple(stripped for line in text.splitlines() if (stripped := line.strip()) and not stripped.startswith("#"))
     if len(lines) != 2:
         return _reject(f"manifest must name exactly two references, found {len(lines)}")
     return lines

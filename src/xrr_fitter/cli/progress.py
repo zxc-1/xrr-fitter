@@ -17,11 +17,7 @@ def render_text(progress: api.FitProgress) -> str:
     dataset = progress.dataset_id or "-"
     objective = _objective(progress.best_objective)
     best = "-" if objective is None else f"{objective:.6g}"
-    return (
-        f"[{dataset}] 阶段 {progress.stage} "
-        f"{progress.completed}/{progress.total} "
-        f"best={best} {progress.message}"
-    )
+    return f"[{dataset}] 阶段 {progress.stage} {progress.completed}/{progress.total} best={best} {progress.message}"
 
 
 def render_json(progress: api.FitProgress) -> str:

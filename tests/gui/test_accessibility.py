@@ -8,10 +8,8 @@ from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QDialogButtonBox,
-    QLabel,
     QPlainTextEdit,
     QPushButton,
-    QTableWidget,
     QTreeWidget,
     QWidget,
 )
@@ -28,11 +26,7 @@ def _accessibility():
 
 def _write_curve(path: Path) -> Path:
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}"
-            for index in range(32)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}" for index in range(32)) + "\n",
         encoding="utf-8",
     )
     return path
@@ -286,8 +280,9 @@ def test_result_panel_wraps_long_evidence_and_preserves_copy_accessibility(qtbot
 
 
 def test_structure_component_actions_are_accessible_and_dataset_gated(qtbot) -> None:
-    from xrr_fitter.gui.structure.editor import StructureEditor
     from tests.support.model_cases import simple_structure
+
+    from xrr_fitter.gui.structure.editor import StructureEditor
 
     module = _accessibility()
     editor = StructureEditor(lambda _value: None, lambda: None, lambda: None)
@@ -388,9 +383,7 @@ def test_parameter_alignment_accessibility_does_not_commit_parameter_settings(
     panel = ParametersPanel(document)
     qtbot.addWidget(panel)
     events: list[object] = []
-    panel.settings_changed.connect(
-        lambda dataset_id, settings: events.append((dataset_id, settings))
-    )
+    panel.settings_changed.connect(lambda dataset_id, settings: events.append((dataset_id, settings)))
 
     module.configure_accessibility(panel)
 

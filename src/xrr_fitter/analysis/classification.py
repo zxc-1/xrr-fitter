@@ -43,11 +43,7 @@ def cluster_unit_vectors(
         cluster = {first}
         while frontier:
             current = frontier.pop()
-            linked = {
-                index
-                for index in remaining
-                if _rms_distance(values[current], values[index]) < join_distance
-            }
+            linked = {index for index in remaining if _rms_distance(values[current], values[index]) < join_distance}
             remaining.difference_update(linked)
             cluster.update(linked)
             frontier.extend(sorted(linked))
@@ -113,9 +109,7 @@ def _cluster_representatives(
     clusters: tuple[tuple[int, ...], ...],
     costs: np.ndarray,
 ) -> tuple[tuple[int, ...], int, tuple[int, ...], float, float]:
-    representatives = tuple(
-        min(cluster, key=lambda index: (costs[index], index)) for cluster in clusters
-    )
+    representatives = tuple(min(cluster, key=lambda index: (costs[index], index)) for cluster in clusters)
     best_position = min(
         range(len(clusters)),
         key=lambda position: (costs[representatives[position]], representatives[position]),
@@ -134,18 +128,14 @@ def _multiple_reason(
     equivalent_delta: float,
     profile_path_merge: Callable[[np.ndarray, np.ndarray, float], bool] | None,
 ) -> str | None:
-    representatives, best_position, _cluster, best_objective, best_index = _cluster_representatives(
-        clusters, costs
-    )
+    representatives, best_position, _cluster, best_objective, best_index = _cluster_representatives(clusters, costs)
     limit = best_objective + equivalent_delta
     for position, other_index in enumerate(representatives):
         if position == best_position or costs[other_index] > limit:
             continue
         if _rms_distance(vectors[best_index], vectors[other_index]) >= distinct_cluster_distance:
             return "distinct_equivalent_clusters"
-        if profile_path_merge is not None and not profile_path_merge(
-            vectors[best_index], vectors[other_index], limit
-        ):
+        if profile_path_merge is not None and not profile_path_merge(vectors[best_index], vectors[other_index], limit):
             return "profile_path_merge_failed"
     return None
 
@@ -258,9 +248,7 @@ def classify_result_with_evidence(
     if report.bootstrap_failure_rate > 0.20:
         return ConfidenceClass.UNTRUSTED, ("bootstrap_failure_rate",)
     active = tuple(
-        candidate
-        for candidate in candidates
-        if getattr(candidate, "stop_reason", None) != "early_eliminated"
+        candidate for candidate in candidates if getattr(candidate, "stop_reason", None) != "early_eliminated"
     )
     if not active:
         return ConfidenceClass.UNTRUSTED, ("no_active_candidates",)
@@ -276,9 +264,9 @@ def classify_result_with_evidence(
     if merge is None and hasattr(problem, "variables"):
         from xrr_fitter.analysis.profiles import default_profile_path_merge
 
-        merge = lambda first, second, limit: default_profile_path_merge(
-            problem, first, second, limit
-        )
+        def merge(first, second, limit):
+            return default_profile_path_merge(problem, first, second, limit)
+
     profiles = tuple(report.profiles)
     return classify_candidate_evidence_with_reasons(
         vectors,

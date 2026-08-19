@@ -4,7 +4,6 @@ from collections import Counter
 
 from tests.support.synthetic_recovery import build_corpus, run_corpus
 
-
 EXPECTED_CATEGORIES = {
     "ambiguous": 20,
     "double_layer": 20,

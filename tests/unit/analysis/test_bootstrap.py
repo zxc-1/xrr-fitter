@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import replace
 from importlib import import_module
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data, simple_structure
+
 from xrr_fitter.evaluation import encode_physical_vector, evaluate_model
 from xrr_fitter.fit.candidates import candidate_from_evaluation
 from xrr_fitter.fit.problem import compile_fit_problem
@@ -114,6 +115,26 @@ def test_bootstrap_failure_rate_gate_is_strictly_greater_than_twenty_percent() -
     assert len(result.intervals) == 1
 
 
+def test_bootstrap_percentiles_interpolate_finite_opposite_extremes_stably() -> None:
+    maximum = np.finfo(float).max
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = bootstrap_local(
+            lambda _rng, sample_index: np.asarray([-maximum if sample_index == 0 else maximum]),
+            ("x",),
+            sample_count=2,
+            child_seed=125,
+        )
+
+    assert len(result.intervals) == 1
+    _name, lower, upper = result.intervals[0]
+    assert lower == pytest.approx(-0.95 * maximum)
+    assert upper == pytest.approx(0.95 * maximum)
+    assert lower < upper
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
 def test_bootstrap_reports_every_completed_sample_including_failures() -> None:
     events: list[tuple[int, int]] = []
 
@@ -135,6 +156,15 @@ def test_residual_bootstrap_block_length_uses_first_zero_crossing_with_clamps() 
 
     assert residual_block_length(alternating) == 3
     assert residual_block_length(persistent) == 25
+
+
+def test_residual_bootstrap_treats_repeated_finite_extremes_as_constant() -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        length = residual_block_length(np.full(8, np.finfo(float).max))
+
+    assert length == 3
+    assert not any(item.category is RuntimeWarning for item in caught)
 
 
 def test_problem_bootstrap_is_deterministic_and_reports_physical_parameters() -> None:

@@ -48,12 +48,9 @@ def _classify(vectors: np.ndarray, costs: np.ndarray, **kwargs):
 
 
 def test_equivalent_distant_solutions_are_multiple() -> None:
-    vectors = np.asarray(
-        [[0.10, 0.10], [0.11, 0.09], [0.80, 0.80], [0.81, 0.79]]
-    )
+    vectors = np.asarray([[0.10, 0.10], [0.11, 0.09], [0.80, 0.80], [0.81, 0.79]])
 
-    assert _classify(vectors, np.asarray([0.0100, 0.0101, 0.01005, 0.0101])) \
-        is ConfidenceClass.MULTIPLE
+    assert _classify(vectors, np.asarray([0.0100, 0.0101, 0.01005, 0.0101])) is ConfidenceClass.MULTIPLE
 
 
 def test_equivalent_distant_cluster_precedes_singleton_best_gate() -> None:
@@ -61,9 +58,7 @@ def test_equivalent_distant_cluster_precedes_singleton_best_gate() -> None:
     costs = np.asarray([0.0100, 0.01005, 0.4, 0.5])
     clusters = ((0,), (1, 2, 3))
 
-    confidence, reasons = classify_candidate_evidence_with_reasons(
-        vectors, costs, clusters
-    )
+    confidence, reasons = classify_candidate_evidence_with_reasons(vectors, costs, clusters)
 
     assert confidence is ConfidenceClass.MULTIPLE
     assert reasons == ("distinct_equivalent_clusters",)
@@ -81,28 +76,28 @@ def test_cluster_candidates_uses_candidate_unit_vectors_in_input_order() -> None
 def test_one_of_four_seeds_is_untrusted() -> None:
     vectors = np.asarray([[0.1], [0.7], [0.8], [0.9]])
 
-    assert _classify(vectors, np.asarray([0.01, 0.2, 0.3, 0.4])) \
-        is ConfidenceClass.UNTRUSTED
+    assert _classify(vectors, np.asarray([0.01, 0.2, 0.3, 0.4])) is ConfidenceClass.UNTRUSTED
 
 
 def test_two_of_four_in_best_cluster_is_correlated_but_three_is_trusted() -> None:
     two = np.asarray([[0.10], [0.11], [0.70], [0.90]])
     three = np.asarray([[0.10], [0.11], [0.12], [0.90]])
 
-    assert _classify(two, np.asarray([0.0100, 0.0101, 0.2, 0.3])) \
-        is ConfidenceClass.CORRELATED
-    assert _classify(three, np.asarray([0.0100, 0.0101, 0.01005, 0.3])) \
-        is ConfidenceClass.TRUSTED
+    assert _classify(two, np.asarray([0.0100, 0.0101, 0.2, 0.3])) is ConfidenceClass.CORRELATED
+    assert _classify(three, np.asarray([0.0100, 0.0101, 0.01005, 0.3])) is ConfidenceClass.TRUSTED
 
 
 def test_strong_correlation_caps_otherwise_trusted_evidence() -> None:
     vectors = _supported_vectors()
 
-    assert _classify(
-        vectors,
-        np.asarray([0.0100, 0.0101, 0.01005, 0.01008]),
-        strong_correlations=(("a", "b", 0.96),),
-    ) is ConfidenceClass.CORRELATED
+    assert (
+        _classify(
+            vectors,
+            np.asarray([0.0100, 0.0101, 0.01005, 0.01008]),
+            strong_correlations=(("a", "b", 0.96),),
+        )
+        is ConfidenceClass.CORRELATED
+    )
 
 
 @pytest.mark.parametrize(
@@ -123,9 +118,7 @@ def test_strong_correlation_caps_otherwise_trusted_evidence() -> None:
         ),
     ),
 )
-def test_untrusted_classification_reports_the_deciding_evidence(
-    clusters, valid, reason: str
-) -> None:
+def test_untrusted_classification_reports_the_deciding_evidence(clusters, valid, reason: str) -> None:
     observed = classify_candidate_evidence_with_reasons(
         np.asarray([[0.10], [0.40], [0.70], [0.90]]),
         np.asarray([0.01, 0.20, 0.30, 0.40]),
@@ -162,9 +155,7 @@ def test_untrusted_classification_reports_the_deciding_evidence(
         ),
     ),
 )
-def test_correlated_classification_reports_the_deciding_evidence(
-    kwargs: dict[str, object], reason: str
-) -> None:
+def test_correlated_classification_reports_the_deciding_evidence(kwargs: dict[str, object], reason: str) -> None:
     vectors = _supported_vectors()
 
     confidence, reasons = classify_candidate_evidence_with_reasons(
@@ -189,9 +180,7 @@ def test_two_seed_cluster_reports_limited_support_reason() -> None:
 
 
 def test_multiple_classification_reports_distant_cluster_and_open_primary_reasons() -> None:
-    distant = np.asarray(
-        [[0.10, 0.10], [0.11, 0.09], [0.80, 0.80], [0.81, 0.79]]
-    )
+    distant = np.asarray([[0.10, 0.10], [0.11, 0.09], [0.80, 0.80], [0.81, 0.79]])
     close = _supported_vectors()
 
     assert classify_candidate_evidence_with_reasons(
@@ -208,9 +197,7 @@ def test_multiple_classification_reports_distant_cluster_and_open_primary_reason
 
 
 def test_profile_merge_failure_returns_stable_classification_evidence() -> None:
-    vectors = np.asarray(
-        [[0.40, 0.40], [0.41, 0.41], [0.47, 0.47], [0.48, 0.48]]
-    )
+    vectors = np.asarray([[0.40, 0.40], [0.41, 0.41], [0.47, 0.47], [0.48, 0.48]])
 
     assert classify_candidate_evidence_with_reasons(
         vectors,
@@ -327,8 +314,7 @@ def test_singleton_best_does_not_probe_close_equivalent_profile_path() -> None:
 def test_classify_result_with_evidence_uses_candidate_and_report_state() -> None:
     vectors = (0.10, 0.11, 0.12, 0.13)
     candidates = tuple(
-        SimpleNamespace(unit_vector=np.asarray([value]), objective=0.01, valid=True)
-        for value in vectors
+        SimpleNamespace(unit_vector=np.asarray([value]), objective=0.01, valid=True) for value in vectors
     )
     report = SimpleNamespace(
         bootstrap_failure_rate=0.0,
@@ -339,8 +325,10 @@ def test_classify_result_with_evidence_uses_candidate_and_report_state() -> None
         diagnostics=(),
     )
 
-    assert classify_result_with_evidence(SimpleNamespace(config=None), candidates, report) \
-        == (ConfidenceClass.TRUSTED, ())
+    assert classify_result_with_evidence(SimpleNamespace(config=None), candidates, report) == (
+        ConfidenceClass.TRUSTED,
+        (),
+    )
 
 
 def test_classify_result_uses_persisted_global_ranking_costs(monkeypatch) -> None:

@@ -26,11 +26,7 @@ INTERACTIVE = (QAbstractButton, QComboBox, QSpinBox, QLineEdit)
 
 def _write_curve(path: Path) -> Path:
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}"
-            for index in range(64)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}" for index in range(64)) + "\n",
         encoding="utf-8",
     )
     return path
@@ -87,10 +83,7 @@ def test_each_step_stays_within_the_control_budget(qtbot, tmp_path) -> None:
         window.guidance.show_step(name)
         qtbot.wait(1)
         visible = [
-            widget
-            for kind in INTERACTIVE
-            for widget in window.guidance.findChildren(kind)
-            if widget.isVisible()
+            widget for kind in INTERACTIVE for widget in window.guidance.findChildren(kind) if widget.isVisible()
         ]
         assert len(visible) <= 10, f"{name} shows {len(visible)} controls"
 

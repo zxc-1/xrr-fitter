@@ -38,11 +38,7 @@ def _saved_preset() -> api.MeasurementPreset:
 def _write_curve(path: Path, *, scale: float = 1000.0) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {scale / (index + 1):.12g}"
-            for index in range(32)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {scale / (index + 1):.12g}" for index in range(32)) + "\n",
         encoding="utf-8",
     )
     return path
@@ -134,9 +130,7 @@ def test_cancelled_measurement_preset_change_does_not_affect_next_import(
 
     panel = _panel(
         qtbot,
-        ProjectDocument(
-            replace(api.new_project(), measurement_preset=_saved_preset())
-        ),
+        ProjectDocument(replace(api.new_project(), measurement_preset=_saved_preset())),
     )
     source = _write_curve(tmp_path / "P1 Zr.xy")
     selected = [str(source)] if select_source else []
@@ -279,9 +273,7 @@ def test_import_routes_mutation_only_through_add_dataset_and_renders_returned_id
     monkeypatch.setattr(
         api,
         "import_data",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("GUI import bypassed add_dataset")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GUI import bypassed add_dataset")),
     )
     beam = api.BeamSpec("mixed_kalpha")
 
@@ -383,9 +375,7 @@ def test_data_panel_shows_source_beam_and_instrument_summaries(qtbot, tmp_path) 
     assert item.text(0) == "sample"
     assert item.toolTip(1) == str(source)
     assert panel.beam_text("sample").startswith("混合 Kα")
-    assert panel.instrument_text("sample") == (
-        "lab-01 · 几何换算 10×0.1 mm · 背景 linear · 分辨率 θ"
-    )
+    assert panel.instrument_text("sample") == ("lab-01 · 几何换算 10×0.1 mm · 背景 linear · 分辨率 θ")
     assert item.toolTip(5) == panel.sha256_text("sample")
 
 
@@ -574,6 +564,7 @@ def test_data_panel_shows_fit_status_per_dataset(qtbot) -> None:
         fit_candidate,
         project,
     )
+
     from xrr_fitter.gui.document import ProjectDocument
     from xrr_fitter.model.analysis import ConfidenceClass
 
@@ -611,6 +602,7 @@ def test_active_dataset_row_stays_emphasised_when_tree_loses_focus(qtbot) -> Non
     from dataclasses import replace
 
     from tests.support.model_cases import dataset_project, project
+
     from xrr_fitter.gui.document import ProjectDocument
 
     first = dataset_project("first")

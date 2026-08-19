@@ -8,6 +8,7 @@ import numpy as np
 from scipy import signal
 
 from xrr_fitter.fit.initialization import structure_evidence
+from xrr_fitter.fit.thickness_features import scaled_qz4_transform as _scaled_qz4_transform
 from xrr_fitter.model.fitting import FitCandidate
 
 
@@ -36,9 +37,9 @@ def fringe_extrema_qz(
     qz = qz[finite][order]
     curve = curve[finite][order]
     uniform_qz = np.linspace(qz[0], qz[-1], qz.size)
-    transformed = uniform_qz**4 * np.maximum(
-        np.interp(uniform_qz, qz, curve),
-        r_floor,
+    transformed = _scaled_qz4_transform(
+        uniform_qz,
+        np.maximum(np.interp(uniform_qz, qz, curve), r_floor),
     )
     detrended = signal.detrend(transformed, type="linear")
     differences = np.diff(detrended)
@@ -142,18 +143,10 @@ def fringe_count_screen(
         candidate
         for candidate in candidate_tuple
         if candidate.valid
-        and abs(
-            _candidate_extrema_count(problem, candidate, q_min, q_max)
-            - observed_count
-        )
-        <= tolerance
+        and abs(_candidate_extrema_count(problem, candidate, q_min, q_max) - observed_count) <= tolerance
     )
     return FringeScreenResult(
         survivors,
         False,
-        stop_reason=(
-            "stage_a_all_candidates_rejected"
-            if candidate_tuple and not survivors
-            else None
-        ),
+        stop_reason=("stage_a_all_candidates_rejected" if candidate_tuple and not survivors else None),
     )

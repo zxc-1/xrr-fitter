@@ -18,7 +18,6 @@ from xrr_fitter.io.project_codec import project_from_bytes
 from xrr_fitter.io.xy import read_xy_bytes
 from xrr_fitter.model.fitting import FitConfig
 
-
 ROOT = Path(__file__).resolve().parents[3]
 REFERENCE = ROOT / "examples"
 
@@ -43,9 +42,7 @@ def _problem(*, data=None):
 
 
 def _candidate(problem, thickness_a: float):
-    physical = {
-        definition.name: definition.initial for definition in problem.parameter_definitions
-    }
+    physical = {definition.name: definition.initial for definition in problem.parameter_definitions}
     physical["component.0.thickness_a"] = thickness_a
     unit = encode_physical_vector(problem, physical)
     evaluation = evaluate_vector(problem, unit)
@@ -71,6 +68,17 @@ def test_fringe_count_screen_rejects_thickness_off_by_a_fringe() -> None:
     assert good in result.candidates
     assert doubled not in result.candidates
     assert not result.disabled
+
+
+def test_fringe_extrema_scales_extreme_finite_q_before_qz4_transform() -> None:
+    qz = np.linspace(1e80, 2e80, 256)
+    normalized = 1e-8 * (1.0 + 0.2 * np.cos(np.linspace(0.0, 16.0 * np.pi, qz.size)))
+
+    with np.errstate(over="raise", invalid="raise"):
+        extrema = fringe_extrema_qz(qz, normalized, 1e-10)
+
+    assert extrema.size >= 4
+    assert np.all(np.isfinite(extrema))
 
 
 def test_fringe_count_screen_disables_itself_without_reliable_fringes() -> None:

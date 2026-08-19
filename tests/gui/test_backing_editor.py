@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -16,18 +16,13 @@ import xrr_fitter.api as api
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.structure.panel import StructurePanel
 
-
 AIR = api.MaterialSpec("Air", None, None, 0.0j)
 SI = api.MaterialSpec("Si", "Si", 2.329)
 
 
 def _write_curve(path: Path) -> Path:
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}"
-            for index in range(32)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}" for index in range(32)) + "\n",
         encoding="utf-8",
     )
     return path
@@ -66,9 +61,7 @@ def _edit_backing(
         assert isinstance(dialog, QDialog)
         dialog.findChild(QLineEdit, "backingFormulaInput").setText(formula)
         dialog.findChild(QDoubleSpinBox, "backingDensityInput").setValue(density)
-        dialog.findChild(QDoubleSpinBox, "backingRoughnessInput").setValue(
-            roughness_nm
-        )
+        dialog.findChild(QDoubleSpinBox, "backingRoughnessInput").setValue(roughness_nm)
         buttons = dialog.findChild(QDialogButtonBox, "backingDialogButtons")
         qtbot.mouseClick(
             buttons.button(QDialogButtonBox.StandardButton.Ok),

@@ -96,12 +96,8 @@ def test_fit_controller_coalesces_progress_without_reordering_durable_records(
     monkeypatch.setattr(api, "start_fit_job", lambda *_args, **_kwargs: job)
     controller = FitController()
     projected: list[tuple[str, object]] = []
-    controller.progress_changed.connect(
-        lambda value: projected.append(("progress", value.completed))
-    )
-    controller.checkpoint_ready.connect(
-        lambda value: projected.append(("checkpoint", value))
-    )
+    controller.progress_changed.connect(lambda value: projected.append(("progress", value.completed)))
+    controller.checkpoint_ready.connect(lambda value: projected.append(("checkpoint", value)))
     controller.cancelled.connect(lambda value: projected.append(("cancelled", value)))
 
     controller.start_fit(project)
@@ -283,9 +279,7 @@ def test_fit_controller_keeps_one_progress_frame_per_stage_in_a_batch(
     """
     from xrr_fitter.gui.fitting.controller import FitController
 
-    batch = tuple(
-        _stage_progress(index, "A", index + 1, 400) for index in range(400)
-    ) + (
+    batch = tuple(_stage_progress(index, "A", index + 1, 400) for index in range(400)) + (
         _stage_progress(400, "B", 1, 2),
         _stage_progress(401, "B", 2, 2),
         _stage_progress(402, "C", 1, 3),
@@ -294,9 +288,7 @@ def test_fit_controller_keeps_one_progress_frame_per_stage_in_a_batch(
     monkeypatch.setattr(api, "start_fit_job", lambda *_args, **_kwargs: job)
     controller = FitController()
     seen: list[tuple[str, int]] = []
-    controller.progress_changed.connect(
-        lambda value: seen.append((value.stage, value.completed))
-    )
+    controller.progress_changed.connect(lambda value: seen.append((value.stage, value.completed)))
 
     controller.start_fit(api.new_project())
     controller.poll_now()
@@ -325,9 +317,7 @@ def test_fit_controller_progress_frames_survive_across_durable_events(
     monkeypatch.setattr(api, "start_fit_job", lambda *_args, **_kwargs: job)
     controller = FitController()
     ordered: list[object] = []
-    controller.progress_changed.connect(
-        lambda value: ordered.append((value.stage, value.completed))
-    )
+    controller.progress_changed.connect(lambda value: ordered.append((value.stage, value.completed)))
     controller.checkpoint_ready.connect(lambda _value: ordered.append("checkpoint"))
 
     controller.start_fit(project)

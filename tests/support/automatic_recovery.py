@@ -151,10 +151,7 @@ class AutomaticWorkLedger:
             return
         role = dataset.automation.role
         status = dataset.automation.status
-        if (
-            role is api.AutomaticRole.JOINT
-            and status is api.AutomaticStatus.REFINING
-        ):
+        if role is api.AutomaticRole.JOINT and status is api.AutomaticStatus.REFINING:
             key = ("dataset", dataset.dataset_id)
         elif role is api.AutomaticRole.SINGLE:
             key = ("dataset", dataset.dataset_id)
@@ -261,9 +258,7 @@ def _write_curve(
     )
     noise = np.random.default_rng(seed).normal(0.0, noise_decades, intensity.size)
     if systematic_decades:
-        noise += systematic_decades * np.sin(
-            np.linspace(0.0, 8.0 * np.pi, intensity.size)
-        )
+        noise += systematic_decades * np.sin(np.linspace(0.0, 8.0 * np.pi, intensity.size))
     sampled = np.maximum(intensity * np.power(10.0, noise), 1e-14)
     path.write_bytes(xy_bytes(2.0 * theta_deg, sampled))
     return path

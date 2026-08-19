@@ -5,7 +5,6 @@ from pathlib import Path
 
 import xrr_fitter.api as api
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -48,9 +47,7 @@ def _single_fit_snapshot(readiness, result, progress, checkpoints) -> dict[str, 
     final_checkpoint = final_dataset.checkpoint
     best = fit_result.best_candidate
     checkpoint_best = next(
-        candidate
-        for candidate in final_checkpoint.candidates
-        if candidate.candidate_id == best.candidate_id
+        candidate for candidate in final_checkpoint.candidates if candidate.candidate_id == best.candidate_id
     )
     return {
         "readiness": readiness,
@@ -73,9 +70,7 @@ def _single_fit_snapshot(readiness, result, progress, checkpoints) -> dict[str, 
             "finalizing",
         },
         "has_checkpoints": bool(checkpoints),
-        "checkpoints_populated": all(
-            item.datasets[0].checkpoint is not None for item in checkpoints
-        ),
+        "checkpoints_populated": all(item.datasets[0].checkpoint is not None for item in checkpoints),
         "final_checkpoint_stage": final_checkpoint.stage,
         "best_has_diagnostics": bool(best.diagnostics),
         "checkpoint_diagnostics_match": checkpoint_best.diagnostics == best.diagnostics,

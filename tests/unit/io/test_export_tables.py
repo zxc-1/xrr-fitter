@@ -8,16 +8,15 @@ Run-log text is checked independently from workbook JSON cell encoding.
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from io import BytesIO
-import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 from openpyxl import load_workbook
-
 from tests.support.model_cases import (
     dataset_project,
     final_fit_result,
@@ -25,6 +24,7 @@ from tests.support.model_cases import (
     prepared_data,
     project,
 )
+
 from xrr_fitter.io.export_tables import (
     DatasetExportData,
     ExportReplayIdentity,
@@ -45,18 +45,13 @@ from xrr_fitter.model.instrument import PhysicsDiagnostic
 from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue
 from xrr_fitter.model.project import OxideDecision
 
-
-SOURCE_FIXTURE = (
-    Path(__file__).resolve().parents[2] / "fixtures/source/header_and_duplicates.xy"
-)
+SOURCE_FIXTURE = Path(__file__).resolve().parents[2] / "fixtures/source/header_and_duplicates.xy"
 
 
 def _context(dataset_id: str = "curve") -> DatasetExportData:
     data = prepared_data()
     model = data.intensity_normalized * 0.97
-    residual = np.log10(model + data.r_floor) - np.log10(
-        data.intensity_normalized + data.r_floor
-    )
+    residual = np.log10(model + data.r_floor) - np.log10(data.intensity_normalized + data.r_floor)
     source_candidate = fit_candidate()
     candidate = replace(
         source_candidate,
@@ -177,8 +172,7 @@ def _project_contexts(*dataset_ids: str) -> tuple[DatasetExportData, ...]:
     originals = tuple(_context(dataset_id) for dataset_id in dataset_ids)
     value = project(*(context.dataset for context in originals))
     mapping = tuple(
-        (dataset_id, f"{index:03d}-dataset-aaaaaaaa")
-        for index, dataset_id in enumerate(dataset_ids, start=1)
+        (dataset_id, f"{index:03d}-dataset-aaaaaaaa") for index, dataset_id in enumerate(dataset_ids, start=1)
     )
     return tuple(
         DatasetExportData(
@@ -188,9 +182,7 @@ def _project_contexts(*dataset_ids: str) -> tuple[DatasetExportData, ...]:
             directory_mapping=mapping,
             selected=context.selected,
             replay_identity=context.replay_identity,
-            matching_surface_oxide_rejection=(
-                context.matching_surface_oxide_rejection
-            ),
+            matching_surface_oxide_rejection=(context.matching_surface_oxide_rejection),
         )
         for context in originals
     )
@@ -251,9 +243,7 @@ def _context_with_mcmc_diagnostics() -> DatasetExportData:
     dataset = replace(
         original.dataset,
         last_valid_result=result,
-        oxide_decisions=(
-            OxideDecision("Si", "SiO2", "surface", False, "oxide-table-v1"),
-        ),
+        oxide_decisions=(OxideDecision("Si", "SiO2", "surface", False, "oxide-table-v1"),),
     )
     value = replace(original.project, datasets=(dataset,))
     return DatasetExportData(
@@ -333,9 +323,7 @@ def _assert_json_identity(payload: dict[str, object], context: DatasetExportData
 
 
 def _assert_json_provenance(payload: dict[str, object], context: DatasetExportData) -> None:
-    assert payload["model_residuals"]["qz_a_inv"] == pytest.approx(
-        context.selected.qz_a_inv
-    )
+    assert payload["model_residuals"]["qz_a_inv"] == pytest.approx(context.selected.qz_a_inv)
     observed = {
         "raw_rows": payload["raw_data"]["raw_rows"],
         "source_groups": _source_groups(payload),
@@ -526,13 +514,9 @@ def test_export_uses_explicit_selected_candidate_without_rewriting_result() -> N
     payload = json.loads(dataset_json_bytes(context))
 
     assert payload["model_residuals"]["candidate_id"] == selected.candidate_id
-    assert payload["model_residuals"]["model_normalized"] == pytest.approx(
-        selected.model_normalized
-    )
+    assert payload["model_residuals"]["model_normalized"] == pytest.approx(selected.model_normalized)
     assert payload["fit_result"]["best_index"] == 0
-    assert payload["project"]["ui_state"]["selected_candidate_ids"] == [
-        [dataset.dataset_id, selected.candidate_id]
-    ]
+    assert payload["project"]["ui_state"]["selected_candidate_ids"] == [[dataset.dataset_id, selected.candidate_id]]
 
 
 def test_export_rejects_selected_candidate_outside_persisted_result() -> None:
@@ -649,10 +633,7 @@ def test_export_workbook_preserves_real_parser_raw_provenance() -> None:
     assert raw_data["raw_row_text"].tolist() == list(data.raw_rows)
     assert raw_data["raw_parse_status"].tolist() == list(data.raw_parse_status)
     assert raw_data["row_index"].dropna().astype(int).tolist() == [0, 1, 2, 3]
-    assert [
-        json.loads(value)
-        for value in raw_data["source_row_group_json"].dropna()
-    ] == [[3], [4, 5], [7], [8]]
+    assert [json.loads(value) for value in raw_data["source_row_group_json"].dropna()] == [[3], [4, 5], [7], [8]]
 
     metadata_columns = (
         "source_path",
@@ -665,10 +646,9 @@ def test_export_workbook_preserves_real_parser_raw_provenance() -> None:
         "fit_ready",
         "warnings_json",
     )
-    assert {
-        column: int(raw_data[column].notna().sum())
-        for column in metadata_columns
-    } == {column: 1 for column in metadata_columns}
+    assert {column: int(raw_data[column].notna().sum()) for column in metadata_columns} == {
+        column: 1 for column in metadata_columns
+    }
     first = raw_data.iloc[0]
     assert {
         "source_path": first["source_path"],
@@ -797,9 +777,7 @@ def test_export_workbook_run_info_matches_json_and_keeps_strings_literal() -> No
         "jacobian_version",
     ]
     assert row["dataset_id"] == "=1+1"
-    assert json.loads(row["dataset_directory_mapping"]) == payload["run_info"][
-        "dataset_directory_mapping"
-    ]
+    assert json.loads(row["dataset_directory_mapping"]) == payload["run_info"]["dataset_directory_mapping"]
     assert json.loads(row["beam"]) == payload["run_info"]["beam"]
     workbook = load_workbook(BytesIO(workbook_bytes), data_only=False)
     sheet = workbook["RunInfo"]
@@ -826,9 +804,7 @@ def test_export_json_and_workbook_retain_nonempty_mcmc_replay_identity() -> None
         "mcmc_child_seed": 30303,
         "fitted_instrument_parameters": {"instrument.background": 2.5e-7},
     }
-    expected_workbook = {
-        key: value for key, value in expected_json.items() if key != "fit_config"
-    }
+    expected_workbook = {key: value for key, value in expected_json.items() if key != "fit_config"}
 
     json_info = payload["run_info"]
     observed_json = {key: json_info[key] for key in expected_json}
@@ -838,9 +814,7 @@ def test_export_json_and_workbook_retain_nonempty_mcmc_replay_identity() -> None
         "joint_root_child": row["joint_root_child"],
         "optimizer_child_seeds": json.loads(row["optimizer_child_seeds"]),
         "mcmc_child_seed": row["mcmc_child_seed"],
-        "fitted_instrument_parameters": json.loads(
-            row["fitted_instrument_parameters"]
-        ),
+        "fitted_instrument_parameters": json.loads(row["fitted_instrument_parameters"]),
     }
     assert observed_json == expected_json
     assert observed_workbook == expected_workbook
@@ -1003,9 +977,7 @@ def test_export_log_ignores_unrelated_surface_oxide_rejection() -> None:
     dataset = replace(
         original.dataset,
         last_valid_result=result,
-        oxide_decisions=(
-            OxideDecision("Cu", "Cu2O", "surface", False, "unrelated-version"),
-        ),
+        oxide_decisions=(OxideDecision("Cu", "Cu2O", "surface", False, "unrelated-version"),),
     )
     value = replace(original.project, datasets=(dataset,))
     context = DatasetExportData(

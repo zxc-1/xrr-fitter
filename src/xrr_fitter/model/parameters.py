@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from math import exp, isfinite, log
+from math import exp, isfinite, log, log1p
 
 import numpy as np
 
@@ -59,10 +59,33 @@ def _prior_center(prior: PriorSpec) -> float | None:
     if prior.kind == "normal":
         return prior.parameters[0]
     if prior.kind == "lognormal":
-        return exp(prior.parameters[0])
+        try:
+            return exp(prior.parameters[0])
+        except OverflowError:
+            return float("inf")
     if prior.kind == "soft_range":
-        return (prior.parameters[0] + prior.parameters[1]) / 2.0
+        return _interval_midpoint(prior.parameters[0], prior.parameters[1])
     return None
+
+
+def _interval_midpoint(lower: float, upper: float) -> float:
+    """Return the midpoint of two finite bounds without overflowing their sum."""
+    lower, upper = float(lower), float(upper)
+    span = upper - lower
+    if isfinite(span):
+        return lower + span / 2.0
+    scale = max(abs(lower), abs(upper))
+    return scale * ((lower / scale) * 0.5 + (upper / scale) * 0.5)
+
+
+def _interval_half_width(lower: float, upper: float) -> float:
+    """Return half of a finite interval even when its full span overflows."""
+    lower, upper = float(lower), float(upper)
+    span = upper - lower
+    if isfinite(span):
+        return span / 2.0
+    scale = max(abs(lower), abs(upper))
+    return scale * ((upper / scale - lower / scale) / 2.0)
 
 
 def _definition_prior(
@@ -161,6 +184,8 @@ class ParameterDefinition:
         _bounds(self.name, self.initial, self.lower, self.upper)
         if self.transform not in TRANSFORMS:
             raise ValueError(f"unsupported parameter transform: {self.transform}")
+        if self.transform == "log" and self.lower <= 0.0:
+            raise ValueError(f"log parameter bounds must be positive: {self.name}")
         if not all(
             isinstance(value, bool) for value in (self.locked, self.integer, self.expert_only, self.constrained)
         ):
@@ -181,15 +206,50 @@ def _effective_upper(
     """
     # Static metadata remains authoritative whenever geometry imposes no cap.
     # A supplied cap may tighten only; it cannot silently broaden the project.
-    return definition.upper if dynamic_upper is None else min(definition.upper, dynamic_upper)
-
-
-def _zero_width_locked(definition: ParameterDefinition) -> bool:
-    return (definition.locked, definition.lower == definition.upper) == (True, True)
+    if dynamic_upper is not None:
+        try:
+            finite_dynamic = isfinite(dynamic_upper)
+        except (TypeError, ValueError):
+            finite_dynamic = False
+        if isinstance(dynamic_upper, bool) or not finite_dynamic:
+            raise PhysicalValueError(f"dynamic upper must be finite: {definition.name}")
+        upper = min(definition.upper, float(dynamic_upper))
+    else:
+        upper = definition.upper
+    if upper < definition.lower:
+        raise PhysicalValueError(f"empty physical bounds: {definition.name}")
+    return upper
 
 
 class PhysicalValueError(ValueError):
     """An expected candidate value outside its compiled physical domain."""
+
+
+def _log_interval_width(lower: float, upper: float) -> float:
+    """Return a positive log-space interval without losing adjacent bounds.
+
+    ``log(upper) - log(lower)`` can round to zero when two distinct floating
+    point values are adjacent at very large or very small magnitudes.  The
+    ``log1p`` form retains that local ratio while preserving the original
+    subtraction order for ordinary intervals.
+    """
+    direct = log(upper) - log(lower)
+    if isfinite(direct) and direct > 0.0:
+        return direct
+    relative = (upper - lower) / lower
+    width = log1p(relative)
+    if not isfinite(width) or width <= 0.0:
+        raise ValueError("log bounds have no representable positive interval")
+    return width
+
+
+def _log10_ratio(value: float, reference: float) -> float:
+    """Return ``log10(value/reference)`` while retaining adjacent positives."""
+    if value == reference:
+        return 0.0
+    if value > reference:
+        return _log_interval_width(reference, value) / log(10.0)
+    return -_log_interval_width(value, reference) / log(10.0)
 
 
 def _validate_physical_value(
@@ -218,7 +278,13 @@ def _log_physical_to_unit(
     """
     if min(definition.lower, value) <= 0.0:
         raise PhysicalValueError(f"log parameter must be positive: {definition.name}")
-    return (log(value) - log(definition.lower)) / (log(upper) - log(definition.lower))
+    if value == definition.lower:
+        return 0.0
+    if value == upper:
+        return 1.0
+    numerator = _log_interval_width(definition.lower, value)
+    denominator = _log_interval_width(definition.lower, upper)
+    return numerator / denominator
 
 
 def _validate_unit_value(definition: ParameterDefinition, unit: float) -> None:
@@ -247,7 +313,8 @@ def _log_unit_to_physical(
         return float(definition.lower)
     if unit == 1.0:
         return float(upper)
-    decoded = float(np.exp(log(definition.lower) + unit * (log(upper) - log(definition.lower))))
+    span = _log_interval_width(definition.lower, upper)
+    decoded = float(np.exp(log(definition.lower) + unit * span))
     return min(max(decoded, float(definition.lower)), float(upper))
 
 
@@ -265,7 +332,41 @@ def _linear_unit_to_physical(
         return float(definition.lower)
     if unit == 1.0:
         return float(upper)
-    return float(definition.lower + unit * (upper - definition.lower))
+    lower = float(definition.lower)
+    upper = float(upper)
+    span = upper - lower
+    if isfinite(span):
+        return float(lower + unit * span)
+    # A cross-zero interval can have finite endpoints but an unrepresentable
+    # span. Normalize the endpoints first so the convex combination never
+    # constructs that span as an intermediate value.
+    scale = max(abs(lower), abs(upper))
+    lower_scaled = lower / scale
+    upper_scaled = upper / scale
+    return float(scale * (lower_scaled * (1.0 - unit) + upper_scaled * unit))
+
+
+def _linear_physical_to_unit(
+    definition: ParameterDefinition,
+    value: float,
+    upper: float,
+) -> float:
+    """Normalize an affine value without overflowing a wide cross-zero span."""
+    lower = float(definition.lower)
+    upper = float(upper)
+    value = float(value)
+    if value == lower:
+        return 0.0
+    if value == upper:
+        return 1.0
+    span = upper - lower
+    if isfinite(span):
+        return (value - lower) / span
+    scale = max(abs(lower), abs(upper))
+    lower_scaled = lower / scale
+    upper_scaled = upper / scale
+    value_scaled = value / scale
+    return (value_scaled - lower_scaled) / (upper_scaled - lower_scaled)
 
 
 def physical_to_unit(
@@ -275,18 +376,18 @@ def physical_to_unit(
 ) -> float:
     """Encode one legal physical value in its declared unit interval.
 
-    A locked zero-width declaration has no meaningful inverse coordinate and
-    maps to zero. All active declarations reject out-of-range values before
-    dispatching to their persisted transform identifier.
+    A zero-width effective domain has no meaningful inverse coordinate and maps
+    to the canonical unit value zero. All declarations reject out-of-range
+    values before dispatching to their persisted transform identifier.
     """
     upper = _effective_upper(definition, dynamic_upper)
-    if _zero_width_locked(definition):
-        return 0.0
     _validate_physical_value(definition, value, upper)
+    if upper == definition.lower:
+        return 0.0
     if definition.transform == "log":
         return _log_physical_to_unit(definition, value, upper)
     if definition.transform in {"linear", "roughness_fraction"}:
-        return (value - definition.lower) / (upper - definition.lower)
+        return _linear_physical_to_unit(definition, value, upper)
     raise ValueError(f"unknown transform: {definition.transform}")
 
 
@@ -302,6 +403,8 @@ def unit_to_physical(
     """
     _validate_unit_value(definition, unit)
     upper = _effective_upper(definition, dynamic_upper)
+    if upper == definition.lower:
+        return float(definition.lower)
     if definition.transform == "log":
         return _log_unit_to_physical(definition, unit, upper)
     if definition.transform in {"linear", "roughness_fraction"}:

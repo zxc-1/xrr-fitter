@@ -16,7 +16,6 @@ from tests.support.model_cases import project
 from xrr_fitter.io.project_codec import project_from_bytes, project_to_bytes
 from xrr_fitter.model.project import ProjectUiState
 
-
 DOCK_STATE = "AAAA/wAAAAD9AAAAAgAAAAAAAAEA"
 
 

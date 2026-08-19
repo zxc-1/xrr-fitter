@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data, simple_structure
+
 from xrr_fitter.evaluation import EvaluationConstraintError, encode_physical_vector
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig
@@ -64,9 +64,7 @@ def _problem(*targets: str):
         )
         for definition in base.parameter_definitions
     )
-    return compile_fit_problem(
-        base.data, base.structure, base.instrument, base.config, settings
-    )
+    return compile_fit_problem(base.data, base.structure, base.instrument, base.config, settings)
 
 
 def test_quadratic_profile_closes_before_bounds_and_flat_profile_stays_open() -> None:
@@ -136,9 +134,7 @@ def test_profile_uses_supplied_analytic_gradient_for_nuisance_optimization() -> 
     def gradient(unit: np.ndarray) -> np.ndarray:
         nonlocal calls
         calls += 1
-        return np.asarray(
-            [2.0 * (unit[0] - unit[1]), 2.0 * (unit[1] - unit[0])]
-        )
+        return np.asarray([2.0 * (unit[0] - unit[1]), 2.0 * (unit[1] - unit[0])])
 
     profile_parameter(
         lambda unit: float((unit[1] - unit[0]) ** 2),
@@ -203,10 +199,7 @@ def test_profile_residual_solvers_use_analysis_tolerance(monkeypatch) -> None:
     )
 
     assert {shape for shape, *_tolerances in calls} == {(1,), (2,)}
-    assert {
-        (ftol, xtol, gtol)
-        for _shape, ftol, xtol, gtol in calls
-    } == {(1e-6, 1e-6, 1e-6)}
+    assert {(ftol, xtol, gtol) for _shape, ftol, xtol, gtol in calls} == {(1e-6, 1e-6, 1e-6)}
 
 
 def test_profile_tolerates_physically_invalid_parameter_boundary() -> None:
@@ -389,9 +382,7 @@ def test_profile_refines_coarse_support_boundaries_for_a_narrow_secondary_basin(
     center = np.asarray([0.25])
 
     profile, decision = profile_parameter_with_decision(
-        lambda unit: float(
-            min((unit[0] - 0.25) ** 2 + 0.02, ((unit[0] - 0.735) / 0.03) ** 2)
-        ),
+        lambda unit: float(min((unit[0] - 0.25) ** 2 + 0.02, ((unit[0] - 0.735) / 0.03) ** 2)),
         center,
         parameter_index=0,
         name="component.0.thickness_a",
@@ -478,9 +469,7 @@ def test_build_report_profiles_use_residual_least_squares_path(monkeypatch) -> N
     monkeypatch.setattr(
         _api(),
         "minimize",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("direct problem profile used scalar minimize")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("direct problem profile used scalar minimize")),
     )
 
     profile = build_problem_profile(
@@ -532,8 +521,6 @@ def test_default_profile_path_detects_barrier_between_coarse_grid_points() -> No
     class NarrowBarrier:
         def __call__(self, unit: np.ndarray) -> float:
             value = float(np.mean(unit))
-            return 0.0100 + 0.10 * np.exp(-((value - 0.4385) / 0.0006) ** 2)
+            return 0.0100 + 0.10 * np.exp(-(((value - 0.4385) / 0.0006) ** 2))
 
-    assert not default_profile_path_merge(
-        NarrowBarrier(), np.full(4, 0.40), np.full(4, 0.47), 0.0102
-    )
+    assert not default_profile_path_merge(NarrowBarrier(), np.full(4, 0.40), np.full(4, 0.47), 0.0102)

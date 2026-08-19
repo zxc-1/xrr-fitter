@@ -41,12 +41,32 @@ def _matrix(rows: object, count: int, width: int, field: str) -> np.ndarray:
     return values
 
 
+def _scaled_columns(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    with np.errstate(over="ignore", invalid="ignore"):
+        scales = np.max(np.abs(values), axis=0)
+        normalized = np.divide(
+            values,
+            scales,
+            out=np.zeros_like(values),
+            where=scales > 0.0,
+        )
+    return normalized, scales
+
+
 def _correlation(values: np.ndarray, dimension: int) -> np.ndarray:
     if dimension == 0:
         return np.empty((0, 0), dtype=float)
     if values.shape[0] < 2:
         return np.eye(dimension, dtype=float)
-    centered = values - np.mean(values, axis=0)
+    normalized, _scales = _scaled_columns(values)
+    centered = normalized - np.mean(normalized, axis=0)
+    centered_scale = np.max(np.abs(centered), axis=0)
+    centered = np.divide(
+        centered,
+        centered_scale,
+        out=np.zeros_like(centered),
+        where=centered_scale > 0.0,
+    )
     norms = np.sqrt(np.sum(centered * centered, axis=0))
     denominator = np.outer(norms, norms)
     correlation = np.divide(
@@ -57,6 +77,19 @@ def _correlation(values: np.ndarray, dimension: int) -> np.ndarray:
     )
     np.fill_diagonal(correlation, 1.0)
     return correlation
+
+
+def _parameter_spread(values: np.ndarray) -> np.ndarray:
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        spread = np.std(values, axis=0, ddof=1)
+    if np.all(np.isfinite(spread)):
+        return spread
+    normalized, scales = _scaled_columns(values)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        spread = np.std(normalized, axis=0, ddof=1) * scales
+    if np.any(~np.isfinite(spread)):
+        raise ValueError("joint parameter spread is not finite")
+    return spread
 
 
 def _strong_correlations(
@@ -134,7 +167,7 @@ def _uncertainty_report(
         default=None,
     )
     best_vector = None if best_index is None else ensemble.vectors[best_index]
-    sigma = np.std(values, axis=0, ddof=1) if values.shape[0] >= 2 else None
+    sigma = _parameter_spread(values) if values.shape[0] >= 2 else None
     return UncertaintyReport(
         correlation_names=ensemble.names,
         correlation_matrix=correlation,

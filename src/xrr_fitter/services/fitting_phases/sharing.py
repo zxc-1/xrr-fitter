@@ -7,12 +7,11 @@ from xrr_fitter.model.structure import LayerSpec
 
 from .common import PreparedDatasetFit
 
+
 def _automatic_material_occurrences(prepared: PreparedDatasetFit):
     for index, component in enumerate(prepared.problem.structure.components):
         if not isinstance(component, LayerSpec):
-            raise ValueError(
-                "automatic joint sharing requires homogeneous layer components"
-            )
+            raise ValueError("automatic joint sharing requires homogeneous layer components")
         yield f"component.{index}", component.material
     yield "backing", prepared.problem.structure.backing
 
@@ -38,22 +37,16 @@ def _collect_material_sharing(
     imag_sld: dict[str, list[tuple[ParameterReference | None, bool]]],
 ) -> None:
     free_names = {coordinate.name for coordinate in prepared.problem.variables}
-    explicit = {
-        setting.name for setting in prepared.updated_dataset.parameter_settings
-    }
+    explicit = {setting.name for setting in prepared.updated_dataset.parameter_settings}
     for path, material in _automatic_material_occurrences(prepared):
         if material.sld_override_a2 is None:
             name = f"{path}.density_scale"
             if name in free_names:
-                density.setdefault(material.name, []).append(
-                    ParameterReference(prepared.dataset_id, name)
-                )
+                density.setdefault(material.name, []).append(ParameterReference(prepared.dataset_id, name))
             continue
         real_name = f"{path}.sld_real_a2"
         if real_name in free_names:
-            real_sld.setdefault(material.name, []).append(
-                ParameterReference(prepared.dataset_id, real_name)
-            )
+            real_sld.setdefault(material.name, []).append(ParameterReference(prepared.dataset_id, real_name))
         imag_name = f"{path}.sld_imag_a2"
         imag_sld.setdefault(material.name, []).append(
             (
@@ -71,9 +64,7 @@ def _collect_roughness_sharing(
         name = coordinate.name
         if name.endswith("roughness_a"):
             path = name.rsplit(".", 1)[0]
-            roughness.setdefault(path, []).append(
-                ParameterReference(prepared.dataset_id, name)
-            )
+            roughness.setdefault(path, []).append(ParameterReference(prepared.dataset_id, name))
 
 
 def _group_sharing_rules(
@@ -84,8 +75,7 @@ def _group_sharing_rules(
     return tuple(
         rule
         for owner, members in grouped.items()
-        if (rule := _sharing_rule(fit_group_id, family, owner, members))
-        is not None
+        if (rule := _sharing_rule(fit_group_id, family, owner, members)) is not None
     )
 
 

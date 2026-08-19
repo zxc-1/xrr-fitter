@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data, simple_structure
+
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
@@ -238,9 +238,7 @@ def test_de_population_preserves_the_start_and_local_search_bias() -> None:
     gaussian = first[1 : 1 + gaussian_count]
     latin_hypercube = first[1 + gaussian_count :]
     assert gaussian.size and latin_hypercube.size
-    assert np.mean(np.abs(gaussian - start)) < np.mean(
-        np.abs(latin_hypercube - start)
-    )
+    assert np.mean(np.abs(gaussian - start)) < np.mean(np.abs(latin_hypercube - start))
 
 
 def test_stage_e_population_contains_centers_perturbations_and_lhs() -> None:
@@ -311,9 +309,7 @@ def test_downsampled_search_data_keeps_every_row_field_aligned() -> None:
 
     coarse = api.downsample_prepared_data(enriched, selected)
 
-    assert coarse.source_row_groups == tuple(
-        enriched.source_row_groups[index] for index in selected
-    )
+    assert coarse.source_row_groups == tuple(enriched.source_row_groups[index] for index in selected)
     for field in (
         "two_theta_deg",
         "intensity_raw",

@@ -6,6 +6,7 @@ import numpy as np
 
 from xrr_fitter.evaluation import EvaluationConstraintError, encode_physical_vector
 from xrr_fitter.fit.joint_constraints import apply_joint_constraints
+from xrr_fitter.fit.joint_evaluation import _finite_objective_mean
 from xrr_fitter.fit.joint_roughness import (
     SHARED_ROUGHNESS_TRANSFORM,
     apply_consensus_roughness,
@@ -194,7 +195,7 @@ def _validate_candidate_rankings(
 ) -> None:
     for candidate_index in range(len(candidate_ids)):
         aligned = tuple(candidates[candidate_index] for candidates in candidates_by_dataset)
-        ranking = float(np.mean([candidate.objective for candidate in aligned]))
+        ranking = _finite_objective_mean(tuple(candidate.objective for candidate in aligned))
         if any(candidate.ranking_objective != ranking for candidate in aligned):
             raise ValueError("joint resume candidate ranking objective mismatch")
 

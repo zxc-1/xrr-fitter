@@ -135,8 +135,18 @@ def constraint_value_jacobians(
         except ConstraintArithmeticError as error:
             raise ConstraintResolutionError(f"constraint_nonfinite:{target}") from error
         jacobian = np.zeros(parameter_count, dtype=float)
-        for reference, partial in gradient.items():
-            jacobian = jacobian + partial * value_jacobians[reference.parameter_name]
+        try:
+            with np.errstate(over="raise", invalid="raise"):
+                for reference, partial in gradient.items():
+                    contribution = np.multiply(
+                        partial,
+                        value_jacobians[reference.parameter_name],
+                    )
+                    jacobian = np.add(jacobian, contribution)
+        except FloatingPointError as error:
+            raise FloatingPointError(f"nonfinite constraint Jacobian: {target}") from error
+        if np.any(~np.isfinite(jacobian)):
+            raise FloatingPointError(f"nonfinite constraint Jacobian: {target}")
         value_jacobians[target] = jacobian
 
 

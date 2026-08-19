@@ -5,17 +5,16 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
 import tomllib
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from pathlib import Path
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
-
 
 PIP_VERSION = "26.1.2"
 VCS_PATTERN = re.compile(r"git\+(https://[^@]+)@([0-9a-f]{40})")
@@ -67,9 +66,7 @@ def _validate_pin(requirement: Requirement) -> None:
         raise ValueError("ordinary lock requirements must use one exact == pin")
 
 
-def _check_declared_versions(
-    pins: dict[str, Requirement], dependencies: Sequence[Requirement]
-) -> None:
+def _check_declared_versions(pins: dict[str, Requirement], dependencies: Sequence[Requirement]) -> None:
     for declared in dependencies:
         name = canonicalize_name(declared.name)
         if name not in pins:

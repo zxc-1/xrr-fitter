@@ -16,11 +16,7 @@ from xrr_fitter.model.project import (
 
 def dataset_index(project: XrrProject, dataset_id: str) -> int:
     """Return the unique persisted position for a dataset ID."""
-    matches = tuple(
-        index
-        for index, dataset in enumerate(project.datasets)
-        if dataset.dataset_id == dataset_id
-    )
+    matches = tuple(index for index, dataset in enumerate(project.datasets) if dataset.dataset_id == dataset_id)
     if len(matches) != 1:
         raise KeyError(f"unknown or duplicate dataset: {dataset_id}")
     return matches[0]
@@ -82,11 +78,7 @@ def validate_source(
             None,
             f"数据集 {dataset.dataset_id} 的源文件不可读取: {error}",
         )
-    status = (
-        SourceStatus.OK
-        if actual == dataset.source_sha256
-        else SourceStatus.HASH_MISMATCH
-    )
+    status = SourceStatus.OK if actual == dataset.source_sha256 else SourceStatus.HASH_MISMATCH
     message = (
         f"数据集 {dataset.dataset_id} 的源文件校验通过"
         if status is SourceStatus.OK
@@ -97,6 +89,4 @@ def validate_source(
 
 def validate_sources(project: XrrProject) -> ProjectValidation:
     """Return ordered source observations without mutating project state."""
-    return ProjectValidation(
-        tuple(validate_source(project, dataset) for dataset in project.datasets)
-    )
+    return ProjectValidation(tuple(validate_source(project, dataset) for dataset in project.datasets))

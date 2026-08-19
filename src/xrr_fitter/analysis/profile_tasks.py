@@ -72,9 +72,7 @@ def _problem_profile_plan(
         problem.config.budget.local_nfev_per_parameter * max(1, len(problem.variables)),
     )
     steps = 11 if problem.config.budget.bootstrap_samples < 100 else 41
-    residual, jacobian = cache_callbacks(
-        partial(least_squares_system, problem)
-    )
+    residual, jacobian = cache_callbacks(partial(least_squares_system, problem))
     return prepare_plan(
         objective,
         unit_vector,
@@ -95,11 +93,7 @@ def _run_profile_tasks(
     task_runner,
 ) -> tuple[object, ...]:
     """Execute one ordered phase and reject incomplete runner responses."""
-    results = (
-        tuple(task() for task in tasks)
-        if task_runner is None
-        else tuple(task_runner(tasks))
-    )
+    results = tuple(task() for task in tasks) if task_runner is None else tuple(task_runner(tasks))
     if len(results) != len(tasks):
         raise RuntimeError("task runner returned an unexpected result count")
     return results
@@ -142,19 +136,9 @@ def build_problem_profiles(
         )
         for name in names
     )
-    direction_tasks = tuple(
-        partial(scan_plan_direction, plan, direction)
-        for plan in plans
-        for direction in (-1, 1)
-    )
+    direction_tasks = tuple(partial(scan_plan_direction, plan, direction) for plan in plans for direction in (-1, 1))
     directional = _run_profile_tasks(direction_tasks, task_runner)
-    scans = tuple(
-        (directional[2 * index], directional[2 * index + 1])
-        for index in range(len(plans))
-    )
-    finish_tasks = tuple(
-        partial(finish_plan, plan, scan)
-        for plan, scan in zip(plans, scans, strict=True)
-    )
+    scans = tuple((directional[2 * index], directional[2 * index + 1]) for index in range(len(plans)))
+    finish_tasks = tuple(partial(finish_plan, plan, scan) for plan, scan in zip(plans, scans, strict=True))
     finished = _run_profile_tasks(finish_tasks, task_runner)
     return tuple(result[0] for result in finished)

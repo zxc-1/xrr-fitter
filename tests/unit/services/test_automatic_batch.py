@@ -63,11 +63,7 @@ class RecordingAutomaticFits:
         )
 
     def prepare(self, value, dataset_id, _seed):
-        index = next(
-            index
-            for index, dataset in enumerate(value.datasets)
-            if dataset.dataset_id == dataset_id
-        )
+        index = next(index for index, dataset in enumerate(value.datasets) if dataset.dataset_id == dataset_id)
         self.prefit_dataset_ids.add(dataset_id)
         return SimpleNamespace(
             dataset_id=dataset_id,
@@ -107,8 +103,7 @@ def test_mixed_import_batch_routes_singletons_and_matching_points_separately(
         measurement_preset=_preset(),
     )
     records = tuple(
-        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok"))
-        for item in value.datasets
+        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok")) for item in value.datasets
     )
     monkeypatch.setattr(
         batch,
@@ -175,8 +170,7 @@ def test_physical_signature_separates_backing_and_beam() -> None:
         beam=BeamSpec("monochromatic", wavelength_a=0.7093),
     )
     signatures = {
-        batch.automatic_physical_signature(value, preset)
-        for value in (first, different_backing, different_beam)
+        batch.automatic_physical_signature(value, preset) for value in (first, different_backing, different_beam)
     }
     assert len(signatures) == 3
 
@@ -193,8 +187,7 @@ def test_physical_signature_ignores_non_identity_material_properties() -> None:
                     first.structure.components[0],
                     material=replace(
                         first.structure.components[0].material,
-                        bulk_density_g_cm3=first.structure.components[0].material.bulk_density_g_cm3
-                        + 0.1,
+                        bulk_density_g_cm3=first.structure.components[0].material.bulk_density_g_cm3 + 0.1,
                     ),
                 ),
                 *first.structure.components[1:],
@@ -266,8 +259,7 @@ def test_prefits_share_one_worker_budget_and_publish_in_completion_order(
         fit_config=replace(project().fit_config, local_workers=4),
     )
     records = tuple(
-        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok"))
-        for item in value.datasets
+        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok")) for item in value.datasets
     )
     monkeypatch.setattr(
         batch,
@@ -305,10 +297,7 @@ def test_prefits_share_one_worker_budget_and_publish_in_completion_order(
 
     assert sorted(allocations) == [("fast", 2), ("slow", 2)]
     assert published[0] == (AutomaticStatus.REFINING, AutomaticStatus.PASSED)
-    assert all(
-        dataset.automation.status is AutomaticStatus.PASSED
-        for dataset in result.updated_project.datasets
-    )
+    assert all(dataset.automation.status is AutomaticStatus.PASSED for dataset in result.updated_project.datasets)
 
 
 def test_source_and_preparation_failures_are_isolated_and_all_results_publish(
@@ -437,9 +426,7 @@ def test_completed_prefit_persists_winner_settings_and_checkpoint(monkeypatch) -
     )
 
     updated = result.updated_project.datasets[0]
-    assert updated.parameter_settings == (
-        ParameterSetting("scale", 1.0, 0.5, 1.5),
-    )
+    assert updated.parameter_settings == (ParameterSetting("scale", 1.0, 0.5, 1.5),)
     validate_parameter_setting_declarations(
         fitted.parameter_definitions,
         updated.parameter_settings,
@@ -460,8 +447,7 @@ def test_joint_group_failure_does_not_replace_successful_singleton(
         measurement_preset=_preset(),
     )
     records = tuple(
-        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok"))
-        for item in value.datasets
+        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok")) for item in value.datasets
     )
     monkeypatch.setattr(
         batch,
@@ -485,10 +471,7 @@ def test_joint_group_failure_does_not_replace_successful_singleton(
         fit_joint=fail_joint,
     )
 
-    by_id = {
-        item.dataset_id: item.automation
-        for item in result.updated_project.datasets
-    }
+    by_id = {item.dataset_id: item.automation for item in result.updated_project.datasets}
     assert by_id["left"].status is AutomaticStatus.FAILED
     assert by_id["right"].status is AutomaticStatus.FAILED
     assert "joint refinement failed" in by_id["left"].reason
@@ -517,8 +500,7 @@ def test_joint_cancellation_subclass_stops_later_groups_without_failure(
         measurement_preset=_preset(),
     )
     records = tuple(
-        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok"))
-        for item in value.datasets
+        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok")) for item in value.datasets
     )
     monkeypatch.setattr(
         batch,
@@ -549,10 +531,7 @@ def test_joint_cancellation_subclass_stops_later_groups_without_failure(
 
     assert result.cancelled is True
     assert joint_groups == [("first-left", "first-right")]
-    assert all(
-        dataset.automation.status is AutomaticStatus.REFINING
-        for dataset in result.updated_project.datasets
-    )
+    assert all(dataset.automation.status is AutomaticStatus.REFINING for dataset in result.updated_project.datasets)
 
 
 def test_passed_isolated_retry_retains_its_auditable_reason(monkeypatch) -> None:
@@ -565,8 +544,7 @@ def test_passed_isolated_retry_retains_its_auditable_reason(monkeypatch) -> None
         measurement_preset=_preset(),
     )
     records = tuple(
-        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok"))
-        for item in value.datasets
+        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok")) for item in value.datasets
     )
     monkeypatch.setattr(
         batch,
@@ -621,8 +599,7 @@ def test_isolated_review_publishes_the_latest_combined_reason(monkeypatch) -> No
         measurement_preset=_preset(),
     )
     records = tuple(
-        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok"))
-        for item in value.datasets
+        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok")) for item in value.datasets
     )
     monkeypatch.setattr(
         batch,

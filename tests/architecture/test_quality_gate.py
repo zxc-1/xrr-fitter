@@ -14,7 +14,6 @@ from tests.support.release_workflow_contract import (
     expected_windows_job,
 )
 
-
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "verify.yml"
 RUNNER = ["self-hosted", "macOS", "ARM64", "xrr-ci"]
@@ -24,17 +23,8 @@ JOB_TIMEOUTS = {"statistical": 720, "release": 720}
 
 def _imported_modules(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    modules = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
-    }
-    modules.update(
-        alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
-    )
+    modules = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module is not None}
+    modules.update(alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names)
     return modules
 
 
@@ -49,7 +39,7 @@ def _standard_run(mode: str) -> str:
     return "\n".join(
         (
             "set -euo pipefail",
-            "python3.12 -c 'import platform, sys; assert sys.platform == \"darwin\" and platform.machine() == \"arm64\" and sys.version_info[:2] == (3, 12)'",
+            'python3.12 -c \'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)\'',
             'python3.12 -m venv "$RUNNER_TEMP/venv"',
             'PYTHON="$RUNNER_TEMP/venv/bin/python"',
             '"$PYTHON" -m pip install pip==26.1.2',
@@ -114,7 +104,7 @@ def _readiness_run() -> str:
     return "\n".join(
         (
             "set -euo pipefail",
-            "python3.12 -c 'import platform, sys; assert sys.platform == \"darwin\" and platform.machine() == \"arm64\" and sys.version_info[:2] == (3, 12)'",
+            'python3.12 -c \'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)\'',
             'test -z "$(git status --porcelain=v1 --untracked-files=all)"',
             "if test ! -f verification/r23/tests.json; then",
             "  printf 'ready=false\\n' >> \"$GITHUB_OUTPUT\"",
@@ -281,27 +271,27 @@ def _checkpoint_job() -> dict[str, object]:
                     'case "$REF" in\n'
                     '  refs/tags/*) test "$STATISTICAL_RESULT" = success ;;\n'
                     '  *) test "$STATISTICAL_RESULT" = skipped ;;\n'
-                    'esac\n'
+                    "esac\n"
                     'test "$DISTRIBUTION_RESULT" = success\n'
                     'case "$REF" in\n'
                     '  refs/tags/*) test "$READINESS_RESULT" = success ;;\n'
                     '  *) test "$READINESS_RESULT" = skipped ;;\n'
-                    'esac\n'
+                    "esac\n"
                     'case "$REF" in\n'
-                    '  refs/tags/*)\n'
+                    "  refs/tags/*)\n"
                     '    test "$READY" = true\n'
                     '    test "$IDENTITY_RESULT" = success\n'
                     '    test "$RELEASE_RESULT" = success\n'
                     '    test "$WINDOWS_RESULT" = success\n'
                     '    test "$DRAFT_RELEASE_RESULT" = success\n'
-                    '    ;;\n'
-                    '  *)\n'
+                    "    ;;\n"
+                    "  *)\n"
                     '    test "$IDENTITY_RESULT" = skipped\n'
                     '    test "$RELEASE_RESULT" = skipped\n'
                     '    test "$WINDOWS_RESULT" = skipped\n'
                     '    test "$DRAFT_RELEASE_RESULT" = skipped\n'
-                    '    ;;\n'
-                    'esac\n'
+                    "    ;;\n"
+                    "esac\n"
                 ),
             }
         ],
@@ -430,8 +420,8 @@ def test_checkpoint_step_requires_every_gate() -> None:
         'test "$SPAWN_RESULT" = success',
         'test "$REGRESSION_RESULT" = success',
         'case "$REF" in',
-        "  refs/tags/*) test \"$STATISTICAL_RESULT\" = success ;;",
-        "  *) test \"$STATISTICAL_RESULT\" = skipped ;;",
+        '  refs/tags/*) test "$STATISTICAL_RESULT" = success ;;',
+        '  *) test "$STATISTICAL_RESULT" = skipped ;;',
         "esac",
         'test "$DISTRIBUTION_RESULT" = success',
         'case "$REF" in',
@@ -493,9 +483,7 @@ def test_release_tool_consumers_use_the_declared_public_owners() -> None:
 def _assert_standard_job(name: str, job: dict[str, object]) -> None:
     assert job["runs-on"] == RUNNER
     assert job["timeout-minutes"] == JOB_TIMEOUTS.get(name, 60)
-    checkout = [
-        step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@")
-    ]
+    checkout = [step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@")]
     assert len(checkout) == 1
     assert checkout[0]["with"] == {"persist-credentials": False, "fetch-depth": 0}
     commands = "\n".join(step.get("run", "") for step in job["steps"])
@@ -595,7 +583,7 @@ def test_release_jobs_are_readiness_gated_and_use_exact_bundles() -> None:
     "mutate",
     [
         lambda payload: payload["jobs"]["checkpoint"]["steps"][0].__setitem__(
-            "run", "set -euo pipefail\nexit 0\ntest \"$QUALITY_RESULT\" = success\ntest \"$TOOLS_RESULT\" = success\n"
+            "run", 'set -euo pipefail\nexit 0\ntest "$QUALITY_RESULT" = success\ntest "$TOOLS_RESULT" = success\n'
         ),
         lambda payload: payload["jobs"]["quality"]["steps"][1].__setitem__(
             "run", payload["jobs"]["quality"]["steps"][1]["run"] + " || true"
@@ -605,26 +593,16 @@ def test_release_jobs_are_readiness_gated_and_use_exact_bundles() -> None:
         lambda payload: payload["jobs"]["gui"].__setitem__("if", "false"),
         lambda payload: payload["jobs"]["integration"].__setitem__("if", "false"),
         lambda payload: payload["jobs"]["spawn"].__setitem__("continue-on-error", True),
-        lambda payload: payload["jobs"]["statistical"].__setitem__(
-            "continue-on-error", True
-        ),
-        lambda payload: payload["jobs"]["quality"].__setitem__(
-            "permissions", {"contents": "write"}
-        ),
-        lambda payload: payload["jobs"]["quality"]["steps"].append(
-            {"uses": "actions/cache@" + "a" * 40}
-        ),
+        lambda payload: payload["jobs"]["statistical"].__setitem__("continue-on-error", True),
+        lambda payload: payload["jobs"]["quality"].__setitem__("permissions", {"contents": "write"}),
+        lambda payload: payload["jobs"]["quality"]["steps"].append({"uses": "actions/cache@" + "a" * 40}),
         lambda payload: payload["jobs"]["tools"].__setitem__("if", "false"),
-        lambda payload: payload["jobs"]["distribution"].__setitem__(
-            "continue-on-error", True
-        ),
+        lambda payload: payload["jobs"]["distribution"].__setitem__("continue-on-error", True),
         lambda payload: payload["jobs"]["candidate-readiness"]["steps"][2].__setitem__(
             "run", "printf 'ready=true\\n' >> \"$GITHUB_OUTPUT\"\n"
         ),
         lambda payload: payload["jobs"]["identity"].__setitem__("if", "true"),
-        lambda payload: payload["jobs"]["release"].__setitem__(
-            "continue-on-error", True
-        ),
+        lambda payload: payload["jobs"]["release"].__setitem__("continue-on-error", True),
     ],
 )
 def test_exact_workflow_contract_rejects_success_bypasses(mutate) -> None:
@@ -640,11 +618,7 @@ def test_exact_workflow_contract_accepts_committed_workflow() -> None:
 
 def test_software_delivery_workflow_never_requires_owner_data() -> None:
     payload = _payload()
-    commands = "\n".join(
-        step.get("run", "")
-        for job in payload["jobs"].values()
-        for step in job.get("steps", [])
-    )
+    commands = "\n".join(step.get("run", "") for job in payload["jobs"].values() for step in job.get("steps", []))
     assert "approved-data" not in payload["jobs"]
     assert {"identity", "release"} < set(payload["jobs"])
     assert "--approved-data-root" not in commands

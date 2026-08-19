@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import fnmatch
-from pathlib import Path
 import subprocess
-from typing import Iterable, Sequence
-
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
 
 ALLOWED_DIRS = {
     ".github",

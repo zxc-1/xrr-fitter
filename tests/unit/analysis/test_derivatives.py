@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import replace
 from importlib import import_module
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -73,6 +75,22 @@ def _problem(*targets: str, scale_prior: bool = False):
     return result
 
 
+def _wide_log_scale_problem(*, scale_prior: bool):
+    problem = _problem("instrument.scale", scale_prior=scale_prior)
+    definitions = tuple(
+        replace(
+            definition,
+            initial=1.0,
+            lower=1e-308,
+            upper=1e308,
+        )
+        if definition.name == "instrument.scale"
+        else definition
+        for definition in problem.parameter_definitions
+    )
+    return replace(problem, parameter_definitions=definitions)
+
+
 def test_problem_objective_gradient_matches_central_differences() -> None:
     problem = _problem("component.0.thickness_a", "component.0.density_scale")
     unit = encode_physical_vector(problem, {})
@@ -101,6 +119,162 @@ def test_problem_objective_information_uses_robust_weights_and_scale_prior() -> 
     assert plain.shape == regularized.shape == (2, 2)
     assert regularized[1, 1] > plain[1, 1]
     assert np.allclose(regularized, regularized.T)
+
+
+def test_problem_objective_gradient_handles_log_bounds_whose_ratio_overflows() -> None:
+    problem = _wide_log_scale_problem(scale_prior=True)
+    unit = encode_physical_vector(problem, {"instrument.scale": 1.0})
+
+    observed = objective_gradient(problem, unit)
+    step = 1e-6
+    plus, minus = unit.copy(), unit.copy()
+    plus[0] += step
+    minus[0] -= step
+    expected = (evaluate_model(problem, plus).objective - evaluate_model(problem, minus).objective) / (2.0 * step)
+
+    assert np.all(np.isfinite(observed))
+    assert observed[0] == pytest.approx(expected, rel=2e-4)
+
+
+def test_problem_objective_information_handles_log_bounds_whose_ratio_overflows() -> None:
+    with_prior = _wide_log_scale_problem(scale_prior=True)
+    without_prior = replace(with_prior, scale_prior_center=None)
+    unit = encode_physical_vector(with_prior, {"instrument.scale": 1.0})
+
+    plain = objective_information(without_prior, unit)
+    regularized = objective_information(with_prior, unit)
+    definition = next(item for item in with_prior.parameter_definitions if item.name == "instrument.scale")
+    decades_per_unit = np.log10(definition.upper) - np.log10(definition.lower)
+    expected_increment = (
+        2.0 * (decades_per_unit / with_prior.scale_prior_tau_decades) ** 2 / np.count_nonzero(with_prior.data.fit_mask)
+    )
+
+    assert np.all(np.isfinite(regularized))
+    assert regularized[0, 0] - plain[0, 0] == pytest.approx(expected_increment)
+
+
+def test_problem_objective_gradient_at_prior_center_handles_extreme_tau_without_overflow() -> None:
+    with_prior = replace(
+        _problem("instrument.scale", scale_prior=True),
+        scale_prior_center=1.0,
+        scale_prior_tau_decades=np.nextafter(0.0, 1.0),
+    )
+    without_prior = replace(with_prior, scale_prior_center=None)
+    unit = encode_physical_vector(with_prior, {"instrument.scale": 1.0})
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        observed = objective_gradient(with_prior, unit)
+
+    np.testing.assert_array_equal(observed, objective_gradient(without_prior, unit))
+    assert np.all(np.isfinite(observed))
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
+def test_problem_objective_information_rejects_extreme_prior_tau_without_warning() -> None:
+    problem = replace(
+        _problem("instrument.scale", scale_prior=True),
+        scale_prior_center=1.0,
+        scale_prior_tau_decades=np.nextafter(0.0, 1.0),
+    )
+    unit = encode_physical_vector(problem, {"instrument.scale": 1.0})
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(FloatingPointError, match="scale prior derivative"):
+            objective_information(problem, unit)
+
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
+def test_problem_objective_information_rejects_prior_curvature_overflow_without_warning() -> None:
+    problem = replace(
+        _problem("instrument.scale", scale_prior=True),
+        scale_prior_center=1.0,
+        scale_prior_tau_decades=1e-200,
+    )
+    unit = encode_physical_vector(problem, {"instrument.scale": 1.0})
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(FloatingPointError, match="scale prior information"):
+            objective_information(problem, unit)
+
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
+def test_problem_objective_gradient_handles_extreme_positive_robust_scale() -> None:
+    baseline = _problem("instrument.scale")
+    problem = replace(baseline, config=replace(baseline.config, c_decades=1e-200))
+    unit = encode_physical_vector(problem, {"instrument.scale": 1.0})
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        observed = objective_gradient(problem, unit)
+    step = 1e-6
+    plus, minus = unit.copy(), unit.copy()
+    plus[0] += step
+    minus[0] -= step
+    expected = (evaluate_model(problem, plus).objective - evaluate_model(problem, minus).objective) / (2.0 * step)
+
+    assert observed[0] == pytest.approx(expected, rel=2e-4, abs=0.0)
+    assert np.all(np.isfinite(observed))
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
+def test_problem_objective_information_handles_extreme_positive_robust_scale() -> None:
+    baseline = _problem("instrument.scale")
+    problem = replace(baseline, config=replace(baseline.config, c_decades=1e-200))
+    unit = encode_physical_vector(problem, {"instrument.scale": 1.0})
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        observed = objective_information(problem, unit)
+
+    assert np.all(np.isfinite(observed))
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
+@pytest.mark.parametrize(
+    ("function_name", "message"),
+    (
+        ("objective_gradient", "objective gradient"),
+        ("objective_information", "objective information"),
+    ),
+)
+def test_objective_derivatives_reject_unrepresentable_matrix_products(
+    monkeypatch: pytest.MonkeyPatch,
+    function_name: str,
+    message: str,
+) -> None:
+    module = _api()
+    problem = SimpleNamespace(
+        variables=(SimpleNamespace(name="x", parameter_index=0),),
+        weights=np.ones(1),
+        data=SimpleNamespace(fit_mask=np.array([True])),
+        config=SimpleNamespace(c_decades=1.0),
+        scale_prior_center=None,
+        parameter_definitions=(SimpleNamespace(),),
+    )
+    observed = SimpleNamespace(
+        valid=True,
+        objective=1.0,
+        fit_log_residuals_decades=np.ones(1),
+        parameters=(),
+    )
+    monkeypatch.setattr(module, "evaluate_model", lambda *_args: observed)
+    monkeypatch.setattr(
+        module,
+        "evaluate_model_jacobian",
+        lambda *_args: np.array([[np.finfo(float).max]]),
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(FloatingPointError, match=message):
+            getattr(module, function_name)(problem, np.array([0.5]))
+
+    assert not any(item.category is RuntimeWarning for item in caught)
 
 
 def test_physical_parameter_jacobian_maps_unit_coordinates_in_declared_order() -> None:
@@ -172,3 +346,50 @@ def test_covariance_from_correlation_zeroes_non_positive_variance_rows() -> None
 def test_covariance_from_correlation_rejects_mismatched_shapes() -> None:
     with pytest.raises(ValueError):
         covariance_from_correlation(np.ones(2), np.eye(3))
+
+
+@pytest.mark.parametrize(
+    "covariance",
+    (
+        np.array([[1.0, np.inf], [np.inf, 1.0]]),
+        np.array([[np.nan, 0.0], [0.0, 1.0]]),
+    ),
+)
+def test_correlation_from_covariance_rejects_nonfinite_entries_without_warning(
+    covariance: np.ndarray,
+) -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match="finite"):
+            correlation_from_covariance(covariance)
+
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
+@pytest.mark.parametrize(
+    ("sigma", "correlation"),
+    (
+        (np.array([-1.0, 1.0]), np.eye(2)),
+        (np.array([1.0, np.inf]), np.eye(2)),
+        (np.ones(2), np.array([[1.0, np.nan], [np.nan, 1.0]])),
+    ),
+)
+def test_covariance_from_correlation_rejects_invalid_numeric_entries_without_warning(
+    sigma: np.ndarray,
+    correlation: np.ndarray,
+) -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match="finite|nonnegative"):
+            covariance_from_correlation(sigma, correlation)
+
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
+def test_covariance_from_correlation_rejects_unrepresentable_result_without_warning() -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(FloatingPointError, match="finite"):
+            covariance_from_correlation(np.array([1e308, 1.0]), np.eye(2))
+
+    assert not any(item.category is RuntimeWarning for item in caught)

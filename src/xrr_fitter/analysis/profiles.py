@@ -66,7 +66,6 @@ from xrr_fitter.evaluation import (
 from xrr_fitter.model.analysis import ParameterProfile, ProfileBasinDecision
 from xrr_fitter.model.fitting import FitEvaluationContext
 
-
 Scalar = Callable[[np.ndarray], float]
 Vector = Callable[[np.ndarray], np.ndarray]
 # Profile closure never resolves an objective delta below 1e-5.
@@ -349,9 +348,7 @@ def _profile_point(
     optimized = (
         _scalar_nuisance(callbacks, setup, fixed, start)
         if callbacks.residual is None
-        else _residual_nuisance(
-            callbacks, setup, fixed, start, residual_loss, max_nfev
-        )
+        else _residual_nuisance(callbacks, setup, fixed, start, residual_loss, max_nfev)
     )
     callbacks.poll()
     nuisance = np.asarray(optimized.x, dtype=float)
@@ -378,11 +375,7 @@ def _scan_direction(
     Explicit grid indices make later merging independent of task completion.
     """
     center_index = int(np.argmin(np.abs(setup.grid - setup.center[setup.index])))
-    indices = tuple(
-        range(center_index, -1, -1)
-        if direction < 0
-        else range(center_index + 1, setup.grid.size)
-    )
+    indices = tuple(range(center_index, -1, -1) if direction < 0 else range(center_index + 1, setup.grid.size))
     vectors = np.empty((len(indices), setup.center.size), dtype=float)
     objectives = np.full(len(indices), np.inf)
     warm = setup.center[list(setup.nuisance)]
@@ -525,8 +518,7 @@ def _support_expanded(
     values = np.asarray((*original_envelope, *refined_envelope), dtype=float)
     tolerance = 32.0 * np.finfo(float).eps * max(1.0, float(np.max(np.abs(values))))
     return bool(
-        original_envelope[0] - refined_envelope[0] > tolerance
-        or refined_envelope[1] - original_envelope[1] > tolerance
+        original_envelope[0] - refined_envelope[0] > tolerance or refined_envelope[1] - original_envelope[1] > tolerance
     )
 
 
@@ -538,6 +530,7 @@ def _solve_recentered_profile(
     max_nfev: int | None,
 ):
     if callbacks.residual is None:
+
         def objective(vector: np.ndarray) -> float:
             return _finite_objective(callbacks, setup, vector)
 
@@ -621,9 +614,7 @@ def _merge_profile_points(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     values = np.concatenate((values, np.asarray([item[0] for item in additions])))
     vectors = np.vstack((vectors, np.vstack([item[1] for item in additions])))
-    objectives = np.concatenate(
-        (objectives, np.asarray([item[2] for item in additions]))
-    )
+    objectives = np.concatenate((objectives, np.asarray([item[2] for item in additions])))
     order = np.argsort(values, kind="stable")
     return values[order], vectors[order], objectives[order]
 
@@ -678,9 +669,7 @@ def _refine_transitions(
             fixed = float(0.5 * (values[left] + values[right]))
             warm_index = left if supported[left] else right
             warm = vectors[warm_index, list(setup.nuisance)]
-            vector, objective, _state = _profile_point(
-                callbacks, setup, fixed, warm, residual_loss, max_nfev
-            )
+            vector, objective, _state = _profile_point(callbacks, setup, fixed, warm, residual_loss, max_nfev)
             additions.append((fixed, vector, objective))
             probe_objectives.append(objective)
         values, vectors, objectives = _merge_profile_points(
@@ -769,9 +758,7 @@ def _prepare_profile_plan(
     seek_basin: bool = False,
 ) -> _ProfilePlan:
     """Validate callbacks and freeze all state needed after task submission."""
-    callbacks = _Callbacks(
-        objective, value_mapper, gradient, residual, residual_jacobian, cancelled
-    )
+    callbacks = _Callbacks(objective, value_mapper, gradient, residual, residual_jacobian, cancelled)
     setup = _prepare(
         callbacks,
         center_unit,
@@ -1085,8 +1072,7 @@ def _structural_profile_names(names: tuple[str, ...]) -> set[str]:
     return {
         name
         for name in names
-        if name == "instrument.angle_offset_deg"
-        or any(fragment in name for fragment in fragments)
+        if name == "instrument.angle_offset_deg" or any(fragment in name for fragment in fragments)
     }
 
 
@@ -1153,9 +1139,7 @@ def recover_profile_basin(
     trigger = max(1e-3, 100.0 * problem.config.confidence.equivalent_cost_floor)
     if candidate.objective <= trigger:
         return None
-    for name in (
-        variable.name for variable in problem.variables if variable.name.endswith(".thickness_a")
-    ):
+    for name in (variable.name for variable in problem.variables if variable.name.endswith(".thickness_a")):
         index = tuple(variable.name for variable in problem.variables).index(name)
 
         def objective(value: np.ndarray) -> float:

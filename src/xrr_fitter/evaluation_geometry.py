@@ -9,10 +9,12 @@ production consumer of this implementation boundary.
 
 from __future__ import annotations
 
+from math import ceil, isfinite
+
 import numpy as np
 
 from xrr_fitter.model.parameters import ParameterDefinition
-from xrr_fitter.model.structure import PeriodicBlock
+from xrr_fitter.model.structure import MAX_EXPANDED_SLABS, GradientLayerSpec, PeriodicBlock
 from xrr_fitter.physics.geometry import (
     GRADIENT_INTERNAL_INTERFACE,
     DifferentiableStack,
@@ -67,6 +69,23 @@ def _is_roughness_definition(definition: ParameterDefinition) -> bool:
 
 def _definition_name(definition: ParameterDefinition) -> str:
     return definition.name
+
+
+def _gradient_slab_counts(problem: object) -> dict[str, int]:
+    """Resolve the fixed gradient topology compiled from candidate bounds."""
+    definitions = {definition.name: definition for definition in problem.parameter_definitions}
+    counts: dict[str, int] = {}
+    for index, component in enumerate(problem.structure.components):
+        if not isinstance(component, GradientLayerSpec):
+            continue
+        prefix = f"component.{index}"
+        maximum = component.microslab_max_a
+        upper = definitions[f"{prefix}.thickness_a"].upper
+        ratio = upper / maximum
+        if not isfinite(ratio) or ratio > MAX_EXPANDED_SLABS:
+            raise ValueError(f"gradient slab topology exceeds the expanded slab budget: {prefix}")
+        counts[prefix] = max(1, ceil(ratio))
+    return counts
 
 
 def _zero_roughness_values(problem: object) -> dict[str, float]:
@@ -200,7 +219,10 @@ def _roughness_dynamic_uppers(
         problem.structure,
         provisional_values,
     )
-    geometry = _expand_geometry(provisional)
+    geometry = _expand_geometry(
+        provisional,
+        gradient_slab_counts=_gradient_slab_counts(problem),
+    )
     dynamic: dict[str, float] = {}
     final_medium = geometry.thickness_a.size - 1
     # Repeated source names reduce by minimum, independent of occurrence order.
@@ -225,6 +247,7 @@ def _expand_structure_with_jacobian(
         value_jacobians,
         wavelength_a,
         len(problem.variables),
+        _gradient_slab_counts(problem),
     )
 
 
@@ -244,6 +267,7 @@ def _roughness_geometry_context(
         provisional,
         parameter_count=len(problem.variables),
         value_jacobians=value_jacobians,
+        gradient_slab_counts=_gradient_slab_counts(problem),
     )
 
 

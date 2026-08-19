@@ -35,10 +35,7 @@ class SubstrateDialog(QDialog):
         self.error_label.setObjectName("substrateValidationError")
         self.error_label.setWordWrap(True)
         self.error_label.hide()
-        self.buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-        )
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         form = QFormLayout()

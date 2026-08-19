@@ -70,8 +70,9 @@ orders `17 → 33 → 65`. The first finer value is accepted when
 |Rfine - Rcoarse| ≤ max(1e-12, 1e-4 |Rfine|)
 ```
 
-Samples below the physical zero boundary are omitted and retained weights are
-renormalized. If 33→65 still fails, the 65-point value is returned and
+The ideal model is evaluated at `abs(q)` for nodes that cross the physical zero
+boundary, giving an even extension without dropping nodes or changing the
+Gauss–Hermite normalization. If 33→65 still fails, the 65-point value is returned and
 `GaussHermiteConvergenceWarning` plus a structured `PhysicsDiagnostic` records
 the affected point indices.
 

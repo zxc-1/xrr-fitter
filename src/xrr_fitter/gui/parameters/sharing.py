@@ -80,8 +80,5 @@ class SharingEditor(QWidget):
     def _render(self, *_args) -> None:
         self.tree.clear()
         for rule in self.rules:
-            members = ", ".join(
-                f"{member.dataset_id}:{member.parameter_name}"
-                for member in rule.members
-            )
+            members = ", ".join(f"{member.dataset_id}:{member.parameter_name}" for member in rule.members)
             self.tree.addTopLevelItem(QTreeWidgetItem((rule.sharing_key, members)))

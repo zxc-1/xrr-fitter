@@ -17,7 +17,6 @@ from PySide6.QtCore import QObject, QTimer, Signal
 import xrr_fitter.api as api
 from xrr_fitter.gui.document import ProjectDocument
 
-
 DRAFT_SUFFIX = ".autosave"
 
 # Two minutes between drafts: frequent enough to bound lost work, rare enough

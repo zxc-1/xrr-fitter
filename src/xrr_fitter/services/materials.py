@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Mapping
 
 from xrr_fitter.model.parameters import ParameterSetting
 from xrr_fitter.model.structure import LayerSpec, MaterialSpec, StructureSpec
-
 
 INITIAL_DENSITY_TABLE_VERSION = "initial-density-v2"
 INITIAL_DENSITIES_G_CM3: Mapping[str, float] = MappingProxyType(
@@ -30,8 +29,7 @@ def material_from_initial_density(formula: str) -> MaterialSpec:
         density = INITIAL_DENSITIES_G_CM3[formula]
     except KeyError as error:
         raise ValueError(
-            f"no initial density for filename material {formula!r} "
-            f"in {INITIAL_DENSITY_TABLE_VERSION}"
+            f"no initial density for filename material {formula!r} in {INITIAL_DENSITY_TABLE_VERSION}"
         ) from error
     return MaterialSpec(formula, formula, density)
 

@@ -24,9 +24,7 @@ def operation_is_running(window: object) -> bool:
 
 def has_exportable_results(window: object) -> bool:
     datasets = window.document.project.datasets
-    return bool(datasets) and all(
-        dataset.last_valid_result is not None for dataset in datasets
-    )
+    return bool(datasets) and all(dataset.last_valid_result is not None for dataset in datasets)
 
 
 def refresh_operation_state(window: object) -> None:
@@ -36,9 +34,7 @@ def refresh_operation_state(window: object) -> None:
     external_running = external is not None and bool(external.is_running)
     running = fit_running or mcmc_running or external_running
     readiness = window._fit_readiness()
-    window._workflow_actions["startFitAction"].setEnabled(
-        readiness.ready and not running
-    )
+    window._workflow_actions["startFitAction"].setEnabled(readiness.ready and not running)
     window._workflow_actions["cancelFitAction"].setEnabled(fit_running)
     export_enabled = has_exportable_results(window) and not running
     window._workflow_actions["exportResultsAction"].setEnabled(export_enabled)

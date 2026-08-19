@@ -50,16 +50,10 @@ class AutomaticPointLayerTable(QTableWidget):
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.setAlternatingRowColors(True)
         self.verticalHeader().hide()
-        self.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
 
     def project_summary(self, summary: object) -> None:
-        rows = tuple(
-            (dataset, layer)
-            for dataset in summary.datasets
-            for layer in dataset.layers
-        )
+        rows = tuple((dataset, layer) for dataset in summary.datasets for layer in dataset.layers)
         self.setRowCount(len(rows))
         self.setVisible(bool(rows))
         for row, (dataset, layer) in enumerate(rows):
@@ -102,9 +96,7 @@ class AutomaticUniformityTable(QTableWidget):
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.setAlternatingRowColors(True)
         self.verticalHeader().hide()
-        self.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
 
     def project_summary(self, summary: object) -> None:
         self.setRowCount(len(summary.uniformity))

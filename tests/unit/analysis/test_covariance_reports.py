@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import replace
 from importlib import import_module
 
@@ -100,6 +101,28 @@ def test_joint_ensemble_populates_parameter_sigma_from_physical_spread() -> None
 
     np.testing.assert_allclose(report.parameter_sigma, (1.0, 0.0))
     np.testing.assert_array_equal(np.diag(report.correlation_matrix), (1.0, 1.0))
+
+
+def test_joint_ensemble_handles_repeated_finite_extreme_physical_values() -> None:
+    joint = import_module("xrr_fitter.analysis.joint")
+    maximum = np.finfo(float).max
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        report, _confidence, _evidence = joint.analyze_joint_ensemble(
+            variable_names=("shared",),
+            candidate_ids=("E-0", "E-1", "E-2"),
+            unit_vectors=np.asarray(((0.5,), (0.5,), (0.5,))),
+            physical_values=np.full((3, 1), maximum),
+            objectives=(1.0, 1.1, 1.2),
+            valid=(True, True, True),
+            diagnostics=((), (), ()),
+            thresholds=FitConfig.fast(1701).confidence,
+        )
+
+    np.testing.assert_array_equal(report.parameter_sigma, (0.0,))
+    np.testing.assert_array_equal(report.correlation_matrix, np.eye(1))
+    assert not any(item.category is RuntimeWarning for item in caught)
 
 
 def test_local_report_parameter_sigma_matches_correlation_diagonal() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from math import erf, sqrt
 
 import numpy as np
@@ -50,6 +51,12 @@ def test_erf_kind_matches_the_documented_half_width_constant() -> None:
 def test_unknown_kind_is_rejected() -> None:
     with pytest.raises(ValueError, match="gaussian"):
         transition_profile("gaussian", np.linspace(0.0, 1.0, 5))
+
+
+@pytest.mark.parametrize("coordinates", [np.array([np.nan]), np.array([np.inf]), np.array([-0.1]), np.array([1.1])])
+def test_transition_profile_rejects_nonfinite_or_out_of_range_coordinates(coordinates: np.ndarray) -> None:
+    with pytest.raises(ValueError, match=r"finite.*\[0,1\]"):
+        transition_profile("linear", coordinates)
 
 
 def test_slab_count_is_at_least_one_and_ceils() -> None:
@@ -105,6 +112,27 @@ def test_transition_fractions_weight_branches_of_different_widths() -> None:
     np.testing.assert_allclose(fractions, [0.1875, 0.5625, 0.8125, 0.9375])
 
 
+def test_transition_fractions_saturate_subnormal_branch_without_division_overflow() -> None:
+    transition = InterfaceTransition(
+        branches=(
+            TransitionBranch(kind="linear", weight=0.5, thickness_a=2.0),
+            TransitionBranch(
+                kind="linear",
+                weight=0.5,
+                thickness_a=np.nextafter(0.0, 1.0),
+            ),
+        ),
+        microslab_max_a=2.0,
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fractions = transition_fractions(transition, 1)
+
+    np.testing.assert_array_equal(fractions, np.array([0.75]))
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
 def test_transition_fractions_end_below_one_for_interior_centers() -> None:
     transition = InterfaceTransition(
         branches=(TransitionBranch(kind="erf", weight=1.0, thickness_a=8.0),),
@@ -114,3 +142,13 @@ def test_transition_fractions_end_below_one_for_interior_centers() -> None:
     assert fractions[0] > 0.0
     assert fractions[-1] < 1.0
     assert np.all(np.diff(fractions) >= 0.0)
+
+
+@pytest.mark.parametrize("count", [True, 2.0, "2", 0, -1, np.nan, np.inf])
+def test_transition_fractions_requires_a_positive_integer_count(count: object) -> None:
+    transition = InterfaceTransition(
+        branches=(TransitionBranch(kind="linear", weight=1.0, thickness_a=2.0),),
+        microslab_max_a=1.0,
+    )
+    with pytest.raises(ValueError, match="slab count must be a positive integer"):
+        transition_fractions(transition, count)

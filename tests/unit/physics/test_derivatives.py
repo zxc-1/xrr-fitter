@@ -1,24 +1,29 @@
 from __future__ import annotations
 
-from importlib import import_module
-
-import numpy as np
-import pytest
-
-from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
-from xrr_fitter.physics.derivatives import parratt_reflectivity_jacobian, smear_with_widths_jacobian
+from tests.unit.physics.derivative_cases import *
 
 
-def _tangents(stack: SlabStack, q: np.ndarray, count: int = 3):
-    q_jac = np.zeros((q.size, count))
-    q_jac[:, 0] = 1e-3
-    thickness_jac = np.zeros((stack.thickness_a.size, count))
-    thickness_jac[1:-1:2, 1] = 0.7
-    sld_jac = np.zeros((stack.sld_a2.size, count), complex)
-    sld_jac[2:-1:2, 2] = 1e-7 + 2e-8j
-    roughness_jac = np.zeros((stack.roughness_a.size, count))
-    roughness_jac[:, 0] = 0.03
-    return q_jac, thickness_jac, sld_jac, roughness_jac
+def test_parratt_jacobian_rejects_nonfinite_nevot_croce_path() -> None:
+    stack = SlabStack(
+        [0, 1, 1, 0],
+        [
+            0j,
+            0.09009274 + 5.25772738e-05j,
+            0.08972989 + 3.62374192e-04j,
+            0j,
+        ],
+        [0, 30, 0],
+    )
+    qz = np.asarray([0.011774154985086273])
+    with pytest.raises(FloatingPointError, match="finite|Nevot-Croce"):
+        parratt_reflectivity_jacobian(
+            qz,
+            stack,
+            np.zeros((1, 1)),
+            np.zeros((4, 1)),
+            np.zeros((4, 1), complex),
+            np.zeros((3, 1)),
+        )
 
 
 def test_periodic_mobius_jacobian_matches_expanded_recurrence() -> None:
@@ -161,231 +166,3 @@ def test_periodic_tangents_reuse_identical_expanded_optics() -> None:
     assert repeated_kz[1] is first_kz[1]
     assert repeated_interface[0] is first_interface[0]
     assert repeated_interface[1] is first_interface[1]
-
-
-def test_analytic_tangent_matches_centered_difference() -> None:
-    from xrr_fitter.physics.parratt import parratt_reflectivity
-
-    q = np.linspace(0.01, 0.3, 80)
-    stack = SlabStack([0, 80, 0], [0j, 25e-6 + 0.2e-6j, 20e-6 + 0.1e-6j], [2, 3])
-    tangents = (np.zeros((q.size, 1)), np.array([[0], [1], [0]], float), np.zeros((3, 1), complex), np.zeros((2, 1)))
-    primal, jacobian = parratt_reflectivity_jacobian(q, stack, *tangents)
-    eps = 1e-4
-    plus = SlabStack([0, 80 + eps, 0], stack.sld_a2, stack.roughness_a)
-    minus = SlabStack([0, 80 - eps, 0], stack.sld_a2, stack.roughness_a)
-    finite = (parratt_reflectivity(q, plus) - parratt_reflectivity(q, minus)) / (2 * eps)
-    np.testing.assert_allclose(primal, parratt_reflectivity(q, stack), rtol=1e-13)
-    np.testing.assert_allclose(jacobian[:, 0], finite, rtol=2e-7, atol=2e-10)
-
-
-def test_compose_batches_periodic_tangent_product_rule(monkeypatch) -> None:
-    module = import_module("xrr_fitter.physics.derivatives")
-    rng = np.random.default_rng(20240607)
-
-    def complex_values(*shape: int) -> np.ndarray:
-        return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
-
-    left = complex_values(20, 2, 2)
-    right = complex_values(20, 2, 2)
-    left_tangent = complex_values(20, 2, 2, 6)
-    right_tangent = complex_values(20, 2, 2, 6)
-    expected_matrix = np.empty_like(left)
-    expected_tangent = np.empty_like(left_tangent)
-    for row in range(2):
-        for column in range(2):
-            expected_matrix[:, row, column] = (
-                left[:, row, 0] * right[:, 0, column] + left[:, row, 1] * right[:, 1, column]
-            )
-            expected_tangent[:, row, column] = (
-                left_tangent[:, row, 0] * right[:, 0, column, None]
-                + left[:, row, 0, None] * right_tangent[:, 0, column]
-                + left_tangent[:, row, 1] * right[:, 1, column, None]
-                + left[:, row, 1, None] * right_tangent[:, 1, column]
-            )
-    expected = module._normalize(expected_matrix, expected_tangent)
-    calls: list[str] = []
-    original_einsum = np.einsum
-
-    def audited_einsum(subscripts, *operands, **kwargs):
-        calls.append(subscripts)
-        return original_einsum(subscripts, *operands, **kwargs)
-
-    monkeypatch.setattr(np, "einsum", audited_einsum)
-    actual = module._compose(left, left_tangent, right, right_tangent)
-
-    assert calls == ["qijp,qjk->qikp", "qij,qjkp->qikp"]
-    np.testing.assert_allclose(actual[0], expected[0], rtol=1e-14, atol=1e-16)
-    np.testing.assert_allclose(actual[1], expected[1], rtol=1e-14, atol=1e-16)
-
-
-def test_quadrature_jacobian_reuses_fine_tangent_values_for_order_selection() -> None:
-    samples = np.linspace(0.02, 0.4, 80)
-    primal_calls, tangent_calls = [], []
-
-    def primal(query):
-        primal_calls.append(query.shape)
-        return query**2
-
-    def tangent(query, query_jacobian):
-        tangent_calls.append(query.shape)
-        return query**2, 2 * query[..., None] * query_jacobian
-
-    values, jacobian = smear_with_widths_jacobian(
-        samples,
-        np.ones((samples.size, 1)),
-        np.full(samples.size, 0.002),
-        np.zeros((samples.size, 1)),
-        tangent,
-        primal_function=primal,
-    )
-    np.testing.assert_allclose(values, samples**2 + 0.002**2)
-    np.testing.assert_allclose(jacobian[:, 0], 2 * samples)
-    assert {shape[1] for shape in primal_calls} == {17}
-    assert {shape[1] for shape in tangent_calls} == {33}
-
-
-def test_adaptive_jacobian_evaluates_sixty_five_nodes_only_for_unresolved_points() -> None:
-    calls = []
-
-    def needle(query, query_jacobian):
-        calls.append(query.shape)
-        values = np.exp(-4e6 * (query - 0.02137) ** 2)
-        derivative = -8e6 * (query - 0.02137) * values
-        return values, derivative[..., None] * query_jacobian
-
-    smear_with_widths_jacobian(
-        np.array([0.02, 0.2]),
-        np.ones((2, 1)),
-        np.full(2, 0.011),
-        np.zeros((2, 1)),
-        needle,
-    )
-    assert calls == [(2, 17), (2, 33), (1, 65)]
-
-
-def test_quadrature_jacobian_chunks_large_query_grids() -> None:
-    samples = np.linspace(0.02, 0.4, 600)
-    calls = []
-
-    def smooth(query, query_jacobian):
-        calls.append(query.shape)
-        return query**2, 2 * query[..., None] * query_jacobian
-
-    values, jacobian = smear_with_widths_jacobian(
-        samples,
-        np.ones((samples.size, 1)),
-        np.full(samples.size, 0.002),
-        np.zeros((samples.size, 1)),
-        smooth,
-    )
-    np.testing.assert_allclose(values, samples**2 + 0.002**2, rtol=2e-13, atol=2e-15)
-    np.testing.assert_allclose(jacobian[:, 0], 2 * samples, rtol=2e-13, atol=2e-15)
-    assert len(calls) <= 8
-    assert max(np.prod(shape) for shape in calls) <= 4096
-
-
-def test_all_zero_width_jacobian_reuses_validated_input_arrays() -> None:
-    samples = np.linspace(0.02, 0.4, 80)
-    sample_jacobian = np.ones((samples.size, 1))
-    observed: list[tuple[bool, bool]] = []
-
-    def exact(query, query_jacobian):
-        observed.append(
-            (
-                np.shares_memory(query, samples),
-                np.shares_memory(query_jacobian, sample_jacobian),
-            )
-        )
-        return query**2, 2 * query[..., None] * query_jacobian
-
-    smear_with_widths_jacobian(
-        samples,
-        sample_jacobian,
-        np.zeros(samples.size),
-        np.zeros_like(sample_jacobian),
-        exact,
-    )
-
-    assert observed == [(True, True)]
-
-
-@pytest.mark.parametrize(
-    "widths",
-    [np.zeros(2), np.array([0.0, 0.002])],
-    ids=("all-zero", "mixed"),
-)
-@pytest.mark.parametrize(
-    "invalid",
-    ("value-shape", "tangent-shape", "value-nonfinite", "tangent-nonfinite"),
-)
-def test_zero_width_jacobian_validates_differentiable_callback(
-    widths: np.ndarray,
-    invalid: str,
-) -> None:
-    samples = np.array([0.1, 0.2])
-    sample_jacobian = np.ones((2, 1))
-
-    def callback(query, query_jacobian):
-        if query.ndim > 1:
-            return query**2, 2 * query[..., None] * query_jacobian
-        values = query**2
-        tangent = 2 * query[:, None] * query_jacobian
-        if invalid == "value-shape":
-            values = np.array(1.0)
-        elif invalid == "tangent-shape":
-            tangent = np.array(1.0)
-        elif invalid == "value-nonfinite":
-            values[0] = np.nan
-        else:
-            tangent[0, 0] = np.inf
-        return values, tangent
-
-    with pytest.raises(ValueError, match="differentiable function returned invalid values"):
-        smear_with_widths_jacobian(
-            samples,
-            sample_jacobian,
-            widths,
-            np.zeros_like(sample_jacobian),
-            callback,
-        )
-
-
-def test_parratt_jacobian_tracks_q_complex_sld_and_roughness_tangents() -> None:
-    from xrr_fitter.physics.parratt import parratt_reflectivity
-
-    q = np.linspace(0.01, 0.3, 80)
-    stack = SlabStack([0, 80, 0], [0j, 25e-6 + 0.2e-6j, 20e-6 + 0.1e-6j], [2, 3])
-    q_jacobian = np.zeros((q.size, 3))
-    q_jacobian[:, 0] = 0.4
-    thickness_jacobian = np.zeros((3, 3))
-    sld_jacobian = np.zeros((3, 3), complex)
-    sld_jacobian[1, 1] = 0.7e-6 + 0.2e-6j
-    roughness_jacobian = np.zeros((2, 3))
-    roughness_jacobian[0, 2] = 0.3
-    _, actual = parratt_reflectivity_jacobian(
-        q, stack, q_jacobian, thickness_jacobian, sld_jacobian, roughness_jacobian
-    )
-    eps = 1e-6
-    expected = np.empty_like(actual)
-    expected[:, 0] = (parratt_reflectivity(q + eps * 0.4, stack) - parratt_reflectivity(q - eps * 0.4, stack)) / (
-        2 * eps
-    )
-    eps = 1e-4
-    delta_sld = eps * (0.7e-6 + 0.2e-6j)
-    plus_sld = stack.sld_a2.copy()
-    plus_sld[1] += delta_sld
-    minus_sld = stack.sld_a2.copy()
-    minus_sld[1] -= delta_sld
-    expected[:, 1] = (
-        parratt_reflectivity(q, SlabStack(stack.thickness_a, plus_sld, stack.roughness_a))
-        - parratt_reflectivity(q, SlabStack(stack.thickness_a, minus_sld, stack.roughness_a))
-    ) / (2 * eps)
-    plus_roughness = stack.roughness_a.copy()
-    plus_roughness[0] += eps * 0.3
-    minus_roughness = stack.roughness_a.copy()
-    minus_roughness[0] -= eps * 0.3
-    expected[:, 2] = (
-        parratt_reflectivity(q, SlabStack(stack.thickness_a, stack.sld_a2, plus_roughness))
-        - parratt_reflectivity(q, SlabStack(stack.thickness_a, stack.sld_a2, minus_roughness))
-    ) / (2 * eps)
-    np.testing.assert_allclose(actual, expected, rtol=3e-6, atol=2e-10)

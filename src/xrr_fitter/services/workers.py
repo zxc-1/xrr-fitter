@@ -65,6 +65,7 @@ def _put(queue, kind: str, payload) -> None:
 
 def _run_fit_worker(request: _FitJobRequest, queue, cancellation) -> None:
     try:
+
         def progress(value) -> None:
             _put(queue, "progress", value)
 
@@ -95,6 +96,7 @@ def _run_automatic_fit_worker(
     cancellation,
 ) -> None:
     try:
+
         def progress(value) -> None:
             _put(queue, "progress", value)
 
@@ -268,23 +270,17 @@ class OperationJob:
         if self._pending_terminal is None:
             return (
                 "error",
-                _protocol_error(
-                    f"worker exited without terminal event: {self._process.exitcode}"
-                ),
+                _protocol_error(f"worker exited without terminal event: {self._process.exitcode}"),
             )
         if not self._stop_received:
             return (
                 "error",
-                _protocol_error(
-                    f"worker exited without stopped event: {self._process.exitcode}"
-                ),
+                _protocol_error(f"worker exited without stopped event: {self._process.exitcode}"),
             )
         if self._process.exitcode != 0:
             return (
                 "error",
-                _protocol_error(
-                    f"worker exited with unexpected exit status {self._process.exitcode}"
-                ),
+                _protocol_error(f"worker exited with unexpected exit status {self._process.exitcode}"),
             )
         return self._pending_terminal
 

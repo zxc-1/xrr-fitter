@@ -19,8 +19,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTreeWidget,
 )
-
-import xrr_fitter.api as api
 from tests.integration.test_gui_synthetic_xy_workflow import (
     _configure_import,
     _lock_all_but_first_thickness,
@@ -30,6 +28,8 @@ from tests.integration.test_gui_synthetic_xy_workflow import (
     _show_window,
     _write_synthetic_xy,
 )
+
+import xrr_fitter.api as api
 
 
 def _filename_batch_inputs(tmp_path: Path) -> tuple[Path, Path]:
@@ -70,10 +70,7 @@ def _import_filename_batch(window) -> None:
         tuple(dataset.dataset_id for dataset in project.datasets),
         tuple(dataset.display_name for dataset in project.datasets),
         tuple(dataset.column_mapping for dataset in project.datasets),
-        tuple(
-            tuple(layer.material.formula for layer in dataset.structure.components)
-            for dataset in project.datasets
-        ),
+        tuple(tuple(layer.material.formula for layer in dataset.structure.components) for dataset in project.datasets),
         window.findChild(QPushButton, "initializeStructureButton").isHidden(),
     )
     assert snapshot == (
@@ -127,10 +124,7 @@ def _exercise_recoverable_layer_dialog(window) -> None:
                 dialog.isVisible(),
                 error.isVisible(),
                 error.text(),
-                tuple(
-                    len(dataset.structure.components)
-                    for dataset in window.document.project.datasets
-                ),
+                tuple(len(dataset.structure.components) for dataset in window.document.project.datasets),
             )
         )
         roughness.setValue(0.1)
@@ -177,8 +171,7 @@ def _exercise_recoverable_layer_dialog(window) -> None:
 
 def _component_names(window) -> tuple[tuple[str, ...], ...]:
     return tuple(
-        tuple(layer.name for layer in dataset.structure.components)
-        for dataset in window.document.project.datasets
+        tuple(layer.name for layer in dataset.structure.components) for dataset in window.document.project.datasets
     )
 
 
@@ -190,11 +183,7 @@ def _prepare_filename_batch_parameters(window) -> None:
 
 
 def _assert_joint_progress(events: list[api.OperationEvent]) -> None:
-    stages = tuple(
-        event.progress.stage
-        for event in events
-        if event.kind == "progress" and event.progress is not None
-    )
+    stages = tuple(event.progress.stage for event in events if event.kind == "progress" and event.progress is not None)
     finalizing = stages.index("finalizing")
     assert "E" in stages
     assert max(index for index, stage in enumerate(stages) if stage == "E") < finalizing
@@ -224,7 +213,4 @@ def test_filename_batch_auto_structure_joint_gui_workflow(
     _run_gui_fit(window, qtbot)
 
     _assert_joint_progress(events)
-    assert all(
-        dataset.last_valid_result is not None
-        for dataset in window.document.project.datasets
-    )
+    assert all(dataset.last_valid_result is not None for dataset in window.document.project.datasets)

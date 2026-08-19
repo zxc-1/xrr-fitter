@@ -147,9 +147,7 @@ def _validate_candidate_layout(
         )
         if not _derived_candidate_equal(candidate, expected):
             raise ValueError("resume checkpoint candidate derived state mismatch")
-        normalized.append(
-            replace(expected, ranking_objective=candidate.ranking_objective)
-        )
+        normalized.append(replace(expected, ranking_objective=candidate.ranking_objective))
     return tuple(normalized)
 
 

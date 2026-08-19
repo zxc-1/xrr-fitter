@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-from pathlib import PurePosixPath
 import re
+from pathlib import PurePosixPath
 
 from approved_data_model import (
-    CASE_IDS,
     CANDIDATE_SCHEMA,
+    CASE_IDS,
     HEX,
     SIGNOFF_SCHEMA,
     ApprovedRun,
@@ -191,11 +191,7 @@ def _run_value(value: ApprovedRun) -> dict[str, object]:
 
 
 def _evidence_paths(runs: tuple[ApprovedRun, ...]) -> tuple[str, ...]:
-    return tuple(
-        record.path
-        for run in runs
-        for record in (run.project, *run.exports, *run.plots)
-    )
+    return tuple(record.path for run in runs for record in (run.project, *run.exports, *run.plots))
 
 
 def _require_unique_evidence_paths(paths: tuple[str, ...]) -> None:
@@ -272,9 +268,7 @@ def _candidate(value: object) -> CandidateReport:
     cases = tuple(_candidate_case(item) for item in supplied)
     if tuple(case.case_id for case in cases) != CASE_IDS:
         raise ValueError("candidate cases must contain the exact sorted case registry")
-    _require_unique_evidence_paths(
-        tuple(path for case in cases for path in _evidence_paths(case.runs))
-    )
+    _require_unique_evidence_paths(tuple(path for case in cases for path in _evidence_paths(case.runs)))
     return CandidateReport(
         CANDIDATE_SCHEMA,
         _environment(data["environment"]),
@@ -334,8 +328,7 @@ def signoff_value(value: DomainSignoff) -> dict[str, object]:
         "role": value.role,
         "candidate_report_sha256": value.candidate_report_sha256,
         "cases": [
-            {"case_id": item.case_id, "approved": item.approved, "conclusion": item.conclusion}
-            for item in value.cases
+            {"case_id": item.case_id, "approved": item.approved, "conclusion": item.conclusion} for item in value.cases
         ],
     }
 

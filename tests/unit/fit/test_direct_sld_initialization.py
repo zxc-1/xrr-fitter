@@ -54,10 +54,7 @@ def _all_direct_locations_structure() -> StructureSpec:
 
 
 def _real_sld_rows(pool) -> tuple[tuple[tuple[str, float], ...], ...]:
-    return tuple(
-        tuple((name, value) for name, value in start.values if "sld_real_a2" in name)
-        for start in pool
-    )
+    return tuple(tuple((name, value) for name, value in start.values if "sld_real_a2" in name) for start in pool)
 
 
 def _has_layer_distinct_sld(rows) -> bool:

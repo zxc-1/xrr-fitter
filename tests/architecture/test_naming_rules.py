@@ -8,15 +8,14 @@ are exempt only when an imported Qt base really exposes that method.
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
 import importlib
 import importlib.util
-from pathlib import Path
 import re
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[2]
 SNAKE_CASE = re.compile(r"_*[a-z][a-z0-9_]*")
@@ -113,11 +112,7 @@ def _class_qt_bases(
         if qualified in local_bases:
             bases.extend(local_bases[qualified])
             continue
-        value = (
-            _import_object(qualified)
-            if qualified and qualified.startswith(QT_BASE_PREFIXES)
-            else None
-        )
+        value = _import_object(qualified) if qualified and qualified.startswith(QT_BASE_PREFIXES) else None
         if isinstance(value, type):
             bases.append(value)
     return tuple(bases)
@@ -138,20 +133,14 @@ def _qt_overrides(tree: ast.Module) -> set[tuple[str, str]]:
     return overrides
 
 
-def _definition_violations(
-    tree: ast.Module, qt_overrides: set[tuple[str, str]]
-) -> list[NamingViolation]:
+def _definition_violations(tree: ast.Module, qt_overrides: set[tuple[str, str]]) -> list[NamingViolation]:
     violations: list[NamingViolation] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and CAP_WORDS.fullmatch(node.name) is None:
             violations.append(NamingViolation("class", node.name, node.lineno))
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             parent = next(
-                (
-                    owner.name
-                    for owner in ast.walk(tree)
-                    if isinstance(owner, ast.ClassDef) and node in owner.body
-                ),
+                (owner.name for owner in ast.walk(tree) if isinstance(owner, ast.ClassDef) and node in owner.body),
                 None,
             )
             if not _is_snake_case(node.name) and (parent, node.name) not in qt_overrides:
@@ -176,11 +165,7 @@ def _module_constants(tree: ast.Module) -> set[str]:
         if isinstance(owner, ast.ClassDef):
             for node in owner.body:
                 if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
-                    names.update(
-                        name
-                        for name in _assignment_names(node)
-                        if UPPER_SNAKE_CASE.fullmatch(name)
-                    )
+                    names.update(name for name in _assignment_names(node) if UPPER_SNAKE_CASE.fullmatch(name))
     return names
 
 
@@ -189,9 +174,7 @@ def _type_aliases(tree: ast.Module) -> set[str]:
     type_expressions = (ast.Name, ast.Attribute, ast.Subscript, ast.BinOp)
     for node in tree.body:
         if isinstance(node, ast.Assign) and isinstance(node.value, type_expressions):
-            aliases.update(
-                name for name in _assignment_names(node) if CAP_WORDS.fullmatch(name)
-            )
+            aliases.update(name for name in _assignment_names(node) if CAP_WORDS.fullmatch(name))
         elif isinstance(node, ast.TypeAlias) and isinstance(node.name, ast.Name):
             aliases.add(node.name.id)
     return aliases
@@ -206,20 +189,15 @@ def _variable_violations(tree: ast.Module) -> list[NamingViolation]:
     ]
 
 
-def _constant_violations(
-    constants: set[str], type_aliases: set[str]
-) -> list[NamingViolation]:
+def _constant_violations(constants: set[str], type_aliases: set[str]) -> list[NamingViolation]:
     return [
         NamingViolation("constant", name, 0)
         for name in sorted(constants - type_aliases)
-        if not (name.startswith("__") and name.endswith("__"))
-        and UPPER_SNAKE_CASE.fullmatch(name) is None
+        if not (name.startswith("__") and name.endswith("__")) and UPPER_SNAKE_CASE.fullmatch(name) is None
     ]
 
 
-def _stored_name_violations(
-    tree: ast.Module, exempt: set[str]
-) -> list[NamingViolation]:
+def _stored_name_violations(tree: ast.Module, exempt: set[str]) -> list[NamingViolation]:
     violations: list[NamingViolation] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.arg) and not _is_snake_case(node.arg):
@@ -230,9 +208,7 @@ def _stored_name_violations(
     return violations
 
 
-def _symbol_violations(
-    tree: ast.Module, qt_overrides: set[tuple[str, str]]
-) -> tuple[NamingViolation, ...]:
+def _symbol_violations(tree: ast.Module, qt_overrides: set[tuple[str, str]]) -> tuple[NamingViolation, ...]:
     violations = [
         *_definition_violations(tree, qt_overrides),
         *_variable_violations(tree),
@@ -282,9 +258,7 @@ def test_no_forwarding_or_compatibility_module_name_exists() -> None:
         ("src/xrr_fitter/__main__.py", True),
     ],
 )
-def test_module_path_fixture_enforces_private_parent_prefix_and_any_task_stage(
-    relative: str, expected: bool
-) -> None:
+def test_module_path_fixture_enforces_private_parent_prefix_and_any_task_stage(relative: str, expected: bool) -> None:
     assert _valid_module_path(Path(relative)) is expected
 
 
@@ -342,9 +316,5 @@ def test_naming_scans_exactly_the_same_python_files_as_radon() -> None:
 
 
 def test_root_conftest_is_the_only_conftest() -> None:
-    conftests = {
-        path.relative_to(ROOT).as_posix()
-        for path in _radon_python_files()
-        if path.name == "conftest.py"
-    }
+    conftests = {path.relative_to(ROOT).as_posix() for path in _radon_python_files() if path.name == "conftest.py"}
     assert conftests == {"tests/conftest.py"}

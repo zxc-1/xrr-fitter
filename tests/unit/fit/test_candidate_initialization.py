@@ -6,6 +6,7 @@ deterministic cap/dedup behavior so those policies cannot collapse together.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,7 @@ import pytest
 
 from xrr_fitter.fit.candidates import (
     CandidateStart,
+    _start_distance,
     build_candidate_pool,
     select_coarse_candidates,
     select_full_search_candidates,
@@ -55,10 +57,7 @@ def _prepared_data(
     return PreparedData(
         source_path=Path("synthetic.xy"),
         source_sha256="0" * 64,
-        raw_rows=tuple(
-            f"{angle} {value}"
-            for angle, value in zip(two_theta_deg, normalized, strict=True)
-        ),
+        raw_rows=tuple(f"{angle} {value}" for angle, value in zip(two_theta_deg, normalized, strict=True)),
         raw_parse_status=("data",) * size,
         source_row_groups=tuple((index,) for index in range(size)),
         beam=BEAM,
@@ -139,9 +138,7 @@ def test_footprint_candidates_respect_fit_and_locked_modes() -> None:
     disabled = InstrumentSpec(footprint_mode="none", footprint_spill_angle_deg=0.0)
 
     assert footprint_angle_candidates(data, FIT_INSTRUMENT, 0.22, None) == (0.0, 0.22)
-    assert footprint_angle_candidates(data, geometry, 0.22, 0.18) == (
-        geometry.footprint_spill_angle_deg,
-    )
+    assert footprint_angle_candidates(data, geometry, 0.22, 0.18) == (geometry.footprint_spill_angle_deg,)
     assert footprint_angle_candidates(data, disabled, 0.22, 0.18) == (0.0,)
     initial = estimate_initial_candidates(
         data,
@@ -156,13 +153,7 @@ def test_angle_offset_candidates_are_not_a_round_trip_of_import_qz() -> None:
     qz = np.linspace(0.002, 0.12, 2000)
     theta = np.rad2deg(np.arcsin(qz * BEAM.effective_wavelength_a / (4.0 * np.pi)))
     delta = material_sld(MOLYBDENUM, 1.0, BEAM.effective_wavelength_a).real
-    theoretical = np.rad2deg(
-        np.arcsin(
-            np.sqrt(16.0 * np.pi * delta)
-            * BEAM.effective_wavelength_a
-            / (4.0 * np.pi)
-        )
-    )
+    theoretical = np.rad2deg(np.arcsin(np.sqrt(16.0 * np.pi * delta) * BEAM.effective_wavelength_a / (4.0 * np.pi)))
     observed = theoretical - 0.018
     reflectivity = 1.0 / (1.0 + np.exp((theta - observed) / 0.0015))
     data = _prepared_data(qz, reflectivity, two_theta_deg=2.0 * theta)
@@ -200,16 +191,56 @@ def test_unreliable_single_method_peaks_fall_back_to_wide_observable_grid() -> N
     np.testing.assert_allclose(initial.thickness_a, expected)
 
 
+def test_extreme_q_range_keeps_fallback_thicknesses_inside_hard_bounds() -> None:
+    qz = np.linspace(1e-80, 2e-80, 256)
+    data = _prepared_data(
+        qz,
+        np.full(qz.size, 1e-8),
+        two_theta_deg=np.linspace(0.1, 1.0, qz.size),
+    )
+
+    with np.errstate(over="raise", invalid="raise", divide="raise"):
+        initial = estimate_initial_candidates(
+            data,
+            _single_layer_structure(),
+            FIT_INSTRUMENT,
+            np.random.default_rng(19),
+        )
+
+    assert np.all(np.isfinite(initial.thickness_a))
+    assert tuple(sorted(initial.thickness_a)) == initial.thickness_a
+    assert 2.0 <= initial.thickness_a[0] <= initial.thickness_a[-1] <= 2e5
+
+
+def test_subnormal_q_span_uses_bounded_fallback_without_inverse_overflow() -> None:
+    smallest = np.nextafter(0.0, 1.0)
+    qz = smallest * np.arange(2048.0, 2304.0)
+    assert np.all(np.diff(qz) > 0.0)
+    data = _prepared_data(
+        qz,
+        np.full(qz.size, 1e-8),
+        two_theta_deg=np.linspace(0.1, 1.0, qz.size),
+    )
+
+    with np.errstate(over="raise", invalid="raise", divide="raise"):
+        initial = estimate_initial_candidates(
+            data,
+            _single_layer_structure(),
+            FIT_INSTRUMENT,
+            np.random.default_rng(20),
+        )
+
+    assert np.all(np.isfinite(initial.thickness_a))
+    assert tuple(sorted(initial.thickness_a)) == initial.thickness_a
+    assert 2.0 <= initial.thickness_a[0] <= initial.thickness_a[-1] <= 2e5
+
+
 def test_candidate_pool_caps_are_deterministic() -> None:
     data = _oscillatory_data(70.0, 110.0)
     structure = _periodic_structure()
 
-    first = build_candidate_pool(
-        data, structure, FIT_INSTRUMENT, np.random.default_rng(91)
-    )
-    second = build_candidate_pool(
-        data, structure, FIT_INSTRUMENT, np.random.default_rng(91)
-    )
+    first = build_candidate_pool(data, structure, FIT_INSTRUMENT, np.random.default_rng(91))
+    second = build_candidate_pool(data, structure, FIT_INSTRUMENT, np.random.default_rng(91))
 
     assert len(first) == 512
     assert first == second
@@ -239,10 +270,7 @@ def test_candidate_pool_preserves_declared_periodic_geometry() -> None:
     declared = tuple(layer.thickness_a for layer in block.layers)
 
     assert any(
-        tuple(
-            dict(start.values)[f"component.0.layer.{index}.thickness_a"]
-            for index in range(len(declared))
-        )
+        tuple(dict(start.values)[f"component.0.layer.{index}.thickness_a"] for index in range(len(declared)))
         == declared
         for start in pool
     )
@@ -271,9 +299,7 @@ def test_candidate_pool_protects_complete_declared_multilayer_baseline() -> None
     )
     data = _oscillatory_data(73.0, 201.0)
 
-    pool = build_candidate_pool(
-        data, structure, FIT_INSTRUMENT, np.random.default_rng(174), limit=32
-    )
+    pool = build_candidate_pool(data, structure, FIT_INSTRUMENT, np.random.default_rng(174), limit=32)
 
     declared = dict(pool[0].values)
     assert pool[0].feature_key == "declared-baseline"
@@ -305,20 +331,11 @@ def test_multilayer_geometry_preserves_declared_ratio_and_varies_layers() -> Non
         FIT_INSTRUMENT,
         np.random.default_rng(17),
     )
-    triples = {
-        tuple(
-            dict(start.values)[f"component.{index}.thickness_a"]
-            for index in range(3)
-        )
-        for start in pool
-    }
+    triples = {tuple(dict(start.values)[f"component.{index}.thickness_a"] for index in range(3)) for start in pool}
     declared_ratio = np.array([40.0, 60.0, 73.0]) / 173.0
 
     assert any(len(set(values)) > 1 for values in triples)
-    assert any(
-        np.allclose(np.array(values) / sum(values), declared_ratio)
-        for values in triples
-    )
+    assert any(np.allclose(np.array(values) / sum(values), declared_ratio) for values in triples)
 
 
 def test_candidate_roughness_uses_adjacent_effective_thickness() -> None:
@@ -360,23 +377,14 @@ def test_two_periodic_blocks_receive_independent_period_hypotheses() -> None:
     )
     period_pairs = {
         (
-            sum(
-                dict(start.values)[f"component.0.layer.{index}.thickness_a"]
-                for index in range(2)
-            ),
-            sum(
-                dict(start.values)[f"component.1.layer.{index}.thickness_a"]
-                for index in range(2)
-            ),
+            sum(dict(start.values)[f"component.0.layer.{index}.thickness_a"] for index in range(2)),
+            sum(dict(start.values)[f"component.1.layer.{index}.thickness_a"] for index in range(2)),
         )
         for start in pool
     }
 
     assert any(first_period != second_period for first_period, second_period in period_pairs)
-    assert all(
-        not any(name.startswith("repeat.") for name, _value in start.values)
-        for start in pool
-    )
+    assert all(not any(name.startswith("repeat.") for name, _value in start.values) for start in pool)
 
 
 def test_curve_dedup_merges_far_parameter_degenerate_starts_globally() -> None:
@@ -405,20 +413,24 @@ def test_curve_dedup_merges_far_parameter_degenerate_starts_globally() -> None:
             assert np.sqrt(np.mean((curves[current] - curves[other]) ** 2)) >= 0.02
 
 
+def test_parameter_distance_normalizes_opposite_finite_extremes_without_overflow() -> None:
+    maximum = np.finfo(float).max
+    first = CandidateStart((("x", maximum),), "positive")
+    second = CandidateStart((("x", -maximum),), "negative")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        distance = _start_distance(first, second)
+
+    assert distance == pytest.approx(2.0)
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
 def test_full_search_selection_reserves_declared_baseline() -> None:
     baseline = CandidateStart((("x", 0.0),), "declared-baseline")
-    lower_cost = tuple(
-        CandidateStart((("x", float(index)),), f"feature-{index}")
-        for index in range(1, 10)
-    )
-    scored = tuple(
-        [(1.0, baseline)]
-        + [(0.01 * index, start) for index, start in enumerate(lower_cost, 1)]
-    )
-    curves = {
-        start: np.array([0.0, float(index), float(index**2)])
-        for index, (_cost, start) in enumerate(scored)
-    }
+    lower_cost = tuple(CandidateStart((("x", float(index)),), f"feature-{index}") for index in range(1, 10))
+    scored = tuple([(1.0, baseline)] + [(0.01 * index, start) for index, start in enumerate(lower_cost, 1)])
+    curves = {start: np.array([0.0, float(index), float(index**2)]) for index, (_cost, start) in enumerate(scored)}
 
     selected = select_full_search_candidates(scored, curves, limit=8)
 

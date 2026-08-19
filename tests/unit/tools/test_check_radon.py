@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -41,9 +41,7 @@ def _issue_kinds(report: dict[str, object]) -> set[str]:
     return {str(item["kind"]) for item in issues}
 
 
-def test_discovery_and_json_report_cover_every_managed_root(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_discovery_and_json_report_cover_every_managed_root(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("check_radon")
     root = _repo(tmp_path)
     paths, issues = module.discover_python_files(root)
@@ -72,9 +70,7 @@ def test_discovery_rejects_wrong_owner_and_ignored_python(
     assert kind in {issue.kind for issue in issues}
 
 
-def test_discovery_skips_ignored_directories_outside_managed_roots(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_discovery_skips_ignored_directories_outside_managed_roots(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("check_radon")
     root = _repo(tmp_path)
     _write(root, ".gitignore", ".venv/\n")
@@ -89,18 +85,14 @@ def test_discovery_skips_ignored_directories_outside_managed_roots(
     assert issues == ()
 
 
-def test_discovery_still_reports_stray_source_in_a_tracked_subdirectory(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_discovery_still_reports_stray_source_in_a_tracked_subdirectory(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("check_radon")
     root = _repo(tmp_path)
     _write(root, ".gitignore", ".venv/\n")
     _write(root, "scripts/nested/stray.py")
     paths, issues = module.discover_python_files(root)
     assert "scripts/nested/stray.py" in {path.as_posix() for path in paths}
-    assert [(issue.kind, issue.path) for issue in issues] == [
-        ("ownership", "scripts/nested/stray.py")
-    ]
+    assert [(issue.kind, issue.path) for issue in issues] == [("ownership", "scripts/nested/stray.py")]
 
 
 def test_average_a_with_highest_b_passes_and_reports_ranks(load_tool_module) -> None:
@@ -152,9 +144,7 @@ def test_version_mismatch_is_a_failed_report(load_tool_module) -> None:
     assert _issue_kinds(report) == {"radon-version"}
 
 
-def test_nested_closure_is_counted_and_class_method_is_not_duplicated(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_nested_closure_is_counted_and_class_method_is_not_duplicated(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("check_radon")
     root = _repo(tmp_path, populate=False)
     source = (
@@ -176,9 +166,7 @@ def test_nested_closure_is_counted_and_class_method_is_not_duplicated(
     assert set(names) == {"Sample", "method", "outer", "inner"}
 
 
-def test_assertion_complexity_uses_radon_default_behavior(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_assertion_complexity_uses_radon_default_behavior(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("check_radon")
     root = _repo(tmp_path, populate=False)
     assertions = "".join(f"    assert value != {index}\n" for index in range(10))
@@ -192,9 +180,7 @@ def test_assertion_complexity_uses_radon_default_behavior(
     ("content", "detail"),
     [(b"def broken(:\n", "syntax"), (b"\xff\xfe", "decode")],
 )
-def test_invalid_python_is_a_reported_failure(
-    tmp_path: Path, load_tool_module, content: bytes, detail: str
-) -> None:
+def test_invalid_python_is_a_reported_failure(tmp_path: Path, load_tool_module, content: bytes, detail: str) -> None:
     module = load_tool_module("check_radon")
     root = _repo(tmp_path, populate=False)
     path = root / "tools/broken.py"
@@ -206,9 +192,7 @@ def test_invalid_python_is_a_reported_failure(
     assert detail in str(report["issues"][0]["detail"]).lower()
 
 
-def test_missing_tracked_python_is_a_git_set_failure(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_missing_tracked_python_is_a_git_set_failure(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("check_radon")
     root = _repo(tmp_path, populate=False)
     path = _write(root, "tests/deleted.py")
@@ -219,9 +203,7 @@ def test_missing_tracked_python_is_a_git_set_failure(
     assert "git-set" in _issue_kinds(report)
 
 
-def test_discovery_empty_after_generated_directories_are_pruned(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_discovery_empty_after_generated_directories_are_pruned(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("check_radon")
     root = _repo(tmp_path, populate=False)
     _write(root, "build/generated.py")

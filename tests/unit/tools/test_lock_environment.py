@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[3]
 TOOL = ROOT / "tools" / "lock_environment.py"
@@ -22,10 +21,7 @@ RUNTIME = (
     "matplotlib>=3.9,<4",
     "PySide6>=6.8,<7",
 )
-REFNX = (
-    "refnx @ git+https://github.com/refnx/refnx.git@"
-    "3d3808f66a14a8200eba020f8dff53f4d1e059bc"
-)
+REFNX = "refnx @ git+https://github.com/refnx/refnx.git@3d3808f66a14a8200eba020f8dff53f4d1e059bc"
 TEST = (
     "pytest>=8.3,<9",
     "pytest-qt>=4.4,<5",
@@ -133,8 +129,7 @@ BAD_LOCKS = (
     pytest.param(
         _replace(
             REFNX,
-            "refnx @ git+https://github.com/refnx/refnx.git@"
-            "3D3808F66A14A8200EBA020F8DFF53F4D1E059BC",
+            "refnx @ git+https://github.com/refnx/refnx.git@3D3808F66A14A8200EBA020F8DFF53F4D1E059BC",
         ),
         id="uppercase-vcs-commit",
     ),
@@ -147,10 +142,7 @@ BAD_LOCKS = (
         id="vcs-marker",
     ),
     pytest.param(
-        _add(
-            "other @ git+https://github.com/example/other.git@"
-            "1111111111111111111111111111111111111111"
-        ),
+        _add("other @ git+https://github.com/example/other.git@1111111111111111111111111111111111111111"),
         id="undeclared-vcs",
     ),
     pytest.param(
@@ -160,16 +152,14 @@ BAD_LOCKS = (
     pytest.param(
         _replace(
             REFNX,
-            "refnx @ git+https://example.invalid/refnx.git@"
-            "3d3808f66a14a8200eba020f8dff53f4d1e059bc",
+            "refnx @ git+https://example.invalid/refnx.git@3d3808f66a14a8200eba020f8dff53f4d1e059bc",
         ),
         id="wrong-vcs-url",
     ),
     pytest.param(
         _replace(
             REFNX,
-            "refnx @ git+https://github.com/refnx/refnx.git@"
-            "1111111111111111111111111111111111111111",
+            "refnx @ git+https://github.com/refnx/refnx.git@1111111111111111111111111111111111111111",
         ),
         id="wrong-vcs-commit",
     ),
@@ -199,9 +189,7 @@ def test_lock_accepts_canonical_exact_closure_and_declared_refnx(load_tool_modul
 
 
 @pytest.mark.parametrize("bad", BAD_LOCKS)
-def test_lock_rejects_each_noncanonical_or_unbound_mutation(
-    load_tool_module, bad: str
-) -> None:
+def test_lock_rejects_each_noncanonical_or_unbound_mutation(load_tool_module, bad: str) -> None:
     module = load_tool_module("lock_environment")
 
     with pytest.raises(ValueError):
@@ -222,9 +210,7 @@ def test_lock_rejects_each_noncanonical_or_unbound_mutation(
         ("parse-error", "invalid lock requirement"),
     ),
 )
-def test_check_cli_returns_nonzero_for_path_decode_or_parse_error(
-    tmp_path: Path, kind: str, error_text: str
-) -> None:
+def test_check_cli_returns_nonzero_for_path_decode_or_parse_error(tmp_path: Path, kind: str, error_text: str) -> None:
     lock = tmp_path / "requirements.lock"
     if kind == "directory":
         lock.mkdir()

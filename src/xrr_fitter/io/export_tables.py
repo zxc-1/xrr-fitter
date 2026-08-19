@@ -35,10 +35,10 @@ and parse status retain the full source-row cardinality independently.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO, StringIO
-import json
 from math import isfinite
 from pathlib import PurePosixPath
 from typing import Any
@@ -53,7 +53,6 @@ from xrr_fitter.model.data import PreparedData
 from xrr_fitter.model.fitting import FitCandidate
 from xrr_fitter.model.instrument import PhysicsDiagnostic
 from xrr_fitter.model.project import DatasetProject, XrrProject
-
 
 WORKBOOK_CREATED = datetime(2000, 1, 1)
 WORKBOOK_OPTIONS = {
@@ -182,11 +181,7 @@ class DatasetExportData:
 
 def _project_dataset_document(context: DatasetExportData) -> dict[str, Any]:
     document = project_to_dict(context.project)
-    index = next(
-        index
-        for index, dataset in enumerate(context.project.datasets)
-        if dataset is context.dataset
-    )
+    index = next(index for index, dataset in enumerate(context.project.datasets) if dataset is context.dataset)
     return document["datasets"][index]
 
 
@@ -242,9 +237,7 @@ def _raw_data_payload(
         "resolution_raw": _array_values(data.resolution_raw),
         "qz_a_inv": _array_values(data.qz_a_inv),
         "intensity_normalized": _array_values(data.intensity_normalized),
-        "intensity_sigma_normalized": _array_values(
-            data.intensity_sigma_normalized
-        ),
+        "intensity_sigma_normalized": _array_values(data.intensity_sigma_normalized),
         "sigma_q_a_inv": _array_values(data.sigma_q_a_inv),
         "validation_mask": [bool(value) for value in data.validation_mask],
         "fit_mask": list(context.dataset.fit_mask),
@@ -275,9 +268,7 @@ def _run_info_payload(
     project_document = project_to_dict(context.project)
     config = context.project.fit_config
     fitted_instrument = {
-        value.name: value.value
-        for value in context.selected.parameters
-        if value.name.startswith("instrument.")
+        value.name: value.value for value in context.selected.parameters if value.name.startswith("instrument.")
     }
     mcmc = result.uncertainty.mcmc if result.uncertainty is not None else None
     return {
@@ -326,9 +317,7 @@ def _convergence_payload(result: FitResult) -> dict[str, object]:
     candidates = tuple(
         candidate
         for candidate in result.candidates
-        if candidate.valid
-        and isfinite(candidate.objective)
-        and candidate.stop_reason != "early_eliminated"
+        if candidate.valid and isfinite(candidate.objective) and candidate.stop_reason != "early_eliminated"
     )
     return {
         "candidate_ids": [candidate.candidate_id for candidate in candidates],
@@ -468,9 +457,7 @@ def _candidate_frame(context: DatasetExportData) -> pd.DataFrame:
             "archived": value.stop_reason == "early_eliminated",
             "stop_reason": value.stop_reason,
             "nfev": value.nfev,
-            "parameters_json": json_text(
-                {item.name: item.value for item in value.parameters}
-            ),
+            "parameters_json": json_text({item.name: item.value for item in value.parameters}),
             "diagnostics_json": json_text(_diagnostics(value.diagnostics)),
         }
         for value in context.result.candidates
@@ -601,9 +588,7 @@ def _run_info_frame(context: DatasetExportData) -> pd.DataFrame:
         "optimizer_child_seeds": json_text(info["optimizer_child_seeds"]),
         "mcmc_child_seed": info["mcmc_child_seed"],
         "selected_candidate_id": info["selected_candidate_id"],
-        "fitted_instrument_parameters": json_text(
-            info["fitted_instrument_parameters"]
-        ),
+        "fitted_instrument_parameters": json_text(info["fitted_instrument_parameters"]),
         "confidence": info["confidence"],
         "candidate_count": len(context.result.candidates),
         "warnings": json_text(info["warnings"]),
@@ -710,8 +695,7 @@ def _curves_frame(contexts: tuple[DatasetExportData, ...]) -> pd.DataFrame:
     frames = [
         pd.DataFrame(
             {
-                "dataset_id": [context.dataset.dataset_id]
-                * context.data.two_theta_deg.size,
+                "dataset_id": [context.dataset.dataset_id] * context.data.two_theta_deg.size,
                 "two_theta_deg": context.data.two_theta_deg,
                 "qz_a_inv": context.selected.qz_a_inv,
                 "intensity_raw": context.data.intensity_raw,
@@ -774,9 +758,7 @@ def batch_workbook_bytes(contexts: object) -> bytes:
         for parameter in context.selected.parameters
     ]
     parameters = pd.DataFrame(rows, columns=columns)
-    return _workbook_bytes(
-        (("Summary", _summary_frame(values)), ("Parameters", parameters))
-    )
+    return _workbook_bytes((("Summary", _summary_frame(values)), ("Parameters", parameters)))
 
 
 def _diagnostic_qz_range(
@@ -797,10 +779,7 @@ def _diagnostic_line(
 ) -> str:
     indices = _compact_json(diagnostic.point_indices)
     qz_range = _diagnostic_qz_range(context, diagnostic.point_indices)
-    return (
-        f"{diagnostic.code}: {diagnostic.message}; "
-        f"full_data_indices={indices}; qz_a_inv_range={qz_range}"
-    )
+    return f"{diagnostic.code}: {diagnostic.message}; full_data_indices={indices}; qz_a_inv_range={qz_range}"
 
 
 def _persisted_diagnostics(
@@ -816,9 +795,7 @@ def _rejected_surface_oxide(
     context: DatasetExportData,
     diagnostics: tuple[PhysicsDiagnostic, ...],
 ) -> bool:
-    residual = any(
-        value.code == "surface_thin_layer_residual" for value in diagnostics
-    )
+    residual = any(value.code == "surface_thin_layer_residual" for value in diagnostics)
     return context.matching_surface_oxide_rejection and residual
 
 

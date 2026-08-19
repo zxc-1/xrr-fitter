@@ -95,6 +95,7 @@ from xrr_fitter.services.fitting import (
     sld_uncertainty_bands,
 )
 from xrr_fitter.services.parameters import (
+    _reconcile_parameter_relationships,
     accept_source_update,
     describe_parameters,
     set_constraint_rules,
@@ -140,9 +141,11 @@ from xrr_fitter.services.workers import (
 @wraps(_set_fit_mask)
 def set_fit_mask(project, dataset_id, mask):
     """Persist a fit mask and reconcile all declaration-bound sidecars."""
-    return _reconcile_parameter_sidecars(
-        _set_fit_mask(project, dataset_id, mask),
-        dataset_id,
+    return _reconcile_parameter_relationships(
+        _reconcile_parameter_sidecars(
+            _set_fit_mask(project, dataset_id, mask),
+            dataset_id,
+        )
     )
 
 
@@ -152,9 +155,11 @@ def set_instrument(
     instrument: InstrumentSpec,
 ) -> XrrProject:
     """Persist an instrument and reconcile all declaration-bound sidecars."""
-    return _reconcile_parameter_sidecars(
-        _set_instrument(project, dataset_id, instrument),
-        dataset_id,
+    return _reconcile_parameter_relationships(
+        _reconcile_parameter_sidecars(
+            _set_instrument(project, dataset_id, instrument),
+            dataset_id,
+        )
     )
 
 

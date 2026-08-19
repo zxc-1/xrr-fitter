@@ -5,8 +5,8 @@ from importlib import import_module
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data, simple_structure
+
 from xrr_fitter.evaluation import (
     EvaluationConstraintError,
     encode_physical_vector,
@@ -70,9 +70,28 @@ def _periodic_problem():
         )
         for definition in initial.parameter_definitions
     )
-    return compile_fit_problem(
-        initial.data, structure, initial.instrument, initial.config, settings
+    return compile_fit_problem(initial.data, structure, initial.instrument, initial.config, settings)
+
+
+def _extreme_periodic_problem(first_bound: float, second_bound: float):
+    """Return a valid compiled problem with near-maximum thickness bounds."""
+    problem = _periodic_problem()
+    names = {
+        "component.0.layer.0.thickness_a",
+        "component.0.layer.1.thickness_a",
+    }
+    definitions = tuple(
+        replace(
+            definition,
+            initial=(first_bound if definition.name.endswith("layer.0.thickness_a") else second_bound),
+            lower=(first_bound if definition.name.endswith("layer.0.thickness_a") else second_bound),
+            upper=(first_bound if definition.name.endswith("layer.0.thickness_a") else second_bound),
+        )
+        if definition.name in names
+        else definition
+        for definition in problem.parameter_definitions
     )
+    return replace(problem, parameter_definitions=definitions)
 
 
 def test_profile_selection_adds_binary_period_and_fraction_profiles() -> None:
@@ -102,9 +121,7 @@ def test_binary_derived_profile_holds_the_reported_quantity_while_nuisance_moves
         problem,
         center,
         name,
-        observer=lambda derived, first, second: observed.append(
-            (derived, first, second)
-        ),
+        observer=lambda derived, first, second: observed.append((derived, first, second)),
     )
 
     assert profile.name == name
@@ -121,13 +138,19 @@ def test_binary_coordinate_decode_preserves_period_and_fraction_constraints() ->
     center = values_by_name(problem, encode_physical_vector(problem, {}))
 
     period = decode_binary_coordinate(problem, "component.0.period_a", 70.0, 0.4)
-    fraction = decode_binary_coordinate(
-        problem, "component.0.layer.0.fraction", 0.4, 70.0
-    )
+    fraction = decode_binary_coordinate(problem, "component.0.layer.0.fraction", 0.4, 70.0)
 
     assert sum(period) == pytest.approx(70.0)
     assert fraction[0] / sum(fraction) == pytest.approx(0.4)
     assert center["component.0.layer.0.thickness_a"] == pytest.approx(28.0)
+
+
+def test_binary_profile_rejects_unrepresentable_derived_period_bounds() -> None:
+    maximum = np.finfo(float).max
+    problem = _extreme_periodic_problem(0.75 * maximum, 0.75 * maximum)
+
+    with pytest.raises(ValueError, match="derived periodic period bounds are not representable"):
+        decode_binary_coordinate(problem, "component.0.period_a", maximum, 0.5)
 
 
 def test_binary_profile_treats_physical_constraint_failures_as_unsupported_probes(
@@ -137,9 +160,7 @@ def test_binary_profile_treats_physical_constraint_failures_as_unsupported_probe
     problem = _periodic_problem()
     center = encode_physical_vector(problem, {})
     first_index = next(
-        index
-        for index, variable in enumerate(problem.variables)
-        if variable.name == "component.0.layer.0.thickness_a"
+        index for index, variable in enumerate(problem.variables) if variable.name == "component.0.layer.0.thickness_a"
     )
     original = module.evaluate_model
 

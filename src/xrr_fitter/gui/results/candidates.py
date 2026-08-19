@@ -69,22 +69,14 @@ def candidate_line(candidate: object, *, selected: bool, recommended: bool) -> s
 def active_dataset(project: object) -> object | None:
     dataset_id = project.ui_state.active_dataset_id
     return next(
-        (
-            dataset
-            for dataset in project.datasets
-            if dataset.dataset_id == dataset_id
-        ),
+        (dataset for dataset in project.datasets if dataset.dataset_id == dataset_id),
         None,
     )
 
 
 def persisted_candidate_id(project: object, dataset_id: str) -> str | None:
     return next(
-        (
-            candidate_id
-            for owner, candidate_id in project.ui_state.selected_candidate_ids
-            if owner == dataset_id
-        ),
+        (candidate_id for owner, candidate_id in project.ui_state.selected_candidate_ids if owner == dataset_id),
         None,
     )
 
@@ -158,11 +150,7 @@ class CandidateList(QListWidget):
         if candidate_id is None or self._result is None:
             return None
         return next(
-            (
-                candidate
-                for candidate in self._result.candidates
-                if candidate.candidate_id == candidate_id
-            ),
+            (candidate for candidate in self._result.candidates if candidate.candidate_id == candidate_id),
             None,
         )
 
@@ -228,6 +216,4 @@ class CandidateList(QListWidget):
         _previous: QListWidgetItem | None,
     ) -> None:
         if current is not None:
-            self.candidate_requested.emit(
-                str(current.data(Qt.ItemDataRole.UserRole))
-            )
+            self.candidate_requested.emit(str(current.data(Qt.ItemDataRole.UserRole)))

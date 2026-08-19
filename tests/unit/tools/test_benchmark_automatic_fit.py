@@ -225,10 +225,7 @@ def test_adaptive_registry_builds_the_real_recovery_contract(
 ) -> None:
     module = load_tool_module("benchmark_automatic_fit")
     registered = module._adaptive_cases()
-    fixtures = tuple(
-        builder(tmp_path / case_id)
-        for case_id, builder in registered
-    )
+    fixtures = tuple(builder(tmp_path / case_id) for case_id, builder in registered)
 
     assert tuple(case_id for case_id, _builder in registered) == (
         "direct-sld",
@@ -236,19 +233,13 @@ def test_adaptive_registry_builds_the_real_recovery_contract(
         "isolated-outlier",
         "roughness-release",
     )
-    assert tuple(
-        tuple(target.dataset_id for target in fixture.targets)
-        for fixture in fixtures
-    ) == (
+    assert tuple(tuple(target.dataset_id for target in fixture.targets) for fixture in fixtures) == (
         ("D1",),
         ("P1", "P2", "P3", "P4"),
         ("P1", "P2", "P3", "P4"),
         ("R1", "R2", "R3", "R4"),
     )
-    assert tuple(
-        tuple(target.parameters for target in fixture.targets)
-        for fixture in fixtures
-    ) == (
+    assert tuple(tuple(target.parameters for target in fixture.targets) for fixture in fixtures) == (
         ((("component.0.thickness_a", 130.0), ("component.0.sld_real_a2", 24e-6)),),
         tuple(
             (
@@ -258,15 +249,9 @@ def test_adaptive_registry_builds_the_real_recovery_contract(
             for thickness in (90.0, 100.0, 110.0, 120.0)
         ),
         ((("component.0.thickness_a", 100.0),),) * 4,
-        tuple(
-            (("component.0.roughness_a", roughness),)
-            for roughness in (2.0, 3.0, 8.0, 9.0)
-        ),
+        tuple((("component.0.roughness_a", roughness),) for roughness in (2.0, 3.0, 8.0, 9.0)),
     )
-    assert all(
-        fixture.project.fit_config.master_seed == module.MASTER_SEED
-        for fixture in fixtures
-    )
+    assert all(fixture.project.fit_config.master_seed == module.MASTER_SEED for fixture in fixtures)
 
 
 @pytest.mark.parametrize(
@@ -296,15 +281,8 @@ def test_adaptive_recovery_error_tracks_case_defining_parameters(
     expected,
 ) -> None:
     module = load_tool_module("benchmark_automatic_fit")
-    candidate = SimpleNamespace(
-        parameters=tuple(
-            SimpleNamespace(name=name, value=value)
-            for name, value in fitted
-        )
-    )
-    dataset = SimpleNamespace(
-        last_valid_result=SimpleNamespace(best_candidate=candidate)
-    )
+    candidate = SimpleNamespace(parameters=tuple(SimpleNamespace(name=name, value=value) for name, value in fitted))
+    dataset = SimpleNamespace(last_valid_result=SimpleNamespace(best_candidate=candidate))
     target = SimpleNamespace(parameters=truths)
 
     assert module._recovery_error(dataset, target) == pytest.approx(expected)
@@ -559,9 +537,7 @@ def test_benchmark_times_only_public_fit_and_uses_intermediate_work_ledger(
         "_recovery_support",
         lambda: SimpleNamespace(AutomaticWorkLedger=lambda: ledger),
     )
-    candidate = SimpleNamespace(
-        parameters=(SimpleNamespace(name="component.0.thickness_a", value=130.0),)
-    )
+    candidate = SimpleNamespace(parameters=(SimpleNamespace(name="component.0.thickness_a", value=130.0),))
     dataset = SimpleNamespace(
         dataset_id="D1",
         automation=SimpleNamespace(status=SimpleNamespace(value="passed")),

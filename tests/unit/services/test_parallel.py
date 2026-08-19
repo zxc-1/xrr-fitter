@@ -17,9 +17,7 @@ def test_single_worker_runs_serially_without_constructing_executor(monkeypatch) 
     calls: list[int] = []
 
     with parallel.OrderedTaskRunner(1) as runner:
-        result = runner.run(
-            tuple(lambda index=index: calls.append(index) or index for index in range(3))
-        )
+        result = runner.run(tuple(lambda index=index: calls.append(index) or index for index in range(3)))
 
     assert result == (0, 1, 2)
     assert calls == [0, 1, 2]

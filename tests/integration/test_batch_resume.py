@@ -5,7 +5,6 @@ from pathlib import Path
 
 import xrr_fitter.api as api
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 

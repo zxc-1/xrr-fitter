@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 CASE_IDS = (
     "known_single_layer",
     "unstable_multilayer",

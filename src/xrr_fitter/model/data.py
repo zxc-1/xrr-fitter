@@ -13,7 +13,6 @@ from typing import Any
 
 import numpy as np
 
-
 RESOLUTION_KINDS = frozenset(
     {
         "sigma_q_a_inv",
@@ -59,10 +58,7 @@ def _column_indices(mapping: DataColumnMapping) -> tuple[int, ...]:
 
 
 def _validate_column_indices(indices: tuple[int, ...]) -> None:
-    valid = all(
-        isinstance(value, int) and not isinstance(value, bool) and value >= 0
-        for value in indices
-    )
+    valid = all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in indices)
     if not valid or len(indices) != len(set(indices)):
         raise ValueError("column indices must be distinct nonnegative integers")
 
@@ -89,9 +85,9 @@ class BeamSpec:
             raise ValueError(f"beam kind must be monochromatic or mixed_kalpha: {self.kind}")
         _validate_wavelengths(
             (
-            ("wavelength_a", self.wavelength_a),
-            ("wavelength_1_a", self.wavelength_1_a),
-            ("wavelength_2_a", self.wavelength_2_a),
+                ("wavelength_a", self.wavelength_a),
+                ("wavelength_1_a", self.wavelength_1_a),
+                ("wavelength_2_a", self.wavelength_2_a),
             )
         )
         if not isfinite(self.intensity_ratio_21) or self.intensity_ratio_21 < 0.0:
@@ -259,11 +255,17 @@ def qz_from_two_theta(
     two_theta = np.asarray(two_theta_deg, dtype=float)
     if two_theta.ndim != 1:
         raise ValueError("two_theta_deg must be one-dimensional")
-    theta_deg = two_theta / 2.0 + angle_offset_deg
+    with np.errstate(over="ignore", invalid="ignore"):
+        theta_deg = two_theta / 2.0 + angle_offset_deg
     finite = np.isfinite(theta_deg)
-    positive = finite & (theta_deg > 0.0)
+    positive = finite & (theta_deg > 0.0) & (theta_deg <= 90.0)
     qz = np.full(theta_deg.shape, np.nan, dtype=float)
-    qz[finite] = 4.0 * pi * np.sin(np.deg2rad(theta_deg[finite])) / wavelength_a
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        converted = 4.0 * pi * np.sin(np.deg2rad(theta_deg[finite])) / wavelength_a
+    converted_finite = np.isfinite(converted)
+    finite_indices = np.flatnonzero(finite)
+    qz[finite_indices[converted_finite]] = converted[converted_finite]
+    positive[finite_indices[~converted_finite]] = False
     return _readonly(qz, float), _readonly(positive, bool)
 
 
@@ -280,7 +282,7 @@ def fit_ready(
     if np.count_nonzero(mask) < 30 or np.unique(angles[mask]).size < 30:
         return False
     selected_qz = qz[mask]
-    return bool(selected_qz.size >= 2 and np.isfinite(selected_qz).all() and np.ptp(selected_qz) > 0.0)
+    return bool(selected_qz.size >= 2 and np.isfinite(selected_qz).all() and np.all(np.diff(selected_qz) > 0.0))
 
 
 def log_domain_mask(intensity_normalized: np.ndarray, r_floor: float) -> np.ndarray:
@@ -289,7 +291,7 @@ def log_domain_mask(intensity_normalized: np.ndarray, r_floor: float) -> np.ndar
     intensity = np.asarray(intensity_normalized, dtype=float)
     if intensity.ndim != 1:
         raise ValueError("intensity_normalized must be one-dimensional")
-    return _readonly(np.isfinite(intensity) & (intensity + r_floor > 0.0), bool)
+    return _readonly(np.isfinite(intensity) & (intensity > -r_floor), bool)
 
 
 def with_fit_mask(data: PreparedData, mask: np.ndarray) -> PreparedData:

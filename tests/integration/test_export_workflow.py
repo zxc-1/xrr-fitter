@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import xrr_fitter.api as api
-
 
 ROOT = Path(__file__).resolve().parents[2]
 DATASET_EXPORT_NAMES = {
@@ -60,15 +59,11 @@ def _export_tree(manifest: api.ExportManifest) -> dict[str, object]:
     datasets = {}
     for dataset in manifest.datasets:
         document_path = next(
-            manifest.run_directory / record.path
-            for record in dataset.files
-            if record.path.endswith("fit_result.json")
+            manifest.run_directory / record.path for record in dataset.files if record.path.endswith("fit_result.json")
         )
         datasets[dataset.dataset_id] = {
             "files": {Path(record.path).name for record in dataset.files},
-            "document_dataset_id": json.loads(
-                document_path.read_text(encoding="utf-8")
-            )["dataset_id"],
+            "document_dataset_id": json.loads(document_path.read_text(encoding="utf-8"))["dataset_id"],
         }
     return {
         "parent": manifest.run_directory.parent,

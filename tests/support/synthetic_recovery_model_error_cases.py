@@ -24,6 +24,8 @@ def _structure_sld(material: MaterialSpec, wavelength_a: float = 1.5406) -> comp
         wavelength_a,
     )
     return complex(stack.sld_a2[1])
+
+
 def _model_error_cases() -> tuple[SyntheticCase, ...]:
     cases: list[SyntheticCase] = []
     model_classes = (

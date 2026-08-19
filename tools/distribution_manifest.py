@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
 import tempfile
-
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 
 SCHEMA = "xrr-r23-artifact-manifest-v1"
 STATUS = "PASS"
@@ -45,22 +44,14 @@ def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 
 def git_oid(value: object, label: str) -> str:
-    valid = (
-        isinstance(value, str)
-        and len(value) == 40
-        and all(character in "0123456789abcdef" for character in value)
-    )
+    valid = isinstance(value, str) and len(value) == 40 and all(character in "0123456789abcdef" for character in value)
     if not valid:
         raise ValueError(f"invalid {label}")
     return value
 
 
 def _sha256(value: object, label: str) -> str:
-    valid = (
-        isinstance(value, str)
-        and len(value) == 64
-        and all(character in "0123456789abcdef" for character in value)
-    )
+    valid = isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
     if not valid:
         raise ValueError(f"invalid {label} SHA-256")
     return value
@@ -195,9 +186,7 @@ def _artifact_entries(directory: Path) -> tuple[Path, Path]:
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("artifact directory must be a regular directory")
     entries = tuple(directory.iterdir())
-    valid = len(entries) == 2 and all(
-        not path.is_symlink() and path.is_file() for path in entries
-    )
+    valid = len(entries) == 2 and all(not path.is_symlink() and path.is_file() for path in entries)
     if not valid:
         raise ValueError("artifact directory must contain exactly two regular files")
     return entries
@@ -235,9 +224,7 @@ def calculate_artifact_manifest(
     commit = git_oid(head_commit, "head commit")
     tree = git_oid(head_tree, "head tree")
     selected = select_artifacts(Path(artifact_dir))
-    records = tuple(
-        _calculated_record(kind, selected[kind]) for kind in ARTIFACT_KINDS
-    )
+    records = tuple(_calculated_record(kind, selected[kind]) for kind in ARTIFACT_KINDS)
     return ArtifactManifest(SCHEMA, STATUS, commit, tree, records)
 
 

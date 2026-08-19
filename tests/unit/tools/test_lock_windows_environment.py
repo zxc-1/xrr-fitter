@@ -56,9 +56,7 @@ def test_target_arguments_pin_the_windows_wheel_platform(load_tool_module) -> No
     )
 
 
-def test_reads_build_runtime_and_windows_packaging_requirements(
-    load_tool_module, tmp_path: Path
-) -> None:
+def test_reads_build_runtime_and_windows_packaging_requirements(load_tool_module, tmp_path: Path) -> None:
     module = load_tool_module("lock_windows_environment")
     build, runtime, packaging = module.read_windows_dependencies(_write(tmp_path, PYPROJECT))
     assert build == ("setuptools==75.8.2", "wheel==0.45.1")
@@ -66,9 +64,7 @@ def test_reads_build_runtime_and_windows_packaging_requirements(
     assert packaging == ("pyinstaller==6.21.0",)
 
 
-def test_rejects_pyproject_without_windows_packaging_table(
-    load_tool_module, tmp_path: Path
-) -> None:
+def test_rejects_pyproject_without_windows_packaging_table(load_tool_module, tmp_path: Path) -> None:
     module = load_tool_module("lock_windows_environment")
     body = PYPROJECT.replace('[tool.xrr.windows-packaging]\nrequires = ["pyinstaller==6.21.0"]\n', "")
     with pytest.raises(ValueError, match="invalid Windows packaging metadata"):
@@ -149,8 +145,6 @@ def test_committed_locks_agree_on_shared_distributions() -> None:
     windows = pins(LOCK)
     macos = pins("requirements-macos-arm64-py312.lock")
     divergent = {
-        name: (macos[name], windows[name])
-        for name in set(macos) & set(windows)
-        if macos[name] != windows[name]
+        name: (macos[name], windows[name]) for name in set(macos) & set(windows) if macos[name] != windows[name]
     }
     assert divergent == {}

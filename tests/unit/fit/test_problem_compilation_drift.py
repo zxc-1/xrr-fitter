@@ -11,7 +11,7 @@ from xrr_fitter.evaluation import encode_physical_vector, values_and_jacobians, 
 from xrr_fitter.fit.problem import compile_fit_problem, compile_stage_problem
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ConstraintNode, ConstraintRule, ParameterReference
+from xrr_fitter.model.parameters import ConstraintNode, ConstraintRule, ParameterReference, ParameterSetting
 from xrr_fitter.model.structure import DriftSpec, LayerSpec, PeriodicBlock, StructureSpec
 
 
@@ -188,6 +188,39 @@ def test_stage_recompile_does_not_accumulate_drift_rules() -> None:
 
     assert len(restaged.constraint_rules) == len(problem.constraint_rules)
     assert all(".repeat." in rule.target.parameter_name for rule in restaged.constraint_rules)
+
+
+def test_drift_targets_follow_effective_base_bounds_after_parameter_setting() -> None:
+    structure = _drift_periodic_structure()
+    config = _config(37)
+    initial = _problem(
+        structure=structure,
+        instrument=InstrumentSpec(footprint_mode="none"),
+        seed=37,
+    )
+    base = next(
+        definition
+        for definition in initial.parameter_definitions
+        if definition.name == "component.0.layer.0.thickness_a"
+    )
+    setting = ParameterSetting(
+        base.name,
+        5.0,
+        4.5,
+        100.0,
+    )
+    problem = compile_fit_problem(
+        initial.data,
+        structure,
+        initial.instrument,
+        config,
+        (setting,),
+    )
+
+    values = values_by_name(problem, encode_physical_vector(problem, {}))
+
+    assert values["component.0.layer.0.thickness_a"] == pytest.approx(5.0)
+    assert values["component.0.repeat.1.layer.0.thickness_a"] == pytest.approx(5.5)
 
 
 def test_drift_rule_values_compose_base_scale_coeff() -> None:

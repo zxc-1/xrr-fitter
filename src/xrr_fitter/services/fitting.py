@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from types import SimpleNamespace
 
 from xrr_fitter.analysis import sld_bands as _bands
 from xrr_fitter.analysis.automatic import assess_automatic_quality
@@ -33,7 +34,12 @@ from xrr_fitter.fit.joint_candidates import (
 from xrr_fitter.fit.joint_evaluation import evaluate_joint_vector
 from xrr_fitter.fit.joint_pipeline import JointFitRequest, run_joint_fit
 from xrr_fitter.fit.joint_problem import compile_joint_problem
-from xrr_fitter.fit.joint_sharing import initial_joint_vector
+from xrr_fitter.fit.joint_sharing import (
+    initial_joint_vector,
+)
+from xrr_fitter.fit.joint_sharing import (
+    validate_sharing_rules as validate_compiled_sharing_rules,
+)
 from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.fit.objective import evaluate_declared_initial, evaluate_vector
 from xrr_fitter.fit.parameters import (
@@ -49,6 +55,7 @@ from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.analysis import FitResult, McmcConfig, StructureEvidence
 from xrr_fitter.model.fitting import FitCheckpoint
 from xrr_fitter.model.operations import FitReadiness, ProjectFitResult
+from xrr_fitter.model.parameters import ParameterCoordinate
 from xrr_fitter.model.project import XrrProject
 from xrr_fitter.model.provenance import fit_search_provenance_sha256
 from xrr_fitter.services.datasets import (
@@ -185,6 +192,45 @@ def _reconcile_parameter_sidecars(project: XrrProject, dataset_id: str) -> XrrPr
     datasets = list(project.datasets)
     datasets[index] = reconciled
     return replace(project, datasets=tuple(datasets))
+
+
+def _sharing_problem_view(project: XrrProject, dataset: object) -> object:
+    if dataset.structure is None:
+        definitions = ()
+    else:
+        definitions = compiled_parameter_definitions(
+            _prepared_current(project, dataset),
+            dataset.structure,
+            dataset.instrument,
+            project.fit_config,
+            dataset.parameter_settings,
+        )
+    variables = tuple(
+        ParameterCoordinate(index, definition.name, definition.transform)
+        for index, definition in enumerate(definitions)
+        if not (definition.locked or definition.constrained)
+    )
+    return SimpleNamespace(
+        parameter_definitions=definitions,
+        variables=variables,
+        instrument=dataset.instrument,
+    )
+
+
+def reconciled_sharing_rules(project: XrrProject) -> tuple:
+    """Retain only sharing rules valid for the current effective declarations."""
+    if not project.sharing_rules:
+        return ()
+    dataset_ids = tuple(dataset.dataset_id for dataset in project.datasets)
+    problems = tuple(_sharing_problem_view(project, dataset) for dataset in project.datasets)
+    retained = []
+    for rule in project.sharing_rules:
+        try:
+            validate_compiled_sharing_rules(dataset_ids, problems, (rule,))
+        except ValueError:
+            continue
+        retained.append(rule)
+    return tuple(retained)
 
 
 def structure_evidence_for(data, structure) -> StructureEvidence:

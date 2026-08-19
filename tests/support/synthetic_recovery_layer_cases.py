@@ -70,6 +70,8 @@ def _single_layer_cases() -> tuple[SyntheticCase, ...]:
             )
         )
     return tuple(cases)
+
+
 def _double_layer_cases() -> tuple[SyntheticCase, ...]:
     cases: list[SyntheticCase] = []
     for index in range(20):
@@ -101,7 +103,9 @@ def _double_layer_cases() -> tuple[SyntheticCase, ...]:
         )
         metrics = (
             *_single_layer_metrics(thickness=top_t, density=top_density, roughness=top_rough, prefix="component.0"),
-            *_single_layer_metrics(thickness=bottom_t, density=bottom_density, roughness=bottom_rough, prefix="component.1"),
+            *_single_layer_metrics(
+                thickness=bottom_t, density=bottom_density, roughness=bottom_rough, prefix="component.1"
+            ),
         )
         cases.append(
             SyntheticCase(
@@ -125,6 +129,7 @@ def _double_layer_cases() -> tuple[SyntheticCase, ...]:
             )
         )
     return tuple(cases)
+
 
 def _periodic_cases() -> tuple[SyntheticCase, ...]:
     cases: list[SyntheticCase] = []
@@ -237,7 +242,9 @@ def _oxide_cap_cases() -> tuple[SyntheticCase, ...]:
             backing_roughness_a=2.0,
         )
         metrics = (
-            *_single_layer_metrics(thickness=oxide_t, density=oxide_density, roughness=oxide_rough, prefix="component.0"),
+            *_single_layer_metrics(
+                thickness=oxide_t, density=oxide_density, roughness=oxide_rough, prefix="component.0"
+            ),
             *_single_layer_metrics(thickness=film_t, density=film_density, roughness=film_rough, prefix="component.1"),
         )
         cases.append(

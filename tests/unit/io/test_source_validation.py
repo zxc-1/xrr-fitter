@@ -5,8 +5,8 @@ from hashlib import sha256
 from pathlib import Path
 
 import pytest
-
 from tests.support.model_cases import dataset_project, project
+
 from xrr_fitter.io.source import (
     dataset_by_id,
     dataset_index,

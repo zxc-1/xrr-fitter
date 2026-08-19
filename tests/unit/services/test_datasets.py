@@ -25,6 +25,7 @@ from xrr_fitter.model.parameters import (
     ParameterReference,
     ParameterSetting,
     PriorSpec,
+    SharingRule,
 )
 from xrr_fitter.model.project import ProjectUiState, ScalePriorState
 from xrr_fitter.services.datasets import (
@@ -711,3 +712,100 @@ def test_instrument_change_reconciles_parameter_sidecars(tmp_path: Path) -> None
 
     assert updated.datasets[0].parameter_settings == (scale_setting,)
     assert updated.datasets[0].parameter_priors == (scale_prior,)
+
+
+def test_instrument_domain_change_drops_sharing_rule_for_locked_coordinate(
+    tmp_path: Path,
+) -> None:
+    project = new_project()
+    instrument = InstrumentSpec(instrument_id="shared-resolution", resolution_domain="q")
+    for dataset_id in ("first", "second"):
+        project = add_dataset(
+            project,
+            _write_curve(tmp_path / f"{dataset_id}.xy"),
+            instrument,
+        )
+        project = set_structure(project, dataset_id, simple_structure())
+    name = "instrument.relative_sigma"
+    rule = SharingRule(
+        "shared-resolution",
+        (
+            ParameterReference("first", name),
+            ParameterReference("second", name),
+        ),
+    )
+    project = api.set_sharing_rules(project, (rule,))
+
+    updated = api.set_instrument(
+        project,
+        "first",
+        replace(instrument, resolution_domain="theta"),
+    )
+
+    assert updated.sharing_rules == ()
+
+
+def test_source_update_drops_sharing_when_data_derived_bounds_diverge(
+    tmp_path: Path,
+) -> None:
+    project = new_project()
+    for dataset_id in ("first", "second"):
+        project = add_dataset(
+            project,
+            _write_curve(tmp_path / f"{dataset_id}.xy"),
+            _instrument(),
+        )
+        project = set_structure(project, dataset_id, simple_structure())
+    name = "component.0.thickness_a"
+    project = api.set_sharing_rules(
+        project,
+        (
+            SharingRule(
+                "shared-thickness-source-update",
+                (
+                    ParameterReference("first", name),
+                    ParameterReference("second", name),
+                ),
+            ),
+        ),
+    )
+
+    replacement = tmp_path / "first-replacement.xy"
+    replacement.write_bytes(
+        xy_bytes(
+            np.linspace(0.1, 60.0, 32),
+            np.geomspace(1.0, 1e-4, 32),
+        )
+    )
+    updated = accept_source_update(
+        project,
+        preview_source_update(project, "first", replacement),
+    )
+
+    assert updated.sharing_rules == ()
+
+
+def test_source_update_drops_constraint_when_new_bounds_reject_target(
+    tmp_path: Path,
+) -> None:
+    project = add_dataset(new_project(), _write_curve(tmp_path / "curve.xy"), _instrument())
+    project = set_structure(project, "curve", simple_structure())
+    rule = ConstraintRule(
+        ParameterReference("curve", "component.0.thickness_a"),
+        ConstraintNode("const", value=200.0),
+    )
+    project = api.set_constraint_rules(project, (rule,))
+
+    replacement = tmp_path / "curve-replacement.xy"
+    replacement.write_bytes(
+        xy_bytes(
+            np.linspace(0.1, 60.0, 32),
+            np.geomspace(1.0, 1e-4, 32),
+        )
+    )
+    updated = accept_source_update(
+        project,
+        preview_source_update(project, "curve", replacement),
+    )
+
+    assert updated.constraint_rules == ()

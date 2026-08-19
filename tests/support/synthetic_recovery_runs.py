@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
-from math import ceil
 import multiprocessing
 import os
 import warnings
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
+from math import ceil
 
 import numpy as np
 
 from tests.support.synthetic_recovery_metrics import (
-    _MetricAccumulator,
     _best_candidate,
-    _metric_profile_requests,
     _metric_error,
+    _metric_profile_requests,
     _metric_truth_is_eligible,
+    _MetricAccumulator,
     _values_by_name,
 )
 from tests.support.synthetic_recovery_model import SyntheticCase, _option_dict
@@ -124,11 +124,7 @@ def _assert_mixed_mono_exposes_mismatch(case: SyntheticCase, result, data: Prepa
 def _initialize_worker_cases(local_workers: int = 4) -> None:
     from tests.support.synthetic_recovery import build_corpus
 
-    valid_workers = (
-        isinstance(local_workers, int)
-        and not isinstance(local_workers, bool)
-        and local_workers >= 1
-    )
+    valid_workers = isinstance(local_workers, int) and not isinstance(local_workers, bool) and local_workers >= 1
     if not valid_workers:
         raise ValueError("local_workers must be a positive integer")
     global WORKER_CASES, WORKER_LOCAL_WORKERS
@@ -143,10 +139,7 @@ def _initialize_worker_cases(local_workers: int = 4) -> None:
 def _metric_outcome(case: SyntheticCase, result, data: PreparedData) -> _CaseOutcome:
     accumulator = _MetricAccumulator()
     accumulator.add_case(case, result, data)
-    errors = tuple(
-        (family, tuple(values))
-        for family, values in sorted(accumulator.errors_by_family.items())
-    )
+    errors = tuple((family, tuple(values)) for family, values in sorted(accumulator.errors_by_family.items()))
     return _CaseOutcome(
         case_id=case.case_id,
         errors_by_family=errors,
@@ -187,10 +180,7 @@ def _ambiguous_outcome(case: SyntheticCase, result) -> _CaseOutcome:
 def _model_error_outcome(case: SyntheticCase, result, data: PreparedData) -> _CaseOutcome:
     biased = _major_thickness_or_period_bias(case, result, limit=0.05)
     acf_flag = _residual_acf_flag(result, data)
-    production_flag = bool(
-        result.uncertainty
-        and result.uncertainty.residual_autocorrelation
-    )
+    production_flag = bool(result.uncertainty and result.uncertainty.residual_autocorrelation)
     if production_flag:
         assert result.confidence is not ConfidenceClass.TRUSTED, {
             "case_id": case.case_id,
@@ -241,10 +231,7 @@ def _component_layer_work(component: object) -> int:
 def _case_work_estimate(case: SyntheticCase) -> int:
     """Estimate optical work only to front-load likely stragglers."""
     wavelengths = 2 if case.fit_beam.kind == "mixed_kalpha" else 1
-    layers = sum(
-        _component_layer_work(component)
-        for component in case.fit_structure.components
-    )
+    layers = sum(_component_layer_work(component) for component in case.fit_structure.components)
     return int(case.theta_deg.size) * wavelengths * max(1, layers)
 
 

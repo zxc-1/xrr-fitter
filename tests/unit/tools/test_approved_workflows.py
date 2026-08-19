@@ -5,9 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-
 from tests.support import approved_workflows as workflows
-
 
 CASE_IDS = (
     "known_single_layer",
@@ -90,9 +88,7 @@ def test_api_capture_writes_exact_canonical_four_run_candidate(
     candidate = report / "approved-data-candidate.json"
     payload = json.loads(candidate.read_text(encoding="utf-8"))
     assert tuple(case["case_id"] for case in payload["cases"]) == CASE_IDS
-    assert tuple(case["source"]["path"] for case in payload["cases"]) == tuple(
-        f"{case_id}.dat" for case_id in CASE_IDS
-    )
+    assert tuple(case["source"]["path"] for case in payload["cases"]) == tuple(f"{case_id}.dat" for case_id in CASE_IDS)
     assert candidate.read_bytes() == workflows.canonical_json_bytes(payload)
     assert not any(path.name.startswith(".capture-") for path in report.iterdir())
 

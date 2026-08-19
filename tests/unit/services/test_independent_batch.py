@@ -6,8 +6,8 @@ from threading import Barrier, Event
 from types import SimpleNamespace
 
 import numpy as np
-
 from tests.support.model_cases import final_fit_result, simple_structure
+
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.services import batch, fitting
@@ -56,11 +56,7 @@ def _fit_independently(
 
 
 def _prepared_stub(project, dataset_id: str, _seed=None):
-    index = next(
-        index
-        for index, dataset in enumerate(project.datasets)
-        if dataset.dataset_id == dataset_id
-    )
+    index = next(index for index, dataset in enumerate(project.datasets) if dataset.dataset_id == dataset_id)
     return SimpleNamespace(
         dataset_id=dataset_id,
         dataset_index=index,
@@ -94,21 +90,14 @@ def _assert_concurrent_events(
         "zeta:finish",
         "zeta:start",
     ]
-    assert progress_messages.index("alpha:start") < progress_messages.index(
-        "alpha:finish"
-    )
-    assert progress_messages.index("zeta:start") < progress_messages.index(
-        "zeta:finish"
-    )
+    assert progress_messages.index("alpha:start") < progress_messages.index("alpha:finish")
+    assert progress_messages.index("zeta:start") < progress_messages.index("zeta:finish")
     assert published[-2:] == [("checkpoint", "saved"), ("checkpoint", "saved")]
 
 
 def _assert_concurrent_result(result) -> None:
     assert tuple(item.dataset_id for item in result.datasets) == ("zeta", "alpha")
-    assert all(
-        dataset.last_valid_result is not None
-        for dataset in result.updated_project.datasets
-    )
+    assert all(dataset.last_valid_result is not None for dataset in result.updated_project.datasets)
 
 
 def test_independent_dispatch_uses_sorted_seed_identity_but_project_result_order(

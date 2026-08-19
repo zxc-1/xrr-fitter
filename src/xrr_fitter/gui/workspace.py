@@ -44,9 +44,7 @@ class WorkspaceView:
 
     def snapshot(self) -> WorkspaceSnapshot:
         return WorkspaceSnapshot(
-            None
-            if self.workspace_splitter is None
-            else tuple(self.workspace_splitter.sizes()),
+            None if self.workspace_splitter is None else tuple(self.workspace_splitter.sizes()),
             None if self.left_splitter is None else tuple(self.left_splitter.sizes()),
             None if self.plot_tabs is None else self.plot_tabs.currentIndex(),
             None if self.expert_toggle is None else self.expert_toggle.isChecked(),
@@ -129,20 +127,10 @@ def capture_project(project: api.XrrProject, view: WorkspaceView) -> api.XrrProj
             else snapshot.workspace_splitter_sizes
         ),
         left_splitter_sizes=(
-            current.left_splitter_sizes
-            if snapshot.left_splitter_sizes is None
-            else snapshot.left_splitter_sizes
+            current.left_splitter_sizes if snapshot.left_splitter_sizes is None else snapshot.left_splitter_sizes
         ),
-        plot_tab_index=(
-            current.plot_tab_index
-            if snapshot.plot_tab_index is None
-            else snapshot.plot_tab_index
-        ),
-        expert_mode=(
-            current.expert_mode
-            if snapshot.expert_mode is None
-            else snapshot.expert_mode
-        ),
+        plot_tab_index=(current.plot_tab_index if snapshot.plot_tab_index is None else snapshot.plot_tab_index),
+        expert_mode=(current.expert_mode if snapshot.expert_mode is None else snapshot.expert_mode),
     )
     return api.set_workspace_state(project, state)
 

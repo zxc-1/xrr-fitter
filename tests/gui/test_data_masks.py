@@ -10,11 +10,7 @@ import xrr_fitter.api as api
 
 def _write_curve(path: Path) -> Path:
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}"
-            for index in range(32)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}" for index in range(32)) + "\n",
         encoding="utf-8",
     )
     return path
@@ -162,10 +158,7 @@ def test_mask_change_failure_is_atomic_and_emits_no_success(
 def test_initial_fit_range_uses_service_valid_points(qtbot, tmp_path) -> None:
     path = tmp_path / "invalid-first-point.xy"
     rows = ["0.05 -5.0"]
-    rows.extend(
-        f"{0.07 + index * 0.02:.6f} {1200.0 / (index + 1):.12g}"
-        for index in range(31)
-    )
+    rows.extend(f"{0.07 + index * 0.02:.6f} {1200.0 / (index + 1):.12g}" for index in range(31))
     path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     from xrr_fitter.gui.data.panel import DataPanel
     from xrr_fitter.gui.document import ProjectDocument
@@ -178,6 +171,4 @@ def test_initial_fit_range_uses_service_valid_points(qtbot, tmp_path) -> None:
         instrument=api.InstrumentSpec(),
     )
 
-    assert panel.document.project.datasets[0].fit_range_two_theta_deg[0] == pytest.approx(
-        0.07
-    )
+    assert panel.document.project.datasets[0].fit_range_two_theta_deg[0] == pytest.approx(0.07)

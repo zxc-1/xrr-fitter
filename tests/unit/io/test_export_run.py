@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import errno
-from hashlib import sha256
 import os
-from pathlib import Path
 import re
+from hashlib import sha256
+from pathlib import Path
 
 import pytest
 
@@ -39,15 +39,11 @@ def test_export_run_records_complete_relative_size_and_digest_manifest(
     )
 
     assert manifest.run_directory == tmp_path / "20260715T120000-11111111"
-    assert tuple(record.path for record in manifest.root_files) == (
-        "compatibility_summary.xlsx",
-    )
+    assert tuple(record.path for record in manifest.root_files) == ("compatibility_summary.xlsx",)
     dataset = manifest.datasets[0]
     assert dataset.dataset_id == "sample-a"
     assert dataset.directory.startswith("001-sample-a-")
-    assert tuple(record.path for record in dataset.files) == (
-        f"{dataset.directory}/fit_result.json",
-    )
+    assert tuple(record.path for record in dataset.files) == (f"{dataset.directory}/fit_result.json",)
     for record in manifest.files:
         published = manifest.run_directory / record.path
         content = published.read_bytes()
@@ -211,8 +207,7 @@ def test_export_rejects_unsafe_artifact_paths_before_writing(
         (
             (
                 ArtifactPayload(
-                    f"{export_run._dataset_directory(1, 'sample-a')}"
-                    "/fit_result.json",
+                    f"{export_run._dataset_directory(1, 'sample-a')}/fit_result.json",
                     b"duplicates dataset file",
                 ),
             ),
@@ -294,9 +289,7 @@ def test_export_fsyncs_written_files_and_directories_before_publish(
     )
 
     synced_regular_files = set(synced_files) - set(synced_directories)
-    assert {path.name for path in synced_regular_files} == {
-        Path(item.path).name for item in manifest.files
-    }
+    assert {path.name for path in synced_regular_files} == {Path(item.path).name for item in manifest.files}
     assert any(path.name.startswith("001-") for path in synced_directories)
     assert any(path.name.startswith(".partial-") for path in synced_directories)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import replace
 
 import numpy as np
@@ -9,17 +10,26 @@ import pytest
 from tests.support.drift_cases import drift_structure, drift_values
 from tests.support.model_cases import prepared_data
 
+import xrr_fitter.analysis.sld_bands as sld_bands
 from xrr_fitter.analysis.sld_bands import (
     MAX_REPLAY_SAMPLES,
     QUANTILE_LEVELS,
     _common_grid,
+    _interpolated,
     sld_uncertainty_bands,
 )
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.analysis import McmcConfig, McmcReport
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.structure import DriftSpec, LayerSpec, MaterialSpec, PeriodicBlock, StructureSpec
+from xrr_fitter.model.structure import (
+    DriftSpec,
+    GradientLayerSpec,
+    LayerSpec,
+    MaterialSpec,
+    PeriodicBlock,
+    StructureSpec,
+)
 from xrr_fitter.physics.sld_profile import sld_depth_profile
 from xrr_fitter.physics.stack import expand_structure, rebuild_structure
 
@@ -191,6 +201,53 @@ def test_zero_variance_median_is_the_direct_profile_on_the_same_backing_axis() -
     np.testing.assert_array_equal(bands.imaginary[2], expected_imaginary)
 
 
+def test_gradient_replay_uses_the_topology_recorded_by_the_fitted_problem() -> None:
+    structure = StructureSpec(
+        AIR,
+        (
+            GradientLayerSpec(
+                "gradient",
+                upper_sld_a2=10e-6 + 0.5e-6j,
+                lower_sld_a2=50e-6 + 2.0e-6j,
+                thickness_a=20.0,
+                roughness_a=0.0,
+                microslab_max_a=10.0,
+            ),
+        ),
+        SI,
+        backing_roughness_a=0.0,
+    )
+    count = 8
+    report = replace(
+        _report(np.full(8, 20.0)),
+        gradient_slab_counts=(("component.0", count),),
+    )
+    step_a = 0.5
+
+    bands = sld_uncertainty_bands(
+        structure,
+        report,
+        wavelength_a=WAVELENGTH_A,
+        step_a=step_a,
+    )
+    stack = expand_structure(
+        structure,
+        WAVELENGTH_A,
+        {"component.0": count},
+    )
+    depth, profile = sld_depth_profile(stack, step_a=step_a)
+    backing_depth = depth - float(np.sum(stack.thickness_a[1:-1]))
+
+    np.testing.assert_array_equal(
+        bands.real[2],
+        np.interp(bands.depth_a, backing_depth, profile.real),
+    )
+    np.testing.assert_array_equal(
+        bands.imaginary[2],
+        np.interp(bands.depth_a, backing_depth, profile.imag),
+    )
+
+
 def test_backing_alignment_removes_a_vacuum_spacer_translation() -> None:
     samples = np.tile((40.0, 60.0), 16)
     bands = sld_uncertainty_bands(
@@ -244,6 +301,37 @@ def test_real_and_imaginary_envelopes_stay_separate_values() -> None:
     # Mo carries roughly fifty times more real SLD than absorption, so a
     # collapsed modulus would erase the absorption envelope entirely.
     assert float(np.max(bands.real)) > 10.0 * float(np.max(bands.imaginary))
+
+
+def test_quantiles_interpolate_finite_opposite_extreme_sld_samples_stably() -> None:
+    maximum = np.finfo(float).max
+    material = MaterialSpec("extreme", None, None, 0j)
+    structure = StructureSpec(
+        AIR,
+        (LayerSpec("extreme", material, 20.0, roughness_a=0.0),),
+        AIR,
+        backing_roughness_a=0.0,
+    )
+    report = _report(
+        np.array([-maximum, maximum]),
+        names=("component.0.sld_real_a2",),
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        bands = sld_uncertainty_bands(
+            structure,
+            report,
+            wavelength_a=WAVELENGTH_A,
+            step_a=1.0,
+        )
+
+    interior = int(np.flatnonzero(bands.depth_a == -10.0)[0])
+    expected = maximum * np.array((-0.95, -0.68, 0.0, 0.68, 0.95))
+    assert np.all(np.isfinite(bands.real))
+    assert np.all(np.diff(bands.real, axis=0) >= 0.0)
+    np.testing.assert_allclose(bands.real[:, interior], expected, rtol=1e-15)
+    assert not any(issubclass(item.category, RuntimeWarning) for item in caught)
 
 
 def test_backing_and_surface_alignment_place_their_interface_at_the_same_depth() -> None:
@@ -479,3 +567,28 @@ def test_aligned_profiles_with_an_empty_depth_intersection_are_rejected() -> Non
 
     with pytest.raises(ValueError, match="share no overlapping depth range"):
         _common_grid(profiles, step_a=0.5)
+
+
+def test_interpolation_rejects_a_matrix_over_the_memory_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profiles = tuple((np.arange(2.0), np.zeros(2, dtype=complex)) for _ in range(2))
+    grid = np.arange(6.0)
+    monkeypatch.setattr(sld_bands, "MAX_INTERPOLATION_CELLS", 10, raising=False)
+
+    with pytest.raises(ValueError, match="interpolation matrix exceeds"):
+        _interpolated(profiles, grid)
+
+
+def test_replay_collection_rejects_aggregate_profile_points_over_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profiles = (
+        (np.arange(2.0), np.zeros(2, dtype=complex)),
+        (np.arange(2.0), np.zeros(2, dtype=complex)),
+    )
+    monkeypatch.setattr(sld_bands, "MAX_REPLAY_PROFILE_POINTS", 3, raising=False)
+
+    assert hasattr(sld_bands, "_collect_profiles")
+    with pytest.raises(ValueError, match="replayed SLD profiles exceed"):
+        sld_bands._collect_profiles(iter(profiles))

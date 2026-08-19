@@ -286,6 +286,29 @@ def test_joint_project_validates_global_rank_against_local_mean() -> None:
         replace(project(bad_first, bad_second), batch_mode="joint")
 
 
+def test_joint_project_validates_a_finite_rank_with_overflowing_local_sum() -> None:
+    objectives = (1.6e308, 1.2e308)
+    ranking = objectives[0] / len(objectives) + objectives[1] / len(objectives)
+    first_candidate = replace(
+        fit_candidate("shared", objectives[0]),
+        ranking_objective=ranking,
+    )
+    second_candidate = replace(
+        fit_candidate("shared", objectives[1]),
+        ranking_objective=ranking,
+    )
+
+    joint = replace(
+        project(
+            dataset_project("first", result=final_fit_result(first_candidate)),
+            dataset_project("second", result=final_fit_result(second_candidate)),
+        ),
+        batch_mode="joint",
+    )
+
+    assert joint.batch_mode == "joint"
+
+
 def test_joint_project_allows_dataset_local_classification_and_warnings() -> None:
     first_candidate = replace(fit_candidate("shared", 1.0), ranking_objective=1.5)
     second_candidate = replace(fit_candidate("shared", 2.0), ranking_objective=1.5)

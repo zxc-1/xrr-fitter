@@ -57,9 +57,7 @@ def _readonly(value: object) -> np.ndarray:
 
 def _ranked_feature_positions(data: object, by_q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     qz = data.qz_a_inv[by_q]
-    intensity = np.log10(
-        np.clip(data.intensity_normalized[by_q], data.r_floor, np.inf)
-    )
+    intensity = np.log10(np.clip(data.intensity_normalized[by_q], data.r_floor, np.inf))
     span = qz[2:] - qz[:-2]
     fraction = np.divide(
         qz[1:-1] - qz[:-2],
@@ -174,10 +172,7 @@ def _ratio_variants(
     base = declared_thickness / declared_thickness.sum()
     variants = [base, np.full(base.size, 1.0 / base.size)]
     if base.size == 2:
-        variants.extend(
-            np.array([fraction, 1.0 - fraction], dtype=float)
-            for fraction in binary_defaults
-        )
+        variants.extend(np.array([fraction, 1.0 - fraction], dtype=float) for fraction in binary_defaults)
     for index in range(base.size):
         for change in (-0.15, 0.15):
             candidate = base.copy()
@@ -216,8 +211,7 @@ def _ordinary_geometry_group(
     ratios = _ratio_variants(declared, rng, initial.layer_fractions)
     totals = initial.thickness_a or (float(declared.sum()),)
     declared_geometry = tuple(
-        (f"component.{index}.thickness_a", float(component.thickness_a))
-        for index, component in ordinary
+        (f"component.{index}.thickness_a", float(component.thickness_a)) for index, component in ordinary
     )
     generated = tuple(
         tuple(
@@ -291,12 +285,7 @@ def _latin_hypercube_fill(
     while len(selected) < limit and stagnant < 32:
         before = len(selected)
         for row in sampler.random(max(32, limit - len(selected))):
-            selected.add(
-                tuple(
-                    min(int(value * size), size - 1)
-                    for value, size in zip(row, sizes, strict=True)
-                )
-            )
+            selected.add(tuple(min(int(value * size), size - 1) for value, size in zip(row, sizes, strict=True)))
             if len(selected) == limit:
                 return
         stagnant = stagnant + 1 if len(selected) == before else 0
@@ -413,9 +402,7 @@ def build_de_population(
         0.0,
         1.0,
     )
-    latin = qmc.LatinHypercube(d=center.size, seed=rng).random(
-        size - 1 - gaussian_count
-    )
+    latin = qmc.LatinHypercube(d=center.size, seed=rng).random(size - 1 - gaussian_count)
     return _readonly(np.vstack((center, gaussian, latin)))
 
 
@@ -464,9 +451,7 @@ def build_stage_e_population(
                 1.0,
             )
         )
-    latin = qmc.LatinHypercube(d=values[0].size, seed=rng).random(
-        size - seeded_count
-    )
+    latin = qmc.LatinHypercube(d=values[0].size, seed=rng).random(size - seeded_count)
     return _readonly(np.vstack((*rows, latin)))
 
 

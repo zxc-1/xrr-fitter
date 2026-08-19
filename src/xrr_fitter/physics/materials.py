@@ -17,6 +17,14 @@ def _require_positive(value: float, name: str) -> None:
         raise ValueError(f"{name} must be finite and positive")
 
 
+def _finite_sld(value: complex) -> complex:
+    if not isfinite(value.real) or not isfinite(value.imag):
+        raise ValueError("material SLD must be finite")
+    if value.imag < 0.0:
+        raise ValueError("material SLD must have nonnegative absorption")
+    return value
+
+
 @lru_cache(maxsize=256)
 def _parsed_formula(formula: str):
     """Parse each declared formula once while leaving SLD inputs dynamic."""
@@ -34,7 +42,7 @@ def _formula_sld(
         density=material.bulk_density_g_cm3 * density_scale,
         wavelength=wavelength_a,
     )[:2]
-    return complex(real, abs(absorption)) * 1e-6
+    return _finite_sld(complex(real, abs(absorption)) * 1e-6)
 
 
 def material_sld(material: MaterialSpec, density_scale: float, wavelength_a: float) -> complex:
@@ -42,5 +50,5 @@ def material_sld(material: MaterialSpec, density_scale: float, wavelength_a: flo
     _require_positive(density_scale, "density scale")
     _require_positive(wavelength_a, "wavelength_a")
     if material.sld_override_a2 is not None:
-        return material.sld_override_a2 * density_scale
+        return _finite_sld(material.sld_override_a2 * density_scale)
     return _formula_sld(material, density_scale, wavelength_a)

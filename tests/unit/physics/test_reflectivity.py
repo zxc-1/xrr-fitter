@@ -93,3 +93,46 @@ def test_layer_wavevectors_use_decaying_branch_and_nonnegative_real_tie() -> Non
 def test_exact_fresnel_denominator_is_a_hard_failure() -> None:
     with pytest.raises(FloatingPointError, match="zero Fresnel denominator"):
         fresnel_interfaces(np.array([[1 + 0j, -1 + 0j]]), np.array([0.0]))
+
+
+@pytest.mark.parametrize(
+    "sld",
+    (
+        np.array([], dtype=complex),
+        np.array([[0j, 20e-6]]),
+        np.array([0j, np.nan + 0j]),
+    ),
+)
+def test_layer_wavevectors_reject_invalid_sld_vectors(sld: np.ndarray) -> None:
+    with pytest.raises(ValueError, match="SLD.*nonempty finite vector"):
+        layer_kz(np.array([0.1]), sld)
+
+
+@pytest.mark.parametrize(
+    ("kz", "roughness"),
+    (
+        (np.ones(3, dtype=complex), np.ones(2)),
+        (np.ones((2, 3), dtype=complex), np.ones(1)),
+        (np.ones((2, 3), dtype=complex), np.array([0.0, np.nan])),
+        (np.ones((2, 3), dtype=complex), np.array([0.0, -1.0])),
+    ),
+)
+def test_fresnel_interfaces_reject_invalid_array_contracts(
+    kz: np.ndarray,
+    roughness: np.ndarray,
+) -> None:
+    with pytest.raises(ValueError, match="wavevectors|roughness"):
+        fresnel_interfaces(kz, roughness)
+
+
+def test_layer_wavevectors_reject_finite_inputs_that_overflow_the_radicand() -> None:
+    with pytest.raises(FloatingPointError, match="overflow|nonfinite"):
+        layer_kz(np.array([1e308]), np.array([0j, 1e308 + 0j]))
+
+
+def test_fresnel_interfaces_reject_finite_inputs_that_overflow_roughness_factor() -> None:
+    with pytest.raises(FloatingPointError, match="overflow|nonfinite"):
+        fresnel_interfaces(
+            np.array([[1e308 + 0j, 1e308 + 0j]]),
+            np.array([1e308]),
+        )

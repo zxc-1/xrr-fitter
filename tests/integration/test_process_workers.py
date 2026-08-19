@@ -77,22 +77,12 @@ def _checkpoints_before_terminal(
     events: tuple[api.OperationEvent, ...],
     kind: str,
 ) -> tuple[object, ...]:
-    terminal_index = next(
-        index for index, event in enumerate(events) if event.kind == kind
-    )
-    return tuple(
-        event.checkpoint
-        for event in events[:terminal_index]
-        if event.kind == "checkpoint"
-    )
+    terminal_index = next(index for index, event in enumerate(events) if event.kind == kind)
+    return tuple(event.checkpoint for event in events[:terminal_index] if event.kind == "checkpoint")
 
 
 def _contains_dataset_checkpoint(snapshots) -> bool:
-    return any(
-        dataset.checkpoint is not None
-        for snapshot in snapshots
-        for dataset in snapshot.datasets
-    )
+    return any(dataset.checkpoint is not None for snapshot in snapshots for dataset in snapshot.datasets)
 
 
 def _contains_joint_checkpoint(snapshots) -> bool:
@@ -101,13 +91,7 @@ def _contains_joint_checkpoint(snapshots) -> bool:
         and len({checkpoint.joint_layout_fingerprint for checkpoint in checkpoints}) == 1
         and checkpoints[0].joint_layout_fingerprint
         for snapshot in snapshots
-        if (
-            checkpoints := tuple(
-                dataset.checkpoint
-                for dataset in snapshot.datasets
-                if dataset.checkpoint is not None
-            )
-        )
+        if (checkpoints := tuple(dataset.checkpoint for dataset in snapshot.datasets if dataset.checkpoint is not None))
     )
 
 
@@ -189,9 +173,7 @@ def test_real_spawn_automatic_joint_worker_serializes_checkpoints_and_projection
     datasets = result.updated_project.datasets
     assert result.mode == "automatic"
     assert all(dataset.last_valid_result is not None for dataset in datasets)
-    assert {dataset.automation.role for dataset in datasets} == {
-        api.AutomaticRole.JOINT
-    }
+    assert {dataset.automation.role for dataset in datasets} == {api.AutomaticRole.JOINT}
     assert len({dataset.automation.fit_group_id for dataset in datasets}) == 1
     assert checkpoint_path.is_file()
     assert job.is_running is False

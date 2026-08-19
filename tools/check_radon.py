@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
-from typing import Iterable, Sequence
-
+from collections.abc import Iterable, Sequence
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 MANAGED_ROOTS = ("examples", "src", "tests", "tools")
 PRUNED_DIRS = {".git", ".pytest_cache", "__pycache__", "build", "dist"}
@@ -57,9 +56,7 @@ def discover_python_files(root: str | Path) -> tuple[tuple[Path, ...], tuple[Dis
     issues: list[DiscoveryIssue] = []
     for current, directories, names in os.walk(repository):
         base = Path(current).relative_to(repository)
-        directories[:] = [
-            name for name in directories if not _prunable(repository, base / name)
-        ]
+        directories[:] = [name for name in directories if not _prunable(repository, base / name)]
         for name in names:
             if not name.endswith(".py") or not (Path(current) / name).is_file():
                 continue
@@ -79,10 +76,7 @@ def _symbol_records(item: dict[str, object], scores: list[float]) -> list[dict[s
     supplied = item.get("symbols")
     if isinstance(supplied, list) and len(supplied) == len(scores):
         return [dict(symbol) for symbol in supplied]
-    return [
-        {"name": f"<block:{index}>", "line": 0, "complexity": score}
-        for index, score in enumerate(scores, start=1)
-    ]
+    return [{"name": f"<block:{index}>", "line": 0, "complexity": score} for index, score in enumerate(scores, start=1)]
 
 
 def _block_issues(path: str, symbols: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -196,10 +190,7 @@ def _flatten_blocks(blocks: Iterable[object]) -> list[object]:
 
 def _halstead(value: object) -> dict[str, object]:
     total = dict(value.total._asdict())
-    functions = [
-        {"name": name, **dict(report._asdict())}
-        for name, report in value.functions
-    ]
+    functions = [{"name": name, **dict(report._asdict())} for name, report in value.functions]
     return {"total": total, "functions": functions}
 
 
@@ -215,14 +206,14 @@ def _source_metrics(path: Path, relative: Path) -> dict[str, object]:
         {
             "name": str(getattr(block, "name", "")),
             "line": int(getattr(block, "lineno", 0)),
-            "complexity": float(getattr(block, "complexity")),
+            "complexity": float(block.complexity),
         }
         for block in blocks
     ]
     return {
         "path": relative.as_posix(),
         "mi": float(mi_visit(source, multi=True)),
-        "blocks": [float(getattr(block, "complexity")) for block in blocks],
+        "blocks": [float(block.complexity) for block in blocks],
         "symbols": symbols,
         "raw": dict(raw._asdict()),
         "halstead": _halstead(h_visit(source)),

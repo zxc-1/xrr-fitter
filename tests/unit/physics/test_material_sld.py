@@ -14,9 +14,7 @@ def test_classical_electron_radius_uses_angstrom_units() -> None:
 
 def test_material_sld_preserves_angstrom_inverse_squared_units() -> None:
     material = MaterialSpec("Si", "Si", 2.329)
-    real, absorption = periodictable.xray_sld(
-        periodictable.formula("Si"), density=2.329, wavelength=1.5406
-    )[:2]
+    real, absorption = periodictable.xray_sld(periodictable.formula("Si"), density=2.329, wavelength=1.5406)[:2]
     assert material_sld(material, 1.0, 1.5406) == complex(real, abs(absorption)) * 1e-6
 
 
@@ -70,3 +68,11 @@ def test_material_sld_rejects_nonfinite_density_scale() -> None:
     for value in (0.0, -1.0, float("inf"), float("nan")):
         with pytest.raises(ValueError, match="density scale"):
             material_sld(material, value, 1.5406)
+
+
+def test_material_sld_rejects_finite_inputs_that_overflow_the_sld() -> None:
+    direct = MaterialSpec("large", None, None, 1e308 + 1e308j)
+    formula = MaterialSpec("dense", "Si", 1e308)
+    for material in (direct, formula):
+        with pytest.raises(ValueError, match="SLD.*finite"):
+            material_sld(material, 1e308, 1.5406)

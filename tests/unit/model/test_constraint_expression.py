@@ -5,6 +5,7 @@ import math
 import pytest
 
 from xrr_fitter.model.constraint_expression import (
+    ConstraintArithmeticError,
     constraint_value_and_grad,
     evaluate_constraint_value,
 )
@@ -54,3 +55,32 @@ def test_cos_gradient_uses_negative_sine() -> None:
 
     assert value == pytest.approx(math.cos(0.7))
     assert gradient == {reference: pytest.approx(-math.sin(0.7))}
+
+
+def test_nonfinite_intermediate_is_rejected_before_unary_math() -> None:
+    reference = ParameterReference("curve", "value")
+    overflow = ConstraintNode(
+        "mul",
+        operands=(
+            ConstraintNode("const", value=1e308),
+            ConstraintNode("const", value=1e308),
+        ),
+    )
+    node = ConstraintNode("sin", operands=(overflow,))
+
+    with pytest.raises(ConstraintArithmeticError):
+        evaluate_constraint_value(node, {reference: 0.0})
+
+
+def test_fractional_power_at_zero_is_rejected_as_nondifferentiable() -> None:
+    reference = ParameterReference("curve", "value")
+    node = ConstraintNode(
+        "pow",
+        operands=(
+            _ref_node(reference),
+            ConstraintNode("const", value=0.5),
+        ),
+    )
+
+    with pytest.raises(ConstraintArithmeticError):
+        constraint_value_and_grad(node, {reference: 0.0})

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from time import perf_counter
 
 import numpy as np
@@ -7,6 +8,33 @@ import pytest
 
 from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
 from xrr_fitter.physics.parratt import normalize_mobius, parratt_reflectivity
+
+
+def _overflow_stack(*, periodic: bool = False) -> SlabStack:
+    """Return a valid low-level stack whose Nevot-Croce exponent overflows."""
+    media = [
+        0j,
+        0.09009274 + 5.25772738e-05j,
+        0.08972989 + 3.62374192e-04j,
+    ]
+    if periodic:
+        return SlabStack(
+            [0, 1, 1, 1, 1, 0],
+            [media[0], media[1], media[2], media[1], media[2], media[0]],
+            [0, 30, 0, 30, 0],
+            (PeriodicSpan(1, 2, 2),),
+        )
+    return SlabStack([0, 1, 1, 0], [*media, media[0]], [0, 30, 0])
+
+
+@pytest.mark.parametrize("periodic", [False, True])
+def test_parratt_rejects_nonfinite_nevot_croce_path_without_warning(periodic: bool) -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(FloatingPointError, match="finite|Nevot-Croce"):
+            parratt_reflectivity(np.asarray([0.011774154985086273]), _overflow_stack(periodic=periodic))
+
+    assert caught == []
 
 
 def _periodic(repeats: int = 20) -> tuple[SlabStack, SlabStack]:

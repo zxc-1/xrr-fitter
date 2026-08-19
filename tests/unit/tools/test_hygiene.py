@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
-
 
 ALLOWED_ROOTS = (
     ".github",
@@ -58,10 +57,7 @@ def _ignore(root: Path, relative: str) -> None:
 
 
 def _kinds(module, root: Path, *, strict: bool = False) -> set[str]:
-    return {
-        issue.kind
-        for issue in module.inspect_repository(root, require_git_clean=strict)
-    }
+    return {issue.kind for issue in module.inspect_repository(root, require_git_clean=strict)}
 
 
 @pytest.mark.parametrize("ignored", [False, True], ids=("ordinary", "ignored"))
@@ -107,9 +103,7 @@ def test_hygiene_rejects_generated_partial_and_unowned_paths_even_when_ignored(
 
 
 @pytest.mark.parametrize("ignored", [False, True], ids=("ordinary", "ignored"))
-def test_hygiene_rejects_symlink_even_when_ignored(
-    tmp_path: Path, load_tool_module, ignored: bool
-) -> None:
+def test_hygiene_rejects_symlink_even_when_ignored(tmp_path: Path, load_tool_module, ignored: bool) -> None:
     module = load_tool_module("check_hygiene")
     root = _repo(tmp_path)
     link = root / "docs/link"
@@ -136,9 +130,7 @@ def test_each_allowed_root_accepts_review_files_but_strict_requires_clean_git(
     assert _kinds(module, root, strict=True) == {"git-dirty"}
 
 
-def test_clean_independent_repository_passes_both_modes(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_clean_independent_repository_passes_both_modes(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("check_hygiene")
     root = _repo(tmp_path)
     assert module.inspect_repository(root) == ()
@@ -146,9 +138,7 @@ def test_clean_independent_repository_passes_both_modes(
 
 
 @pytest.mark.parametrize("control_type", ["gitfile", "symlink", "fifo"])
-def test_git_control_must_be_a_normal_directory(
-    tmp_path: Path, load_tool_module, control_type: str
-) -> None:
+def test_git_control_must_be_a_normal_directory(tmp_path: Path, load_tool_module, control_type: str) -> None:
     module = load_tool_module("check_hygiene")
     root = _repo(tmp_path)
     git_dir = root / ".git"

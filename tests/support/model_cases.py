@@ -14,7 +14,6 @@ from xrr_fitter.model.data import (
 )
 from xrr_fitter.model.fitting import (
     FitCandidate,
-    FitConfig,
     FitSearchResult,
 )
 from xrr_fitter.model.instrument import InstrumentSpec
@@ -32,27 +31,15 @@ def prepared_data(
     fit_mask: np.ndarray | None = None,
     beam: BeamSpec | None = None,
 ) -> PreparedData:
-    angles = (
-        np.linspace(0.1, 3.2, size)
-        if two_theta_deg is None
-        else np.asarray(two_theta_deg, dtype=float)
-    )
-    intensities = (
-        np.linspace(1000.0, 10.0, size)
-        if intensity_raw is None
-        else np.asarray(intensity_raw, dtype=float)
-    )
+    angles = np.linspace(0.1, 3.2, size) if two_theta_deg is None else np.asarray(two_theta_deg, dtype=float)
+    intensities = np.linspace(1000.0, 10.0, size) if intensity_raw is None else np.asarray(intensity_raw, dtype=float)
     beam_value = beam or BeamSpec("monochromatic")
     qz, positive = qz_from_two_theta(
         angles,
         beam_value.effective_wavelength_a,
         0.0,
     )
-    valid = (
-        positive & np.isfinite(intensities)
-        if validation_mask is None
-        else np.asarray(validation_mask, dtype=bool)
-    )
+    valid = positive & np.isfinite(intensities) if validation_mask is None else np.asarray(validation_mask, dtype=bool)
     selected = valid.copy() if fit_mask is None else np.asarray(fit_mask, dtype=bool)
     normalization = float(np.nanmax(intensities[valid])) if np.any(valid) else 1.0
     normalized = intensities / normalization
@@ -60,7 +47,7 @@ def prepared_data(
     return PreparedData(
         source_path=Path("curve.xy"),
         source_sha256="a" * 64,
-        raw_rows=tuple(f"{angle} {value}" for angle, value in zip(angles, intensities)),
+        raw_rows=tuple(f"{angle} {value}" for angle, value in zip(angles, intensities, strict=False)),
         raw_parse_status=("numeric",) * size,
         source_row_groups=groups,
         beam=beam_value,

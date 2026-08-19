@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
-from typing import Sequence
 
 from approved_data_candidate import (
     _environment,
@@ -19,14 +19,12 @@ from approved_data_candidate import (
     _runs,
     _sha256,
     _text,
-    candidate_value,
     canonical_json_bytes,
     parse_candidate_report,
-    signoff_value,
 )
 from approved_data_model import (
-    CASE_IDS,
     CANDIDATE_SCHEMA,
+    CASE_IDS,
     MANIFEST_SCHEMA,
     RECORD_SCHEMA,
     SIGNOFF_SCHEMA,

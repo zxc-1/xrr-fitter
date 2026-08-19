@@ -27,17 +27,17 @@ an exception group; cleanup errors are never hidden behind the original error.
 from __future__ import annotations
 
 import ctypes
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import errno
-from hashlib import sha256
 import os
-from pathlib import Path, PurePosixPath
 import re
 import secrets
 import shutil
 import sys
 import unicodedata
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from hashlib import sha256
+from pathlib import Path, PurePosixPath
 
 from xrr_fitter.model.export import (
     DatasetExportManifest,
@@ -45,12 +45,9 @@ from xrr_fitter.model.export import (
     ExportManifest,
 )
 
-
 TIMESTAMP_PATTERN = re.compile(r"\d{8}T\d{6}Z?")
 UNSAFE_SLUG_PATTERN = re.compile(r"[^\w-]+", flags=re.UNICODE)
-UNSUPPORTED_DIRECTORY_FSYNC = frozenset(
-    {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP} - {None}
-)
+UNSUPPORTED_DIRECTORY_FSYNC = frozenset({errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP} - {None})
 
 
 def _relative_path(value: str) -> str:
@@ -135,7 +132,7 @@ def _validate_timestamp(value: str) -> str:
 
 
 def _utc_timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _dataset_slug(dataset_id: str, limit: int = 48) -> str:
@@ -311,9 +308,7 @@ def _stage_export(
         paths = _write_artifacts(partial / directory, dataset.files)
         written.extend(paths)
         records = tuple(_record(partial, path) for path in paths)
-        dataset_records.append(
-            DatasetExportManifest(dataset.dataset_id, directory, records)
-        )
+        dataset_records.append(DatasetExportManifest(dataset.dataset_id, directory, records))
     manifest = ExportManifest(partial, tuple(dataset_records), root_records)
     return manifest, tuple(written)
 
@@ -340,9 +335,7 @@ def publish_export_run(
     dataset_values = _datasets(datasets)
     root_values = _payloads(root_files, "root files")
     _validate_export_layout(dataset_values, root_values)
-    timestamp = _validate_timestamp(
-        _utc_timestamp() if run_timestamp is None else run_timestamp
-    )
+    timestamp = _validate_timestamp(_utc_timestamp() if run_timestamp is None else run_timestamp)
     partial, final = _allocate_run(Path(output_dir), timestamp)
     try:
         staged, written = _stage_export(partial, dataset_values, root_values)
@@ -383,19 +376,11 @@ def _tree_members(destination: Path) -> tuple[Path, ...]:
 
 
 def _observed_files(destination: Path, members: tuple[Path, ...]) -> set[str]:
-    return {
-        path.relative_to(destination).as_posix()
-        for path in members
-        if path.is_file()
-    }
+    return {path.relative_to(destination).as_posix() for path in members if path.is_file()}
 
 
 def _observed_directories(destination: Path, members: tuple[Path, ...]) -> set[str]:
-    return {
-        path.relative_to(destination).as_posix()
-        for path in members
-        if path.is_dir()
-    }
+    return {path.relative_to(destination).as_posix() for path in members if path.is_dir()}
 
 
 def _observed_tree(destination: Path) -> tuple[set[str], set[str]]:

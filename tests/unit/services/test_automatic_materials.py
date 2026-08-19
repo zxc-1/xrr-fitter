@@ -39,9 +39,7 @@ def test_existing_backing_adjacent_exact_sio2_is_not_duplicated() -> None:
 
 def test_unknown_direct_sld_density_scale_is_locked_to_one() -> None:
     _structure, settings = automatic_structure(("CrSiC",), "sapphire")
-    density = next(
-        value for value in settings if value.name == "component.0.density_scale"
-    )
+    density = next(value for value in settings if value.name == "component.0.density_scale")
     assert (density.initial, density.lower, density.upper, density.locked) == (
         1.0,
         1.0,

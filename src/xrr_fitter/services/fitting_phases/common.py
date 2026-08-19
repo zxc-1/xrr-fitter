@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from xrr_fitter.model.analysis import FitResult
 from xrr_fitter.model.fitting import FitEvaluationContext, FitProgress
 from xrr_fitter.model.project import DatasetProject, XrrProject
+
 ProgressCallback = Callable[[FitProgress], None]
 CheckpointCallback = Callable[[XrrProject], None]
 CancellationProbe = Callable[[], bool]

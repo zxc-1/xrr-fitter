@@ -79,14 +79,10 @@ def run_corpus(cases: tuple[SyntheticCase, ...]) -> CorpusReport:
         if case.category not in {"ambiguous", "model_error"}
     )
     ambiguous_outcomes = tuple(
-        outcome
-        for case, outcome in zip(values, outcomes, strict=True)
-        if case.category == "ambiguous"
+        outcome for case, outcome in zip(values, outcomes, strict=True) if case.category == "ambiguous"
     )
     model_error_outcomes = tuple(
-        outcome
-        for case, outcome in zip(values, outcomes, strict=True)
-        if case.category == "model_error"
+        outcome for case, outcome in zip(values, outcomes, strict=True) if case.category == "model_error"
     )
     _run_slow_statistical_recovery_corpus(recovery, recovery_outcomes)
     _run_slow_ambiguous_corpus(ambiguous, ambiguous_outcomes)

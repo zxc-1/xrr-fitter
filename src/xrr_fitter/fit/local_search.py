@@ -95,9 +95,7 @@ def solve_local(
         evaluation = evaluate_vector(problem, unit)
         return LocalSearchResult(unit, evaluation, "no_free_parameters", 1)
     start_evaluation = evaluate_vector(problem, unit)
-    system_residual, system_jacobian = cached_least_squares_callbacks(
-        partial(least_squares_system, problem)
-    )
+    system_residual, system_jacobian = cached_least_squares_callbacks(partial(least_squares_system, problem))
 
     def residual(value: np.ndarray) -> np.ndarray:
         _poll(cancelled)
@@ -124,8 +122,7 @@ def solve_local(
     evaluation = evaluate_vector(problem, result_unit)
     tolerance = max(1e-12, 1e-8 * start_evaluation.objective)
     if start_evaluation.valid and (
-        not evaluation.valid
-        or evaluation.objective > start_evaluation.objective + tolerance
+        not evaluation.valid or evaluation.objective > start_evaluation.objective + tolerance
     ):
         return LocalSearchResult(
             unit,

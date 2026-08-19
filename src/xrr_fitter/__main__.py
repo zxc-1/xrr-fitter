@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 from multiprocessing import freeze_support
-import sys
 
 
 def _parser() -> argparse.ArgumentParser:

@@ -28,23 +28,53 @@ def select_decaying_branch(wavevectors: np.ndarray) -> np.ndarray:
 
 def layer_kz(qz_a_inv: np.ndarray, sld_a2: np.ndarray) -> np.ndarray:
     """Return branch-stable wave vectors relative to the fronting SLD."""
-    qz = np.asarray(qz_a_inv, dtype=float).ravel()
+    qz = _validated_qz(qz_a_inv).ravel()
     sld = np.asarray(sld_a2, dtype=np.complex128)
+    if sld.ndim != 1 or sld.size == 0 or np.any(~np.isfinite(sld.real)) or np.any(~np.isfinite(sld.imag)):
+        raise ValueError("SLD must be a nonempty finite vector")
     relative = (sld - sld[0]).copy()
     relative.imag[relative.imag == 0.0] = BRANCH_EPSILON_A2
-    radicand = (qz[:, None] / 2.0) ** 2 - 4.0 * np.pi * relative[None, :]
-    return select_decaying_branch(np.sqrt(radicand.astype(np.complex128)))
+    with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+        radicand = (qz[:, None] / 2.0) ** 2 - 4.0 * np.pi * relative[None, :]
+        wavevectors = select_decaying_branch(np.sqrt(radicand.astype(np.complex128)))
+    if np.any(~np.isfinite(wavevectors.real)) or np.any(~np.isfinite(wavevectors.imag)):
+        raise FloatingPointError("nonfinite layer wavevectors")
+    return wavevectors
+
+
+def _validated_wavevectors(kz: np.ndarray) -> np.ndarray:
+    wavevectors = np.asarray(kz, dtype=np.complex128)
+    if (
+        wavevectors.ndim != 2
+        or wavevectors.shape[1] < 2
+        or np.any(~np.isfinite(wavevectors.real))
+        or np.any(~np.isfinite(wavevectors.imag))
+    ):
+        raise ValueError("wavevectors must be a finite two-dimensional array with at least two media")
+    return wavevectors
+
+
+def _validated_roughness(roughness_a: np.ndarray, medium_count: int) -> np.ndarray:
+    roughness = np.asarray(roughness_a, dtype=float)
+    if roughness.shape != (medium_count - 1,) or np.any(~np.isfinite(roughness)) or np.any(roughness < 0.0):
+        raise ValueError("roughness must be a finite nonnegative vector matching the interfaces")
+    return roughness
 
 
 def fresnel_interfaces(kz: np.ndarray, roughness_a: np.ndarray) -> np.ndarray:
     """Return exact Nevot-Croce corrected Fresnel amplitudes."""
-    upper = kz[:, :-1]
-    lower = kz[:, 1:]
-    denominator = upper + lower
-    if np.any(denominator == 0.0):
-        raise FloatingPointError("zero Fresnel denominator")
-    reflection = (upper - lower) / denominator
-    reflection *= np.exp(-2.0 * upper * lower * np.asarray(roughness_a)[None, :] ** 2)
+    wavevectors = _validated_wavevectors(kz)
+    roughness = _validated_roughness(roughness_a, wavevectors.shape[1])
+    upper = wavevectors[:, :-1]
+    lower = wavevectors[:, 1:]
+    with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+        denominator = upper + lower
+        if np.any(denominator == 0.0):
+            raise FloatingPointError("zero Fresnel denominator")
+        reflection = (upper - lower) / denominator
+        reflection *= np.exp(-2.0 * upper * lower * roughness[None, :] ** 2)
+    if np.any(~np.isfinite(reflection.real)) or np.any(~np.isfinite(reflection.imag)):
+        raise FloatingPointError("nonfinite Fresnel interfaces")
     return reflection
 
 
@@ -65,7 +95,7 @@ def _standard_reflectivity(qz: np.ndarray, stack: SlabStack) -> np.ndarray:
 def normalize_mobius(matrix: np.ndarray) -> np.ndarray:
     scale = np.max(np.abs(matrix), axis=(1, 2))
     if np.any(~np.isfinite(scale)) or np.any(scale == 0.0):
-        raise FloatingPointError("invalid periodic Parratt transform")
+        raise FloatingPointError("invalid periodic Parratt transform: nonfinite matrix")
     return matrix / scale[:, None, None]
 
 
@@ -199,6 +229,18 @@ def _periodic_reflectivity(qz: np.ndarray, stack: SlabStack) -> np.ndarray:
 def parratt_reflectivity(qz_a_inv: np.ndarray, stack: SlabStack) -> np.ndarray:
     """Evaluate reflectivity through ordinary recurrence or periodic Mobius powers."""
     qz = _validated_qz(qz_a_inv)
-    if stack.periodic_spans:
-        return _periodic_reflectivity(qz, stack)
-    return _standard_reflectivity(qz, stack)
+    try:
+        # Treat overflow/invalid/divide as a candidate-domain failure instead of
+        # allowing NumPy warnings to turn into a published NaN curve. Underflow
+        # is benign for exponentially decaying propagation and remains ignored.
+        with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+            result = _periodic_reflectivity(qz, stack) if stack.periodic_spans else _standard_reflectivity(qz, stack)
+    except FloatingPointError as error:
+        # Preserve explicit denominator/transform diagnostics while normalizing
+        # NumPy's arithmetic errors to the public finite-value contract.
+        if str(error).startswith(("zero ", "invalid periodic Parratt transform")):
+            raise
+        raise FloatingPointError(f"nonfinite Parratt arithmetic: {error}") from error
+    if np.any(~np.isfinite(result)):
+        raise FloatingPointError("nonfinite Parratt reflectivity")
+    return result

@@ -16,9 +16,9 @@ from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QPushButton
 from shiboken6 import isValid
+from tests.support.model_cases import final_fit_result, fit_candidate, simple_structure
 
 import xrr_fitter.api as api
-from tests.support.model_cases import final_fit_result, fit_candidate, simple_structure
 
 
 class _FakeJob:
@@ -44,11 +44,7 @@ class _FakeJob:
 
 def _write_curve(path: Path) -> Path:
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}"
-            for index in range(32)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}" for index in range(32)) + "\n",
         encoding="utf-8",
     )
     return path
@@ -89,11 +85,7 @@ def _project(tmp_path: Path, *, fitted: bool = True) -> api.XrrProject:
 
 
 def _actions(window) -> dict[str, QAction]:
-    return {
-        action.objectName(): action
-        for action in window.findChildren(QAction)
-        if action.objectName()
-    }
+    return {action.objectName(): action for action in window.findChildren(QAction) if action.objectName()}
 
 
 EXPECTED_ACTIONS = {
@@ -127,10 +119,7 @@ def _assert_fitted_projection(window) -> None:
 
 def _assert_action_contract(window) -> None:
     actions = _actions(window)
-    observed = {
-        name: (actions[name].text(), actions[name].shortcut().toString())
-        for name in EXPECTED_ACTIONS
-    }
+    observed = {name: (actions[name].text(), actions[name].shortcut().toString()) for name in EXPECTED_ACTIONS}
     assert observed == EXPECTED_ACTIONS
     assert actions["startFitAction"].isEnabled()
     assert not actions["cancelFitAction"].isEnabled()
@@ -168,9 +157,7 @@ def test_candidate_selection_updates_project_plot_and_export_state(
 
     assert window.result_panel.select_candidate("candidate-b") is True
 
-    assert window.document.project.ui_state.selected_candidate_ids == (
-        ("curve", "candidate-b"),
-    )
+    assert window.document.project.ui_state.selected_candidate_ids == (("curve", "candidate-b"),)
     assert window.result_panel.selected_candidate_id() == "candidate-b"
     assert window.plot_panel.selected_candidate_id() == "candidate-b"
     assert _actions(window)["exportResultsAction"].isEnabled()
@@ -207,9 +194,11 @@ def test_expert_mcmc_controls_remain_readable_at_documented_window_size(
         window.result_panel.force_button,
     )
     assert all(widget.height() >= widget.minimumSizeHint().height() for widget in controls)
-    assert all(widget.geometry().intersected(other.geometry()).isEmpty()
-               for index, widget in enumerate(controls)
-               for other in controls[index + 1:])
+    assert all(
+        widget.geometry().intersected(other.geometry()).isEmpty()
+        for index, widget in enumerate(controls)
+        for other in controls[index + 1 :]
+    )
 
 
 def test_fit_completion_projects_result_and_updates_operation_actions(

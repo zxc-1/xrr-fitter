@@ -56,9 +56,7 @@ def test_project_roundtrip_preserves_allocated_ids_and_source_identity(
     )
     value = replace(
         value,
-        datasets=tuple(
-            replace(dataset, automation=automatic) for dataset in value.datasets
-        ),
+        datasets=tuple(replace(dataset, automation=automatic) for dataset in value.datasets),
         measurement_preset=MeasurementPreset(
             "lab-cu-kalpha",
             BeamSpec(kind="monochromatic", wavelength_a=1.5406),

@@ -67,6 +67,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from tests.architecture.evaluation_policy import (
+    EVALUATION_BOUNDARY_MODULES,
+    EVALUATION_FACADE_MODULE,
+    EVALUATION_IMPLEMENTATION_MODULES,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "src" / "xrr_fitter"
@@ -85,8 +90,6 @@ ALLOWED = {
     "__main__": {"gui", "cli"},
     "__init__": set(),
 }
-EVALUATION_IMPLEMENTATION_MODULES = {"evaluation_geometry"}
-EVALUATION_FACADE_MODULE = "evaluation"
 PACKAGE_EDGE_EXCEPTIONS = {
     "io.examples": {"physics.reflectivity", "physics.stack"},
     "io.orso": {"version"},
@@ -125,7 +128,8 @@ MODEL_ALLOWED = {
     "constraint_resolution": {"constraint_expression", "parameters"},
     "project_parameter_graph": {"parameters"},
     "progress": set(),
-    "mcmc_samples": set(),
+    "mcmc_sampling": set(),
+    "mcmc_samples": {"mcmc_sampling"},
     "sld_bands": set(),
     "slab_stack": set(),
     "fitting": {"data", "instrument", "structure", "parameters", "progress", "slab_stack"},
@@ -135,6 +139,7 @@ MODEL_ALLOWED = {
         "parameters",
         "fitting",
         "mcmc_samples",
+        "mcmc_sampling",
         "sld_bands",
     },
     "project": {
@@ -282,7 +287,7 @@ def _package_violations(module: str, targets: set[str], node: ast.AST) -> list[R
         return [_violation("package-owner", module, owner, node)]
     allowed = ALLOWED[owner]
     exceptions = PACKAGE_EDGE_EXCEPTIONS.get(module, set())
-    forbidden = sorted(target for target in targets if (_owner(target) not in allowed or (target in EVALUATION_IMPLEMENTATION_MODULES and module != EVALUATION_FACADE_MODULE)) and target not in exceptions)  # fmt: skip
+    forbidden = sorted(target for target in targets if (_owner(target) not in allowed or (target in EVALUATION_IMPLEMENTATION_MODULES and module not in EVALUATION_BOUNDARY_MODULES)) and target not in exceptions)  # fmt: skip
     return [_violation(("package-edge", "evaluation-boundary")[target in EVALUATION_IMPLEMENTATION_MODULES], module, target, node) for target in forbidden]  # fmt: skip
 
 

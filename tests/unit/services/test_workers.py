@@ -36,6 +36,7 @@ class FakeEvent:
 
 class FakeProcess:
     pid = 7319
+
     def __init__(
         self,
         *,

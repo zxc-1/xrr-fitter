@@ -61,10 +61,9 @@ from xrr_fitter.model.fitting import (
     FitStageSummary,
     PhysicsDiagnostic,
 )
-from xrr_fitter.model.mcmc_samples import (
-    validate_derived_samples,
-    validate_fixed_parameter_values,
-)
+from xrr_fitter.model.mcmc_samples import McmcReport as McmcReport
+from xrr_fitter.model.mcmc_sampling import EnsembleSamples as EnsembleSamples
+from xrr_fitter.model.mcmc_sampling import McmcConfig as McmcConfig
 from xrr_fitter.model.parameters import ParameterDefinition
 
 # Re-exported so analysis values keep one import entry point; the band lives in
@@ -82,68 +81,6 @@ def _readonly(value: object, dtype: type, field: str, ndim: int) -> np.ndarray:
 
 def _pickle_values(value: object) -> tuple[object, ...]:
     return tuple(getattr(value, item.name) for item in fields(value))
-
-
-def _positive_integer(value: int, field: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise ValueError(f"{field} must be a positive integer")
-
-
-def _nonempty_unique_names(values: object, field: str) -> tuple[str, ...]:
-    names = tuple(values)
-    if not names or any(not value.strip() for value in names):
-        raise ValueError(f"{field} must be nonempty")
-    if len(names) != len(set(names)):
-        raise ValueError(f"{field} must be unique")
-    return names
-
-
-def _set_array_fields(value: object, names: tuple[str, ...], arrays: tuple[np.ndarray, ...]) -> None:
-    for name, array in zip(names, arrays, strict=True):
-        object.__setattr__(value, name, array)
-
-
-def _mcmc_arrays(value: McmcReport) -> tuple[np.ndarray, ...]:
-    return (
-        _readonly(value.samples_physical, float, "samples_physical", 2),
-        _readonly(value.log_probability, float, "log_probability", 1),
-        _readonly(value.acceptance_fraction, float, "acceptance_fraction", 1),
-        _readonly(value.split_rhat, float, "split_rhat", 1),
-        _readonly(value.effective_sample_size, float, "effective_sample_size", 1),
-    )
-
-
-def _validate_mcmc_identity(value: McmcReport) -> None:
-    if not isinstance(value.config, McmcConfig):
-        raise TypeError("config must be McmcConfig")
-    if not isinstance(value.child_seed, int) or isinstance(value.child_seed, bool) or value.child_seed < 0:
-        raise ValueError("child_seed must be a nonnegative integer")
-    if not value.label.strip():
-        raise ValueError("label must not be empty")
-    if value.candidate_id is not None and not value.candidate_id.strip():
-        raise ValueError("candidate_id must be nonempty or None")
-
-
-def _validate_mcmc_axes(
-    config: McmcConfig,
-    names: tuple[str, ...],
-    arrays: tuple[np.ndarray, ...],
-) -> None:
-    """Keep flattened retained draws aligned with walker and parameter axes."""
-    samples, probability, acceptance, rhat, effective = arrays
-    parameter_axes = samples.shape[1] == len(names) == rhat.size == effective.size
-    if not parameter_axes:
-        raise ValueError("MCMC parameter axes do not match parameter names")
-    if samples.shape[0] != probability.size:
-        raise ValueError("MCMC sample and probability counts must match")
-    if acceptance.size != config.walkers:
-        raise ValueError("MCMC acceptance_fraction must match walker count")
-
-
-def _validate_mcmc_values(arrays: tuple[np.ndarray, ...]) -> None:
-    samples, probability, _acceptance, _rhat, _effective = arrays
-    if np.any(~np.isfinite(samples)) or np.any(~np.isfinite(probability)):
-        raise ValueError("MCMC report arrays contain nonfinite values")
 
 
 def _evidence_count(value: int, field: str) -> None:
@@ -283,40 +220,6 @@ class ProfileBasinDecision:
 
 
 @dataclass(frozen=True, slots=True)
-class McmcConfig:
-    """Affine-invariant sampling geometry and deterministic work budget."""
-
-    walkers: int
-    burn_in: int
-    production_steps: int
-    thin: int = 1
-    stretch_scale: float = 2.0
-
-    def __post_init__(self) -> None:
-        for field in ("walkers", "production_steps", "thin"):
-            _positive_integer(getattr(self, field), field)
-        if not isinstance(self.burn_in, int) or isinstance(self.burn_in, bool) or self.burn_in < 0:
-            raise ValueError("burn_in must be a nonnegative integer")
-        if self.walkers % 2:
-            raise ValueError("walkers must be even")
-        if not isfinite(self.stretch_scale) or self.stretch_scale <= 1.0:
-            raise ValueError("stretch_scale must be finite and greater than one")
-
-    @classmethod
-    def standard(cls, free_parameter_count: int) -> McmcConfig:
-        if (
-            not isinstance(free_parameter_count, int)
-            or isinstance(free_parameter_count, bool)
-            or free_parameter_count < 0
-        ):
-            raise ValueError("free_parameter_count must be a nonnegative integer")
-        walkers = max(32, 2 * free_parameter_count + 2)
-        if walkers % 2:
-            walkers += 1
-        return cls(walkers=walkers, burn_in=1000, production_steps=4000)
-
-
-@dataclass(frozen=True, slots=True)
 class ParameterProfile:
     """Profile coordinates, objective evidence, and closure flags."""
 
@@ -362,128 +265,6 @@ class BootstrapResult:
         object.__setattr__(self, "parameter_names", names)
         object.__setattr__(self, "samples", samples)
         object.__setattr__(self, "intervals", intervals)
-
-    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
-        return type(self), _pickle_values(self)
-
-
-def _ensemble_arrays(value: EnsembleSamples) -> tuple[np.ndarray, ...]:
-    return (
-        _readonly(value.samples_unit, float, "samples_unit", 3),
-        _readonly(value.log_probability, float, "log_probability", 2),
-        _readonly(value.acceptance_fraction, float, "acceptance_fraction", 1),
-        _readonly(value.split_rhat, float, "split_rhat", 1),
-        _readonly(value.effective_sample_size, float, "effective_sample_size", 1),
-    )
-
-
-def _validate_ensemble_axes(arrays: tuple[np.ndarray, ...]) -> None:
-    draws, walkers, dimensions = arrays[0].shape
-    valid = (
-        draws > 0
-        and dimensions > 0
-        and arrays[1].shape == (draws, walkers)
-        and arrays[2].shape == (walkers,)
-        and arrays[3].shape == (dimensions,)
-        and arrays[4].shape == (dimensions,)
-    )
-    if not valid:
-        raise ValueError("ensemble diagnostic arrays have incompatible shapes")
-
-
-@dataclass(frozen=True, slots=True)
-class EnsembleSamples:
-    """Retained unit-space ensemble and aligned convergence diagnostics."""
-
-    samples_unit: np.ndarray
-    log_probability: np.ndarray
-    acceptance_fraction: np.ndarray
-    split_rhat: np.ndarray
-    effective_sample_size: np.ndarray
-
-    def __post_init__(self) -> None:
-        arrays = _ensemble_arrays(self)
-        _validate_ensemble_axes(arrays)
-        names = (
-            "samples_unit",
-            "log_probability",
-            "acceptance_fraction",
-            "split_rhat",
-            "effective_sample_size",
-        )
-        _set_array_fields(self, names, arrays)
-
-    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
-        return type(self), _pickle_values(self)
-
-
-@dataclass(frozen=True, slots=True)
-class McmcReport:
-    """Physical retained samples bound to config, seed, and candidate identity.
-
-    Sample rows and log probabilities share the flattened retained-draw axis;
-    acceptance fractions remain walker-owned, while R-hat and effective sample
-    size remain parameter-owned. The optional candidate ID records which fit
-    state supplied the sampling center without retaining that mutable runtime.
-
-    Constraint targets are deterministic transforms of sampled coordinates,
-    while locked coordinates are constant physical values. Both stay separate
-    from sampled axes so R-hat and ESS describe free dimensions only.
-    """
-
-    config: McmcConfig
-    child_seed: int
-    parameter_names: tuple[str, ...]
-    samples_physical: np.ndarray
-    log_probability: np.ndarray
-    acceptance_fraction: np.ndarray
-    split_rhat: np.ndarray
-    effective_sample_size: np.ndarray
-    boundary_hits: tuple[str, ...]
-    label: str = "目标函数伪后验"
-    warnings: tuple[str, ...] = ()
-    candidate_id: str | None = None
-    prior_conflicts: tuple[str, ...] = ()
-    # Keep deterministic replay values outside sampled axes for stable diagnostics.
-    derived_parameter_names: tuple[str, ...] = ()
-    derived_samples_physical: np.ndarray | None = None
-    fixed_parameter_values: tuple[tuple[str, float], ...] = ()
-
-    def __post_init__(self) -> None:
-        _validate_mcmc_identity(self)
-        parameter_names = _nonempty_unique_names(self.parameter_names, "parameter names")
-        arrays = _mcmc_arrays(self)
-        _validate_mcmc_axes(self.config, parameter_names, arrays)
-        _validate_mcmc_values(arrays)
-        object.__setattr__(self, "parameter_names", parameter_names)
-        array_fields = (
-            "samples_physical",
-            "log_probability",
-            "acceptance_fraction",
-            "split_rhat",
-            "effective_sample_size",
-        )
-        _set_array_fields(self, array_fields, arrays)
-        object.__setattr__(self, "boundary_hits", tuple(self.boundary_hits))
-        object.__setattr__(self, "warnings", tuple(self.warnings))
-        object.__setattr__(self, "prior_conflicts", tuple(self.prior_conflicts))
-        derived_names, derived = validate_derived_samples(
-            parameter_names,
-            arrays[0].shape[0],
-            self.derived_parameter_names,
-            self.derived_samples_physical,
-        )
-        object.__setattr__(self, "derived_parameter_names", derived_names)
-        object.__setattr__(self, "derived_samples_physical", derived)
-        object.__setattr__(
-            self,
-            "fixed_parameter_values",
-            validate_fixed_parameter_values(
-                parameter_names,
-                derived_names,
-                self.fixed_parameter_values,
-            ),
-        )
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)

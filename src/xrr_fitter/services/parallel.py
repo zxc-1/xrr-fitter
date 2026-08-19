@@ -108,6 +108,7 @@ class OrderedTaskRunner:
         futures: list[Future[T]] = []
         try:
             for index, task in enumerate(tasks):
+
                 def observed_task(index=index, task=task):
                     try:
                         return task()
@@ -116,11 +117,7 @@ class OrderedTaskRunner:
 
                 future = self._executor.submit(observed_task)
                 future.add_done_callback(
-                    lambda value, index=index: (
-                        completed_positions.put(index)
-                        if value.cancelled()
-                        else None
-                    )
+                    lambda value, index=index: completed_positions.put(index) if value.cancelled() else None
                 )
                 self._register(futures, future)
         except BaseException:

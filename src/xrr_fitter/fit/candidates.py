@@ -143,9 +143,7 @@ def _ordinary_interface_values(
     effective = thickness if previous_thickness is None else min(previous_thickness, thickness)
     values: list[tuple[str, float]] = []
     if isinstance(component, LayerSpec):
-        material_density = (
-            1.0 if component.material.sld_override_a2 is not None else density_scale
-        )
+        material_density = 1.0 if component.material.sld_override_a2 is not None else density_scale
         values.append((f"{prefix}.density_scale", material_density))
     values.append((f"{prefix}.roughness_a", roughness_fraction * effective))
     return values, thickness
@@ -194,11 +192,7 @@ def _periodic_interface_values(
             )
         )
     if component.top_roughness_a is not None:
-        effective = (
-            thicknesses[0]
-            if previous_thickness is None
-            else min(previous_thickness, thicknesses[0])
-        )
+        effective = thicknesses[0] if previous_thickness is None else min(previous_thickness, thicknesses[0])
         values.append(
             (
                 f"component.{component_index}.top_roughness_a",
@@ -401,8 +395,7 @@ def _selected_combinations(
         return product(*dimensions)
     indices = bounded_index_product(tuple(len(values) for values in dimensions), rng, limit)
     return (
-        tuple(dimensions[dimension][option] for dimension, option in enumerate(index_tuple))
-        for index_tuple in indices
+        tuple(dimensions[dimension][option] for dimension, option in enumerate(index_tuple)) for index_tuple in indices
     )
 
 
@@ -444,16 +437,11 @@ def build_candidate_pool(
             *dimensions,
         )
         combinations = _selected_combinations(all_dimensions, rng, generated_limit)
-        generated = tuple(
-            _make_start(structure, *combination) for combination in combinations
-        )
+        generated = tuple(_make_start(structure, *combination) for combination in combinations)
     else:
         all_dimensions = (geometry, *dimensions)
         combinations = _selected_combinations(all_dimensions, rng, generated_limit)
-        generated = tuple(
-            _make_start(structure, combination[0], (), *combination[1:])
-            for combination in combinations
-        )
+        generated = tuple(_make_start(structure, combination[0], (), *combination[1:]) for combination in combinations)
     return (*protected, *generated[:generated_limit])
 
 
@@ -466,7 +454,12 @@ def _start_distance(first: CandidateStart, second: CandidateStart) -> float:
     left = np.array([first_values[name] for name in shared], dtype=float)
     right = np.array([second_values[name] for name in shared], dtype=float)
     scale = np.maximum(np.maximum(np.abs(left), np.abs(right)), 1e-12)
-    return float(np.sqrt(np.mean(((left - right) / scale) ** 2)))
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        normalized = (left - right) / scale
+    unstable = ~np.isfinite(normalized)
+    if np.any(unstable):
+        normalized[unstable] = left[unstable] / scale[unstable] - right[unstable] / scale[unstable]
+    return float(np.sqrt(np.mean(normalized**2)))
 
 
 def _curve_distance(first: np.ndarray, second: np.ndarray) -> float:
@@ -474,11 +467,7 @@ def _curve_distance(first: np.ndarray, second: np.ndarray) -> float:
 
 
 def _effective_objective(candidate: FitCandidate) -> float:
-    return (
-        candidate.objective
-        if candidate.ranking_objective is None
-        else candidate.ranking_objective
-    )
+    return candidate.objective if candidate.ranking_objective is None else candidate.ranking_objective
 
 
 def rank_candidate_indices(
@@ -497,9 +486,7 @@ def rank_candidate_indices(
         and isfinite(_effective_objective(candidate))
         and (eligible is None or candidate.candidate_id in eligible)
     )
-    return tuple(
-        sorted(selected, key=lambda index: (_effective_objective(values[index]), index))
-    )
+    return tuple(sorted(selected, key=lambda index: (_effective_objective(values[index]), index)))
 
 
 def best_candidate_index(
@@ -521,10 +508,7 @@ def cluster_candidate_indices(
     values = tuple(candidates)
     if not isfinite(distance) or distance < 0.0:
         raise ValueError("cluster distance must be finite and nonnegative")
-    if values and any(
-        candidate.unit_vector.size != values[0].unit_vector.size
-        for candidate in values
-    ):
+    if values and any(candidate.unit_vector.size != values[0].unit_vector.size for candidate in values):
         raise ValueError("candidate unit vectors must have equal width")
     remaining = set(range(len(values)))
     clusters: list[tuple[int, ...]] = []
@@ -538,8 +522,7 @@ def cluster_candidate_indices(
             neighbors = tuple(
                 index
                 for index in sorted(remaining)
-                if np.linalg.norm(values[current].unit_vector - values[index].unit_vector)
-                <= distance
+                if np.linalg.norm(values[current].unit_vector - values[index].unit_vector) <= distance
             )
             pending.extend(neighbors)
             remaining.difference_update(neighbors)
@@ -631,33 +614,26 @@ def _deduplicated(
     parameter vectors that produce the same reflectivity curve.
     """
     curves = _validated_curves(scored, coarse_log_curves)
-    ordered = tuple(
-        sorted(scored, key=lambda item: (item[0], item[1].feature_key, item[1].values))
-    )
+    ordered = tuple(sorted(scored, key=lambda item: (item[0], item[1].feature_key, item[1].values)))
     parameter_clusters = _connected_components(
         tuple(range(len(ordered))),
-        lambda first, second: _start_distance(ordered[first][1], ordered[second][1])
-        <= PARAMETER_PRECLUSTER_DISTANCE,
+        lambda first, second: _start_distance(ordered[first][1], ordered[second][1]) <= PARAMETER_PRECLUSTER_DISTANCE,
     )
     first_level: list[tuple[float, CandidateStart]] = []
     for cluster in parameter_clusters:
         families = _connected_components(
             cluster,
-            lambda first, second: _curve_distance(
-                curves[ordered[first][1]], curves[ordered[second][1]]
-            )
-            < CURVE_MERGE_DECADES,
+            lambda first, second: (
+                _curve_distance(curves[ordered[first][1]], curves[ordered[second][1]]) < CURVE_MERGE_DECADES
+            ),
         )
         first_level.extend(_representative(ordered, family) for family in families)
-    provisional = tuple(
-        sorted(first_level, key=lambda item: (item[0], item[1].feature_key, item[1].values))
-    )
+    provisional = tuple(sorted(first_level, key=lambda item: (item[0], item[1].feature_key, item[1].values)))
     global_families = _connected_components(
         tuple(range(len(provisional))),
-        lambda first, second: _curve_distance(
-            curves[provisional[first][1]], curves[provisional[second][1]]
-        )
-        < CURVE_MERGE_DECADES,
+        lambda first, second: (
+            _curve_distance(curves[provisional[first][1]], curves[provisional[second][1]]) < CURVE_MERGE_DECADES
+        ),
     )
     return tuple(
         sorted(
@@ -707,9 +683,7 @@ def select_full_search_candidates(
     if limit < 1:
         return ()
     deduplicated = _deduplicated(scored, coarse_log_curves)
-    baseline_items = tuple(
-        item for item in scored if item[1].feature_key == "declared-baseline"
-    )
+    baseline_items = tuple(item for item in scored if item[1].feature_key == "declared-baseline")
     if not baseline_items:
         return tuple(start for _cost, start in deduplicated[:limit])
     baseline = min(baseline_items, key=lambda item: (item[0], item[1].values))[1]
@@ -717,8 +691,7 @@ def select_full_search_candidates(
         start
         for _cost, start in deduplicated
         if start != baseline
-        and _curve_distance(coarse_log_curves[start], coarse_log_curves[baseline])
-        >= CURVE_MERGE_DECADES
+        and _curve_distance(coarse_log_curves[start], coarse_log_curves[baseline]) >= CURVE_MERGE_DECADES
     )
     return (baseline, *remaining[: limit - 1])
 
@@ -768,11 +741,7 @@ def _archived_candidate(candidate: FitCandidate) -> FitCandidate:
 def _validate_archive_policy(threshold_ratio: float, base_perturbations: int) -> None:
     if not isfinite(threshold_ratio) or threshold_ratio <= 1.0:
         raise ValueError("stage-B archive threshold must exceed one")
-    if (
-        isinstance(base_perturbations, bool)
-        or not isinstance(base_perturbations, int)
-        or base_perturbations < 0
-    ):
+    if isinstance(base_perturbations, bool) or not isinstance(base_perturbations, int) or base_perturbations < 0:
         raise ValueError("base perturbation count must be a nonnegative integer")
 
 
@@ -799,20 +768,14 @@ def _partition_stage_b_archive(
     ordered: tuple[FitCandidate, ...],
     threshold_ratio: float,
 ) -> tuple[tuple[FitCandidate, ...], tuple[FitCandidate, ...]]:
-    selectable = tuple(
-        candidate
-        for candidate in ordered
-        if _is_selectable_archive_candidate(candidate)
-    )
+    selectable = tuple(candidate for candidate in ordered if _is_selectable_archive_candidate(candidate))
     if not selectable:
         return (), tuple(_archived_candidate(candidate) for candidate in ordered)
     cutoff = threshold_ratio * selectable[0].objective
     active = tuple(candidate for candidate in selectable if candidate.objective <= cutoff)
     active_ids = {candidate.candidate_id for candidate in active}
     archived = tuple(
-        _archived_candidate(candidate)
-        for candidate in ordered
-        if candidate.candidate_id not in active_ids
+        _archived_candidate(candidate) for candidate in ordered if candidate.candidate_id not in active_ids
     )
     return active, archived
 

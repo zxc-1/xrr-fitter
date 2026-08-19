@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 MANIFEST = """\
 # Ti-Ni multilayer, from BornAgain FitSpecularBasics.py
 # dQ/Q = 0.05 FWHM or 0.0212 1-sigma
@@ -61,9 +60,7 @@ def test_frozen_index_records_schema_commit_and_sha256(load_tool_module, tmp_pat
     assert index["schema"] == module.INDEX_SCHEMA
     assert index["suite_commit"] == module.SUITE_COMMIT
     assert all(len(record["sha256"]) == 64 and record["size"] > 0 for record in index["files"])
-    assert [record["path"] for record in index["files"]] == sorted(
-        record["path"] for record in index["files"]
-    )
+    assert [record["path"] for record in index["files"]] == sorted(record["path"] for record in index["files"])
 
 
 def test_verify_index_rejects_mutated_content(load_tool_module, tmp_path: Path) -> None:

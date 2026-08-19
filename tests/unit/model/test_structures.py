@@ -213,6 +213,20 @@ def test_structure_budget_sums_multiple_components() -> None:
         StructureSpec(air, (*components, layer), silicon)
 
 
+def test_gradient_ratio_overflow_is_rejected_before_budget_allocation() -> None:
+    air, silicon, _ = _materials()
+    gradient = GradientLayerSpec(
+        "wide-gradient",
+        1e-5 + 1e-7j,
+        2e-5 + 2e-7j,
+        1e308,
+        microslab_max_a=1e-308,
+    )
+
+    with pytest.raises(ValueError, match="expanded slab count|gradient slab"):
+        StructureSpec(air, (gradient,), silicon)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     (
@@ -246,6 +260,7 @@ def test_transition_branch_accepts_widths_below_the_layer_thickness_floor() -> N
     (
         ((2.0, 2.0), (0.5, 0.5)),
         ((1.0, 3.0), (0.25, 0.75)),
+        ((1e308, 1e308), (0.5, 0.5)),
     ),
 )
 def test_interface_transition_normalizes_weights(
@@ -260,6 +275,13 @@ def test_interface_transition_normalizes_weights(
 def test_interface_transition_requires_branches() -> None:
     with pytest.raises(ValueError, match="branches"):
         InterfaceTransition(())
+
+
+def test_interface_transition_rejects_ratio_overflow_as_a_value_error() -> None:
+    branch = TransitionBranch("linear", 1.0, 1e308)
+
+    with pytest.raises(ValueError, match="microslab count"):
+        InterfaceTransition((branch,), microslab_max_a=1e-308)
 
 
 @pytest.mark.parametrize("value", (0.0, -1.0, float("nan"), float("inf"), 10.5))
