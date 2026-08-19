@@ -22,9 +22,9 @@ pluggy==1.6.0
 Pygments==2.20.0
 pyparsing==3.3.2
 pyproject_hooks==1.2.0
-PySide6==6.11.1
-PySide6_Addons==6.11.1
-PySide6_Essentials==6.11.1
+PySide6==6.11.2
+PySide6_Addons==6.11.2
+PySide6_Essentials==6.11.2
 pytest-qt==4.5.0
 pytest==8.4.2
 python-dateutil==2.9.0.post0
@@ -36,7 +36,7 @@ refnx @ git+https://github.com/refnx/refnx.git@3d3808f66a14a8200eba020f8dff53f4d
 rpds-py==2026.6.3
 scipy==1.18.0
 setuptools==75.8.2
-shiboken6==6.11.1
+shiboken6==6.11.2
 six==1.17.0
 typing_extensions==4.16.0
 tzdata==2026.3
