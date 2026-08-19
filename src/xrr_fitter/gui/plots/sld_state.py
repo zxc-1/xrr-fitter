@@ -9,6 +9,7 @@ import numpy as np
 from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 import xrr_fitter.api as api
+from xrr_fitter.gui import theme
 from xrr_fitter.gui.plots.diagnostics import COMPANION_SPEC, DiagnosticView
 
 # The selector labels are Chinese UI text; these are the matching algorithm keys
@@ -64,7 +65,7 @@ def build_sld_companion_pane(
     toggle, selector, controls = build_sld_band_controls(pane, on_bands_toggled, on_align_changed)
     layout = QVBoxLayout(pane)
     layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(4)
+    layout.setSpacing(theme.SPACE_XS)
     layout.addWidget(heading)
     layout.addLayout(controls)
     layout.addWidget(views[key].canvas, 1)
@@ -78,7 +79,7 @@ def build_sld_band_controls(
 ) -> tuple[QCheckBox, QComboBox, QHBoxLayout]:
     controls = QHBoxLayout()
     controls.setContentsMargins(0, 0, 0, 0)
-    controls.setSpacing(6)
+    controls.setSpacing(theme.SPACE_SM)
     toggle = QCheckBox("显示不确定度带", pane)
     toggle.setObjectName("sldBandsToggle")
     toggle.setEnabled(False)

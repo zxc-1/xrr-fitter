@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data, simple_structure
+
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
@@ -122,11 +122,7 @@ def test_local_solver_passes_an_analytic_jacobian_to_scipy(
         step = 1e-6
         finite = np.column_stack(
             [
-                (
-                    fun(x + np.eye(x.size)[index] * step)
-                    - fun(x - np.eye(x.size)[index] * step)
-                )
-                / (2.0 * step)
+                (fun(x + np.eye(x.size)[index] * step) - fun(x - np.eye(x.size)[index] * step)) / (2.0 * step)
                 for index in range(x.size)
             ]
         )
@@ -186,8 +182,7 @@ def test_local_residual_and_jacobian_append_the_analytic_scale_prior_row() -> No
     assert residual.shape == (fitted_count + 1,)
     assert jacobian.shape == (fitted_count + 1, len(problem.variables))
     scale_index = next(
-        index for index, coordinate in enumerate(problem.variables)
-        if coordinate.name == "instrument.scale"
+        index for index, coordinate in enumerate(problem.variables) if coordinate.name == "instrument.scale"
     )
     nonzero = np.flatnonzero(np.abs(jacobian[-1]) > 1e-12)
     np.testing.assert_array_equal(nonzero, [scale_index])
@@ -196,9 +191,7 @@ def test_local_residual_and_jacobian_append_the_analytic_scale_prior_row() -> No
     minus = unit.copy()
     plus[scale_index] += step
     minus[scale_index] -= step
-    finite = (api.local_residual(problem, plus)[-1] - api.local_residual(problem, minus)[-1]) / (
-        2.0 * step
-    )
+    finite = (api.local_residual(problem, plus)[-1] - api.local_residual(problem, minus)[-1]) / (2.0 * step)
     assert jacobian[-1, scale_index] == pytest.approx(finite, rel=1e-5, abs=1e-8)
 
 
@@ -313,9 +306,7 @@ def test_local_solver_evaluates_a_no_free_parameter_problem_once() -> None:
 def test_fit_search_preserves_fully_locked_lineage_through_stage_e() -> None:
     pipeline = import_module("xrr_fitter.fit.pipeline")
 
-    result = pipeline.run_fit_search(
-        pipeline.FitSearchRequest("fixed", _fixed_problem())
-    )
+    result = pipeline.run_fit_search(pipeline.FitSearchRequest("fixed", _fixed_problem()))
 
     assert tuple(summary.stage for summary in result.stage_summaries) == (
         "A",
@@ -324,11 +315,7 @@ def test_fit_search_preserves_fully_locked_lineage_through_stage_e() -> None:
         "D",
         "E",
     )
-    final = tuple(
-        candidate
-        for candidate in result.candidates
-        if candidate.candidate_id.startswith("E-")
-    )
+    final = tuple(candidate for candidate in result.candidates if candidate.candidate_id.startswith("E-"))
     assert tuple(candidate.candidate_id for candidate in final) == (
         "E-0",
         "E-1",

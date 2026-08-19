@@ -15,10 +15,12 @@ from xrr_fitter.model.parameters import (
     ParameterReference,
     ParameterSetting,
     ParameterValue,
+    PhysicalValueError,
     PriorSpec,
     SharingRule,
     constraint_cycle_path,
     constraint_sharing_conflicts,
+    physical_to_unit,
     unit_to_physical,
     validate_constraint_stage_split,
 )
@@ -53,6 +55,21 @@ def test_parameter_coordinates_use_declared_r22_transforms() -> None:
         ParameterCoordinate(0, "interface.roughness_a", "logit")
 
 
+def test_log_parameter_definition_requires_positive_bounds() -> None:
+    with pytest.raises(ValueError, match="log parameter.*positive"):
+        ParameterDefinition(
+            name="invalid.log",
+            display_name="Invalid log",
+            unit="",
+            category="structure",
+            initial=1.0,
+            lower=0.0,
+            upper=2.0,
+            transform="log",
+            locked=False,
+        )
+
+
 def test_log_unit_interior_roundoff_stays_within_physical_bounds() -> None:
     definition = ParameterDefinition(
         name="component.0.thickness_a",
@@ -69,6 +86,198 @@ def test_log_unit_interior_roundoff_stays_within_physical_bounds() -> None:
     value = unit_to_physical(definition, np.nextafter(0.0, 1.0))
 
     assert definition.lower <= value <= definition.upper
+
+
+def test_dynamic_upper_below_declared_lower_rejects_both_transform_directions() -> None:
+    definition = ParameterDefinition(
+        name="component.0.roughness_a",
+        display_name="Roughness",
+        unit="A",
+        category="interface",
+        initial=4.5,
+        lower=4.0,
+        upper=50.0,
+        transform="roughness_fraction",
+        locked=False,
+    )
+
+    with pytest.raises(PhysicalValueError, match="empty physical bounds"):
+        unit_to_physical(definition, 1.0, dynamic_upper=3.5)
+    with pytest.raises(PhysicalValueError, match="empty physical bounds"):
+        physical_to_unit(definition, 4.0, dynamic_upper=3.5)
+
+
+def test_nonfinite_dynamic_upper_is_rejected_instead_of_ignored() -> None:
+    definition = ParameterDefinition(
+        name="component.0.roughness_a",
+        display_name="Roughness",
+        unit="A",
+        category="interface",
+        initial=4.0,
+        lower=0.0,
+        upper=50.0,
+        transform="roughness_fraction",
+        locked=False,
+    )
+    for convert, dynamic_upper in (
+        (unit_to_physical, float("nan")),
+        (physical_to_unit, float("inf")),
+        (unit_to_physical, "3"),
+    ):
+        with pytest.raises(PhysicalValueError, match="dynamic upper.*finite"):
+            if convert is unit_to_physical:
+                convert(definition, 0.5, dynamic_upper=dynamic_upper)
+            else:
+                convert(definition, 4.0, dynamic_upper=dynamic_upper)
+
+
+def test_log_unit_derivative_avoids_ratio_overflow() -> None:
+    from xrr_fitter.evaluation import _unit_derivative
+
+    definition = ParameterDefinition(
+        name="wide.log",
+        display_name="Wide log",
+        unit="",
+        category="structure",
+        initial=1.0,
+        lower=1e-300,
+        upper=1e300,
+        transform="log",
+        locked=False,
+    )
+    derivative = _unit_derivative(definition, 1.0)
+    assert np.isfinite(derivative)
+    assert derivative == pytest.approx(np.log(1e300) - np.log(1e-300))
+
+
+@pytest.mark.parametrize("lower", [1e308, 1e-300])
+def test_log_transform_handles_adjacent_bounds_when_log_subtraction_rounds_to_zero(lower: float) -> None:
+    upper = np.nextafter(lower, np.inf)
+    definition = ParameterDefinition(
+        name="narrow.log",
+        display_name="Narrow log",
+        unit="",
+        category="structure",
+        initial=lower,
+        lower=lower,
+        upper=upper,
+        transform="log",
+        locked=False,
+    )
+
+    assert physical_to_unit(definition, lower) == 0.0
+    assert physical_to_unit(definition, upper) == 1.0
+    decoded = unit_to_physical(definition, 0.5)
+    assert lower <= decoded <= upper
+
+
+def test_linear_transform_handles_extreme_cross_zero_bounds() -> None:
+    definition = ParameterDefinition(
+        name="wide.linear",
+        display_name="Wide linear",
+        unit="",
+        category="structure",
+        initial=0.0,
+        lower=-1e308,
+        upper=1e308,
+        transform="linear",
+        locked=False,
+    )
+
+    assert physical_to_unit(definition, definition.lower) == 0.0
+    assert physical_to_unit(definition, definition.upper) == 1.0
+    assert physical_to_unit(definition, 0.0) == pytest.approx(0.5)
+    assert unit_to_physical(definition, 0.5) == pytest.approx(0.0)
+    assert unit_to_physical(definition, 0.0) == definition.lower
+    assert unit_to_physical(definition, 1.0) == definition.upper
+
+
+def test_linear_derivative_rejects_unrepresentable_span() -> None:
+    from xrr_fitter.evaluation import _unit_derivative
+
+    definition = ParameterDefinition(
+        name="wide.linear.derivative",
+        display_name="Wide linear derivative",
+        unit="",
+        category="structure",
+        initial=0.0,
+        lower=-1e308,
+        upper=1e308,
+        transform="linear",
+        locked=False,
+    )
+
+    with pytest.raises(FloatingPointError, match="span"):
+        _unit_derivative(definition, 0.0)
+
+
+def test_roughness_jacobian_rejects_unrepresentable_active_span() -> None:
+    from xrr_fitter.evaluation import _roughness_value_jacobian
+
+    definition = ParameterDefinition(
+        name="wide.roughness.derivative",
+        display_name="Wide roughness derivative",
+        unit="",
+        category="interface",
+        initial=0.0,
+        lower=-1e308,
+        upper=1e308,
+        transform="roughness_fraction",
+        locked=False,
+    )
+
+    with pytest.raises(FloatingPointError, match="span"):
+        _roughness_value_jacobian(
+            definition,
+            0.5,
+            0,
+            1e308,
+            np.zeros(1),
+        )
+
+
+def test_scale_prior_jacobian_rejects_unrepresentable_affine_span() -> None:
+    from types import SimpleNamespace
+
+    from xrr_fitter.evaluation import _scale_prior_jacobian
+
+    definition = ParameterDefinition(
+        name="instrument.scale",
+        display_name="Scale",
+        unit="",
+        category="instrument",
+        initial=1.0,
+        lower=-1e308,
+        upper=1e308,
+        transform="linear",
+        locked=False,
+    )
+    problem = SimpleNamespace(
+        scale_prior_center=1.0,
+        scale_prior_tau_decades=1.0,
+        variables=(ParameterCoordinate(0, definition.name, "linear"),),
+        parameter_definitions=(definition,),
+    )
+
+    with pytest.raises(FloatingPointError, match="span"):
+        _scale_prior_jacobian(problem)
+
+
+def test_dynamic_upper_at_declared_lower_uses_a_canonical_singleton_coordinate() -> None:
+    definition = ParameterDefinition(
+        name="component.0.roughness_a",
+        display_name="Roughness",
+        unit="A",
+        category="interface",
+        initial=4.0,
+        lower=4.0,
+        upper=50.0,
+        transform="roughness_fraction",
+        locked=False,
+    )
+
+    assert physical_to_unit(definition, 4.0, dynamic_upper=4.0) == 0.0
+    assert unit_to_physical(definition, 0.75, dynamic_upper=4.0) == 4.0
 
 
 def test_parameter_settings_and_values_are_finite_immutable_values() -> None:
@@ -192,6 +401,43 @@ def test_parameter_definition_rejects_prior_center_outside_bounds() -> None:
             transform="linear",
             locked=False,
             prior=PriorSpec("normal", (500.0, 2.0)),
+        )
+
+
+def test_parameter_definition_accepts_soft_range_with_adjacent_extreme_bounds() -> None:
+    lower = 1e308
+    upper = np.nextafter(lower, np.inf)
+    prior = PriorSpec("soft_range", (lower, upper, 1.0))
+
+    definition = ParameterDefinition(
+        name="instrument.extreme",
+        display_name="Extreme",
+        unit="",
+        category="instrument",
+        initial=lower,
+        lower=lower,
+        upper=upper,
+        transform="linear",
+        locked=False,
+        prior=prior,
+    )
+
+    assert definition.prior == prior
+
+
+def test_parameter_definition_rejects_nonrepresentable_lognormal_center_as_value_error() -> None:
+    with pytest.raises(ValueError, match="prior center must be within bounds"):
+        ParameterDefinition(
+            name="instrument.scale",
+            display_name="Scale",
+            unit="",
+            category="instrument",
+            initial=1.0,
+            lower=0.1,
+            upper=10.0,
+            transform="log",
+            locked=False,
+            prior=PriorSpec("lognormal", (1e308, 1.0)),
         )
 
 

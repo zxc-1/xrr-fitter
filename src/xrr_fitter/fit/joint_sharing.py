@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 
 from xrr_fitter.evaluation import encode_physical_vector
@@ -115,14 +117,18 @@ def _encode_declared_local(
     local_problem: object,
     scatter: tuple[int, ...],
 ) -> np.ndarray:
-    return np.array(
-        encode_physical_vector(
-            local_problem,
-            _roughness_target_placeholders(local_problem, scatter),
-        ),
-        dtype=float,
-        copy=True,
+    active_indices = tuple(index for index, global_index in enumerate(scatter) if global_index >= 0)
+    active_problem = replace(
+        local_problem,
+        variables=tuple(local_problem.variables[index] for index in active_indices),
     )
+    encoded = encode_physical_vector(
+        active_problem,
+        _roughness_target_placeholders(local_problem, scatter),
+    )
+    local = np.zeros(len(scatter), dtype=float)
+    local[np.asarray(active_indices, dtype=int)] = encoded
+    return local
 
 
 def _raw_scatter(problem: object, unit: np.ndarray) -> list[np.ndarray]:

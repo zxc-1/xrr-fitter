@@ -10,7 +10,6 @@ from PySide6.QtWidgets import QLabel, QProgressBar, QVBoxLayout, QWidget
 
 import xrr_fitter.api as api
 
-
 PROGRESS_RESOLUTION = 1000
 
 # Below this completed fraction the elapsed time is too short a lever to
@@ -227,9 +226,7 @@ class ProgressView(QWidget):
         elapsed = now - self._started
         owner = progress.dataset_id or "联合拟合"
         stage_index, stage_count = self._stage_ordinal(progress.stage)
-        self.stage_label.setText(
-            f"{owner} · 阶段 {stage_index}/{stage_count} · {stage_text(progress.stage)}"
-        )
+        self.stage_label.setText(f"{owner} · 阶段 {stage_index}/{stage_count} · {stage_text(progress.stage)}")
         self._advance(progress)
         self._estimator.update(elapsed, self._floor / PROGRESS_RESOLUTION)
         self._render_meta(elapsed)
@@ -263,9 +260,7 @@ class ProgressView(QWidget):
         fraction = self._floor / PROGRESS_RESOLUTION
         remaining = self._estimator.remaining(elapsed)
         if fraction >= ETA_MIN_FRACTION and remaining is not None:
-            self.meta_label.setText(
-                f"{elapsed_text} · 预计剩余 {_format_duration(remaining)}"
-            )
+            self.meta_label.setText(f"{elapsed_text} · 预计剩余 {_format_duration(remaining)}")
             return
         self.meta_label.setText(f"{elapsed_text} · 预计剩余 --:--")
 

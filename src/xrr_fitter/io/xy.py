@@ -18,10 +18,10 @@ from xrr_fitter.model.data import (
     DataColumnMapping,
     PreparedData,
     fit_ready,
+    log_domain_mask,
     qz_from_two_theta,
 )
 from xrr_fitter.model.instrument import resolution_to_sigma_q
-
 
 DataRecord = tuple[float, float, float, float, int]
 
@@ -50,10 +50,7 @@ def xy_bytes(two_theta_deg: object, intensity: object) -> bytes:
     if not valid:
         raise ValueError("curve axes must be aligned nonempty finite vectors")
     rows = ["# 2theta_deg intensity"]
-    rows.extend(
-        f"{angle:.10f} {value:.16e}"
-        for angle, value in zip(angles, intensities, strict=True)
-    )
+    rows.extend(f"{angle:.10f} {value:.16e}" for angle, value in zip(angles, intensities, strict=True))
     return ("\n".join(rows) + "\n").encode("ascii")
 
 
@@ -85,11 +82,7 @@ def _row_flags(
     required = max(mapped) + 1
     parseable = tuple(values is not None and len(values) >= required for values in parsed)
     numeric = tuple(
-        bool(
-            values is not None
-            and len(values) >= required
-            and all(np.isfinite(values[index]) for index in mapped)
-        )
+        bool(values is not None and len(values) >= required and all(np.isfinite(values[index]) for index in mapped))
         for values in parsed
     )
     return parseable, numeric
@@ -101,11 +94,7 @@ def _data_window(
     source_path: Path,
 ) -> tuple[int, int]:
     data_start = next(
-        (
-            index
-            for index in range(max(0, len(numeric) - 1))
-            if numeric[index] and numeric[index + 1]
-        ),
+        (index for index in range(max(0, len(numeric) - 1)) if numeric[index] and numeric[index + 1]),
         None,
     )
     if data_start is None:
@@ -187,13 +176,72 @@ def _sort_key(record: DataRecord) -> tuple[bool, float, int]:
 
 def _group_end(records: list[DataRecord], cursor: int) -> int:
     end = cursor + 1
-    while (
-        end < len(records)
-        and np.isfinite(records[cursor][0])
-        and records[end][0] == records[cursor][0]
-    ):
+    while end < len(records) and np.isfinite(records[cursor][0]) and records[end][0] == records[cursor][0]:
         end += 1
     return end
+
+
+def _stable_midpoint(left: float, right: float) -> float:
+    left, right = float(left), float(right)
+    span = right - left
+    if isfinite(span):
+        return left + span / 2.0
+    scale = max(abs(left), abs(right))
+    if scale == 0.0:
+        return 0.0
+    return scale * ((left / scale) * 0.5 + (right / scale) * 0.5)
+
+
+def _stable_median(values: object) -> float:
+    array = np.asarray(values, dtype=float)
+    with np.errstate(over="ignore", invalid="ignore"):
+        median = float(np.median(array))
+    if isfinite(median):
+        return median
+    ordered = np.sort(array)
+    midpoint = ordered.size // 2
+    if ordered.size % 2:
+        return float(ordered[midpoint])
+    return _stable_midpoint(ordered[midpoint - 1], ordered[midpoint])
+
+
+def _ordinary_inverse_variance(
+    intensities: np.ndarray,
+    sigmas: np.ndarray,
+) -> tuple[float, float] | None:
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        inverse_variance = 1.0 / sigmas**2
+    if np.any(~np.isfinite(inverse_variance)):
+        return None
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        total = np.sum(inverse_variance)
+        weighted = np.sum(inverse_variance * intensities) / total
+        sigma = np.sqrt(1.0 / total)
+    if all(np.isfinite(value) for value in (weighted, sigma)):
+        return float(weighted), float(sigma)
+    return None
+
+
+def _scaled_inverse_variance(
+    intensities: np.ndarray,
+    sigmas: np.ndarray,
+) -> tuple[float, float]:
+    scale = float(np.min(sigmas))
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        relative = scale / sigmas
+        weights = relative**2
+        total = np.sum(weights)
+        intensity_scale = float(np.max(np.abs(intensities)))
+        if intensity_scale == 0.0:
+            weighted = 0.0
+        else:
+            normalized = intensities / intensity_scale
+            normalized_mean = np.sum(weights * normalized) / total
+            weighted = intensity_scale * np.clip(normalized_mean, -1.0, 1.0)
+        sigma = scale / np.sqrt(total)
+    if not all(np.isfinite(value) for value in (weighted, sigma)):
+        raise ValueError("inverse-variance merge is not finite")
+    return float(weighted), float(sigma)
 
 
 def _merged_intensity(
@@ -203,11 +251,13 @@ def _merged_intensity(
     intensities = np.asarray([item[1] for item in group])
     sigmas = np.asarray([item[2] for item in group])
     if has_sigma and np.all(np.isfinite(sigmas) & (sigmas > 0.0)):
-        inverse_variance = 1.0 / sigmas**2
-        weighted = np.sum(inverse_variance * intensities) / np.sum(inverse_variance)
-        sigma = np.sqrt(1.0 / np.sum(inverse_variance))
-        return float(weighted), float(sigma)
-    return float(np.median(intensities)), float("nan")
+        # Keep the ordinary expression bit-stable when it is representable.
+        # Extremely small finite sigmas overflow their inverse variance; scale
+        # by the smallest sigma in that exceptional path instead of producing
+        # inf/inf and a NaN merged intensity.
+        ordinary = _ordinary_inverse_variance(intensities, sigmas)
+        return ordinary if ordinary is not None else _scaled_inverse_variance(intensities, sigmas)
+    return _stable_median(intensities), float("nan")
 
 
 def _merge_records(
@@ -228,11 +278,7 @@ def _merge_records(
             group,
             mapping.intensity_sigma is not None,
         )
-        resolution = (
-            float(np.median([item[3] for item in group]))
-            if mapping.resolution is not None
-            else float("nan")
-        )
+        resolution = _stable_median([item[3] for item in group]) if mapping.resolution is not None else float("nan")
         angles.append(float(group[0][0]))
         intensities.append(intensity)
         sigmas.append(sigma)
@@ -277,12 +323,19 @@ def _noise_floor(
     high_count = ceil(0.20 * eligible.size)
     if high_count < 20:
         return 1e-8, ["高角点不足，R_floor 使用 1e-8"]
-    high_values = intensity[eligible[-high_count:]] / normalization
-    differences = np.diff(high_values)
-    median = np.median(differences)
-    mad = np.median(np.abs(differences - median))
-    sigma_noise = mad / (0.67448975 * sqrt(2.0))
-    return max(1e-12, 3.0 * float(sigma_noise)), []
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        high_values = intensity[eligible[-high_count:]] / normalization
+    if not np.all(np.isfinite(high_values)):
+        return 1e-8, ["高角归一化强度不可表示，R_floor 使用 1e-8"]
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        differences = np.diff(high_values)
+        median = np.median(differences)
+        mad = np.median(np.abs(differences - median))
+        sigma_noise = mad / (0.67448975 * sqrt(2.0))
+        floor = 3.0 * float(sigma_noise)
+    if not isfinite(floor):
+        return 1e-8, ["高角噪声估计不可表示，R_floor 使用 1e-8"]
+    return max(1e-12, floor), []
 
 
 def _derived_state(
@@ -290,7 +343,7 @@ def _derived_state(
     wavelength_a: float,
     angle_offset_deg: float,
     statuses: tuple[str, ...],
-) -> tuple[np.ndarray, np.ndarray, float, float, bool, list[str]]:
+) -> tuple[np.ndarray, np.ndarray, float, float, np.ndarray, bool, list[str]]:
     qz, theta_positive = qz_from_two_theta(
         merged.two_theta,
         wavelength_a,
@@ -304,12 +357,13 @@ def _derived_state(
         normalization,
     )
     warnings.extend(floor_warnings)
-    normalized = merged.intensity / normalization
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        normalized = merged.intensity / normalization
     validation = (
         np.isfinite(merged.two_theta)
         & np.isfinite(merged.intensity)
         & theta_positive
-        & (normalized + r_floor > 0.0)
+        & log_domain_mask(normalized, r_floor)
     )
     ready = fit_ready(merged.two_theta, qz, validation)
     invalid_count = int(np.count_nonzero(~validation))
@@ -319,7 +373,7 @@ def _derived_state(
         warnings.append("数据区包含无法解析的行")
     if not ready:
         warnings.append("有效唯一点不足 30 或 qz 跨度为零")
-    return qz, normalized, normalization, r_floor, ready, warnings
+    return qz, normalized, normalization, r_floor, validation, ready, warnings
 
 
 def _optional_arrays(
@@ -333,7 +387,10 @@ def _optional_arrays(
     normalized_sigma = None
     if mapping.intensity_sigma is not None:
         intensity_sigma = np.asarray(merged.sigmas, dtype=float)
-        normalized_sigma = intensity_sigma / normalization
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+            normalized_sigma = intensity_sigma / normalization
+        if not np.all(np.isfinite(normalized_sigma)):
+            raise ValueError("normalized intensity uncertainty is not finite")
     resolution = None
     sigma_q = None
     if mapping.resolution is not None:
@@ -377,7 +434,7 @@ def _prepare_xy(
     start, end = _data_window(parseable, numeric, source_path)
     statuses, records = _collect_rows(parsed, parseable, start, end, mapping)
     merged = _merge_records(records, mapping)
-    qz, normalized, normalization, r_floor, ready, warnings = _derived_state(
+    qz, normalized, normalization, r_floor, validation, ready, warnings = _derived_state(
         merged,
         beam.effective_wavelength_a,
         import_angle_offset_deg,
@@ -389,12 +446,6 @@ def _prepare_xy(
         normalization,
         beam.effective_wavelength_a,
         import_angle_offset_deg,
-    )
-    validation = (
-        np.isfinite(merged.two_theta)
-        & np.isfinite(merged.intensity)
-        & (qz > 0.0)
-        & (normalized + r_floor > 0.0)
     )
     return PreparedData(
         source_path=source_path,

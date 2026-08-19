@@ -4,8 +4,8 @@ from dataclasses import replace
 from importlib import import_module
 
 import numpy as np
-
 from tests.support.model_cases import fit_candidate, prepared_data, simple_structure
+
 from xrr_fitter.evaluation import encode_physical_vector
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
@@ -94,10 +94,7 @@ def test_candidate_clustering_is_stable_and_retains_member_lineage() -> None:
     clusters = api.cluster_candidate_indices(candidates, distance=0.05)
 
     assert clusters == ((0, 1), (2, 3))
-    assert tuple(
-        min(cluster, key=lambda index: (candidates[index].objective, index))
-        for cluster in clusters
-    ) == (1, 2)
+    assert tuple(min(cluster, key=lambda index: (candidates[index].objective, index)) for cluster in clusters) == (1, 2)
 
 
 def test_candidate_clustering_and_ranking_do_not_mutate_published_arrays() -> None:
@@ -119,8 +116,7 @@ def test_candidate_clustering_and_ranking_do_not_mutate_published_arrays() -> No
 def test_stage_b_archive_uses_full_objective_and_reclaims_local_budget() -> None:
     api = _api()
     candidates = tuple(
-        _candidate(f"B-{index}", objective)
-        for index, objective in enumerate((1.0, 5.0, 10.0, 10.000001, 20.0))
+        _candidate(f"B-{index}", objective) for index, objective in enumerate((1.0, 5.0, 10.0, 10.000001, 20.0))
     )
 
     archive = api.archive_stage_b_candidates(

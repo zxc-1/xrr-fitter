@@ -6,7 +6,6 @@ from PySide6.QtWidgets import QCheckBox
 
 import xrr_fitter.api as api
 
-
 AIR = api.MaterialSpec("Air", None, None, 0.0j)
 SI = api.MaterialSpec("Si", "Si", 2.329)
 SIO2 = api.MaterialSpec("SiO2", "SiO2", 2.20)
@@ -14,11 +13,7 @@ SIO2 = api.MaterialSpec("SiO2", "SiO2", 2.20)
 
 def _write_curve(path: Path) -> Path:
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}"
-            for index in range(64)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}" for index in range(64)) + "\n",
         encoding="utf-8",
     )
     return path

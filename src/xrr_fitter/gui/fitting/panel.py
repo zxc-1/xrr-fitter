@@ -103,7 +103,7 @@ class FitPanel(QWidget):
         buttons.addWidget(self.force_button)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(theme.SPACE_SM)
         layout.addLayout(batch_row)
         layout.addLayout(buttons)
         layout.addWidget(self.progress_view)
@@ -214,10 +214,7 @@ class FitPanel(QWidget):
         would silently pick up hours-old partial work. Detecting the checkpoint
         lets the panel relabel the action and say so before the user commits.
         """
-        return any(
-            dataset.checkpoint is not None
-            for dataset in self.document.project.datasets
-        )
+        return any(dataset.checkpoint is not None for dataset in self.document.project.datasets)
 
     def _batch_mode_selected(self, _index: int) -> None:
         mode = str(self.batch_selector.currentData())
@@ -281,18 +278,12 @@ class FitPanel(QWidget):
     def _refresh_readiness(self, *_args) -> None:
         try:
             self._readiness = api.preflight_fit(self.document.project)
-            self._automatic_readiness = api.preflight_automatic_fit(
-                self.document.project
-            )
+            self._automatic_readiness = api.preflight_automatic_fit(self.document.project)
         except (OSError, ValueError) as error:
             self._readiness = api.FitReadiness(False, str(error))
             self._automatic_readiness = api.FitReadiness(False, str(error))
         if not self.is_running:
-            readiness = (
-                self._readiness
-                if self.document.project.ui_state.expert_mode
-                else self._automatic_readiness
-            )
+            readiness = self._readiness if self.document.project.ui_state.expert_mode else self._automatic_readiness
             self._show_readiness(readiness)
         self._sync_batch_selector()
         self._sync_mode_visibility()
@@ -313,9 +304,7 @@ class FitPanel(QWidget):
     def _refresh_controls(self, running: bool | None = None) -> None:
         active = self.is_running if running is None else running
         self.start_button.setEnabled(self._readiness.ready and not active)
-        self.automatic_button.setEnabled(
-            self._automatic_readiness.ready and not active
-        )
+        self.automatic_button.setEnabled(self._automatic_readiness.ready and not active)
         self.cancel_button.setEnabled(active)
         self.force_button.setEnabled(active)
         self.batch_selector.setEnabled(not active)

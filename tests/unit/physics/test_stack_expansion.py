@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -14,7 +16,7 @@ from xrr_fitter.model.structure import (
     StructureSpec,
     TransitionBranch,
 )
-from xrr_fitter.physics.stack import expand_structure
+from xrr_fitter.physics.stack import expand_structure, gradient_slab_count, rebuild_structure
 
 AIR = MaterialSpec("Air", None, None, 0j)
 SI = MaterialSpec("Si", None, None, 20e-6 + 0.2e-6j)
@@ -54,6 +56,122 @@ def test_gradient_layer_expands_to_midpoint_microslabs() -> None:
         stack.sld_a2[1:4], [(10e-6 + 1e-6j) + fraction * gradient for fraction in (1 / 6, 1 / 2, 5 / 6)]
     )
     np.testing.assert_array_equal(stack.roughness_a, [1, 0, 0, 0])
+
+
+def test_gradient_interpolation_avoids_cross_zero_sld_overflow() -> None:
+    structure = StructureSpec(
+        AIR,
+        (GradientLayerSpec("wide", 1e308 + 0j, -1e308 + 0j, 20.0, microslab_max_a=20.0),),
+        SI,
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        stack = expand_structure(structure, 1.5406)
+
+    assert stack.sld_a2[1] == 0.0j
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
+@pytest.mark.parametrize("fixed_count", [True, 2.0, "2", 0, -1])
+def test_fixed_gradient_topology_requires_a_bounded_positive_integer(fixed_count: object) -> None:
+    gradient = GradientLayerSpec(
+        "ramp",
+        10e-6 + 1e-6j,
+        30e-6 + 3e-6j,
+        2.0,
+        microslab_max_a=2.0,
+    )
+    with pytest.raises(PhysicalValueError, match="gradient slab topology"):
+        gradient_slab_count(gradient, "component.0", {"component.0": fixed_count})
+
+
+def test_gradient_slab_count_rejects_ratio_overflow() -> None:
+    gradient = GradientLayerSpec("wide", 1e-5, 2e-5, 1e308, microslab_max_a=1e-308)
+
+    with pytest.raises(PhysicalValueError, match="expanded slab budget"):
+        gradient_slab_count(gradient, "component.0")
+
+
+def test_fixed_gradient_topology_rejects_missing_or_oversized_counts() -> None:
+    gradient = GradientLayerSpec(
+        "ramp",
+        10e-6 + 1e-6j,
+        30e-6 + 3e-6j,
+        5.0,
+        microslab_max_a=2.0,
+    )
+    with pytest.raises(PhysicalValueError, match="gradient slab topology"):
+        gradient_slab_count(gradient, "component.0", {})
+    with pytest.raises(PhysicalValueError, match="gradient slab topology"):
+        gradient_slab_count(gradient, "component.0", {"component.0": 2049})
+
+
+def test_fixed_gradient_topology_cannot_bypass_the_total_slab_budget() -> None:
+    gradients = tuple(
+        GradientLayerSpec(
+            f"ramp-{index}",
+            10e-6 + 1e-6j,
+            30e-6 + 3e-6j,
+            2.0,
+            microslab_max_a=2.0,
+        )
+        for index in range(2)
+    )
+    structure = StructureSpec(AIR, gradients, SI)
+    with pytest.raises(ValueError, match="expanded slab count"):
+        expand_structure(
+            structure,
+            1.5406,
+            {"component.0": 2048, "component.1": 1},
+        )
+
+
+def _plain_periodic_values(repeats: float) -> dict[str, float]:
+    return {
+        "component.0.layer.0.thickness_a": 28.0,
+        "component.0.layer.0.density_scale": 1.0,
+        "component.0.layer.0.roughness_a": 3.0,
+        "component.0.layer.1.thickness_a": 42.0,
+        "component.0.layer.1.density_scale": 1.0,
+        "component.0.layer.1.roughness_a": 4.0,
+        "component.0.repeats": repeats,
+        "backing.roughness_a": 5.0,
+    }
+
+
+def test_rebuild_periodic_repeats_accepts_integer_float_without_changing_topology() -> None:
+    structure = StructureSpec(
+        AIR,
+        (
+            PeriodicBlock(
+                "Mo/Si", (LayerSpec("Mo", MO, 28.0, roughness_a=3.0), LayerSpec("Si", SI, 42.0, roughness_a=4.0)), 2
+            ),
+        ),
+        SI,
+        backing_roughness_a=5.0,
+    )
+
+    rebuilt = rebuild_structure(structure, _plain_periodic_values(2.0))
+
+    assert rebuilt.components[0].repeats == 2
+
+
+@pytest.mark.parametrize("repeats", [2.5, 4.0, np.nan, np.inf])
+def test_rebuild_periodic_repeats_rejects_invalid_or_changed_topology(repeats: float) -> None:
+    structure = StructureSpec(
+        AIR,
+        (
+            PeriodicBlock(
+                "Mo/Si", (LayerSpec("Mo", MO, 28.0, roughness_a=3.0), LayerSpec("Si", SI, 42.0, roughness_a=4.0)), 2
+            ),
+        ),
+        SI,
+        backing_roughness_a=5.0,
+    )
+
+    with pytest.raises(PhysicalValueError, match="periodic repeats"):
+        rebuild_structure(structure, _plain_periodic_values(repeats))
 
 
 def test_dynamic_interface_roughness_limit_is_rejected_during_expansion() -> None:

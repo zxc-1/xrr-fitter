@@ -17,15 +17,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from xrr_fitter.gui import theme
 from xrr_fitter.gui.data.panel import DataPanel
-from xrr_fitter.gui.guidance.panel import GuidancePanel
 from xrr_fitter.gui.fitting.panel import FitPanel
+from xrr_fitter.gui.guidance.panel import GuidancePanel
 from xrr_fitter.gui.parameters.panel import ParametersPanel
 from xrr_fitter.gui.plots.panel import PlotPanel
 from xrr_fitter.gui.project.actions import ProjectActions
 from xrr_fitter.gui.results.panel import ResultsPanel
 from xrr_fitter.gui.structure.panel import StructurePanel
-
 
 WORKFLOW_ACTION_SPECS = (
     ("startFitAction", "一键拟合", "Ctrl+Return", "start_fit"),
@@ -64,8 +64,13 @@ class AnalysisSection(QFrame):
         )
         self.toggle.toggled.connect(self.set_expanded)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(
+            theme.SPACE_SM,
+            theme.SPACE_SM,
+            theme.SPACE_SM,
+            theme.SPACE_SM,
+        )
+        layout.setSpacing(theme.SPACE_SM)
         layout.addWidget(self.toggle)
         layout.addWidget(inner)
 
@@ -78,9 +83,7 @@ class AnalysisSection(QFrame):
             self.toggle.setChecked(expanded)
             return
         self.body.setVisible(expanded)
-        self.toggle.setArrowType(
-            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
-        )
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
 
 
 DOCK_SPECS = (
@@ -131,9 +134,7 @@ def _build_analysis_sections(window: object) -> None:
         ("拟合", "fitSection", window.fit_panel),
         ("结果", "resultsSection", window.result_panel),
     )
-    window.analysis_sections = {
-        name: AnalysisSection(title, name, panel) for title, name, panel in specs
-    }
+    window.analysis_sections = {name: AnalysisSection(title, name, panel) for title, name, panel in specs}
     # The result card carries the candidate list, uncertainty evidence, and
     # automatic tables, which together exceed a dock's height at the documented
     # minimum size. A fresh project has no result to read, so it starts collapsed
@@ -221,8 +222,6 @@ def install_workflow_actions(window: object) -> None:
         action.setToolTip(text)
         action.setStatusTip(text)
         callback = getattr(window, callback_name)
-        action.triggered.connect(
-            lambda _checked=False, operation=callback: operation()
-        )
+        action.triggered.connect(lambda _checked=False, operation=callback: operation())
         window.addAction(action)
         window._workflow_actions[object_name] = action

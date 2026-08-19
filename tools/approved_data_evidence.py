@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path
 import shutil
 import tempfile
-from typing import Sequence
+from collections.abc import Sequence
+from pathlib import Path
 
 from approved_data_candidate import (
     candidate_value,
@@ -18,8 +18,8 @@ from approved_data_candidate import (
 )
 from approved_data_model import (
     APPROVED_STATUS,
-    CASE_IDS,
     CANDIDATE_SCHEMA,
+    CASE_IDS,
     MANIFEST_SCHEMA,
     ApprovedCaseRecord,
     ApprovedDataBinding,
@@ -38,7 +38,6 @@ from approved_data_records import (
     _source_tree,
     _tree_hash,
     _verify_source,
-    check_candidate,
     manifest_value,
     parse_approved_case_record,
     parse_approved_data_manifest,
@@ -160,10 +159,7 @@ def _evidence_files(root: Path) -> tuple[bytes, tuple[bytes, ...]]:
     expected_records = {f"{case_id}.json" for case_id in CASE_IDS}
     _exact_directory(record_dir, expected_records, "approved records")
     manifest = _read_regular(root / "manifest.json", "approved-data manifest")
-    records = tuple(
-        _read_regular(record_dir / f"{case_id}.json", "approved case record")
-        for case_id in CASE_IDS
-    )
+    records = tuple(_read_regular(record_dir / f"{case_id}.json", "approved case record") for case_id in CASE_IDS)
     return manifest, records
 
 

@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+from xrr_fitter.gui import theme
 from xrr_fitter.gui.data.import_dialog import ImportDialog
 from xrr_fitter.gui.data.mask_editor import MaskEditor
 from xrr_fitter.gui.data.substrate_dialog import SubstrateDialog
@@ -153,7 +154,7 @@ class DataPanel(QWidget):
         self.summary_label.hide()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(theme.SPACE_SM)
         layout.addLayout(top)
         layout.addWidget(self.summary_label)
         layout.addWidget(self.tree)

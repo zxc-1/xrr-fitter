@@ -4,7 +4,6 @@ import sys
 
 import pytest
 
-
 FORBIDDEN_OUTCOMES = ("skipped", "xfailed", "xpassed", "deselected")
 RECORDER_PLUGIN = "xrr-outcome-recorder"
 

@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data, simple_structure
+
 from xrr_fitter.evaluation import (
     EvaluationConstraintError,
     encode_physical_vector,
@@ -126,11 +126,7 @@ def _continue_profile_basin(pipeline, problem, search, decision, **kwargs):
 
 
 def _stage_e_candidates(result: FitSearchResult):
-    return tuple(
-        candidate
-        for candidate in result.candidates
-        if candidate.candidate_id.startswith("E-")
-    )
+    return tuple(candidate for candidate in result.candidates if candidate.candidate_id.startswith("E-"))
 
 
 def _assert_reconverged_identity(stage_e) -> None:
@@ -141,10 +137,7 @@ def _assert_reconverged_identity(stage_e) -> None:
         "E-3",
     )
     assert tuple(candidate.seed_index for candidate in stage_e) == (0, 1, 2, 3)
-    assert all(
-        candidate.stop_reason.startswith("profile_basin_rescue:")
-        for candidate in stage_e
-    )
+    assert all(candidate.stop_reason.startswith("profile_basin_rescue:") for candidate in stage_e)
 
 
 def _assert_reconverged_stage_e(

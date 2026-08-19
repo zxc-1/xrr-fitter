@@ -112,6 +112,4 @@ class ExportManifest:
 
     @property
     def files(self) -> tuple[ExportFileRecord, ...]:
-        return self.root_files + tuple(
-            record for dataset in self.datasets for record in dataset.files
-        )
+        return self.root_files + tuple(record for dataset in self.datasets for record in dataset.files)

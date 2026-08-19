@@ -117,9 +117,7 @@ def refit_from_physical_values(
     values = tuple(candidates)
     candidate_ids = tuple(candidate.candidate_id for candidate in values)
     selectable = best_candidate_index(values)
-    best_objective = (
-        float("inf") if selectable is None else values[selectable].objective
-    )
+    best_objective = float("inf") if selectable is None else values[selectable].objective
     summary = FitStageSummary(
         "automatic-refit",
         candidate_ids,

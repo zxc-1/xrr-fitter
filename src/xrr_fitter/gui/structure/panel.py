@@ -6,6 +6,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
 import xrr_fitter.api as api
+from xrr_fitter.gui import theme
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.structure.editor import StructureEditor
 
@@ -41,7 +42,7 @@ class StructurePanel(QWidget):
         )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(theme.SPACE_SM)
         layout.addWidget(heading)
         layout.addWidget(self.initialize_button)
         layout.addWidget(self.editor)

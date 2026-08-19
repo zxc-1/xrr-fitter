@@ -131,10 +131,7 @@ class FitController(QObject):
                 self._timer.setInterval(self._base_interval_ms)
             return
         self._empty_polls += 1
-        if (
-            self._empty_polls >= self._backoff_after
-            and self._timer.interval() != self._idle_interval_ms
-        ):
+        if self._empty_polls >= self._backoff_after and self._timer.interval() != self._idle_interval_ms:
             self._timer.setInterval(self._idle_interval_ms)
 
     def _dispatch_batch(self, events: tuple[api.OperationEvent, ...]) -> None:
@@ -149,10 +146,7 @@ class FitController(QObject):
         for event in events:
             self.event_received.emit(event)
             if event.kind == "progress":
-                if (
-                    pending_progress is not None
-                    and event.progress.stage != pending_progress.stage
-                ):
+                if pending_progress is not None and event.progress.stage != pending_progress.stage:
                     self._flush_progress(pending_progress)
                 pending_progress = event.progress
                 continue

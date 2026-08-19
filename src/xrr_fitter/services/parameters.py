@@ -6,6 +6,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from xrr_fitter.io.source import dataset_index
+from xrr_fitter.model.constraint_expression import (
+    ConstraintArithmeticError,
+    evaluate_constraint_value,
+)
 from xrr_fitter.model.parameters import (
     RESERVED_DATASET_ID,
     ConstraintRule,
@@ -126,6 +130,11 @@ def validate_parameter_settings(
     """Validate settings against immutable definition metadata in input order."""
     declaration_values = tuple(definitions)
     setting_values = tuple(settings)
+    by_name = {definition.name: definition for definition in declaration_values}
+    for setting in setting_values:
+        definition = by_name.get(setting.name)
+        if definition is not None and definition.constrained:
+            raise ValueError(f"cannot set constrained parameter: {setting.name}")
     fitting.validate_parameter_setting_declarations(declaration_values, setting_values)
     return setting_values
 
@@ -162,12 +171,13 @@ def accept_source_update(
     index, updated = _accepted_source_dataset(project, preview)
     settings, priors = _reconciled_source_sidecars(project, index, updated)
     reconciled = replace(updated, parameter_settings=settings, parameter_priors=priors)
-    return _replace_invalidated(
+    invalidated = _replace_invalidated(
         project,
         index,
         reconciled,
         clear_evidence=True,
     )
+    return _reconcile_parameter_relationships(invalidated)
 
 
 def _role_signature(definition: ParameterDefinition) -> tuple[object, ...]:
@@ -178,10 +188,7 @@ def _topology_changed(
     previous: StructureSpec | None,
     updated: StructureSpec,
 ) -> bool:
-    if previous is None or len(previous.components) != len(updated.components):
-        return True
-    changed = sum(old is not new for old, new in zip(previous.components, updated.components, strict=True))
-    return changed > 1
+    return previous is None or previous.components != updated.components
 
 
 def _compatible_definition_names(
@@ -273,6 +280,13 @@ def set_parameter_settings(
         raise ValueError(f"dataset has no structure: {dataset_id}")
     data = _prepared_current(project, dataset)
     definitions = _default_definitions(project, dataset, data, dataset.structure)
+    # Validate user settings against the current effective declarations as well
+    # as the raw defaults, so generated constraint targets cannot be persisted as
+    # inert sidecars.
+    effective_declarations = tuple(
+        replace(definition, prior=None) for definition in describe_parameters(project, dataset_id)
+    )
+    validate_parameter_settings(effective_declarations, settings)
     validated = validate_parameter_settings(definitions, settings)
     effective = fitting.effective_parameter_definitions(definitions, validated)
     _, priors = _reconciled_parameter_sidecars(
@@ -287,12 +301,13 @@ def set_parameter_settings(
         parameter_settings=validated,
         parameter_priors=priors,
     )
-    return _replace_invalidated(
+    invalidated = _replace_invalidated(
         project,
         index,
         updated,
         clear_evidence=False,
     )
+    return _reconcile_parameter_relationships(invalidated)
 
 
 def validate_parameter_priors(
@@ -430,6 +445,42 @@ def set_sharing_rules(
         sharing_rules=validated,
         ui_state=replace(project.ui_state, selected_candidate_ids=selected),
     )
+
+
+def _reconcile_parameter_relationships(project: XrrProject) -> XrrProject:
+    """Drop declaration-bound relations that no longer compile."""
+    sharing_rules = fitting.reconciled_sharing_rules(project)
+    updated = project if sharing_rules == project.sharing_rules else set_sharing_rules(project, sharing_rules)
+    constraint_rules = reconciled_constraint_rules(updated)
+    return updated if constraint_rules == updated.constraint_rules else set_constraint_rules(updated, constraint_rules)
+
+
+def reconciled_constraint_rules(project: XrrProject) -> tuple[ConstraintRule, ...]:
+    """Retain only constraints valid against the current effective declarations."""
+    retained: list[ConstraintRule] = []
+    for rule in project.constraint_rules:
+        try:
+            validate_constraint_rules(project, (rule,))
+            references = tuple(_iter_references(rule.expression))
+            if not references:
+                value = evaluate_constraint_value(rule.expression, {})
+                definition = _constraint_definitions_by_reference(project, (rule,))[rule.target]
+                if not definition.lower <= value <= definition.upper:
+                    continue
+        except ConstraintArithmeticError:
+            continue
+        except (TypeError, ValueError):
+            continue
+        retained.append(rule)
+    candidate = tuple(retained)
+    try:
+        validate_constraint_rules(project, candidate)
+    except (TypeError, ValueError):
+        # The persisted graph was valid before the declaration change; if the
+        # new effective declarations introduce a graph-level conflict, remove
+        # the whole stale relation set rather than leave an unloadable project.
+        return ()
+    return candidate
 
 
 def _constraint_dataset_ids(rules: Sequence[ConstraintRule]) -> set[str]:

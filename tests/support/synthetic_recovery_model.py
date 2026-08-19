@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 import numpy as np
 
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.structure import LayerSpec, MaterialSpec, PeriodicBlock, StructureSpec
-
+from xrr_fitter.model.structure import MaterialSpec, StructureSpec
 
 AIR = MaterialSpec("Air", None, None, 0.0j)
 SILICON = MaterialSpec("Si", "Si", 2.329)
@@ -171,8 +170,9 @@ def _fraction_metric(
             (numerator_name, float(numerator_truth)),
             (denominator_name, float(denominator_truth)),
         ),
-        value=lambda values, first=numerator_name, second=denominator_name: values[first]
-        / (values[first] + values[second]),
+        value=lambda values, first=numerator_name, second=denominator_name: (
+            values[first] / (values[first] + values[second])
+        ),
     )
 
 

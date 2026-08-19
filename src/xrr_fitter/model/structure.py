@@ -190,8 +190,13 @@ def _transition_branches(values: object) -> tuple[TransitionBranch, ...]:
         raise ValueError("transition branches must not be empty")
     if any(not isinstance(branch, TransitionBranch) for branch in branches):
         raise TypeError("transition branches must be TransitionBranch values")
-    total = sum(branch.weight for branch in branches)
-    return tuple(TransitionBranch(item.kind, item.weight / total, item.thickness_a) for item in branches)
+    maximum = max(branch.weight for branch in branches)
+    scaled = tuple(branch.weight / maximum for branch in branches)
+    total = sum(scaled)
+    return tuple(
+        TransitionBranch(item.kind, weight / total, item.thickness_a)
+        for item, weight in zip(branches, scaled, strict=True)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,7 +212,8 @@ class InterfaceTransition:
         maximum = _real_scalar("transition microslab_max_a", self.microslab_max_a)
         if not isfinite(maximum) or maximum <= 0.0 or maximum > width:
             raise ValueError("transition microslab_max_a must be in (0,width]")
-        if ceil(width / maximum) > MAX_TRANSITION_SLABS:
+        slab_ratio = width / maximum
+        if not isfinite(slab_ratio) or ceil(slab_ratio) > MAX_TRANSITION_SLABS:
             raise ValueError(f"transition microslab count must not exceed {MAX_TRANSITION_SLABS}")
         object.__setattr__(self, "branches", branches)
         object.__setattr__(self, "microslab_max_a", maximum)
@@ -427,7 +433,10 @@ def _component_expanded_slab_count(component: StructureComponent | _ExpandedDrif
         return component.repeats * sum(_layer_expanded_slab_count(layer) for layer in component.layers)
     if isinstance(component, _ExpandedDriftBlock):
         return sum(_layer_expanded_slab_count(layer) for layer in component.layers)
-    return ceil(component.thickness_a / component.microslab_max_a)
+    ratio = component.thickness_a / component.microslab_max_a
+    if not isfinite(ratio) or ratio > MAX_EXPANDED_SLABS:
+        raise ExpandedSlabLimitError(f"expanded slab count for {component.name} exceeds {MAX_EXPANDED_SLABS}")
+    return max(1, ceil(ratio))
 
 
 def _validate_expanded_slab_budget(components: tuple[StructureComponent, ...]) -> None:

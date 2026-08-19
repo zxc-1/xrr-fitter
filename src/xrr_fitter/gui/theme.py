@@ -1,4 +1,4 @@
-"""Palette-aware application theme built on an 8px spacing grid.
+"""Palette-aware application theme built on a 4px spacing grid.
 
 The stylesheet styles controls only; window backgrounds stay native so the
 application follows the platform light and dark appearance.  Semantic state
@@ -55,6 +55,26 @@ DARK_TOKENS = ThemeTokens(
     selection_bg="rgba(90, 141, 238, 70)",
 )
 
+# The 4px grid the module docstring refers to.  Layouts import these instead of
+# writing literals so one dock's density stays comparable to the next; the
+# right-hand docks scroll inside a fixed viewport, so raising a step here costs
+# vertical budget in every stacked row at once.
+SPACE_XS = 4
+SPACE_SM = 8
+SPACE_MD = 12
+SPACE_LG = 16
+
+# Point sizes for text drawn outside the stylesheet (Matplotlib artists) and for
+# the few labels that need to depart from the widget default.
+FONT_PT_SM = 9
+FONT_PT_MD = 11
+FONT_PT_LG = 14
+
+# One interactive-control height for buttons, tool buttons and single-line
+# inputs alike.  These used to carry three different minimums (22, 20, and
+# unset), which is what made neighbouring controls in one row look mismatched.
+CONTROL_MIN_H = 22
+
 
 @dataclass(frozen=True, slots=True)
 class PlotPalette:
@@ -107,8 +127,8 @@ def _button_styles(tokens: ThemeTokens) -> str:
 QPushButton {{
     border: 1px solid {tokens.surface_border};
     border-radius: 6px;
-    padding: 4px 12px;
-    min-height: 22px;
+    padding: {SPACE_XS}px {SPACE_MD}px;
+    min-height: {CONTROL_MIN_H}px;
     background: {tokens.surface};
 }}
 QPushButton:hover:enabled {{ border-color: {tokens.accent}; }}
@@ -127,11 +147,15 @@ QPushButton[primary="true"]:disabled {{
     color: {tokens.muted_text};
     font-weight: 400;
 }}
-QPushButton[commandBar="true"] {{ padding: 3px 10px; min-height: 20px; }}
+QPushButton[commandBar="true"] {{
+    padding: {SPACE_XS}px {SPACE_SM}px;
+    min-height: {CONTROL_MIN_H}px;
+}}
 QToolButton {{
     border: 1px solid transparent;
     border-radius: 5px;
-    padding: 3px 10px;
+    padding: {SPACE_XS}px {SPACE_SM}px;
+    min-height: {CONTROL_MIN_H}px;
 }}
 QToolButton:hover:enabled {{ border-color: {tokens.surface_border}; }}
 QToolButton:checked {{
@@ -153,21 +177,21 @@ QLabel[sectionHeader="true"] {{
     padding: 2px 0px;
 }}
 QLabel[mutedText="true"] {{ color: {tokens.muted_text}; }}
-QLabel[emptyTitle="true"] {{ font-size: 15pt; font-weight: 700; }}
+QLabel[emptyTitle="true"] {{ font-size: {FONT_PT_LG}pt; font-weight: 700; }}
 QLabel[statusKind="ok"] {{ color: {tokens.ok}; }}
 QLabel[statusKind="warn"] {{ color: {tokens.warn}; }}
 QLabel[statusKind="error"] {{ color: {tokens.error}; }}
-QTabBar::tab {{ padding: 5px 10px; }}
+QTabBar::tab {{ padding: {SPACE_XS}px {SPACE_MD}px; }}
 QGroupBox {{
     border: 1px solid {tokens.surface_border};
     border-radius: 8px;
-    margin-top: 12px;
-    padding-top: 4px;
+    margin-top: {SPACE_MD}px;
+    padding-top: {SPACE_XS}px;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
-    left: 8px;
-    padding: 0px 4px;
+    left: {SPACE_SM}px;
+    padding: 0px {SPACE_XS}px;
     font-weight: 700;
 }}
 """
@@ -176,12 +200,12 @@ QGroupBox::title {{
 def _chrome_styles(tokens: ThemeTokens) -> str:
     return f"""
 QToolBar#mainToolbar {{
-    padding: 4px 8px;
-    spacing: 8px;
+    padding: {SPACE_XS}px {SPACE_SM}px;
+    spacing: {SPACE_SM}px;
     border-bottom: 1px solid {tokens.surface_border};
 }}
 QStatusBar#mainStatusBar {{ border-top: 1px solid {tokens.surface_border}; }}
-QStatusBar#mainStatusBar QLabel {{ padding: 0px 8px; }}
+QStatusBar#mainStatusBar QLabel {{ padding: 0px {SPACE_SM}px; }}
 QProgressBar {{
     border: 1px solid {tokens.surface_border};
     border-radius: 5px;
@@ -195,13 +219,13 @@ QTreeWidget, QTableWidget, QListWidget {{
     selection-background-color: {tokens.selection_bg};
 }}
 QHeaderView::section {{
-    padding: 3px 8px;
+    padding: 3px {SPACE_SM}px;
     border: 0px;
     border-bottom: 1px solid {tokens.surface_border};
     font-weight: 600;
 }}
 QScrollArea#analysisScroll {{ border: 0px; background: transparent; }}
-QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {{ min-height: 20px; }}
+QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {{ min-height: {CONTROL_MIN_H}px; }}
 """
 
 

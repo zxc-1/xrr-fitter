@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
-
 from tests.support.model_cases import prepared_data
+
 from xrr_fitter.model.data import log_domain_mask, with_fit_mask
 
 
@@ -30,6 +32,17 @@ def test_floor_fallback_and_log_domain_mask() -> None:
 
     assert mask.tolist() == [True, True, True, False, False]
     assert mask.flags.writeable is False
+
+
+def test_log_domain_mask_handles_large_finite_sum_without_warning() -> None:
+    maximum = np.finfo(float).max
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        mask = log_domain_mask(np.array([maximum, -maximum]), maximum)
+
+    assert mask.tolist() == [True, False]
+    assert not any(item.category is RuntimeWarning for item in caught)
 
 
 def test_mask_recomputes_fit_ready() -> None:

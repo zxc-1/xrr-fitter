@@ -41,6 +41,8 @@ from xrr_fitter.physics.sld_profile import sld_depth_profile
 from xrr_fitter.physics.stack import expand_structure, rebuild_structure
 
 MAX_REPLAY_SAMPLES = 500
+MAX_REPLAY_PROFILE_POINTS = 8_000_000
+MAX_INTERPOLATION_CELLS = 8_000_000
 QUANTILE_LEVELS = (0.025, 0.16, 0.5, 0.84, 0.975)
 ALIGN_CHOICES = ("backing", "surface")
 ALIGN_LABELS = {"backing": "基底界面", "surface": "表面界面"}
@@ -219,6 +221,7 @@ def _replay_one(
     wavelength_a: float,
     step_a: float,
     align: str,
+    gradient_slab_counts: dict[str, int] | None,
 ) -> Profile | None:
     """Replay one sample, returning ``None`` when its structure is unphysical.
 
@@ -230,12 +233,33 @@ def _replay_one(
     of silently narrowing the band.
     """
     try:
-        stack = expand_structure(rebuild_structure(structure, values), wavelength_a)
+        stack = expand_structure(
+            rebuild_structure(structure, values),
+            wavelength_a,
+            gradient_slab_counts,
+        )
         depth, profile = sld_depth_profile(stack, step_a=step_a)
     except (ValueError, TypeError, KeyError):
         return None
     total = float(np.sum(stack.thickness_a[1:-1]))
     return depth + _alignment_offset(depth, total, align), profile
+
+
+def _replay_gradient_slab_counts(
+    structure: StructureSpec,
+    report: McmcReport,
+) -> dict[str, int] | None:
+    if not report.gradient_slab_counts:
+        return None
+    recorded = dict(report.gradient_slab_counts)
+    expected = {
+        f"component.{index}"
+        for index, component in enumerate(structure.components)
+        if isinstance(component, GradientLayerSpec)
+    }
+    if set(recorded) != expected:
+        raise ValueError("recorded gradient slab topology does not match structure")
+    return recorded
 
 
 def _replayed_profiles(
@@ -248,6 +272,7 @@ def _replayed_profiles(
 ) -> Iterator[Profile | None]:
     baseline = _baseline_values(structure)
     allowed_names = _overlay_names(structure)
+    gradient_slab_counts = _replay_gradient_slab_counts(structure, report)
     if report.fixed_parameter_values:
         inherited_top = _inherited_periodic_top_names(structure)
         fixed_values = [(name, value) for name, value in report.fixed_parameter_values if name not in inherited_top]
@@ -266,7 +291,28 @@ def _replayed_profiles(
         if derived is not None:
             row = np.concatenate((row, derived[index]))
         values = _value_map(baseline, names, row, allowed_names=allowed_names)
-        yield _replay_one(structure, values, wavelength_a, step_a, align)
+        yield _replay_one(
+            structure,
+            values,
+            wavelength_a,
+            step_a,
+            align,
+            gradient_slab_counts,
+        )
+
+
+def _collect_profiles(replayed: Iterable[Profile | None]) -> list[Profile]:
+    """Retain successful profiles without exceeding the aggregate point budget."""
+    profiles: list[Profile] = []
+    points = 0
+    for item in replayed:
+        if item is None:
+            continue
+        points += int(item[0].size)
+        if points > MAX_REPLAY_PROFILE_POINTS:
+            raise ValueError(f"replayed SLD profiles exceed {MAX_REPLAY_PROFILE_POINTS} points")
+        profiles.append(item)
+    return profiles
 
 
 def _common_grid(profiles: Sequence[Profile], step_a: float) -> np.ndarray:
@@ -284,6 +330,9 @@ def _common_grid(profiles: Sequence[Profile], step_a: float) -> np.ndarray:
 
 
 def _interpolated(profiles: Sequence[Profile], grid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    cells = len(profiles) * int(np.asarray(grid).size)
+    if cells > MAX_INTERPOLATION_CELLS:
+        raise ValueError(f"interpolation matrix exceeds {MAX_INTERPOLATION_CELLS} cells")
     real = np.asarray([np.interp(grid, depth, profile.real) for depth, profile in profiles])
     imaginary = np.asarray([np.interp(grid, depth, profile.imag) for depth, profile in profiles])
     return real, imaginary
@@ -313,6 +362,31 @@ def _validated_failure_rate(attempted: int, succeeded: int) -> float:
     return rate
 
 
+def _stable_quantiles(values: np.ndarray, levels: np.ndarray) -> np.ndarray:
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        result = np.quantile(values, levels, axis=0)
+    if np.all(np.isfinite(result)):
+        return result
+    ordered = np.sort(values, axis=0)
+    for row, level in enumerate(levels):
+        position = float(level) * (ordered.shape[0] - 1)
+        lower_index = int(position)
+        upper_index = min(lower_index + 1, ordered.shape[0] - 1)
+        fraction = position - lower_index
+        unstable = ~np.isfinite(result[row])
+        left = ordered[lower_index, unstable]
+        right = ordered[upper_index, unstable]
+        scale = np.maximum(np.abs(left), np.abs(right))
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+            left_scaled = np.divide(left, scale, out=np.zeros_like(left), where=scale > 0.0)
+            right_scaled = np.divide(right, scale, out=np.zeros_like(right), where=scale > 0.0)
+            weighted = (1.0 - fraction) * left_scaled + fraction * right_scaled
+            result[row, unstable] = scale * np.clip(weighted, -1.0, 1.0)
+    if np.any(~np.isfinite(result)):
+        raise ValueError("SLD profile quantiles are not representable")
+    return result
+
+
 def sld_uncertainty_bands(
     structure: StructureSpec,
     report: McmcReport,
@@ -328,7 +402,7 @@ def sld_uncertainty_bands(
     total = int(report.samples_physical.shape[0])
     indices = _thinned_indices(total, max_samples)
     replayed = _replayed_profiles(structure, report, indices, wavelength_a, step_a, chosen)
-    profiles = [item for item in replayed if item is not None]
+    profiles = _collect_profiles(replayed)
     failure_rate = _validated_failure_rate(indices.size, len(profiles))
     grid = _common_grid(profiles, step_a)
     real, imaginary = _interpolated(profiles, grid)
@@ -336,8 +410,8 @@ def sld_uncertainty_bands(
     return SldUncertaintyBands(
         depth_a=grid,
         quantiles=QUANTILE_LEVELS,
-        real=np.quantile(real, levels, axis=0),
-        imaginary=np.quantile(imaginary, levels, axis=0),
+        real=_stable_quantiles(real, levels),
+        imaginary=_stable_quantiles(imaginary, levels),
         align_label=ALIGN_LABELS[chosen],
         sample_count=len(profiles),
         total_samples=total,

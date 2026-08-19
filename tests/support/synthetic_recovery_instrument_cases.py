@@ -78,6 +78,7 @@ def _instrument_effect_cases() -> tuple[SyntheticCase, ...]:
         )
     return tuple(cases)
 
+
 def _ambiguous_cases() -> tuple[SyntheticCase, ...]:
     cases: list[SyntheticCase] = []
     for index in range(20):
@@ -190,9 +191,7 @@ def _footprint_cases() -> tuple[SyntheticCase, ...]:
                     fit_beam=_mono_beam(),
                     generation_options=generation_options,
                     fit_instrument=(
-                        _geometry_instrument(spill)
-                        if mode == "locked"
-                        else InstrumentSpec(footprint_mode="fit")
+                        _geometry_instrument(spill) if mode == "locked" else InstrumentSpec(footprint_mode="fit")
                     ),
                     noise_kind=noise_kind,
                     metrics=tuple(metrics),
@@ -200,6 +199,8 @@ def _footprint_cases() -> tuple[SyntheticCase, ...]:
                 )
             )
     return tuple(cases)
+
+
 def _mixed_kalpha_cases() -> tuple[SyntheticCase, ...]:
     cases: list[SyntheticCase] = []
     for index in range(20):

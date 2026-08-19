@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -33,6 +35,27 @@ def test_footprint_factor_is_identically_one_when_spill_angle_is_zero() -> None:
     np.testing.assert_array_equal(footprint_factor(np.linspace(0.01, 2, 50), 0), np.ones(50))
 
 
+def test_footprint_factor_saturates_without_overflow_for_tiny_spill_angle() -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        actual = footprint_factor(np.array([0.1, 1.0]), 5e-324)
+
+    np.testing.assert_array_equal(actual, np.ones(2))
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
+@pytest.mark.parametrize(
+    ("theta", "spill"),
+    ((np.array([90.1]), 1.0), (np.array([1.0]), 90.1)),
+)
+def test_footprint_factor_rejects_angles_outside_the_incidence_domain(
+    theta: np.ndarray,
+    spill: float,
+) -> None:
+    with pytest.raises(ValueError, match="must be.*90"):
+        footprint_factor(theta, spill)
+
+
 def test_expert_linear_background_is_applied_in_q_space() -> None:
     theta = np.linspace(0.05, 2, 150)
     stack = _stack()
@@ -49,6 +72,19 @@ def test_expert_powerlaw_background_adds_diffuse_tail_in_q_space() -> None:
         theta, stack, MONO, background=3e-8, powerlaw_background_amplitude=1e-10, powerlaw_background_exponent=2.5
     )
     np.testing.assert_allclose(actual, parratt_reflectivity(q, stack) + 3e-8 + 1e-10 * q**-2.5, rtol=1e-13)
+
+
+def test_powerlaw_background_rejects_nonfinite_sampled_values() -> None:
+    theta = np.array([np.nextafter(0.0, 1.0)])
+
+    with pytest.raises(ValueError, match="finite"):
+        instrument_reflectivity(
+            theta,
+            _stack(),
+            MONO,
+            powerlaw_background_amplitude=1e-10,
+            powerlaw_background_exponent=4.0,
+        )
 
 
 @pytest.mark.parametrize(
@@ -89,6 +125,91 @@ def test_mixed_kalpha_requires_secondary_stack_and_mono_rejects_secondary_stack(
         instrument_reflectivity(np.array([0.2]), _stack(), BeamSpec(kind="mixed_kalpha"))
     with pytest.raises(ValueError, match="secondary_stack"):
         instrument_reflectivity(np.array([0.2]), _stack(), MONO, _stack())
+
+
+def test_instrument_reflectivity_rejects_angles_outside_grazing_incidence_domain() -> None:
+    with pytest.raises(ValueError, match="theta_deg.*90"):
+        instrument_reflectivity(np.array([90.1]), _stack(), MONO)
+
+
+def test_qz_conversion_preserves_multidimensional_shape_and_rejects_nonfinite_theta() -> None:
+    theta = np.array([[0.1, 0.2], [0.3, 0.4]])
+    qz = qz_from_theta_deg(theta, MONO.wavelength_a)
+    assert qz.shape == theta.shape
+    for invalid in (np.nan, np.inf, -np.inf):
+        with pytest.raises(ValueError, match="theta_deg.*finite"):
+            qz_from_theta_deg(np.array([invalid]), MONO.wavelength_a)
+
+
+def test_qz_conversion_rejects_finite_inputs_that_overflow() -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match="qz.*finite"):
+            qz_from_theta_deg(np.array([1.0]), 1e-310)
+
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
+def test_instrument_composition_rejects_finite_scale_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import xrr_fitter.physics.reflectivity as reflectivity_module
+
+    monkeypatch.setattr(
+        reflectivity_module,
+        "parratt_reflectivity",
+        lambda query, _stack: np.full_like(query, 2.0),
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(FloatingPointError, match="instrument reflectivity"):
+            instrument_reflectivity(np.array([1.0]), _stack(), MONO, scale=1e308)
+
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
+def test_mixed_kalpha_normalizes_extreme_intensity_ratio_without_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import xrr_fitter.physics.reflectivity as reflectivity_module
+
+    monkeypatch.setattr(
+        reflectivity_module,
+        "parratt_reflectivity",
+        lambda query, _stack: np.full_like(query, 2.0),
+    )
+    beam = BeamSpec(kind="mixed_kalpha", intensity_ratio_21=1e308)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        observed = instrument_reflectivity(
+            np.array([1.0]),
+            _stack(),
+            beam,
+            _stack(),
+        )
+
+    np.testing.assert_array_equal(observed, np.array([2.0]))
+    assert not any(item.category is RuntimeWarning for item in caught)
+
+
+def test_powerlaw_background_avoids_intermediate_power_overflow() -> None:
+    import xrr_fitter.physics.reflectivity as reflectivity_module
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        observed = reflectivity_module._background(
+            np.array([1e-200]),
+            0.0,
+            0.0,
+            1e-200,
+            2.0,
+        )
+
+    np.testing.assert_allclose(observed, np.array([1e200]), rtol=5e-14)
+    assert np.all(np.isfinite(observed))
+    assert not any(item.category is RuntimeWarning for item in caught)
 
 
 def test_mixed_kalpha_applies_scale_once_and_samples_background_at_primary_q() -> None:
@@ -159,3 +280,9 @@ def test_theta_domain_resolution_matches_gaussian_smear_in_theta_space() -> None
         absolute_sigma_a_inv=0.001,
     )
     np.testing.assert_allclose(actual, expected, rtol=1e-13, atol=1e-15)
+
+
+@pytest.mark.parametrize("wavelength", (0.0, -1.0, np.nan, np.inf))
+def test_qz_conversion_rejects_invalid_wavelength(wavelength: float) -> None:
+    with pytest.raises(ValueError, match="wavelength_a.*positive.*finite"):
+        qz_from_theta_deg(np.array([1.0]), wavelength)

@@ -12,6 +12,7 @@ from xrr_fitter.physics.parratt import BRANCH_EPSILON_A2, parratt_reflectivity
 from xrr_fitter.physics.resolution import (
     MAX_QUERY_VALUES,
     RULES,
+    _gauss_hermite_average,
     gauss_hermite_values,
     gh_converged,
 )
@@ -463,17 +464,30 @@ def parratt_reflectivity_jacobian(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return Parratt reflectivity and its analytic real forward Jacobian."""
     inputs = _inputs(qz_a_inv, stack, qz_jacobian, thickness_jacobian, sld_jacobian, roughness_jacobian)
-    if not stack.periodic_spans:
-        return _standard_jacobian(stack, inputs)
-    active = _active_parameter_mask(inputs)
-    if np.all(active):
-        return _jacobian_for_inputs(stack, inputs)
-    values, reduced = _jacobian_for_inputs(
-        stack,
-        _selected_parameter_inputs(inputs, active),
-    )
-    jacobian = np.zeros(values.shape + (inputs.parameter_count,), dtype=float)
-    jacobian[..., active] = reduced
+    try:
+        # Keep primal and tangent arithmetic under the same finite-value policy.
+        # This prevents overflow warnings from escaping during a failed fit
+        # candidate and makes derivative failure match the primal contract.
+        with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+            if not stack.periodic_spans:
+                values, jacobian = _standard_jacobian(stack, inputs)
+            else:
+                active = _active_parameter_mask(inputs)
+                if np.all(active):
+                    values, jacobian = _jacobian_for_inputs(stack, inputs)
+                else:
+                    values, reduced = _jacobian_for_inputs(
+                        stack,
+                        _selected_parameter_inputs(inputs, active),
+                    )
+                    jacobian = np.zeros(values.shape + (inputs.parameter_count,), dtype=float)
+                    jacobian[..., active] = reduced
+    except FloatingPointError as error:
+        if str(error).startswith(("zero ", "invalid periodic Parratt transform")):
+            raise
+        raise FloatingPointError(f"nonfinite Parratt Jacobian arithmetic: {error}") from error
+    if np.any(~np.isfinite(values)) or np.any(~np.isfinite(jacobian)):
+        raise FloatingPointError("nonfinite Parratt reflectivity or Jacobian")
     return values, jacobian
 
 
@@ -494,23 +508,22 @@ def _quadrature_tangent(
     chunk = max(1, MAX_QUERY_VALUES // order)
     for start in range(0, samples.size, chunk):
         stop = min(start + chunk, samples.size)
-        query = samples[start:stop, None] + np.sqrt(2.0) * widths[start:stop, None] * nodes
-        query_tangent = (
-            sample_tangent[start:stop, None] + np.sqrt(2.0) * width_tangent[start:stop, None] * nodes[None, :, None]
-        )
-        keep = query >= 0.0
-        # Negative-q nodes carry zero weight, followed by retained-weight normalization.
-        safe_query = np.where(keep, query, 0.0)
-        safe_tangent = np.where(keep[:, :, None], query_tangent, 0.0)
+        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+            query = samples[start:stop, None] + np.sqrt(2.0) * widths[start:stop, None] * nodes
+            query_tangent = (
+                sample_tangent[start:stop, None] + np.sqrt(2.0) * width_tangent[start:stop, None] * nodes[None, :, None]
+            )
+        if np.any(~np.isfinite(query)) or np.any(~np.isfinite(query_tangent)):
+            raise ValueError("differentiable resolution query must be finite")
+        reflected_query = np.abs(query)
+        reflected_tangent = np.sign(query)[:, :, None] * query_tangent
         values, tangent = _validated_function_values(
-            function(safe_query, safe_tangent),
-            safe_query.shape,
+            function(reflected_query, reflected_tangent),
+            reflected_query.shape,
             count,
         )
-        retained = weights * keep
-        normalizer = retained.sum(axis=1)
-        values_out[start:stop] = np.sum(values * retained, axis=1) / normalizer
-        tangent_out[start:stop] = np.sum(tangent * retained[:, :, None], axis=1) / normalizer[:, None]
+        values_out[start:stop] = _gauss_hermite_average(values, weights)
+        tangent_out[start:stop] = _gauss_hermite_average(tangent, weights)
     return values_out, tangent_out
 
 

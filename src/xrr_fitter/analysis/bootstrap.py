@@ -2,15 +2,42 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
 from math import isfinite
-from typing import Protocol, TypeVar
 
 import numpy as np
 from scipy.optimize import least_squares
 
+from xrr_fitter.analysis.bootstrap_samples import (
+    BootstrapFit as BootstrapFit,
+)
+from xrr_fitter.analysis.bootstrap_samples import (
+    BootstrapProgress,
+    TaskRunner,
+)
+from xrr_fitter.analysis.bootstrap_samples import (
+    bootstrap_local as bootstrap_local,
+)
+from xrr_fitter.analysis.bootstrap_samples import (
+    bootstrap_result_from_fits as _bootstrap_result,
+)
+from xrr_fitter.analysis.bootstrap_samples import (
+    run_tasks as _run_tasks,
+)
+from xrr_fitter.analysis.bootstrap_samples import (
+    validated_bootstrap_names as _validated_names,
+)
+from xrr_fitter.analysis.bootstrap_samples import (
+    validated_sample_count as _validated_sample_count,
+)
+from xrr_fitter.analysis.residual_resampling import (
+    moving_block_draw as _moving_block_draw,
+)
+from xrr_fitter.analysis.residual_resampling import (
+    residual_block_length as residual_block_length,
+)
 from xrr_fitter.evaluation import (
     EvaluationConstraintError,
     cached_least_squares_callbacks,
@@ -22,166 +49,6 @@ from xrr_fitter.evaluation import (
 from xrr_fitter.model.analysis import BootstrapResult
 from xrr_fitter.model.fitting import FitEvaluationContext
 from xrr_fitter.model.provenance import bootstrap_provenance_sha256
-
-
-BootstrapFit = Callable[[np.random.Generator, int], np.ndarray | None]
-BootstrapProgress = Callable[[int, int], None]
-T = TypeVar("T")
-
-
-class TaskRunner(Protocol):
-    def __call__(
-        self,
-        tasks: tuple[Callable[[], T], ...],
-        /,
-    ) -> tuple[T, ...]: ...
-
-
-def _run_tasks(
-    tasks: tuple[Callable[[], T], ...],
-    task_runner: TaskRunner | None,
-) -> tuple[T, ...]:
-    results = (
-        tuple(task() for task in tasks)
-        if task_runner is None
-        else tuple(task_runner(tasks))
-    )
-    if len(results) != len(tasks):
-        raise RuntimeError("task runner returned an unexpected result count")
-    return results
-
-
-def _validated_names(parameter_names: tuple[str, ...]) -> tuple[str, ...]:
-    names = tuple(parameter_names)
-    if not names or any(not isinstance(name, str) or not name for name in names):
-        raise ValueError("bootstrap parameter_names must be nonempty strings")
-    return names
-
-
-def _validated_sample_count(sample_count: int) -> int:
-    valid = (
-        not isinstance(sample_count, bool)
-        and isinstance(sample_count, (int, np.integer))
-        and sample_count >= 1
-    )
-    if not valid:
-        raise ValueError("bootstrap sample_count must be a positive integer")
-    return int(sample_count)
-
-
-def _collect_bootstrap_samples(
-    names: tuple[str, ...],
-    fitted_values: Iterable[np.ndarray | None],
-    count: int,
-    progress: BootstrapProgress | None,
-) -> tuple[np.ndarray, int]:
-    """Validate ordered fits and return the successful sample matrix."""
-    samples: list[np.ndarray] = []
-    failures = 0
-    observed = 0
-    for sample_index, fitted in enumerate(fitted_values):
-        if sample_index >= count:
-            raise RuntimeError("bootstrap produced too many fitted samples")
-        observed += 1
-        if fitted is None:
-            failures += 1
-        else:
-            vector = np.asarray(fitted, dtype=float)
-            if vector.shape != (len(names),) or np.any(~np.isfinite(vector)):
-                raise ValueError("bootstrap fit returned an invalid parameter vector")
-            samples.append(vector)
-        if progress is not None:
-            progress(sample_index + 1, count)
-    if observed != count:
-        raise RuntimeError("bootstrap produced an unexpected fitted sample count")
-    matrix = np.vstack(samples) if samples else np.empty((0, len(names)), dtype=float)
-    return matrix, failures
-
-
-def _bootstrap_intervals(
-    names: tuple[str, ...],
-    matrix: np.ndarray,
-    failure_rate: float,
-) -> tuple[tuple[str, float, float], ...]:
-    """Build percentile intervals only when the failure gate is satisfied."""
-    if failure_rate > 0.20 or matrix.shape[0] == 0:
-        return ()
-    lower, upper = np.percentile(matrix, (2.5, 97.5), axis=0)
-    return tuple(
-        (name, float(lower[index]), float(upper[index]))
-        for index, name in enumerate(names)
-    )
-
-
-def _bootstrap_result(
-    names: tuple[str, ...],
-    fitted_values: Iterable[np.ndarray | None],
-    count: int,
-    progress: BootstrapProgress | None,
-) -> BootstrapResult:
-    matrix, failures = _collect_bootstrap_samples(
-        names,
-        fitted_values,
-        count,
-        progress,
-    )
-    failure_rate = failures / count
-    intervals = _bootstrap_intervals(names, matrix, failure_rate)
-    return BootstrapResult(names, matrix, intervals, float(failure_rate))
-
-
-def bootstrap_local(
-    fit_sample: BootstrapFit,
-    parameter_names: tuple[str, ...],
-    *,
-    sample_count: int,
-    child_seed: int,
-    progress: BootstrapProgress | None = None,
-) -> BootstrapResult:
-    """Aggregate callback fits in index order using one deterministic stream."""
-    names = _validated_names(parameter_names)
-    count = _validated_sample_count(sample_count)
-    rng = np.random.default_rng(child_seed)
-
-    def fitted_values():
-        for sample_index in range(count):
-            yield fit_sample(rng, sample_index)
-
-    return _bootstrap_result(names, fitted_values(), count, progress)
-
-
-def _first_nonpositive_lag(centered: np.ndarray, denominator: float) -> int | None:
-    for lag in range(1, min(25, centered.size - 1) + 1):
-        autocorrelation = float(centered[:-lag] @ centered[lag:]) / denominator
-        if autocorrelation <= 0.0:
-            return lag
-    return None
-
-
-def residual_block_length(residuals: np.ndarray) -> int:
-    values = np.asarray(residuals, dtype=float)
-    centered = values - np.mean(values)
-    denominator = float(centered @ centered)
-    if denominator <= 0.0:
-        return 3
-    crossing = _first_nonpositive_lag(centered, denominator)
-    return int(np.clip(25 if crossing is None else crossing, 3, 25))
-
-
-def _moving_block_draw(
-    residuals: np.ndarray,
-    block_length: int,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    values = np.asarray(residuals, dtype=float)
-    blocks: list[np.ndarray] = []
-    size = 0
-    while size < values.size:
-        start = int(rng.integers(0, values.size))
-        block = values[(start + np.arange(block_length)) % values.size]
-        blocks.append(block)
-        size += block.size
-    return np.concatenate(blocks)[: values.size]
 
 
 def _sorted_fit_indices(problem: object) -> np.ndarray:
@@ -244,9 +111,7 @@ def _local_bootstrap_fit(problem: object, start: np.ndarray) -> np.ndarray | Non
     )
     try:
         initial = evaluate_model(problem, start)
-        residual, jacobian = cached_least_squares_callbacks(
-            partial(least_squares_system, problem)
-        )
+        residual, jacobian = cached_least_squares_callbacks(partial(least_squares_system, problem))
         optimized = least_squares(
             residual,
             start,
@@ -299,9 +164,7 @@ def bootstrap_problem_local(
 ) -> BootstrapResult:
     """Bootstrap one accepted candidate and refit every synthetic curve."""
     sorted_indices = _sorted_fit_indices(problem)
-    names, physical, residuals, model = _candidate_center(
-        problem, candidate, sorted_indices
-    )
+    names, physical, residuals, model = _candidate_center(problem, candidate, sorted_indices)
     names = _validated_names(names)
     count = _validated_sample_count(sample_count)
     sigma = problem.data.intensity_sigma_normalized
@@ -316,10 +179,7 @@ def bootstrap_problem_local(
             synthetic_fit = rng.normal(model, explicit_sigma)
         else:
             sampled = _moving_block_draw(residuals, block_length, rng)
-            synthetic_fit = (
-                (model + problem.data.r_floor) * 10.0 ** (-sampled)
-                - problem.data.r_floor
-            )
+            synthetic_fit = (model + problem.data.r_floor) * 10.0 ** (-sampled) - problem.data.r_floor
         synthetic_fit = np.clip(synthetic_fit, problem.data.r_floor, np.inf)
         contexts.append(_synthetic_context(problem, sorted_indices, synthetic_fit))
 

@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QMenuBar,
     QMessageBox,
-    QSizePolicy,
     QStatusBar,
     QStyle,
     QToolBar,
@@ -25,12 +24,15 @@ from PySide6.QtWidgets import (
 from xrr_fitter.gui import messages, theme
 from xrr_fitter.gui.plots.diagnostics import TAB_SPECS
 
-
 # The SLD profile is no longer a selectable view; it is a permanent companion
 # pane, so the menu lists only the switchable diagnostic tabs.
+# The view menu sections, which group the diagnostic tabs by the question they
+# answer rather than by tab order. Every tab needs an entry here: the menu is
+# the only way to reach a view once the tab bar scrolls, and the checked-state
+# sync walks TAB_SPECS expecting to find an action for each key.
 VIEW_GROUPS = (
     ("反射率", ("log", "raw", "qz4", "residual")),
-    ("诊断", ("candidates", "uncertainty", "trend")),
+    ("诊断", ("candidates", "residual_map", "parameter_map", "uncertainty", "trend")),
 )
 
 BUTTON_ICONS = (
@@ -104,9 +106,10 @@ def _install_toolbar(window: QWidget) -> None:
     cancel.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_BrowserStop))
     toolbar.addAction(start)
     toolbar.addAction(cancel)
-    spacer = QWidget(toolbar)
-    spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-    toolbar.addWidget(spacer)
+    # Export sits directly after the fit commands.  An expanding spacer used to
+    # push it to the far right edge, which left the middle of the toolbar empty
+    # and put the button furthest from the actions that produce what it exports.
+    toolbar.addSeparator()
     toolbar.addWidget(window.export_button)
     window.addToolBar(toolbar)
 
@@ -284,9 +287,7 @@ def _install_status_bar(window: QWidget) -> None:
 
 def _connect_view_sync(window: QWidget) -> None:
     window.plot_panel.view_changed.connect(lambda _index: _sync_view_actions(window))
-    window.parameters_panel.expert_toggle.toggled.connect(
-        lambda _checked: _sync_view_actions(window)
-    )
+    window.parameters_panel.expert_toggle.toggled.connect(lambda _checked: _sync_view_actions(window))
     _sync_view_actions(window)
 
 
@@ -302,11 +303,7 @@ def _active_dataset_text(window: QWidget) -> str:
     if dataset_id is None:
         return "无活动数据集"
     dataset = next(
-        (
-            value
-            for value in window.document.project.datasets
-            if value.dataset_id == dataset_id
-        ),
+        (value for value in window.document.project.datasets if value.dataset_id == dataset_id),
         None,
     )
     if dataset is None:

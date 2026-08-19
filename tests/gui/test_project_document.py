@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox, QSplitter
 
 import xrr_fitter.api as api
@@ -109,11 +109,7 @@ def test_project_document_owns_api_created_state_and_persistence(
 
 def _write_curve(path: Path) -> Path:
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}"
-            for index in range(32)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}" for index in range(32)) + "\n",
         encoding="utf-8",
     )
     return path

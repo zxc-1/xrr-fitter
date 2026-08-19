@@ -6,7 +6,6 @@ from collections.abc import Iterable
 
 import xrr_fitter.api as api
 
-
 SUCCESS = 0
 NOT_CONVERGED = 1
 INVALID_INPUT = 2

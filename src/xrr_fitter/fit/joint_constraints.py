@@ -16,6 +16,7 @@ from xrr_fitter.model.constraint_expression import (
 from xrr_fitter.model.parameters import (
     ConstraintRule,
     ParameterReference,
+    PhysicalValueError,
     _iter_references,
     physical_to_unit,
 )
@@ -70,12 +71,11 @@ def _physical_values(
         local_vectors,
         strict=True,
     ):
-        values.update(
-            {
-                ParameterReference(dataset_id, name): value
-                for name, value in values_by_name(local_problem, vector).items()
-            }
-        )
+        try:
+            local_values = values_by_name(local_problem, vector)
+        except PhysicalValueError as error:
+            raise EvaluationConstraintError("constraint_violation:PhysicalValueError") from error
+        values.update({ParameterReference(dataset_id, name): value for name, value in local_values.items()})
     return values
 
 
@@ -139,11 +139,14 @@ def _write_rule_value(
     if not definition.lower <= value <= upper:
         raise EvaluationConstraintError(_constraint_reason("out_of_bounds", target))
     local_index = _local_coordinate_index(local_problem, target.parameter_name)
-    vector[local_index] = physical_to_unit(
-        definition,
-        value,
-        dynamic_upper=dynamic_upper,
-    )
+    try:
+        vector[local_index] = physical_to_unit(
+            definition,
+            value,
+            dynamic_upper=dynamic_upper,
+        )
+    except PhysicalValueError as error:
+        raise EvaluationConstraintError("constraint_violation:PhysicalValueError") from error
 
 
 def apply_joint_constraints(
@@ -156,9 +159,12 @@ def apply_joint_constraints(
     if not problem.joint_constraint_rules:
         return
     definitions = _definitions_by_reference(problem)
+    rules = _ordered_rules(problem, definitions, roughness=roughness)
+    if not rules:
+        return
     dataset_indices = {dataset_id: index for index, dataset_id in enumerate(problem.dataset_ids)}
     values = _physical_values(problem, local_vectors)
-    for rule in _ordered_rules(problem, definitions, roughness=roughness):
+    for rule in rules:
         value = _evaluated_value(rule, values)
         _write_rule_value(
             problem,

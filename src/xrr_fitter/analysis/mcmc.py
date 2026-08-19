@@ -12,11 +12,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from math import isfinite
+from math import isfinite, log
 
 import numpy as np
 
 from xrr_fitter.evaluation import (
+    _gradient_slab_counts,
     _prior_coordinate,
     _validated_unit,
     prior_center_and_spread,
@@ -248,11 +249,15 @@ def _update_group(
         stretch = _stretch_factor(rng, config.stretch_scale)
         proposal = state.walkers[partner] + stretch * (state.walkers[index] - state.walkers[partner])
         proposal_logp = float(log_probability(proposal.copy()))
-        if np.isnan(proposal_logp):
-            proposal_logp = -np.inf
-        log_acceptance = (dimension - 1) * np.log(stretch) + proposal_logp - state.log_probability[index]
         state.attempted[index] += 1
-        if np.log(rng.random()) < log_acceptance:
+        if not isfinite(proposal_logp):
+            continue
+        # Keep the subtraction in Python scalar arithmetic.  NumPy scalars
+        # emit overflow warnings for mathematically valid +/-infinity limits.
+        log_acceptance = (
+            float(dimension - 1) * log(float(stretch)) + proposal_logp - float(state.log_probability[index])
+        )
+        if not np.isnan(log_acceptance) and log(float(rng.random())) < log_acceptance:
             state.walkers[index] = proposal
             state.log_probability[index] = proposal_logp
             state.accepted[index] += 1
@@ -415,15 +420,16 @@ def problem_mcmc_warnings(
 def _near_boundary(
     definition: object,
     unit: np.ndarray,
-    physical: np.ndarray,
+    _physical: np.ndarray,
     fraction: float,
 ) -> np.ndarray:
-    if definition.transform in {"linear", "roughness_fraction"}:
-        return (unit <= fraction) | (unit >= 1.0 - fraction)
-    if definition.transform == "log":
-        span = definition.upper - definition.lower
-        return (physical - definition.lower <= fraction * span) | (definition.upper - physical <= fraction * span)
-    raise ValueError(f"unknown transform: {definition.transform}")
+    if definition.transform not in {"linear", "log", "roughness_fraction"}:
+        raise ValueError(f"unknown transform: {definition.transform}")
+    # Boundary evidence is defined in the solver's normalized coordinate.  A
+    # linear physical-distance test is wrong for log axes: it labels the
+    # geometric midpoint of a wide interval as close to the lower bound and
+    # can overflow when the physical span is not representable.
+    return (unit <= fraction) | (unit >= 1.0 - fraction)
 
 
 def mcmc_boundary_hits(
@@ -498,13 +504,35 @@ def mcmc_prior_conflicts(
     matters for an even retained sample count because NumPy averages the two
     central values and nonlinear transforms do not preserve that average.
     """
-    estimates = np.median(physical, axis=0)
-    unit_medians = np.median(flat_unit, axis=0)
+    estimates = _stable_column_median(physical)
+    unit_medians = _stable_column_median(flat_unit)
     for index, variable in enumerate(problem.variables):
         definition = problem.parameter_definitions[variable.parameter_index]
         if definition.transform == "roughness_fraction":
             estimates[index] = unit_medians[index]
     return _prior_conflict_names(problem, estimates)
+
+
+def _stable_column_median(values: np.ndarray) -> np.ndarray:
+    """Compute column medians without overflowing an even central pair."""
+    array = np.asarray(values, dtype=float)
+    with np.errstate(over="ignore", invalid="ignore"):
+        result = np.asarray(np.median(array, axis=0), dtype=float)
+    unstable = np.flatnonzero(~np.isfinite(result))
+    if not unstable.size:
+        return result
+    ordered = np.sort(array, axis=0)
+    midpoint = ordered.shape[0] // 2
+    for index in unstable:
+        left = float(ordered[midpoint - 1, index])
+        right = float(ordered[midpoint, index])
+        span = right - left
+        if isfinite(span):
+            result[index] = left + span / 2.0
+            continue
+        scale = max(abs(left), abs(right))
+        result[index] = 0.0 if scale == 0.0 else scale * ((left / scale) * 0.5 + (right / scale) * 0.5)
+    return result
 
 
 def run_problem_mcmc(
@@ -550,4 +578,5 @@ def run_problem_mcmc(
         derived_parameter_names=derived_names,
         derived_samples_physical=derived,
         fixed_parameter_values=_fixed_parameter_values(problem, names, derived_names),
+        gradient_slab_counts=tuple(_gradient_slab_counts(problem).items()),
     )

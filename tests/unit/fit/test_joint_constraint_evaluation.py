@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+from dataclasses import replace
 from importlib import import_module
 from types import SimpleNamespace
 
@@ -78,7 +80,7 @@ def test_cross_dataset_constraint_joint_jacobian_matches_finite_difference() -> 
     np.testing.assert_allclose(analytic, finite, rtol=5e-5, atol=5e-8)
 
 
-def _angle_offset_problem(*, seed: int, size: int, free: bool) -> object:
+def _angle_offset_problem(*, seed: int, size: int, free: bool, background_bounds: bool = False) -> object:
     base = compile_fit_problem(
         prepared_data(size=size),
         simple_structure(),
@@ -86,16 +88,26 @@ def _angle_offset_problem(*, seed: int, size: int, free: bool) -> object:
         FitConfig.fast(seed),
     )
     free_names = {"instrument.angle_offset_deg"} if free else set()
-    settings = tuple(
-        ParameterSetting(
+
+    def setting(definition) -> ParameterSetting:
+        if definition.name == "instrument.background" and background_bounds:
+            return ParameterSetting(definition.name, definition.initial, 0.0, 1.0)
+        if definition.name in free_names:
+            return ParameterSetting(
+                definition.name,
+                definition.initial,
+                definition.lower,
+                definition.upper,
+            )
+        return ParameterSetting(
             definition.name,
             definition.initial,
-            definition.lower if definition.name in free_names else definition.initial,
-            definition.upper if definition.name in free_names else definition.initial,
-            locked=definition.name not in free_names,
+            definition.initial,
+            definition.initial,
+            locked=True,
         )
-        for definition in base.parameter_definitions
-    )
+
+    settings = tuple(setting(definition) for definition in base.parameter_definitions)
     return compile_fit_problem(base.data, base.structure, base.instrument, base.config, settings)
 
 
@@ -119,12 +131,14 @@ def test_cross_dataset_fractional_power_constraint_keeps_joint_callbacks_finite(
         ("left", "right"),
         (
             _angle_offset_problem(seed=862, size=40, free=True),
-            _angle_offset_problem(seed=863, size=52, free=True),
+            _angle_offset_problem(seed=863, size=52, free=True, background_bounds=True),
         ),
         (),
         (rule,),
     )
-    unit = np.asarray([0.5, 0.5])
+    # The square-root source must stay in its differentiable positive domain;
+    # zero is covered separately as an invalid analytic-candidate boundary.
+    unit = np.asarray([0.75, 0.5])
 
     evaluation = evaluation_api.evaluate_joint_vector(joint, unit)
     jacobian = evaluation_api.evaluate_joint_jacobian(joint, unit)
@@ -152,6 +166,79 @@ def test_cross_dataset_constraint_scatter_jacobian_does_not_perturb_projection(
     jacobian = evaluation_api.evaluate_joint_jacobian(joint, np.asarray([0.45]))
 
     assert jacobian.shape[1] == 1
+
+
+def test_cross_dataset_constraint_jacobian_overflow_degrades_without_warning() -> None:
+    joint_api = import_module("xrr_fitter.fit.joint_problem")
+    evaluation_api = import_module("xrr_fitter.fit.joint_evaluation")
+    sharing = import_module("xrr_fitter.fit.joint_sharing")
+
+    def build(data, seed: int, free_name: str) -> object:
+        base = compile_fit_problem(
+            data,
+            simple_structure(),
+            InstrumentSpec(footprint_mode="none"),
+            FitConfig.fast(seed),
+        )
+        settings = tuple(
+            ParameterSetting(
+                definition.name,
+                definition.initial,
+                definition.lower if definition.name == free_name else definition.initial,
+                definition.upper if definition.name == free_name else definition.initial,
+                locked=definition.name != free_name,
+            )
+            for definition in base.parameter_definitions
+        )
+        return compile_fit_problem(
+            base.data,
+            base.structure,
+            base.instrument,
+            base.config,
+            settings,
+        )
+
+    left_data = replace(
+        prepared_data(size=40),
+        intensity_normalized=np.full(40, np.finfo(float).max),
+    )
+    source = ParameterReference("left", "instrument.background")
+    scaled_source = ConstraintNode(
+        "mul",
+        operands=(
+            ConstraintNode("const", value=1e10),
+            ConstraintNode("ref", reference=source),
+        ),
+    )
+    rule = ConstraintRule(
+        ParameterReference("right", "instrument.scale"),
+        ConstraintNode(
+            "add",
+            operands=(
+                ConstraintNode("const", value=2.0),
+                ConstraintNode("sin", operands=(scaled_source,)),
+            ),
+        ),
+    )
+    joint = joint_api.compile_joint_problem(
+        ("left", "right"),
+        (
+            build(left_data, 865, "instrument.background"),
+            build(prepared_data(size=52), 866, "instrument.scale"),
+        ),
+        (),
+        (rule,),
+    )
+    unit = sharing.initial_joint_vector(joint)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = evaluation_api.evaluate_joint_vector(joint, unit)
+        jacobian = evaluation_api.evaluate_joint_jacobian(joint, unit)
+
+    assert result.valid
+    np.testing.assert_array_equal(jacobian, np.zeros_like(jacobian))
+    assert not any(item.category is RuntimeWarning for item in caught)
 
 
 def test_cross_dataset_constraint_chain_jacobian_propagates_through_each_target() -> None:
@@ -269,6 +356,83 @@ def test_initial_joint_vector_lets_roughness_constraint_replace_invalid_declared
     assert result.valid
     assert left[ROUGHNESS_NAME] == pytest.approx(right[ROUGHNESS_NAME])
     assert left[ROUGHNESS_NAME] == pytest.approx(2.0)
+
+
+def test_cross_roughness_constraint_empty_target_domain_is_an_invalid_candidate() -> None:
+    joint_api = import_module("xrr_fitter.fit.joint_problem")
+    sharing = import_module("xrr_fitter.fit.joint_sharing")
+    evaluation = import_module("xrr_fitter.fit.joint_evaluation")
+
+    def build(seed: int, size: int, thickness: float) -> object:
+        base = compile_fit_problem(
+            prepared_data(size=size),
+            simple_structure(),
+            InstrumentSpec(footprint_mode="none"),
+            FitConfig.fast(seed),
+        )
+        settings = []
+        for definition in base.parameter_definitions:
+            if definition.name == "component.0.thickness_a":
+                settings.append(
+                    ParameterSetting(
+                        definition.name,
+                        thickness,
+                        thickness,
+                        thickness,
+                        locked=True,
+                    )
+                )
+            elif definition.name == ROUGHNESS_NAME:
+                settings.append(
+                    ParameterSetting(
+                        definition.name,
+                        4.5,
+                        4.0,
+                        9.0,
+                    )
+                )
+            else:
+                settings.append(
+                    ParameterSetting(
+                        definition.name,
+                        definition.initial,
+                        definition.initial,
+                        definition.initial,
+                        locked=True,
+                    )
+                )
+        return compile_fit_problem(
+            base.data,
+            base.structure,
+            base.instrument,
+            base.config,
+            tuple(settings),
+        )
+
+    rule = ConstraintRule(
+        ParameterReference("right", ROUGHNESS_NAME),
+        ConstraintNode(
+            "ref",
+            reference=ParameterReference("left", ROUGHNESS_NAME),
+        ),
+    )
+    joint = joint_api.compile_joint_problem(
+        ("left", "right"),
+        (
+            build(903, 40, 10.0),
+            build(904, 52, 5.0),
+        ),
+        (),
+        (rule,),
+    )
+
+    unit = sharing.initial_joint_vector(joint)
+    result = evaluation.evaluate_joint_vector(joint, unit)
+    jacobian = evaluation.evaluate_joint_jacobian(joint, unit)
+
+    assert result.valid is False
+    assert all(local.reason == "constraint_violation:PhysicalValueError" for local in result.local_evaluations)
+    np.testing.assert_array_equal(jacobian, np.zeros_like(jacobian))
 
 
 def test_joint_layout_fingerprint_binds_cross_dataset_expression() -> None:

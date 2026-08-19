@@ -17,7 +17,6 @@ from xrr_fitter.model.data import BeamSpec, DataColumnMapping, PreparedData
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.structure import LayerSpec, MaterialSpec, StructureSpec
 
-
 BEAM = BeamSpec(kind="monochromatic")
 FIT_INSTRUMENT = InstrumentSpec(footprint_mode="fit")
 AIR = MaterialSpec("Air", None, None, 0.0j)
@@ -41,10 +40,7 @@ def _prepared_data(
     return PreparedData(
         source_path=Path("synthetic.xy"),
         source_sha256="0" * 64,
-        raw_rows=tuple(
-            f"{angle} {value}"
-            for angle, value in zip(two_theta_deg, normalized, strict=True)
-        ),
+        raw_rows=tuple(f"{angle} {value}" for angle, value in zip(two_theta_deg, normalized, strict=True)),
         raw_parse_status=("data",) * size,
         source_row_groups=tuple((index,) for index in range(size)),
         beam=BEAM,
@@ -119,9 +115,7 @@ def test_feature_extractors_recover_single_layer_thickness() -> None:
     thickness = 173.0
     transformed = 1.0 + 0.25 * np.cos(qz * thickness)
 
-    autocorrelation = autocorrelation_thickness_candidates(
-        qz, transformed, max_candidates=8
-    )
+    autocorrelation = autocorrelation_thickness_candidates(qz, transformed, max_candidates=8)
     spacing = kiessig_spacing_candidates(qz, transformed, max_candidates=8)
 
     assert np.min(np.abs(autocorrelation - thickness)) / thickness < 0.02
@@ -181,9 +175,7 @@ def test_featureless_data_warns_and_keeps_protected_background_candidate() -> No
     )
 
     low_count = max(20, int(np.ceil(0.10 * qz.size)))
-    expected_scale = float(
-        np.clip(np.percentile(data.intensity_normalized[:low_count], 95), 1e-3, 1e3)
-    )
+    expected_scale = float(np.clip(np.percentile(data.intensity_normalized[:low_count], 95), 1e-3, 1e3))
     high_count = int(np.ceil(0.20 * qz.size))
     high_median = float(np.median(data.intensity_normalized[-high_count:]))
     assert "初始特征不足" in initial.warnings
@@ -206,3 +198,18 @@ def test_structure_evidence_distinguishes_supported_and_overspecified_models() -
     assert not supported.warning
     assert overspecified.m_model > overspecified.m_data + 1
     assert overspecified.warning
+
+
+def test_structure_evidence_scales_extreme_finite_q_before_qz4_transform() -> None:
+    qz = np.linspace(1e80, 2e80, 256)
+    data = _prepared_data(
+        qz,
+        np.full(qz.size, 1e-8),
+        two_theta_deg=np.linspace(0.1, 1.0, qz.size),
+    )
+
+    with np.errstate(over="raise", invalid="raise"):
+        evidence = structure_evidence(data, _single_layer_structure())
+
+    assert evidence.m_data == 0
+    assert all(np.isfinite(value) for value in evidence.peak_positions_a)

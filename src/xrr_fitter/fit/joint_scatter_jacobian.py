@@ -138,35 +138,45 @@ def _analytic_constraint_jacobians(
         if not rules:
             continue
         for rule in rules:
-            values, derivatives, local_derivatives = _physical_states(
-                problem,
-                local_units,
-                unit_jacobians,
-            )
             try:
-                _value, gradient = constraint_value_and_grad(rule.expression, values)
-            except ConstraintArithmeticError as error:
-                raise EvaluationConstraintError(
-                    f"constraint_nonfinite:{rule.target.dataset_id}::{rule.target.parameter_name}"
-                ) from error
-            target_derivative = sum(
-                (partial * derivatives[reference] for reference, partial in gradient.items()),
-                start=np.zeros(unit_jacobians[0].shape[1], dtype=float),
-            )
-            dataset_index = problem.dataset_ids.index(rule.target.dataset_id)
-            local_problem = problem.problems[dataset_index]
-            target_index = _local_coordinate_index(
-                local_problem,
-                rule.target.parameter_name,
-            )
-            target_local_jacobian = local_derivatives[dataset_index][rule.target.parameter_name]
-            own_derivative = float(target_local_jacobian[target_index])
-            if own_derivative == 0.0:
-                unit_jacobians[dataset_index][target_index] = 0.0
-                continue
-            current_derivative = target_local_jacobian @ unit_jacobians[dataset_index]
-            other_derivative = current_derivative - own_derivative * unit_jacobians[dataset_index][target_index]
-            unit_jacobians[dataset_index][target_index] = (target_derivative - other_derivative) / own_derivative
+                with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+                    values, derivatives, local_derivatives = _physical_states(
+                        problem,
+                        local_units,
+                        unit_jacobians,
+                    )
+                    try:
+                        _value, gradient = constraint_value_and_grad(rule.expression, values)
+                    except ConstraintArithmeticError as error:
+                        raise EvaluationConstraintError(
+                            f"constraint_nonfinite:{rule.target.dataset_id}::{rule.target.parameter_name}"
+                        ) from error
+                    target_derivative = sum(
+                        (partial * derivatives[reference] for reference, partial in gradient.items()),
+                        start=np.zeros(unit_jacobians[0].shape[1], dtype=float),
+                    )
+                    dataset_index = problem.dataset_ids.index(rule.target.dataset_id)
+                    local_problem = problem.problems[dataset_index]
+                    target_index = _local_coordinate_index(
+                        local_problem,
+                        rule.target.parameter_name,
+                    )
+                    target_local_jacobian = local_derivatives[dataset_index][rule.target.parameter_name]
+                    own_derivative = float(target_local_jacobian[target_index])
+                    if own_derivative == 0.0:
+                        unit_jacobians[dataset_index][target_index] = 0.0
+                        continue
+                    current_derivative = target_local_jacobian @ unit_jacobians[dataset_index]
+                    other_derivative = current_derivative - own_derivative * unit_jacobians[dataset_index][target_index]
+                    unit_jacobians[dataset_index][target_index] = (
+                        target_derivative - other_derivative
+                    ) / own_derivative
+            except FloatingPointError as error:
+                target = f"{rule.target.dataset_id}::{rule.target.parameter_name}"
+                raise FloatingPointError(f"nonfinite joint constraint Jacobian: {target}") from error
+            if np.any(~np.isfinite(unit_jacobians[dataset_index][target_index])):
+                target = f"{rule.target.dataset_id}::{rule.target.parameter_name}"
+                raise FloatingPointError(f"nonfinite joint constraint Jacobian: {target}")
     return tuple(unit_jacobians)
 
 

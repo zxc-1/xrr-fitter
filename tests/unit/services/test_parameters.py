@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from tests.support.drift_cases import one_drift_block_structure
 from tests.support.model_cases import dataset_project, final_fit_result, project, simple_structure
 
 from xrr_fitter.fit.drift import DRIFT_DATASET
@@ -21,6 +22,7 @@ from xrr_fitter.model.parameters import (
 )
 from xrr_fitter.model.project import ProjectUiState
 from xrr_fitter.model.structure import LayerSpec, MaterialSpec, PeriodicBlock, StructureSpec
+from xrr_fitter.services import fitting
 from xrr_fitter.services.datasets import add_dataset
 from xrr_fitter.services.parameters import (
     _reconciled_parameter_sidecars,
@@ -113,6 +115,70 @@ def test_set_parameter_settings_reconciles_priors_against_effective_bounds(
 
     assert updated.datasets[0].parameter_settings == (setting,)
     assert updated.datasets[0].parameter_priors == ()
+
+
+def test_set_parameter_settings_drops_sharing_rule_when_bounds_diverge(
+    tmp_path: Path,
+) -> None:
+    value = _two_dataset_project(tmp_path)
+    name = "component.0.thickness_a"
+    rule = SharingRule(
+        "shared-thickness",
+        (
+            ParameterReference("first", name),
+            ParameterReference("second", name),
+        ),
+    )
+    value = set_sharing_rules(value, (rule,))
+    definition = next(item for item in describe_parameters(value, "first") if item.name == name)
+    setting = ParameterSetting(
+        name,
+        definition.initial,
+        definition.lower,
+        (definition.initial + definition.upper) / 2.0,
+    )
+
+    updated = set_parameter_settings(value, "first", (setting,))
+
+    assert updated.sharing_rules == ()
+
+
+def test_periodic_layer_reorder_drops_component_sidecars_even_when_roles_match(
+    tmp_path: Path,
+) -> None:
+    air = MaterialSpec("Air", None, None, 0.0j)
+    silica = MaterialSpec("SiO2", "SiO2", 2.2)
+    silicon = MaterialSpec("Si", "Si", 2.329)
+    first = LayerSpec("film", silica, 20.0)
+    second = LayerSpec("film", silicon, 40.0)
+    block = PeriodicBlock("stack", (first, second), repeats=3)
+    structure = StructureSpec(air, (block,), silicon)
+    value = add_dataset(
+        new_project(),
+        _source(tmp_path / "periodic-reorder.xy"),
+        InstrumentSpec(instrument_id="periodic-reorder"),
+    )
+    value = set_structure(value, "periodic-reorder", structure)
+    definition = next(
+        item
+        for item in describe_parameters(value, "periodic-reorder")
+        if item.name == "component.0.layer.0.thickness_a"
+    )
+    setting = ParameterSetting(
+        definition.name,
+        definition.initial,
+        definition.lower,
+        definition.upper,
+    )
+    value = set_parameter_settings(value, "periodic-reorder", (setting,))
+    swapped = replace(block, layers=(second, first))
+    updated = set_structure(
+        value,
+        "periodic-reorder",
+        replace(structure, components=(swapped,)),
+    )
+
+    assert updated.datasets[0].parameter_settings == ()
 
 
 def test_sharing_validation_is_pure_and_does_not_read_source(
@@ -357,6 +423,40 @@ def _two_dataset_project(tmp_path: Path):
         InstrumentSpec(instrument_id="second-instrument"),
     )
     return set_structure(value, "second", simple_structure())
+
+
+def test_reconciled_sharing_drops_generated_drift_targets(tmp_path: Path) -> None:
+    value = _two_dataset_project(tmp_path)
+    value = set_structure(value, "first", one_drift_block_structure())
+    value = set_structure(value, "second", one_drift_block_structure())
+    value = set_batch_mode(value, "joint")
+    name = "component.0.repeat.1.layer.0.thickness_a"
+    sharing = SharingRule(
+        "generated-repeat",
+        (
+            ParameterReference("first", name),
+            ParameterReference("second", name),
+        ),
+    )
+    value = set_sharing_rules(value, (sharing,))
+
+    assert fitting.reconciled_sharing_rules(value) == ()
+
+
+def test_set_parameter_settings_rejects_generated_drift_target(tmp_path: Path) -> None:
+    value = set_structure(_structured_project(tmp_path), "curve", one_drift_block_structure())
+    definition = next(
+        item for item in describe_parameters(value, "curve") if item.name == "component.0.repeat.1.layer.0.thickness_a"
+    )
+    setting = ParameterSetting(
+        definition.name,
+        definition.initial,
+        definition.lower,
+        definition.upper,
+    )
+
+    with pytest.raises(ValueError, match="constrained parameter"):
+        set_parameter_settings(value, "curve", (setting,))
 
 
 def _periodic_structure() -> StructureSpec:

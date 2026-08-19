@@ -11,9 +11,9 @@ from matplotlib.ticker import LogFormatter
 import xrr_fitter.api as api
 from xrr_fitter.gui.plots.diagnostics import (
     DiagnosticView,
-    apply_figure_font,
     current_plot_palette,
     draw_empty,
+    finish_view,
 )
 
 
@@ -99,9 +99,7 @@ def _project_dataset(
     project: api.XrrProject,
     dataset_id: str,
 ) -> api.DatasetProject:
-    matches = tuple(
-        dataset for dataset in project.datasets if dataset.dataset_id == dataset_id
-    )
+    matches = tuple(dataset for dataset in project.datasets if dataset.dataset_id == dataset_id)
     if len(matches) != 1:
         raise KeyError(f"unknown project dataset: {dataset_id}")
     return matches[0]
@@ -139,11 +137,6 @@ def prepare_project_plots(project: api.XrrProject) -> PreparedProjectPlots:
         result,
         candidate_id,
     )
-
-
-def _finish(view: DiagnosticView) -> None:
-    apply_figure_font(view.figure)
-    view.canvas.draw_idle()
 
 
 def draw_raw(
@@ -190,7 +183,7 @@ def draw_raw(
         )
     axes.set(title="原始数据与模型", xlabel="2θ (deg)", ylabel="原始强度")
     axes.legend()
-    _finish(view)
+    finish_view(view)
 
 
 def draw_log(
@@ -214,7 +207,7 @@ def draw_log(
     )
     axes.yaxis.set_major_formatter(LogFormatter())
     axes.legend()
-    _finish(view)
+    finish_view(view)
 
 
 def preview_display_values(
@@ -240,6 +233,48 @@ def preview_display_values(
     return angles, np.maximum(model, data.r_floor)
 
 
+def _qz4_display_values(
+    qz: np.ndarray,
+    values: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, str]:
+    """Return finite qz⁴ diagnostics, scaling only when float64 cannot hold them.
+
+    The unscaled transform remains the default so ordinary plots retain their
+    historical physical units.  An extreme candidate can make ``qz**4``
+    overflow even though the curve shape is meaningful; in that case the
+    q-axis is normalized by its largest finite magnitude and the label records
+    the reference explicitly.
+    """
+    qz = np.asarray(qz, dtype=float)
+    values = np.asarray(values, dtype=float)
+    finite = np.isfinite(qz) & np.isfinite(values)
+    if not np.any(finite):
+        return qz[finite], values[finite], "qz⁴R（无有限数据）"
+    qz_finite = qz[finite]
+    values_finite = values[finite]
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        unscaled = qz_finite**4 * values_finite
+    if np.all(np.isfinite(unscaled)):
+        return qz_finite, unscaled, "qz⁴R"
+
+    q_reference = float(np.max(np.abs(qz_finite)))
+    if q_reference == 0.0:
+        q_reference = 1.0
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        normalized_qz4 = (qz_finite / q_reference) ** 4
+        scaled = normalized_qz4 * values_finite
+    if not np.all(np.isfinite(scaled)):
+        value_reference = float(np.max(np.abs(values_finite)))
+        if value_reference == 0.0 or not np.isfinite(value_reference):
+            value_reference = 1.0
+        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+            scaled = normalized_qz4 * (values_finite / value_reference)
+        label = f"归一化 (qz/{q_reference:g} Å⁻¹)⁴(R/{value_reference:g})"
+    else:
+        label = f"归一化 (qz/{q_reference:g} Å⁻¹)⁴R"
+    return qz_finite, scaled, label
+
+
 def draw_qz4(
     view: DiagnosticView,
     data: api.PreparedData,
@@ -249,14 +284,25 @@ def draw_qz4(
         draw_empty(view, "qz⁴R", "暂无当前候选")
         return
     qz = np.asarray(candidate.qz_a_inv, dtype=float)
-    transform = qz**4
+    data_qz, data_transform, ylabel = _qz4_display_values(
+        qz,
+        np.asarray(data.intensity_normalized, dtype=float),
+    )
+    model_qz, model_transform, model_label = _qz4_display_values(
+        qz,
+        np.asarray(candidate.model_normalized, dtype=float),
+    )
     axes = view.axes
     axes.clear()
-    axes.plot(qz, np.asarray(data.intensity_normalized) * transform, "o", label="归一化数据")
-    axes.plot(qz, np.asarray(candidate.model_normalized) * transform, "--", label="当前候选模型")
-    axes.set(title="qz⁴R 诊断变换（非拟合数据）", xlabel="qz (Å⁻¹)", ylabel="qz⁴R")
+    axes.plot(data_qz, data_transform, "o", label="归一化数据")
+    axes.plot(model_qz, model_transform, "--", label="当前候选模型")
+    if ylabel == model_label:
+        axis_label = ylabel
+    else:
+        axis_label = f"数据: {ylabel}; 模型: {model_label}"
+    axes.set(title="qz⁴R 诊断变换（非拟合数据）", xlabel="qz (Å⁻¹)", ylabel=axis_label)
     axes.legend()
-    _finish(view)
+    finish_view(view)
 
 
 def draw_residual(view: DiagnosticView, candidate: object | None) -> None:
@@ -270,4 +316,4 @@ def draw_residual(view: DiagnosticView, candidate: object | None) -> None:
     axes.plot(qz, np.zeros_like(qz), ":", label="零参考线")
     axes.set(title="加权残差", xlabel="qz (Å⁻¹)", ylabel="加权残差")
     axes.legend()
-    _finish(view)
+    finish_view(view)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -22,11 +21,7 @@ import xrr_fitter.api as api
 def _write_curve(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}"
-            for index in range(64)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}" for index in range(64)) + "\n",
         encoding="utf-8",
     )
     return path
@@ -105,6 +100,22 @@ def test_view_menu_switches_plot_views_and_syncs_expert_mode(qtbot) -> None:
     assert window.parameters_panel.expert_toggle.isChecked()
     window.parameters_panel.expert_toggle.setChecked(False)
     assert not expert_action.isChecked()
+
+
+def test_view_menu_groups_cover_every_diagnostic_tab() -> None:
+    """The menu's grouping is hand-written, so a new tab must be added to it.
+
+    ``_sync_view_actions`` looks up an action for every ``TAB_SPECS`` entry, so a
+    tab missing from the grouping raises ``KeyError`` on the next view change
+    rather than merely going unlisted in the menu.
+    """
+    from xrr_fitter.gui.chrome import VIEW_GROUPS
+    from xrr_fitter.gui.plots.diagnostics import TAB_SPECS
+
+    grouped = tuple(key for _title, keys in VIEW_GROUPS for key in keys)
+
+    assert sorted(grouped) == sorted(key for key, _title, _description in TAB_SPECS)
+    assert len(grouped) == len(set(grouped))
 
 
 def test_theme_applies_idempotent_application_stylesheet(qtbot) -> None:

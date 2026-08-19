@@ -29,8 +29,9 @@ def test_dock_state_rejects_a_non_string() -> None:
 
 
 def test_setting_dock_state_leaves_other_ui_fields_untouched() -> None:
-    from xrr_fitter.services.projects import set_dock_state
     from tests.support.model_cases import project
+
+    from xrr_fitter.services.projects import set_dock_state
 
     original = project()
     updated = set_dock_state(original, "AAAA/wAAAAD9AAAA")
@@ -43,8 +44,9 @@ def test_setting_dock_state_leaves_other_ui_fields_untouched() -> None:
 
 def test_setting_the_same_dock_state_is_identity() -> None:
     """An unchanged layout must not mark the project dirty."""
-    from xrr_fitter.services.projects import set_dock_state
     from tests.support.model_cases import project
+
+    from xrr_fitter.services.projects import set_dock_state
 
     original = set_dock_state(project(), "AAAA")
 

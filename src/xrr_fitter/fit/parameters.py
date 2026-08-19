@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from math import isfinite
+from math import ceil, isfinite, nextafter
 
 import numpy as np
 
+from xrr_fitter.fit.background_bounds import background_upper
+from xrr_fitter.fit.derived_bounds import synchronize_derived_bounds as _synchronize_derived_bounds
+from xrr_fitter.fit.drift import drift_coefficients
+from xrr_fitter.fit.drift_bounds import drift_scale_bounds as _drift_scale_bounds
+from xrr_fitter.fit.gradient_bounds import component_slab_count as _component_slab_count
 from xrr_fitter.model.data import PreparedData
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import ParameterDefinition, ParameterSetting
 from xrr_fitter.model.structure import (
+    MAX_EXPANDED_SLABS,
     GradientLayerSpec,
     LayerSpec,
     MaterialSpec,
@@ -19,6 +25,17 @@ from xrr_fitter.model.structure import (
     StructureSpec,
 )
 from xrr_fitter.physics.transitions import transition_width
+
+
+def _bounded_inverse_length(numerator: float, denominator: float) -> float:
+    """Clip a positive inverse length before a potentially overflowing divide."""
+    if not np.isfinite(denominator):
+        return 2.0
+    if denominator <= numerator / 2e5:
+        return 2e5
+    if denominator >= numerator / 2.0:
+        return 2.0
+    return numerator / denominator
 
 
 def _definition(
@@ -55,8 +72,11 @@ def thickness_bounds(data: PreparedData) -> tuple[float, float]:
     qz = data.qz_a_inv[data.fit_mask]
     if qz.size < 2 or np.ptp(qz) <= 0.0:
         return 2.0, 2e5
-    observed_min = max(2.0, 2.0 * np.pi / np.ptp(qz))
-    observed_max = min(2e5, np.pi / (2.0 * np.median(np.diff(qz))))
+    observed_min = _bounded_inverse_length(2.0 * np.pi, float(np.ptp(qz)))
+    observed_max = _bounded_inverse_length(
+        np.pi / 2.0,
+        float(np.median(np.diff(qz))),
+    )
     return max(2.0, 0.25 * observed_min), min(2e5, 4.0 * observed_max)
 
 
@@ -190,6 +210,14 @@ def _periodic_definitions(
     if block.drift is not None:
         drift = block.drift
         family = "thickness_a" if drift.target == "thickness" else "roughness_a"
+        coefficients = drift_coefficients(drift, block.repeats)
+        drift_lower, drift_upper = _drift_scale_bounds(
+            block,
+            prefix,
+            family,
+            definitions,
+            coefficients,
+        )
         definitions.append(
             _definition(
                 f"{prefix}.drift_scale",
@@ -197,8 +225,8 @@ def _periodic_definitions(
                 "",
                 "structure",
                 drift.amount,
-                min(-0.5, drift.amount),
-                max(0.5, drift.amount),
+                drift_lower,
+                drift_upper,
                 "linear",
                 False,
             )
@@ -212,6 +240,9 @@ def _periodic_definitions(
                         base,
                         name=f"{prefix}.repeat.{k}.layer.{index}.{family}",
                         display_name=f"{base.display_name} 副本{k}",
+                        # Derived copies retain the base family's declared
+                        # physical bounds; an out-of-range drift is surfaced
+                        # by constraint evaluation instead of widened silently.
                         initial=base.initial,
                     )
                 )
@@ -240,13 +271,41 @@ def _sld_definition(
     )
 
 
+def _gradient_slab_budgets(structure: StructureSpec) -> dict[int, int]:
+    """Allocate one fixed maximum microslab count to every gradient component."""
+    gradients = [
+        (index, component)
+        for index, component in enumerate(structure.components)
+        if isinstance(component, GradientLayerSpec)
+    ]
+    if not gradients:
+        return {}
+    reserved = sum(_component_slab_count(component) for component in structure.components)
+    minimum = {index: max(1, ceil(component.thickness_a / component.microslab_max_a)) for index, component in gradients}
+    reserved += sum(minimum.values())
+    if reserved > MAX_EXPANDED_SLABS:
+        raise ValueError("declared structure leaves no valid gradient slab budget")
+    spare, remainder = divmod(MAX_EXPANDED_SLABS - reserved, len(gradients))
+    budgets: dict[int, int] = {}
+    for position, (index, _component) in enumerate(gradients):
+        budgets[index] = minimum[index] + spare + int(position < remainder)
+    return budgets
+
+
 def _gradient_definitions(
     prefix: str,
     layer: GradientLayerSpec,
     bounds: tuple[float, float],
+    slab_budget: int | None = None,
 ) -> list[ParameterDefinition]:
+    budget = slab_budget or MAX_EXPANDED_SLABS
+    capacity = nextafter(layer.microslab_max_a * budget, 0.0)
+    # Do not move an already-declared initial value outside the fixed capacity
+    # when a structure exactly consumes the global budget.
+    capacity = max(capacity, layer.thickness_a)
     lower = max(2.0, min(bounds[0], layer.thickness_a))
-    upper = min(2e5, max(bounds[1], layer.thickness_a))
+    lower = max(lower, layer.microslab_max_a)
+    upper = min(2e5, max(bounds[1], layer.thickness_a), capacity)
     return [
         _sld_definition(
             prefix,
@@ -308,8 +367,8 @@ def _gradient_definitions(
             "Å",
             "structure",
             layer.microslab_max_a,
-            0.1,
-            layer.thickness_a,
+            layer.microslab_max_a,
+            layer.microslab_max_a,
             "log",
             True,
             expert_only=True,
@@ -321,12 +380,13 @@ def _component_definitions(
     prefix: str,
     component: LayerSpec | PeriodicBlock | GradientLayerSpec,
     bounds: tuple[float, float],
+    slab_budget: int | None = None,
 ) -> list[ParameterDefinition]:
     if isinstance(component, LayerSpec):
         return _layer_definitions(prefix, component, bounds)
     if isinstance(component, PeriodicBlock):
         return _periodic_definitions(prefix, component, bounds)
-    return _gradient_definitions(prefix, component, bounds)
+    return _gradient_definitions(prefix, component, bounds, slab_budget)
 
 
 def _footprint_upper_deg(data: PreparedData) -> float:
@@ -345,23 +405,20 @@ def _footprint_upper_deg(data: PreparedData) -> float:
         1.0,
     )
     theta_c = float(np.rad2deg(np.arcsin(argument)))
-    return 2.0 * theta_c if theta_c > 0.0 else 1.0
-
-
-def _background_upper(data: PreparedData) -> float:
-    fitted = data.intensity_normalized[data.fit_mask]
-    high_count = max(1, int(np.ceil(0.20 * fitted.size)))
-    return max(0.1, 10.0 * max(0.0, float(np.median(fitted[-high_count:]))))
+    estimate = 2.0 * theta_c if theta_c > 0.0 else 1.0
+    return float(np.clip(estimate, 0.0, 90.0))
 
 
 def _instrument_definitions(
     data: PreparedData,
     instrument: InstrumentSpec,
 ) -> tuple[ParameterDefinition, ...]:
-    background_upper = _background_upper(data)
+    compiled_background_upper = background_upper(data, instrument)
     footprint_locked = instrument.footprint_mode != "fit"
     footprint_initial = instrument.footprint_spill_angle_deg
-    footprint_upper = footprint_initial if footprint_locked else _footprint_upper_deg(data)
+    footprint_upper = (
+        footprint_initial if footprint_locked else min(90.0, max(footprint_initial, _footprint_upper_deg(data)))
+    )
     q_resolution = instrument.resolution_domain == "q"
     return (
         _definition(
@@ -393,7 +450,7 @@ def _instrument_definitions(
             "instrument",
             0.0,
             0.0,
-            background_upper,
+            compiled_background_upper,
             "linear",
             False,
         ),
@@ -403,8 +460,8 @@ def _instrument_definitions(
             "Å",
             "instrument",
             0.0,
-            -background_upper,
-            background_upper,
+            -compiled_background_upper,
+            compiled_background_upper,
             "linear",
             instrument.background_kind != "linear",
             expert_only=True,
@@ -416,7 +473,7 @@ def _instrument_definitions(
             "instrument",
             0.0,
             0.0,
-            background_upper,
+            compiled_background_upper,
             "linear",
             instrument.background_kind != "powerlaw",
             expert_only=True,
@@ -490,9 +547,17 @@ def default_parameter_definitions(
 ) -> tuple[ParameterDefinition, ...]:
     del config
     bounds = thickness_bounds(data)
+    gradient_budgets = _gradient_slab_budgets(structure)
     definitions: list[ParameterDefinition] = []
     for index, component in enumerate(structure.components):
-        definitions.extend(_component_definitions(f"component.{index}", component, bounds))
+        definitions.extend(
+            _component_definitions(
+                f"component.{index}",
+                component,
+                bounds,
+                gradient_budgets.get(index),
+            )
+        )
     definitions.extend(_material_definitions("backing", structure.backing))
     definitions.append(
         _definition(
@@ -522,6 +587,11 @@ def _validate_setting(
         raise ValueError(f"invalid bounds: {setting.name}")
     if not setting.lower <= setting.initial <= setting.upper:
         raise ValueError(f"initial outside bounds: {setting.name}")
+    if definition.name.endswith(".microslab_max_a") and (
+        not setting.locked
+        or (setting.initial, setting.lower, setting.upper) != (definition.initial, definition.lower, definition.upper)
+    ):
+        raise ValueError(f"microslab topology parameter must remain locked: {setting.name}")
     _validate_integer_setting(setting, definition, values)
 
 
@@ -563,7 +633,7 @@ def apply_parameter_settings(
 ) -> tuple[ParameterDefinition, ...]:
     _validate_settings(definitions, settings)
     by_name = {setting.name: setting for setting in settings}
-    return tuple(
+    updated = tuple(
         replace(
             definition,
             initial=by_name[definition.name].initial,
@@ -575,6 +645,7 @@ def apply_parameter_settings(
         else definition
         for definition in definitions
     )
+    return _synchronize_derived_bounds(updated, settings)
 
 
 def _require_locked_value(
@@ -669,7 +740,7 @@ def _validate_compiled_definition(definition: ParameterDefinition) -> None:
         raise ValueError(f"invalid compiled bounds: {definition.name}")
     if not definition.lower <= definition.initial <= definition.upper:
         raise ValueError(f"initial outside compiled bounds: {definition.name}")
-    if not definition.locked and definition.lower == definition.upper:
+    if not (definition.locked or definition.constrained) and definition.lower == definition.upper:
         raise ValueError(f"free parameter has zero range: {definition.name}")
     if definition.transform == "log" and definition.lower <= 0.0:
         raise ValueError(f"log parameter must have positive bounds: {definition.name}")

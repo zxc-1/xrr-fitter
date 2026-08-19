@@ -146,9 +146,7 @@ def automatic_physical_signature(dataset, preset: MeasurementPreset) -> str:
             _dataclass_values(preset.instrument),
             preset.import_angle_offset_deg,
         ),
-        "structure_modes": tuple(
-            type(component).__name__ for component in structure.components
-        ),
+        "structure_modes": tuple(type(component).__name__ for component in structure.components),
     }
     return hashlib.sha256(_canonical_json(payload).encode("ascii")).hexdigest()
 
@@ -246,11 +244,7 @@ def _warnings(results: tuple[DatasetFitResult, ...]) -> tuple[str, ...]:
     The project result preserves dataset order and warning order within rows.
     """
 
-    return tuple(
-        warning
-        for item in results
-        for warning in item.fit_result.warnings
-    )
+    return tuple(warning for item in results for warning in item.fit_result.warnings)
 
 
 def _checkpoint_with_result_diagnostics(checkpoint, result: FitResult):
@@ -261,9 +255,7 @@ def _checkpoint_with_result_diagnostics(checkpoint, result: FitResult):
 
     if checkpoint is None:
         return None
-    result_candidates = {
-        candidate.candidate_id: candidate for candidate in result.candidates
-    }
+    result_candidates = {candidate.candidate_id: candidate for candidate in result.candidates}
     candidates = tuple(
         replace(
             candidate,
@@ -282,9 +274,7 @@ def _cancelled(error: BaseException) -> bool:
     Solvers may mark domain-specific exceptions without sharing their type here.
     """
 
-    return isinstance(error, InterruptedError) or bool(
-        getattr(type(error), "_xrr_cooperative_cancellation", False)
-    )
+    return isinstance(error, InterruptedError) or bool(getattr(type(error), "_xrr_cooperative_cancellation", False))
 
 
 def _prepare_independent_rows(
@@ -402,10 +392,7 @@ def _run_independent_rows(
     concurrency = min(len(tasks), total_workers)
     with OrderedTaskRunner(concurrency) as runner:
         buffered = runner.run(tasks)
-    return {
-        row.index: result
-        for row, result in zip(runnable, buffered, strict=True)
-    }
+    return {row.index: result for row, result in zip(runnable, buffered, strict=True)}
 
 
 def _replay_checkpoints(
@@ -445,9 +432,7 @@ def _commit_success(
     return _replace_dataset(working, index, dataset)
 
 
-AUTOMATIC_RUNNABLE_STATUSES = frozenset(
-    {AutomaticStatus.PENDING, AutomaticStatus.REFINING, AutomaticStatus.REVIEW}
-)
+AUTOMATIC_RUNNABLE_STATUSES = frozenset({AutomaticStatus.PENDING, AutomaticStatus.REFINING, AutomaticStatus.REVIEW})
 
 
 def _automatic_indices(
@@ -464,10 +449,7 @@ def _automatic_indices(
         for index, dataset in enumerate(project.datasets)
         if dataset.automation.role is not AutomaticRole.MANUAL
         and dataset.automation.status in AUTOMATIC_RUNNABLE_STATUSES
-        and (
-            import_batch_id is None
-            or dataset.automation.import_batch_id == import_batch_id
-        )
+        and (import_batch_id is None or dataset.automation.import_batch_id == import_batch_id)
     )
 
 
@@ -664,8 +646,7 @@ def _commit_automatic_result(
     )
     changed_settings = (
         row.prepared is not None
-        and prepared_dataset.parameter_settings
-        != row.prepared.updated_dataset.parameter_settings
+        and prepared_dataset.parameter_settings != row.prepared.updated_dataset.parameter_settings
     )
     status = _automatic_status(fit_result, passed, refining)
     settings_changed = winner_settings != prepared_dataset.parameter_settings
@@ -675,11 +656,7 @@ def _commit_automatic_result(
         persisted_settings = prepared_dataset.parameter_settings
     else:
         checkpoint = (
-            None
-            if settings_changed
-            else prepared_dataset.checkpoint
-            if changed_settings
-            else current.checkpoint
+            None if settings_changed else prepared_dataset.checkpoint if changed_settings else current.checkpoint
         )
         last_valid_result = fit_result
         persisted_settings = winner_settings
@@ -803,8 +780,7 @@ def _joint_failure(project: XrrProject, error: BaseException) -> ProjectFitResul
 
     cleared = _clear_all(project)
     values = tuple(
-        DatasetFitResult(dataset.dataset_id, _failure_result(dataset, error))
-        for dataset in cleared.datasets
+        DatasetFitResult(dataset.dataset_id, _failure_result(dataset, error)) for dataset in cleared.datasets
     )
     return ProjectFitResult(
         "joint",
@@ -832,21 +808,14 @@ def _joint_fit(
 
     records = _source_records(validation)
     source_error = next(
-        (
-            error
-            for dataset in project.datasets
-            if (error := _source_error(records, dataset.dataset_id)) is not None
-        ),
+        (error for dataset in project.datasets if (error := _source_error(records, dataset.dataset_id)) is not None),
         None,
     )
     if source_error is not None:
         return _joint_failure(project, source_error)
     _independent, seed, _mcmc = seed_branches(project)
     try:
-        prepared = tuple(
-            prepare_dataset(project, dataset.dataset_id, seed)
-            for dataset in project.datasets
-        )
+        prepared = tuple(prepare_dataset(project, dataset.dataset_id, seed) for dataset in project.datasets)
         working = replace(
             project,
             datasets=tuple(item.updated_dataset for item in prepared),
@@ -1102,10 +1071,7 @@ def _fit_automatic_joint_transaction_group(
         )
         return working, {row.index: result}, False
     member_prefits = tuple(prefit_results[row.index] for row in member_rows)
-    member_prepared = tuple(
-        _automatic_fit_parts(prefit)[0]
-        for prefit in member_prefits
-    )
+    member_prepared = tuple(_automatic_fit_parts(prefit)[0] for prefit in member_prefits)
     group_baseline = working
 
     def publish_checkpoints(values) -> None:
@@ -1211,17 +1177,15 @@ def fit_automatic_transaction(
         if was_cancelled or (cancelled is not None and cancelled()):
             was_cancelled = True
             break
-        working, group_results, group_cancelled = (
-            _fit_automatic_joint_transaction_group(
-                working,
-                fit_group_id,
-                member_rows,
-                prefit_results,
-                fit_joint=fit_joint,
-                progress=published_progress,
-                checkpoint_callback=checkpoint_callback,
-                cancelled=cancelled,
-            )
+        working, group_results, group_cancelled = _fit_automatic_joint_transaction_group(
+            working,
+            fit_group_id,
+            member_rows,
+            prefit_results,
+            fit_joint=fit_joint,
+            progress=published_progress,
+            checkpoint_callback=checkpoint_callback,
+            cancelled=cancelled,
         )
         published.update(group_results)
         was_cancelled = was_cancelled or group_cancelled

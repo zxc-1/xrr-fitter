@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+from xrr_fitter.gui import theme
 from xrr_fitter.gui.plots.diagnostics import (
     TAB_SPECS,
     VIEW_SPECS,
@@ -44,6 +45,7 @@ from xrr_fitter.gui.plots.diagnostics import (
     release_scratch_views,
     validate_batch_trends,
 )
+from xrr_fitter.gui.plots.heatmaps import draw_parameter_heatmap, draw_residual_heatmap
 from xrr_fitter.gui.plots.interactions import (
     PlotInteractionController,
     PlotInteractionToolbar,
@@ -108,7 +110,7 @@ def _empty_state_widget(panel: PlotPanel) -> QWidget:
     row.addWidget(button)
     row.addStretch(1)
     layout = QVBoxLayout(widget)
-    layout.setSpacing(12)
+    layout.setSpacing(theme.SPACE_MD)
     layout.addStretch(2)
     layout.addWidget(title)
     layout.addWidget(body)
@@ -157,13 +159,16 @@ class PlotPanel(QWidget):
         self.plot_splitter.setChildrenCollapsible(False)
         self.plot_splitter.addWidget(self.tabs)
         self.plot_splitter.addWidget(self.sld_pane)
-        self.plot_splitter.setStretchFactor(0, 3)
-        self.plot_splitter.setStretchFactor(1, 2)
+        # The diagnostic tabs carry the axis labels, legends and tick text that
+        # a 3:2 split squeezed; the depth profile stays legible at a third of
+        # the height because it plots two smooth curves against one axis.
+        self.plot_splitter.setStretchFactor(0, 2)
+        self.plot_splitter.setStretchFactor(1, 1)
         content = QWidget(self)
         content.setObjectName("plotContent")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(6)
+        content_layout.setSpacing(theme.SPACE_SM)
         content_layout.addWidget(self.toolbar)
         content_layout.addWidget(self.plot_splitter, 1)
         self._pages = QStackedLayout(self)
@@ -245,6 +250,15 @@ class PlotPanel(QWidget):
 
     def mode_buttons(self) -> dict[str, object]:
         return self.toolbar.buttons()
+
+    def navigation_buttons(self) -> dict[str, object]:
+        return self.toolbar.navigation_buttons()
+
+    def navigation_mode(self) -> str:
+        return self._interactions.navigation_mode()
+
+    def navigators(self) -> dict[str, object]:
+        return self._interactions.navigators()
 
     def interaction_mode(self) -> str:
         return self.toolbar.mode()
@@ -689,6 +703,10 @@ class PlotPanel(QWidget):
                 )
             self._draw(self._views, previous)
             raise
+        finally:
+            # Whatever ended up on screen, the new projection or the rolled back
+            # one, is the view the reset button has to return to.
+            self._interactions.refresh_navigation_baselines()
 
     def _committed_projection(self) -> Projection:
         return committed_projection(
@@ -733,6 +751,8 @@ class PlotPanel(QWidget):
             draw_sld(views["sld"], candidate, comparison_candidates(projection.result, projection.candidate_id), shown)
             self._draw_range(views, projection.visible_range)
         draw_candidate_comparison(views["candidates"], projection.result, projection.candidate_id)
+        draw_residual_heatmap(views["residual_map"], projection.result, projection.candidate_id)
+        draw_parameter_heatmap(views["parameter_map"], projection.result, projection.candidate_id)
         draw_uncertainty(views["uncertainty"], projection.result, projection.candidate_id)
         draw_batch_trends(views["trend"], projection.trends)
 

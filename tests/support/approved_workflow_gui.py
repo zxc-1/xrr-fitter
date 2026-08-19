@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
-from typing import Callable
 
 from tests.support.approved_workflow_model import (
     CANDIDATE_SCHEMA,
@@ -16,7 +16,6 @@ from tests.support.approved_workflow_model import (
     file_value,
     owner_source,
 )
-
 
 GuiVerifier = Callable[[str, Path, Path], GuiResult]
 
@@ -70,9 +69,7 @@ def _verify_record(report: Path, value: object, expected_path: str) -> Path:
 
 
 def _manifest_files(manifest) -> tuple[object, ...]:
-    return manifest.root_files + tuple(
-        record for dataset in manifest.datasets for record in dataset.files
-    )
+    return manifest.root_files + tuple(record for dataset in manifest.datasets for record in dataset.files)
 
 
 def _manifest_is_current(manifest) -> bool:
@@ -89,6 +86,7 @@ def _manifest_is_current(manifest) -> bool:
 def verify_gui_case(case_id: str, project: Path, output: Path) -> GuiResult:
     from PySide6.QtCore import QCoreApplication, QEvent
     from PySide6.QtWidgets import QApplication
+
     from xrr_fitter.gui.main_window import MainWindow
 
     application = QApplication.instance() or QApplication([])

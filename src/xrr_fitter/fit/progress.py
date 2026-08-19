@@ -22,11 +22,7 @@ def emit_progress(
     """Publish progress with a bounded curve when an incumbent changes."""
     if callback is None:
         return
-    axes = (
-        (None, None)
-        if preview is None
-        else downsampled_preview(preview.qz_a_inv, preview.model_normalized)
-    )
+    axes = (None, None) if preview is None else downsampled_preview(preview.qz_a_inv, preview.model_normalized)
     callback(
         FitProgress(
             dataset_id,

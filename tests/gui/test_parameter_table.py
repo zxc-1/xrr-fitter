@@ -394,3 +394,38 @@ def test_unconstrained_row_matches_head_editability(qtbot) -> None:
     locked = table.item(0, 5)
     assert locked.flags() & Qt.ItemFlag.ItemIsUserCheckable
     assert locked.toolTip() == ""
+
+
+def test_computed_bound_shows_few_digits_and_keeps_full_value_reachable(qtbot) -> None:
+    """A twelve-digit bound used to stretch the column past the dock width."""
+    definition = _definition("component.0.roughness_a", lower=0.37167741227456, upper=266.0914692)
+
+    table = _table(qtbot, definition)
+
+    # Å→nm scaling puts these at 0.037167741227456 and 26.60914692.
+    assert table.item(0, 2).text() == "0.0371677"
+    assert table.item(0, 3).text() == "26.6091"
+    # Rounding hides digits, so the cell carries the exact value in its tooltip.
+    assert table.item(0, 2).toolTip() == repr(0.037167741227456)
+
+
+def test_editing_one_cell_persists_untouched_bounds_at_full_precision(
+    qtbot,
+    tmp_path,
+) -> None:
+    """The commit path reads the whole row, so rounding must not reach storage."""
+    panel = _panel(qtbot, tmp_path)
+    table = panel.findChild(QTableWidget, "parameterTable")
+    name = "component.0.roughness_a"
+
+    # Give the row a bound that does not survive six significant digits.
+    panel.set_display_parameter(name, initial=0.3, lower=0.037167741227456, upper=2.0, locked=False)
+    row = panel.row_names.index(name)
+
+    # Touch only the initial value; the two bounds are left exactly as rendered.
+    table.item(row, 1).setText("0.4")
+
+    setting = next(value for value in panel.document.project.datasets[0].parameter_settings if value.name == name)
+    assert setting.initial == pytest.approx(4.0)
+    # The untouched bound keeps every digit instead of the rounded 0.0371677.
+    assert setting.lower == pytest.approx(0.37167741227456, rel=0, abs=1e-15)

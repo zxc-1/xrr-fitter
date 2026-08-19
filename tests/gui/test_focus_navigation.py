@@ -20,9 +20,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QLineEdit,
     QPushButton,
     QSpinBox,
@@ -44,11 +42,7 @@ def _accessibility():
 
 def _write_curve(path: Path, scale: float) -> Path:
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {scale / (index + 1):.12g}"
-            for index in range(32)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {scale / (index + 1):.12g}" for index in range(32)) + "\n",
         encoding="utf-8",
     )
     return path
@@ -287,7 +281,9 @@ def test_shell_has_logical_keyboard_focus_order(qtbot) -> None:
     ("value", "message"),
     (
         pytest.param("-", "材料密度无效：bulk density must be finite", id="-材料密度无效：bulk density must be finite"),
-        pytest.param("0", "材料密度无效：bulk density must be positive", id="0-材料密度无效：bulk density must be positive"),
+        pytest.param(
+            "0", "材料密度无效：bulk density must be positive", id="0-材料密度无效：bulk density must be positive"
+        ),
     ),
 )
 def test_structure_tree_density_editor_rejects_invalid_value_and_keeps_focus(
@@ -406,7 +402,12 @@ def test_periodic_dialog_keeps_unknown_formula_open_and_focuses_row(qtbot) -> No
     ("enabled_name", "editor_name", "duplicate_value"),
     (
         pytest.param(None, "intensityColumnEditor", 0, id="None-intensityColumnEditor-0"),
-        pytest.param("intensitySigmaEnabled", "intensitySigmaColumnEditor", 1, id="intensitySigmaEnabled-intensitySigmaColumnEditor-1"),
+        pytest.param(
+            "intensitySigmaEnabled",
+            "intensitySigmaColumnEditor",
+            1,
+            id="intensitySigmaEnabled-intensitySigmaColumnEditor-1",
+        ),
         pytest.param("resolutionEnabled", "resolutionColumnEditor", 1, id="resolutionEnabled-resolutionColumnEditor-1"),
     ),
 )

@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 import os
-from pathlib import Path
 import shutil
 import tempfile
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import replace
+from pathlib import Path
 
 import xrr_fitter.api as api
-
 from tests.support.approved_workflow_model import (
     CANDIDATE_SCHEMA,
     CASE_SPECS,
@@ -31,7 +30,6 @@ from tests.support.approved_workflow_model import (
     owner_source,
     workflow_contract_sha256,
 )
-
 
 EnvironmentBuilder = Callable[[], dict[str, object]]
 RunExecutor = Callable[[CaseSpec, Path, int, int, Path], RunRecord]
@@ -264,10 +262,7 @@ def run_api_acceptance(
     _prepare_report(report)
     staging = Path(tempfile.mkdtemp(prefix=".capture-", dir=report))
     try:
-        records = tuple(
-            _capture_case(spec, root, staging, run_executor)
-            for spec in CASE_SPECS
-        )
+        records = tuple(_capture_case(spec, root, staging, run_executor) for spec in CASE_SPECS)
         content = canonical_json_bytes(_candidate_value(records, environment_builder))
         _publish_capture(report, staging, content)
         return records

@@ -15,13 +15,11 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+from xrr_fitter.gui import theme
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.parameters.constraints import ConstraintEditor
 from xrr_fitter.gui.parameters.sharing import SharingEditor
-from xrr_fitter.gui.parameters.table import ParameterTable
-
-# Editable numeric columns in the parameter table: initial, lower, upper.
-VALUE_COLUMNS = (1, 2, 3)
+from xrr_fitter.gui.parameters.table import VALUE_COLUMNS, ParameterTable
 
 # Wash of the error color behind a cell whose entered bound is self-inconsistent.
 INVALID_CELL_BRUSH = QBrush(QColor(179, 38, 30, 48))
@@ -78,7 +76,7 @@ class ParametersPanel(QWidget):
         tabs.addTab(self.constraint_editor, "约束")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(theme.SPACE_SM)
         layout.addWidget(self.expert_toggle)
         layout.addWidget(tabs)
         layout.addWidget(self.status_label)
@@ -351,7 +349,7 @@ class ParametersPanel(QWidget):
         if name_item is None or lock_item is None or any(value is None for value in value_items):
             raise ValueError("parameter row is incomplete")
         name = str(name_item.data(Qt.ItemDataRole.UserRole))
-        initial, lower, upper = (float(value.text()) for value in value_items)
+        initial, lower, upper = (self.parameter_table.entered_value(value) for value in value_items)
         return name, (initial, lower, upper), lock_item.checkState() == Qt.CheckState.Checked
 
     def _mark_row_invalid(self, row: int, problem: str) -> None:

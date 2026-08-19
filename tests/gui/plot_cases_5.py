@@ -152,6 +152,8 @@ def test_remaining_tabs_keep_their_order_after_sld_leaves(qtbot) -> None:
         "qz4",
         "residual",
         "candidates",
+        "residual_map",
+        "parameter_map",
         "uncertainty",
         "trend",
     )
@@ -168,15 +170,15 @@ def test_sld_pane_is_expert_only(qtbot) -> None:
     assert panel.sld_pane.isVisibleTo(panel) is True
 
 
-def test_number_shortcuts_cover_the_seven_remaining_tabs(qtbot) -> None:
+def test_number_shortcuts_cover_every_remaining_tab(qtbot) -> None:
     from PySide6.QtGui import QKeySequence
 
     panel = _panel(qtbot, data=prepared_data(size=4))
     keys = [shortcut.key() for shortcut in panel.view_shortcuts]
 
-    assert len(keys) == 7
+    assert len(keys) == 9
     assert keys[0] == QKeySequence("Alt+1")
-    assert keys[6] == QKeySequence("Alt+7")
+    assert keys[8] == QKeySequence("Alt+9")
 
 
 def test_selecting_sld_as_a_tab_is_rejected(qtbot) -> None:

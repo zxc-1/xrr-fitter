@@ -26,14 +26,9 @@ def _ordered_data(problem: object, candidate: object) -> _OrderedResiduals:
     residual = np.asarray(candidate.log_residuals_decades, dtype=float)
     two_theta_value = getattr(problem.data, "two_theta_deg", None)
     two_theta = qz if two_theta_value is None else np.asarray(two_theta_value, dtype=float)
-    if not (
-        qz.shape == two_theta.shape == fit_mask.shape == residual.shape
-        and qz.ndim == 1
-    ):
+    if not (qz.shape == two_theta.shape == fit_mask.shape == residual.shape and qz.ndim == 1):
         raise ValueError("residual diagnostic arrays have incompatible shapes")
-    selected = np.flatnonzero(
-        fit_mask & np.isfinite(qz) & np.isfinite(two_theta) & np.isfinite(residual)
-    )
+    selected = np.flatnonzero(fit_mask & np.isfinite(qz) & np.isfinite(two_theta) & np.isfinite(residual))
     order = np.argsort(qz[selected], kind="stable")
     indices = selected[order]
     return _OrderedResiduals(
@@ -54,18 +49,30 @@ def ordered_fit_residuals(
     return result
 
 
-def residual_autocorrelation_flag(residuals: np.ndarray) -> bool:
-    values = np.asarray(residuals, dtype=float)
-    if values.ndim != 1 or values.size < 4 or np.any(~np.isfinite(values)):
-        raise ValueError("residuals must be a finite vector with at least four points")
-    centered = values - np.mean(values)
-    if float(np.max(np.abs(centered))) <= 1e-8:
-        return False
+def _normalized_centered_residuals(values: np.ndarray) -> tuple[np.ndarray, float] | None:
+    scale = float(np.max(np.abs(values)))
+    if scale == 0.0:
+        return None
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        centered = values / scale
+        centered -= np.mean(centered)
+    amplitude = float(np.max(np.abs(centered)))
+    if scale <= 1.0:
+        below_noise = amplitude * scale <= 1e-8
+    else:
+        below_noise = amplitude <= 1e-8 / scale
+    if below_noise or amplitude == 0.0:
+        return None
+    centered /= amplitude
     denominator = float(centered @ centered)
     if denominator <= 0.0:
-        return False
+        return None
+    return centered, denominator
+
+
+def _has_significant_autocorrelation(centered: np.ndarray, denominator: float) -> bool:
     significant = 0
-    threshold = 3.0 / np.sqrt(values.size)
+    threshold = 3.0 / np.sqrt(centered.size)
     for lag in range(1, min(20, centered.size // 5) + 1):
         autocorrelation = float(centered[:-lag] @ centered[lag:]) / denominator
         if abs(autocorrelation) > threshold:
@@ -75,9 +82,30 @@ def residual_autocorrelation_flag(residuals: np.ndarray) -> bool:
     return False
 
 
-def _third_median_drop(values: np.ndarray) -> float:
+def residual_autocorrelation_flag(residuals: np.ndarray) -> bool:
+    values = np.asarray(residuals, dtype=float)
+    if values.ndim != 1 or values.size < 4 or np.any(~np.isfinite(values)):
+        raise ValueError("residuals must be a finite vector with at least four points")
+    normalized = _normalized_centered_residuals(values)
+    return False if normalized is None else _has_significant_autocorrelation(*normalized)
+
+
+def _third_median_drop_at_least(values: np.ndarray, threshold: float) -> bool:
     third = max(1, values.size // 3)
-    return float(np.median(values[:third]) - np.median(values[-third:]))
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        drop = float(np.median(values[:third]) - np.median(values[-third:]))
+    if np.isfinite(drop):
+        return drop >= threshold
+    scale = float(np.max(np.abs(values)))
+    if scale == 0.0:
+        return False
+    normalized = values / scale
+    normalized_drop = float(np.median(normalized[:third]) - np.median(normalized[-third:]))
+    if normalized_drop <= 0.0:
+        return False
+    if scale <= 1.0:
+        return normalized_drop * scale >= threshold
+    return normalized_drop >= threshold / scale
 
 
 def _trend_detected(
@@ -85,10 +113,18 @@ def _trend_detected(
     residual: np.ndarray,
     correlation_limit: float,
 ) -> bool:
-    if np.ptp(coordinate) == 0.0 or np.ptp(residual) == 0.0:
+    if (
+        coordinate.size == 0
+        or residual.size == 0
+        or np.all(coordinate == coordinate[0])
+        or np.all(residual == residual[0])
+    ):
         return False
     correlation = float(spearmanr(coordinate, residual).statistic)
-    return correlation <= correlation_limit and _third_median_drop(residual) >= 0.05
+    return correlation <= correlation_limit and _third_median_drop_at_least(
+        residual,
+        0.05,
+    )
 
 
 def _footprint(problem: object, data: _OrderedResiduals) -> PhysicsDiagnostic | None:

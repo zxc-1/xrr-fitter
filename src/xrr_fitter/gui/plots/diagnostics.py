@@ -18,12 +18,11 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from matplotlib.text import Text
-from matplotlib.ticker import LogFormatter
-from PySide6.QtCore import QTimer, Qt
+from matplotlib.ticker import AutoMinorLocator, FixedLocator, LogFormatter
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QTabWidget
 
 from xrr_fitter.gui import theme
-
 
 # The switchable diagnostic tabs, in display order. The log view leads because
 # reflectivity spans several decades: on a linear axis everything below the
@@ -35,6 +34,8 @@ TAB_SPECS = (
     ("qz4", "qz⁴R", "查看当前候选 qz 网格上的 qz 四次方诊断"),
     ("residual", "加权残差", "查看当前候选发布的全长加权残差"),
     ("candidates", "候选解比较", "比较全部保留候选及其审计状态"),
+    ("residual_map", "残差热图", "按候选逐行比较加权残差，定位共同失配的 q 区间"),
+    ("parameter_map", "参数热图", "按候选逐行比较归一化参数值，查看结构解的分歧"),
     ("uncertainty", "相关性与区间", "查看当前候选拥有的相关和区间证据"),
     ("trend", "批量趋势", "查看多个数据集的厚度和周期趋势"),
 )
@@ -152,31 +153,45 @@ def apply_figure_font(figure: Figure) -> None:
     Every draw ends here, and ``Axes.clear()`` resets facecolor and tick colours
     to the Matplotlib defaults, so the palette has to be reapplied at this point
     rather than only at construction.
+
+    Only the family is overridden.  Assigning a whole ``FontProperties`` used to
+    replace every other property along with it, which reset each artist's size
+    back to the rcParam default and made a caller's explicit ``fontsize`` dead on
+    arrival: a caption asking to be smaller than its title came out the same size.
     """
-    properties = _cjk_font()
+    families = _cjk_font().get_family()
     for artist in figure.findobj(match=Text):
-        artist.set_fontproperties(properties)
+        artist.set_fontfamily(families)
     apply_figure_palette(figure)
 
 
 def draw_empty(view: DiagnosticView, title: str, message: str = "暂无可用数据") -> None:
     # Spine visibility survives Axes.clear(), so only ticks are blanked here;
     # hiding spines would leave later real draws without an axes frame.
+    #
+    # Every pane gets its own caption.  On the uncertainty figure, which is split
+    # in two, only the primary pane used to be titled and captioned, and
+    # ``clear()`` also drops the title its companion was given at construction:
+    # that half came up blank on startup, reading as a real plot whose curve had
+    # failed to draw.  A title an axes already carries is put back, so each pane
+    # keeps saying what it will show once evidence arrives.
+    kept = tuple((axes, axes.get_title()) for axes in view.figure.axes)
     for axes in view.figure.axes:
         axes.clear()
         axes.set_xticks(())
         axes.set_yticks(())
-    view.axes.set_title(title)
     palette = apply_figure_palette(view.figure)
-    view.axes.text(
-        0.5,
-        0.5,
-        message,
-        ha="center",
-        va="center",
-        transform=view.axes.transAxes,
-        color=palette.muted,
-    )
+    for axes, previous_title in kept:
+        axes.set_title(title if axes is view.axes else previous_title)
+        axes.text(
+            0.5,
+            0.5,
+            message,
+            ha="center",
+            va="center",
+            transform=axes.transAxes,
+            color=palette.muted,
+        )
     apply_figure_font(view.figure)
     view.canvas.draw_idle()
 
@@ -216,6 +231,42 @@ def apply_figure_palette(figure: Figure) -> theme.PlotPalette:
     return palette
 
 
+# Matplotlib labels the axes it creates for a colorbar, and that label is the
+# only handle on it: a colorbar axes reports data of its own and holds no image,
+# so nothing else tells it apart from a plotted pane.
+COLORBAR_AXES_LABEL = "<colorbar>"
+
+
+def apply_axes_grid(figure: Figure, palette: theme.PlotPalette) -> None:
+    """Draw a reference grid behind the data on every plotted axes.
+
+    Reading a value off a reflectivity curve means tracing it back to both
+    axes, which bare tick marks make into guesswork across four decades.  The
+    palette already carried a ``grid`` colour that nothing used; this is what
+    consumes it.  Axes holding an image are skipped: a grid over the
+    correlation matrix would sit on top of the cells it is meant to help read.
+    """
+    for axes in figure.axes:
+        # An image axes would have its cells overdrawn, and a placeholder axes
+        # holds only centred text: gridding either one adds lines that carry no
+        # reading.  ``has_data`` is false for a text-only placeholder.  A
+        # colorbar reports data of its own without holding an image, so it needs
+        # its own exclusion: it is a legend for another axes, not a plot.
+        if axes.images or axes.get_label() == COLORBAR_AXES_LABEL or not axes.has_data():
+            continue
+        axes.set_axisbelow(True)
+        axes.grid(True, which="major", color=palette.grid, linewidth=0.6)
+        # A log axis already places decade subdivisions itself, and a fixed
+        # locator means the ticks are categories (one per dataset) rather than a
+        # measurable scale: subdividing either one invents readings that are not
+        # there.
+        for axis, scale in ((axes.xaxis, axes.get_xscale()), (axes.yaxis, axes.get_yscale())):
+            if scale == "linear" and not isinstance(axis.get_major_locator(), FixedLocator):
+                axis.set_minor_locator(AutoMinorLocator())
+        axes.grid(True, which="minor", color=palette.grid, linewidth=0.3, alpha=0.6)
+        axes.tick_params(which="minor", length=2)
+
+
 def _view(key: str, *, qt: bool) -> DiagnosticView:
     title = next(title for name, title, _description in VIEW_SPECS if name == key)
     figure = Figure(layout="constrained") if qt else Figure(figsize=(0.8, 0.6), dpi=25)
@@ -249,9 +300,7 @@ def build_tabs() -> tuple[QTabWidget, dict[str, DiagnosticView]]:
 def build_scratch_views() -> dict[str, DiagnosticView]:
     global SCRATCH_VIEWS
     if SCRATCH_VIEWS is None:
-        SCRATCH_VIEWS = {
-            key: _view(key, qt=False) for key, _title, _description in VIEW_SPECS
-        }
+        SCRATCH_VIEWS = {key: _view(key, qt=False) for key, _title, _description in VIEW_SPECS}
     return dict(SCRATCH_VIEWS)
 
 
@@ -272,7 +321,13 @@ def diagnostic_text(diagnostic: object) -> str:
     return f"{label}（{code}: {message}）"
 
 
-def _candidate_is_inspection_only(candidate: object) -> bool:
+def candidate_is_inspection_only(candidate: object) -> bool:
+    """Report whether a candidate may only be inspected, never compared.
+
+    Three views ask this same question, so it is answered in one place: the
+    comparison overlay, the candidate label, and the heatmaps, which would
+    otherwise devote a row to a candidate whose objective is not even finite.
+    """
     ranking = getattr(candidate, "ranking_objective", None)
     return bool(
         not getattr(candidate, "valid", False)
@@ -282,9 +337,20 @@ def _candidate_is_inspection_only(candidate: object) -> bool:
     )
 
 
+def finish_view(view: DiagnosticView) -> None:
+    """Apply the grid, then the font, then queue the redraw.
+
+    Grid first: it can install a minor locator, and the font pass afterwards
+    then reaches every tick label that exists by the time it runs.
+    """
+    apply_axes_grid(view.figure, current_plot_palette())
+    apply_figure_font(view.figure)
+    view.canvas.draw_idle()
+
+
 def candidate_label(candidate: object, *, selected: bool) -> str:
     parts = [str(candidate.candidate_id), f"J={candidate.objective:g}"]
-    if _candidate_is_inspection_only(candidate):
+    if candidate_is_inspection_only(candidate):
         parts.append("仅供检查")
     else:
         parts.append("有效")
@@ -322,7 +388,8 @@ def draw_candidate_comparison(
     axes.set(title="候选解比较", xlabel="qz (Å⁻¹)", ylabel="归一化 R", yscale="log")
     axes.yaxis.set_major_formatter(LogFormatter())
     if candidates:
-        axes.legend(fontsize="small")
+        axes.legend(fontsize=theme.FONT_PT_SM)
+    apply_axes_grid(view.figure, current_plot_palette())
     apply_figure_font(view.figure)
     view.canvas.draw_idle()
 
@@ -358,5 +425,6 @@ def draw_batch_trends(
     axes.set_xticks(positions, dataset_ids)
     axes.set(title="批量趋势", xlabel="数据集", ylabel="长度 (nm)")
     axes.legend()
+    apply_axes_grid(view.figure, current_plot_palette())
     apply_figure_font(view.figure)
     view.canvas.draw_idle()

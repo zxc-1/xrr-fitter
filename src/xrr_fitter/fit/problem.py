@@ -9,6 +9,7 @@ import numpy as np
 
 from xrr_fitter.evaluation import assign_fit_regions, region_weights
 from xrr_fitter.fit.drift import DRIFT_DATASET, drift_constraint_rules, rebind_drift_rules
+from xrr_fitter.fit.gradient_bounds import validate_gradient_modes
 from xrr_fitter.fit.parameters import (
     apply_parameter_settings,
     default_parameter_definitions,
@@ -310,6 +311,7 @@ def compile_fit_problem(
     validate_compiled_definitions(definitions)
     validate_instrument_modes(definitions, instrument)
     validate_transition_modes(definitions, structure)
+    validate_gradient_modes(definitions, structure)
     labels, weights = _region_layout(data)
     center, reason = _scale_prior_state(data, instrument, config)
     problem = FitEvaluationContext(

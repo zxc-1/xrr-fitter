@@ -5,7 +5,6 @@ from math import isfinite, log10
 
 import numpy as np
 
-
 INNER_BOUND_FRACTION = 0.05
 METRIC_THRESHOLDS = {
     "backing.roughness_a": 0.15,
@@ -120,8 +119,7 @@ def open_metric_names(metrics: tuple[RecoveryMetric, ...]) -> tuple[str, ...]:
     return tuple(
         metric.name
         for metric in metrics
-        if target_is_supported(metric)
-        and normalized_coordinate_error(metric) > METRIC_THRESHOLDS[metric.family]
+        if target_is_supported(metric) and normalized_coordinate_error(metric) > METRIC_THRESHOLDS[metric.family]
     )
 
 

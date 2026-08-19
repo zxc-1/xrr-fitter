@@ -577,19 +577,37 @@ def _result_identity(result: FitResult) -> tuple[object, ...]:
     )
 
 
-def _validate_joint_rank(candidates: tuple[object, ...]) -> None:
-    # Invalid global candidates cannot claim a finite rank in any projection.
-    if not candidates[0].valid:
-        if any(candidate.ranking_objective is not None for candidate in candidates):
-            raise ValueError("joint candidates have inconsistent invalid ranking")
-        return
+def _validate_invalid_joint_rank(candidates: tuple[object, ...]) -> bool:
+    if candidates[0].valid:
+        return False
+    if any(candidate.ranking_objective is not None for candidate in candidates):
+        raise ValueError("joint candidates have inconsistent invalid ranking")
+    return True
+
+
+def _joint_objectives(candidates: tuple[object, ...]) -> tuple[float, ...]:
     objectives = tuple(candidate.objective for candidate in candidates)
-    # A valid joint rank is the mean of aligned finite local objectives, never
-    # a copied objective from whichever dataset happened to finish first.
     if any(not isfinite(value) for value in objectives):
         raise ValueError("joint candidates have nonfinite objective")
-    ranking = candidates[0].ranking_objective
+    return objectives
+
+
+def _stable_objective_mean(objectives: tuple[float, ...]) -> float:
     expected = sum(objectives) / len(objectives)
+    if not isfinite(expected):
+        return sum(value / len(objectives) for value in objectives)
+    return expected
+
+
+def _validate_joint_rank(candidates: tuple[object, ...]) -> None:
+    # Invalid global candidates cannot claim a finite rank in any projection.
+    if _validate_invalid_joint_rank(candidates):
+        return
+    # A valid joint rank is the mean of aligned finite local objectives, never
+    # a copied objective from whichever dataset happened to finish first.
+    objectives = _joint_objectives(candidates)
+    ranking = candidates[0].ranking_objective
+    expected = _stable_objective_mean(objectives)
     if ranking is None or not isclose(ranking, expected, rel_tol=1e-12, abs_tol=1e-15):
         raise ValueError("joint candidate global ranking does not match local mean")
 

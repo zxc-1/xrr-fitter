@@ -9,7 +9,6 @@ import numpy as np
 import xrr_fitter.api as api
 from xrr_fitter.cli import progress as progress_module
 
-
 SCALAR_FIELDS = {
     "best_objective",
     "completed",

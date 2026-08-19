@@ -8,7 +8,6 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox, QWidget
 
 import xrr_fitter.api as api
 
-
 EXPECTED_DIALOG_ERRORS = (OSError, ValueError, RuntimeError, KeyError, TypeError)
 PROJECT_FILTER = "XRR 项目 (*.xrrproj.json *.json);;所有文件 (*)"
 SAVE_FILTER = "XRR 项目 (*.xrrproj.json);;JSON (*.json)"

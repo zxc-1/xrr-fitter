@@ -12,7 +12,6 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-
 from tests.unit.fit.test_stage_search import (
     _candidate,
     _pipeline_api,
@@ -20,6 +19,7 @@ from tests.unit.fit.test_stage_search import (
     _stages_api,
     _unchanged_local_solution,
 )
+
 from xrr_fitter.evaluation import encode_physical_vector
 from xrr_fitter.fit.objective import evaluate_vector
 
@@ -120,10 +120,7 @@ def test_stage_e_batches_ranked_locals_before_restarts(
 ) -> None:
     stages = _stages_api()
     problem = _problem(seed=761)
-    declared = {
-        definition.name: definition.initial
-        for definition in problem.parameter_definitions
-    }
+    declared = {definition.name: definition.initial for definition in problem.parameter_definitions}
     declared_unit = encode_physical_vector(problem, declared)
     parents = (
         _candidate(problem, "D-0-0", declared_unit),
@@ -166,10 +163,7 @@ def test_profile_rescue_batches_all_four_paths(
         problem,
         {definition.name: definition.initial for definition in problem.parameter_definitions},
     )
-    candidates = tuple(
-        replace(_candidate(problem, f"E-{index}", center), seed_index=index)
-        for index in range(4)
-    )
+    candidates = tuple(replace(_candidate(problem, f"E-{index}", center), seed_index=index) for index in range(4))
     runner = _BatchRunner()
     monkeypatch.setattr(stages, "solve_local", _unchanged_local_solution)
     monkeypatch.setattr(

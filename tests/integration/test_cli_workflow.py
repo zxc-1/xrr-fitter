@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from dataclasses import replace
+from pathlib import Path
 
 import xrr_fitter.api as api
-
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -73,9 +72,7 @@ def _guarded_environment(tmp_path: Path) -> dict[str, str]:
     return environment
 
 
-def _run(
-    arguments: tuple[str, ...], environment: dict[str, str]
-) -> subprocess.CompletedProcess:
+def _run(arguments: tuple[str, ...], environment: dict[str, str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         (sys.executable, "-m", "xrr_fitter.cli.main", *arguments),
         cwd=ROOT,
@@ -141,6 +138,4 @@ def test_cli_fit_matches_the_in_process_api_fit(tmp_path: Path) -> None:
     direct_output = tmp_path / "direct.json"
     api.save_project(direct.updated_project, direct_output)
 
-    assert json.loads(cli_output.read_text(encoding="utf-8")) == json.loads(
-        direct_output.read_text(encoding="utf-8")
-    )
+    assert json.loads(cli_output.read_text(encoding="utf-8")) == json.loads(direct_output.read_text(encoding="utf-8"))

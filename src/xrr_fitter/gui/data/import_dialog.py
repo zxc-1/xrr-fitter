@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 
-
 VALIDATION_TEXT = "请选择光路类型：单色 / 混合 Kα"
 RESOLUTION_KINDS = (
     ("σ(q) / Å⁻¹", "sigma_q_a_inv"),
@@ -89,10 +88,7 @@ class ColumnMappingDialog(QDialog):
         self.error_label.setObjectName("columnMappingError")
         self.error_label.setWordWrap(True)
         self.error_label.hide()
-        self.buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-        )
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self._connect_controls()
         self._arrange()
 
@@ -217,10 +213,7 @@ class ImportDialog(QDialog):
         self.validation_label = QLabel(VALIDATION_TEXT)
         self.validation_label.setObjectName("importValidation")
         self.validation_label.setWordWrap(True)
-        self.button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-        )
+        self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self._import_button = self.button_box.button(QDialogButtonBox.StandardButton.Ok)
         self._import_button.setText("导入")
         self._import_button.setEnabled(False)

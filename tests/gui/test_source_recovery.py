@@ -12,11 +12,7 @@ import xrr_fitter.api as api
 def _write_curve(path: Path, *, scale: float = 1000.0) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {scale / (index + 1):.12g}"
-            for index in range(32)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {scale / (index + 1):.12g}" for index in range(32)) + "\n",
         encoding="utf-8",
     )
     return path

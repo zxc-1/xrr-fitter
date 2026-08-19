@@ -12,7 +12,8 @@ from tests.support.synthetic_recovery_model import (
 )
 from xrr_fitter.model.analysis import ConfidenceClass, ParameterProfile
 from xrr_fitter.model.data import PreparedData
-from xrr_fitter.model.parameters import ParameterDefinition as FitParameterDefinition, physical_to_unit
+from xrr_fitter.model.parameters import ParameterDefinition as FitParameterDefinition
+from xrr_fitter.model.parameters import physical_to_unit
 
 
 def _best_candidate(result):
@@ -194,13 +195,9 @@ def _profile_covers_truth(profile: ParameterProfile, truth: float) -> bool:
     if np.any(np.isclose(values[supported], truth, rtol=0.0, atol=1e-12)):
         return True
     intervals = (
-        _supported_interval(values, objectives, supported, index, best, threshold)
-        for index in range(values.size - 1)
+        _supported_interval(values, objectives, supported, index, best, threshold) for index in range(values.size - 1)
     )
-    return any(
-        interval is not None and interval[0] <= truth <= interval[1]
-        for interval in intervals
-    )
+    return any(interval is not None and interval[0] <= truth <= interval[1] for interval in intervals)
 
 
 def _metric_truth_is_eligible(metric: RecoveryMetric) -> bool:
@@ -239,10 +236,7 @@ def _required_metric_profile_truths(
 def _metric_profiles_are_closed(
     profile_truths: tuple[tuple[ParameterProfile, float], ...],
 ) -> bool:
-    return all(
-        profile.lower_closed and profile.upper_closed
-        for profile, _truth in profile_truths
-    )
+    return all(profile.lower_closed and profile.upper_closed for profile, _truth in profile_truths)
 
 
 class _MetricAccumulator:
@@ -285,10 +279,7 @@ class _MetricAccumulator:
     def add_case(self, case: SyntheticCase, result, data: PreparedData) -> None:
         values = _values_by_name(result)
         bounds = _bounds_by_name(result)
-        definitions = {
-            definition.name: definition
-            for definition in result.parameter_definitions
-        }
+        definitions = {definition.name: definition for definition in result.parameter_definitions}
         profiles = _profiles_by_name(result)
         for metric in case.metrics:
             if not _metric_truth_is_eligible(metric):

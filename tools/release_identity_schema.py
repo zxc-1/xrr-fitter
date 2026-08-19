@@ -4,12 +4,6 @@ from __future__ import annotations
 
 import json
 
-from verify_distribution import (
-    ARTIFACT_KINDS,
-    artifact_record,
-    artifact_value,
-    git_oid,
-)
 from release_identity_model import (
     NOT_RUN,
     SCHEMA,
@@ -20,7 +14,12 @@ from release_identity_model import (
     RepoFileRecord,
     TestManifestBinding,
 )
-
+from verify_distribution import (
+    ARTIFACT_KINDS,
+    artifact_record,
+    artifact_value,
+    git_oid,
+)
 
 HEX = frozenset("0123456789abcdef")
 IDENTITY_FIELDS = {

@@ -32,11 +32,7 @@ class _FakeJob:
 def _write_curve(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        "\n".join(
-            f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}"
-            for index in range(64)
-        )
-        + "\n",
+        "\n".join(f"{0.05 + index * 0.02:.6f} {1000.0 / (index + 1):.12g}" for index in range(64)) + "\n",
         encoding="utf-8",
     )
     return path
@@ -191,10 +187,6 @@ def test_batch_mode_selector_is_visible_persisted_and_rejects_one_dataset_joint(
     joint = _panel(qtbot, tmp_path / "joint", count=2)
     assert joint.set_batch_mode("joint") is True
     assert joint.document.project.batch_mode == "joint"
-
-
-
-
 
 
 def test_progress_bar_never_moves_backwards_across_stage_changes(qtbot) -> None:
@@ -438,8 +430,8 @@ def test_remaining_estimator_counts_down_between_updates() -> None:
     later = estimator.remaining(16.0)
     assert first is not None and later is not None
     assert later < first
-    assert abs(first - 8.0) < 1e-9   # 20 - 12
-    assert abs(later - 4.0) < 1e-9   # 20 - 16
+    assert abs(first - 8.0) < 1e-9  # 20 - 12
+    assert abs(later - 4.0) < 1e-9  # 20 - 16
 
 
 def test_remaining_estimator_reset_clears_projection() -> None:
@@ -461,7 +453,12 @@ def _preview_progress(value):
     qz = np.array([0.1, 0.2, 0.3], dtype=float)
     model = np.array([value, value, value], dtype=float)
     return api.FitProgress(
-        "curve", "B", 5, 10, 1.0, "search",
+        "curve",
+        "B",
+        5,
+        10,
+        1.0,
+        "search",
         preview_qz_a_inv=qz,
         preview_model_normalized=model,
     )

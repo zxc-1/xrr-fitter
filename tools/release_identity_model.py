@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from verify_distribution import ArtifactRecord
 
-
 SCHEMA = "xrr-r23-release-identity-v1"
 STATUS = "PASS"
 NOT_RUN = "NOT_RUN: owner post-delivery acceptance"

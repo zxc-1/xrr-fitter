@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 CASE_IDS = (
     "known_single_layer",
     "unstable_multilayer",
@@ -115,7 +114,6 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, object]]:
     }
     signoff_path = tmp_path / "signoff.json"
     signoff_path.write_bytes(_canonical(signoff))
-    output = tmp_path / "approved-data"
     return raw, candidate_path, signoff_path, candidate
 
 

@@ -46,19 +46,14 @@ def _report_concerns(report: object) -> tuple[list[str], set[str]]:
 
 
 def _evidence_reasons(evidence: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(
-        code
-        for code in evidence
-        if code in SEARCH_UPGRADE_EVIDENCE or code in PROFILE_REVIEW_EVIDENCE
-    )
+    return tuple(code for code in evidence if code in SEARCH_UPGRADE_EVIDENCE or code in PROFILE_REVIEW_EVIDENCE)
 
 
 def _structural_names(names: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(
         name
         for name in names
-        if any(fragment in name for fragment in ("thickness", "sld_", "roughness"))
-        or name.startswith("instrument.")
+        if any(fragment in name for fragment in ("thickness", "sld_", "roughness")) or name.startswith("instrument.")
     )
 
 
@@ -84,18 +79,12 @@ def _absorption_names(
         name
         for name in names
         if name.endswith(".sld_imag_a2")
-        and (
-            report.systematic_residual
-            or any(code in SEARCH_UPGRADE_EVIDENCE for code in evidence)
-        )
+        and (report.systematic_residual or any(code in SEARCH_UPGRADE_EVIDENCE for code in evidence))
     )
 
 
 def _search_upgrade(best: object, evidence: tuple[str, ...]) -> bool:
-    return (
-        any(code in SEARCH_UPGRADE_EVIDENCE for code in evidence)
-        or best.stop_reason == "max_nfev"
-    )
+    return any(code in SEARCH_UPGRADE_EVIDENCE for code in evidence) or best.stop_reason == "max_nfev"
 
 
 def assess_automatic_quality(
@@ -117,9 +106,7 @@ def assess_automatic_quality(
     evidence = tuple(result.classification_evidence)
     reasons.extend(_evidence_reasons(evidence))
     names = tuple(variable.name for variable in problem.variables)
-    definition_names = tuple(
-        definition.name for definition in problem.parameter_definitions
-    )
+    definition_names = tuple(definition.name for definition in problem.parameter_definitions)
     profiles = _profile_names(
         names,
         _structural_names(names),

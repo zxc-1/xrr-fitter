@@ -93,9 +93,7 @@ def _automatic_joint_project(tmp_path: Path) -> api.XrrProject:
         ),
         original.beam,
     )
-    intensity *= np.exp(
-        np.random.default_rng(817).normal(0.0, 0.01, len(two_theta_deg))
-    )
+    intensity *= np.exp(np.random.default_rng(817).normal(0.0, 0.01, len(two_theta_deg)))
     source = tmp_path / "automatic-joint.xy"
     content = xy_bytes(two_theta_deg, intensity)
     source.write_bytes(content)
@@ -212,9 +210,7 @@ def _aligned_fit_snapshot(left, right) -> dict[str, object]:
         "best_index_aligned": left.best_index == right.best_index,
         "child_seeds_aligned": left.child_seeds == right.child_seeds,
         "confidence_aligned": left.confidence == right.confidence,
-        "evidence_aligned": (
-            left.classification_evidence == right.classification_evidence
-        ),
+        "evidence_aligned": (left.classification_evidence == right.classification_evidence),
         "shared_uncertainty": uncertainty is not None and uncertainty is right.uncertainty,
         "correlation_names": getattr(uncertainty, "correlation_names", None),
         "stages": tuple(summary.stage for summary in left.stage_summaries),
@@ -235,8 +231,7 @@ def _joint_transaction_snapshot(result, progress, checkpoints) -> dict[str, obje
         "published_results": _published_results(result.updated_project.datasets),
         "has_checkpoints": bool(checkpoints),
         "checkpoint_stage_widths": {
-            len({dataset.checkpoint.stage for dataset in checkpoint.datasets})
-            for checkpoint in checkpoints
+            len({dataset.checkpoint.stage for dataset in checkpoint.datasets}) for checkpoint in checkpoints
         },
         "progress_stages": tuple(item.stage for item in progress),
         "progress_dataset_ids": {item.dataset_id for item in progress},

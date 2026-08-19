@@ -5,11 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-from pathlib import Path
+import os as os
 import sys
-from typing import Sequence
-
+from collections.abc import Sequence
+from pathlib import Path
 
 TOOL_DIRECTORY = str(Path(__file__).resolve().parent)
 if TOOL_DIRECTORY not in sys.path:
@@ -24,7 +23,6 @@ from approved_data_candidate import (  # noqa: E402
 )
 from approved_data_evidence import (  # noqa: E402
     calculate_approved_data_binding,
-    check_candidate,
     freeze_approved_data,
     manifest_value,
     parse_approved_case_record,
@@ -34,8 +32,8 @@ from approved_data_evidence import (  # noqa: E402
 )
 from approved_data_model import (  # noqa: E402
     APPROVED_STATUS,
-    CASE_IDS,
     CANDIDATE_SCHEMA,
+    CASE_IDS,
     MANIFEST_SCHEMA,
     RECORD_SCHEMA,
     SIGNOFF_SCHEMA,
@@ -53,6 +51,43 @@ from approved_data_model import (  # noqa: E402
     RepoFileRecord,
     SignedCase,
 )
+from approved_data_records import check_candidate  # noqa: E402
+
+__all__ = [
+    "APPROVED_STATUS",
+    "CASE_IDS",
+    "CANDIDATE_SCHEMA",
+    "MANIFEST_SCHEMA",
+    "RECORD_SCHEMA",
+    "SIGNOFF_SCHEMA",
+    "ApprovedCaseIndex",
+    "ApprovedCaseRecord",
+    "ApprovedDataBinding",
+    "ApprovedDataManifest",
+    "ApprovedRun",
+    "CandidateCase",
+    "CandidateReport",
+    "CanonicalEnvironment",
+    "DomainSignoff",
+    "EmbeddedCaseSignoff",
+    "RelativeFileRecord",
+    "RepoFileRecord",
+    "SignedCase",
+    "calculate_approved_data_binding",
+    "candidate_value",
+    "canonical_json_bytes",
+    "check_candidate",
+    "freeze_approved_data",
+    "main",
+    "manifest_value",
+    "parse_approved_case_record",
+    "parse_approved_data_manifest",
+    "parse_candidate_report",
+    "parse_domain_signoff",
+    "record_value",
+    "signoff_value",
+    "validate_approved_data",
+]
 
 
 def main(argv: Sequence[str] | None = None) -> int:

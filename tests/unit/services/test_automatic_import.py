@@ -104,10 +104,13 @@ def test_preview_uses_parent_folder_stack_for_exported_point_files(
         "S300-1-260424-2 W2",
         "S300-1-260424-2 W02",
     )
-    assert tuple(
-        tuple(layer.name for layer in dataset.structure.components[:3])
-        for dataset in result.updated_project.datasets
-    ) == (("TaN", "SiCMo", "CrSiC"),) * 2
+    assert (
+        tuple(
+            tuple(layer.name for layer in dataset.structure.components[:3])
+            for dataset in result.updated_project.datasets
+        )
+        == (("TaN", "SiCMo", "CrSiC"),) * 2
+    )
 
 
 def test_leftmost_si_requests_one_substrate_choice_per_structure_group(

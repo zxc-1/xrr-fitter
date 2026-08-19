@@ -15,7 +15,36 @@ from xrr_fitter.physics.resolution import gaussian_smear, theta_domain_smear
 
 
 def qz_from_theta_deg(theta_deg: np.ndarray, wavelength_a: float) -> np.ndarray:
-    return 4.0 * np.pi * np.sin(np.deg2rad(theta_deg)) / wavelength_a
+    if not np.isfinite(wavelength_a) or wavelength_a <= 0.0:
+        raise ValueError("wavelength_a must be positive and finite")
+    theta = np.asarray(theta_deg, dtype=float)
+    if np.any(~np.isfinite(theta)):
+        raise ValueError("theta_deg must be finite")
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        qz = 4.0 * np.pi * np.sin(np.deg2rad(theta)) / wavelength_a
+    if np.any(~np.isfinite(qz)):
+        raise ValueError("qz conversion must be finite")
+    return qz
+
+
+def _mixed_kalpha_average(
+    primary: np.ndarray,
+    secondary: np.ndarray,
+    intensity_ratio_21: float,
+) -> np.ndarray:
+    """Average two wavelength responses without overflowing before division."""
+    try:
+        with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+            result = (primary + intensity_ratio_21 * secondary) / (1.0 + intensity_ratio_21)
+    except FloatingPointError:
+        denominator = 1.0 + intensity_ratio_21
+        secondary_weight = intensity_ratio_21 / denominator
+        primary_weight = 1.0 - secondary_weight
+        with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+            result = primary_weight * primary + secondary_weight * secondary
+    if np.any(~np.isfinite(result)):
+        raise FloatingPointError("mixed K-alpha average is nonfinite")
+    return result
 
 
 def _validate_resolution(
@@ -74,10 +103,90 @@ def _validate_scalars(scale: float, background: float, linear: float, amplitude:
         raise ValueError("powerlaw_background_exponent must be in [1,4]")
 
 
+def _validated_theta(theta_deg: np.ndarray) -> np.ndarray:
+    theta = np.asarray(theta_deg, dtype=float)
+    if np.any(~np.isfinite(theta)) or np.any((theta <= 0.0) | (theta > 90.0)):
+        raise ValueError("theta_deg must be finite, positive, and at most 90 degrees")
+    return theta
+
+
+def _validate_beam_stacks(
+    beam: BeamSpec,
+    secondary_stack: SlabStack | None,
+    secondary_sigma_q_a_inv: np.ndarray | None,
+) -> None:
+    if beam.kind == "monochromatic" and (secondary_stack is not None or secondary_sigma_q_a_inv is not None):
+        raise ValueError("secondary_stack/resolution is invalid for monochromatic beam")
+    if beam.kind != "monochromatic" and secondary_stack is None:
+        raise ValueError("secondary_stack is required for mixed_kalpha")
+
+
+def _smeared_reflectivity(
+    theta: np.ndarray,
+    primary_stack: SlabStack,
+    beam: BeamSpec,
+    secondary_stack: SlabStack | None,
+    resolution: tuple[str, float, float, float],
+    sigma_q_a_inv: np.ndarray | None,
+    secondary_sigma_q_a_inv: np.ndarray | None,
+    callback: Callable[[PhysicsDiagnostic], None] | None,
+    emit_warning: bool,
+) -> np.ndarray:
+    _validate_beam_stacks(beam, secondary_stack, secondary_sigma_q_a_inv)
+    if beam.kind == "monochromatic":
+        return _single_wavelength(
+            theta,
+            primary_stack,
+            beam.wavelength_a,
+            *resolution,
+            sigma_q_a_inv,
+            callback,
+            emit_warning,
+        )
+    assert secondary_stack is not None
+    primary = _single_wavelength(
+        theta,
+        primary_stack,
+        beam.wavelength_1_a,
+        *resolution,
+        sigma_q_a_inv,
+        callback,
+        emit_warning,
+    )
+    secondary = _single_wavelength(
+        theta,
+        secondary_stack,
+        beam.wavelength_2_a,
+        *resolution,
+        secondary_sigma_q_a_inv,
+        callback,
+        emit_warning,
+    )
+    try:
+        with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+            return _mixed_kalpha_average(primary, secondary, beam.intensity_ratio_21)
+    except FloatingPointError as error:
+        raise FloatingPointError("instrument reflectivity arithmetic is nonfinite") from error
+
+
+def _powerlaw_term(qz: np.ndarray, amplitude: float, exponent: float) -> np.ndarray:
+    """Evaluate ``amplitude * q**(-exponent)`` without an overflowing power."""
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore", under="ignore"):
+        result = amplitude * qz ** (-exponent)
+    unstable = ~np.isfinite(result)
+    if np.any(unstable):
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore", under="ignore"):
+            result[unstable] = np.exp(np.log(amplitude) - exponent * np.log(qz[unstable]))
+    return result
+
+
 def _background(qz: np.ndarray, constant: float, linear: float, amplitude: float, exponent: float) -> np.ndarray:
-    sampled = constant + linear * qz
-    if amplitude > 0.0:
-        sampled = sampled + amplitude * qz ** (-exponent)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        sampled = constant + linear * qz
+        if amplitude > 0.0:
+            sampled = sampled + _powerlaw_term(qz, amplitude, exponent)
+    if np.any(~np.isfinite(sampled)):
+        raise ValueError("sampled background must be finite")
     if np.any(sampled < 0.0):
         raise ValueError("sampled background must be nonnegative")
     return sampled
@@ -105,49 +214,31 @@ def instrument_reflectivity(
     emit_warning: bool = True,
 ) -> np.ndarray:
     """Apply resolution, beam mixing, scale/footprint, then background."""
-    theta = np.asarray(theta_deg, dtype=float)
-    if np.any(~np.isfinite(theta)) or np.any(theta <= 0.0):
-        raise ValueError("theta_deg must be finite and positive")
+    theta = _validated_theta(theta_deg)
     _validate_scalars(
         scale, background, linear_background_per_a_inv, powerlaw_background_amplitude, powerlaw_background_exponent
     )
     resolution = (resolution_domain, relative_sigma, absolute_sigma_a_inv, sigma_theta_deg)
-    if beam.kind == "monochromatic":
-        if secondary_stack is not None or secondary_sigma_q_a_inv is not None:
-            raise ValueError("secondary_stack/resolution is invalid for monochromatic beam")
-        smeared = _single_wavelength(
-            theta,
-            primary_stack,
-            beam.wavelength_a,
-            *resolution,
-            sigma_q_a_inv,
-            diagnostic_callback,
-            emit_warning,
-        )
-    else:
-        if secondary_stack is None:
-            raise ValueError("secondary_stack is required for mixed_kalpha")
-        primary = _single_wavelength(
-            theta,
-            primary_stack,
-            beam.wavelength_1_a,
-            *resolution,
-            sigma_q_a_inv,
-            diagnostic_callback,
-            emit_warning,
-        )
-        secondary = _single_wavelength(
-            theta,
-            secondary_stack,
-            beam.wavelength_2_a,
-            *resolution,
-            secondary_sigma_q_a_inv,
-            diagnostic_callback,
-            emit_warning,
-        )
-        smeared = (primary + beam.intensity_ratio_21 * secondary) / (1.0 + beam.intensity_ratio_21)
+    smeared = _smeared_reflectivity(
+        theta,
+        primary_stack,
+        beam,
+        secondary_stack,
+        resolution,
+        sigma_q_a_inv,
+        secondary_sigma_q_a_inv,
+        diagnostic_callback,
+        emit_warning,
+    )
     qz = qz_from_theta_deg(theta, beam.effective_wavelength_a)
     sampled_background = _background(
         qz, background, linear_background_per_a_inv, powerlaw_background_amplitude, powerlaw_background_exponent
     )
-    return scale * smeared * footprint_factor(theta, footprint_spill_angle_deg) + sampled_background
+    try:
+        with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+            result = scale * smeared * footprint_factor(theta, footprint_spill_angle_deg) + sampled_background
+    except FloatingPointError as error:
+        raise FloatingPointError("instrument reflectivity arithmetic is nonfinite") from error
+    if np.any(~np.isfinite(result)):
+        raise FloatingPointError("instrument reflectivity must be finite")
+    return result

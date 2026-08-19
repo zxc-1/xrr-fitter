@@ -1,8 +1,8 @@
 from dataclasses import replace
 
 import pytest
-
 from tests.support.model_cases import dataset_project, project
+
 from xrr_fitter.model.automation import (
     AutomaticRole,
     AutomaticStatus,

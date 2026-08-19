@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from importlib import import_module
 from types import SimpleNamespace
 
@@ -39,15 +40,11 @@ def test_residual_patterns_emit_actionable_model_diagnostics() -> None:
     size = 400
     footprint_residual = np.zeros(size)
     footprint_residual[:60] = np.linspace(0.20, 0.0, 60)
-    footprint = module.diagnose_residual_patterns(
-        *_residual_case(footprint_residual, footprint_mode="none")
-    )
+    footprint = module.diagnose_residual_patterns(*_residual_case(footprint_residual, footprint_mode="none"))
 
     diffuse_residual = np.zeros(size)
     diffuse_residual[-100:] = np.linspace(0.20, 0.0, 100)
-    diffuse = module.diagnose_residual_patterns(
-        *_residual_case(diffuse_residual, background_kind="constant")
-    )
+    diffuse = module.diagnose_residual_patterns(*_residual_case(diffuse_residual, background_kind="constant"))
 
     qz = np.linspace(0.01, 1.0, size)
     surface_residual = np.zeros(size)
@@ -58,25 +55,33 @@ def test_residual_patterns_emit_actionable_model_diagnostics() -> None:
     assert "suspected_diffuse_background" in {item.code for item in diffuse}
     assert "surface_thin_layer_residual" in {item.code for item in surface}
     assert all(item.point_indices for item in (*footprint, *diffuse, *surface))
-    assert next(
-        item for item in footprint if item.code == "suspected_unmodeled_footprint"
-    ).point_indices == tuple(range(60))
-    assert next(
-        item for item in diffuse if item.code == "suspected_diffuse_background"
-    ).point_indices == tuple(range(320, 400))
+    assert next(item for item in footprint if item.code == "suspected_unmodeled_footprint").point_indices == tuple(
+        range(60)
+    )
+    assert next(item for item in diffuse if item.code == "suspected_diffuse_background").point_indices == tuple(
+        range(320, 400)
+    )
 
-    guarded_footprint = module.diagnose_residual_patterns(
-        *_residual_case(footprint_residual, footprint_mode="fit")
-    )
-    guarded_diffuse = module.diagnose_residual_patterns(
-        *_residual_case(diffuse_residual, background_kind="linear")
-    )
-    assert "suspected_unmodeled_footprint" not in {
-        item.code for item in guarded_footprint
-    }
-    assert "suspected_diffuse_background" not in {
-        item.code for item in guarded_diffuse
-    }
+    guarded_footprint = module.diagnose_residual_patterns(*_residual_case(footprint_residual, footprint_mode="fit"))
+    guarded_diffuse = module.diagnose_residual_patterns(*_residual_case(diffuse_residual, background_kind="linear"))
+    assert "suspected_unmodeled_footprint" not in {item.code for item in guarded_footprint}
+    assert "suspected_diffuse_background" not in {item.code for item in guarded_diffuse}
+
+
+def test_finite_extreme_residual_trend_is_detected_without_overflow() -> None:
+    maximum = np.finfo(float).max
+    residual = np.zeros(120)
+    residual[:6] = maximum
+    residual[12:18] = -maximum
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        diagnostics = _api().diagnose_residual_patterns(
+            *_residual_case(residual, footprint_mode="none", background_kind="linear")
+        )
+
+    assert "suspected_unmodeled_footprint" in {item.code for item in diagnostics}
+    assert not any(item.category is RuntimeWarning for item in caught)
 
 
 def test_residual_acf_flags_two_significant_lags_but_not_white_noise() -> None:
@@ -96,6 +101,19 @@ def test_residual_acf_flags_two_significant_lags_but_not_white_noise() -> None:
     negative_at_two_lags = innovations[2:] - 0.8 * innovations[1:-1] - 0.5 * innovations[:-2]
     assert module.residual_autocorrelation_flag(negative_at_two_lags)
     assert not module.residual_autocorrelation_flag(rng.normal(size=800))
+
+
+def test_residual_acf_treats_repeated_finite_extremes_as_constant() -> None:
+    module = _api()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        flagged = module.residual_autocorrelation_flag(
+            np.full(8, np.finfo(float).max),
+        )
+
+    assert flagged is False
+    assert not any(item.category is RuntimeWarning for item in caught)
 
 
 def test_report_computes_residual_acf_in_q_sorted_order() -> None:

@@ -117,9 +117,7 @@ class ProjectDocument(QObject):
                 try:
                     projection(previous)
                 except Exception as rollback_error:
-                    rollback_errors.append(
-                        f"{type(rollback_error).__name__}: {rollback_error}"
-                    )
+                    rollback_errors.append(f"{type(rollback_error).__name__}: {rollback_error}")
             if rollback_errors:
                 error.add_note("project projection rollback failures: " + "; ".join(rollback_errors))
             raise
@@ -179,11 +177,7 @@ class ProjectDocument(QObject):
         return validation
 
     def source_record(self, dataset_id: str) -> object:
-        matches = tuple(
-            record
-            for record in self._source_validation.datasets
-            if record.dataset_id == dataset_id
-        )
+        matches = tuple(record for record in self._source_validation.datasets if record.dataset_id == dataset_id)
         if len(matches) != 1:
             raise KeyError(f"unknown source validation dataset: {dataset_id}")
         return matches[0]
@@ -196,11 +190,7 @@ class ProjectDocument(QObject):
         if record.status.value == "ok":
             return ""
         actual = record.actual_sha256 or "不可用"
-        return (
-            f"{record.message}\n"
-            f"expected SHA-256: {record.expected_sha256}\n"
-            f"actual SHA-256: {actual}"
-        )
+        return f"{record.message}\nexpected SHA-256: {record.expected_sha256}\nactual SHA-256: {actual}"
 
     def preview_source_update(
         self,
@@ -226,11 +216,7 @@ class ProjectDocument(QObject):
         return tuple(name for name in before if name not in retained)
 
     def _parameter_setting_names(self, dataset_id: str) -> tuple[str, ...]:
-        matches = tuple(
-            dataset
-            for dataset in self._project.datasets
-            if dataset.dataset_id == dataset_id
-        )
+        matches = tuple(dataset for dataset in self._project.datasets if dataset.dataset_id == dataset_id)
         if len(matches) != 1:
             raise KeyError(f"unknown dataset: {dataset_id}")
         return tuple(setting.name for setting in matches[0].parameter_settings)

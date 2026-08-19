@@ -5,11 +5,34 @@ from __future__ import annotations
 from math import exp
 
 from PySide6.QtCore import QSignalBlocker, Qt
-from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
+from PySide6.QtWidgets import QHeaderView, QTableWidget, QTableWidgetItem
 
 import xrr_fitter.api as api
 
 HEADERS = ("参数", "初值", "下限", "上限", "单位", "锁定", "先验")
+# Editable numeric columns: initial, lower, upper.
+VALUE_COLUMNS = (1, 2, 3)
+# Significant digits shown for a numeric cell.  A computed bound such as
+# 0.37167741227 carries far more digits than a user reads, and the three numeric
+# columns share this format, so a wide bound used to stretch the whole column.
+DISPLAY_SIGNIFICANT = 6
+# Holds the unrounded value behind a numeric cell.  The commit path reads the
+# whole row back off screen, so without this the rounded text of the two cells
+# the user did not touch would be persisted in place of their exact values.
+EXACT_VALUE_ROLE = Qt.ItemDataRole.UserRole + 1
+# Per-column width policy.  Sizing every column to its contents left the two
+# widest columns fighting for the dock width and clipped 单位 and 锁定 outright;
+# the name and prior columns absorb the surplus instead, and the short columns
+# keep exactly the width their text needs.
+COLUMN_RESIZE_MODES = (
+    QHeaderView.ResizeMode.Stretch,
+    QHeaderView.ResizeMode.ResizeToContents,
+    QHeaderView.ResizeMode.ResizeToContents,
+    QHeaderView.ResizeMode.ResizeToContents,
+    QHeaderView.ResizeMode.ResizeToContents,
+    QHeaderView.ResizeMode.ResizeToContents,
+    QHeaderView.ResizeMode.Stretch,
+)
 # Shown on the lock cell of a constraint-driven row, where the checkbox is a
 # read-only indicator rather than a user toggle.
 CONSTRAINT_DRIVEN_TOOLTIP = "该参数由表达式约束驱动，数值不可手动编辑"
@@ -30,7 +53,7 @@ def _prior_display_scale(definition: api.ParameterDefinition) -> float:
 
 
 def _number(value: float) -> str:
-    return f"{value:.12g}"
+    return f"{value:.{DISPLAY_SIGNIFICANT}g}"
 
 
 def _prior_body(prior: api.PriorSpec, scale: float) -> str:
@@ -63,6 +86,9 @@ class ParameterTable(QTableWidget):
         self.setObjectName("parameterTable")
         self.setAccessibleName("拟合参数")
         self.setHorizontalHeaderLabels(HEADERS)
+        header = self.horizontalHeader()
+        for column, mode in enumerate(COLUMN_RESIZE_MODES):
+            header.setSectionResizeMode(column, mode)
         self._definitions: tuple[api.ParameterDefinition, ...] = ()
 
     @property
@@ -86,7 +112,6 @@ class ParameterTable(QTableWidget):
         self._definitions = visible
         for row, definition in enumerate(visible):
             self._render_row(row, definition)
-        self.resizeColumnsToContents()
         del blocker
 
     def clear_parameters(self) -> None:
@@ -107,6 +132,19 @@ class ParameterTable(QTableWidget):
         definition = self.definition(name)
         return "nm" if _uses_nm(definition) else definition.unit
 
+    def entered_value(self, item: QTableWidgetItem) -> float:
+        """Read a numeric cell back without losing digits the display rounded off.
+
+        A cell shows six significant digits while carrying its unrounded value in
+        EXACT_VALUE_ROLE.  Text still matching what this table rendered means the
+        user left the cell alone, so the exact value is returned; any other text
+        is what they just typed and is taken as entered.
+        """
+        exact = item.data(EXACT_VALUE_ROLE)
+        if exact is not None and item.text() == _number(float(exact)):
+            return float(exact)
+        return float(item.text())
+
     def to_persisted_values(
         self,
         name: str,
@@ -119,12 +157,12 @@ class ParameterTable(QTableWidget):
         return initial * scale, lower * scale, upper * scale
 
     def _render_row(self, row: int, definition: api.ParameterDefinition) -> None:
-        initial, lower, upper = self._display_values(definition)
+        numbers = self._display_values(definition)
         values = (
             definition.display_name,
-            _number(initial),
-            _number(lower),
-            _number(upper),
+            _number(numbers[0]),
+            _number(numbers[1]),
+            _number(numbers[2]),
             "nm" if _uses_nm(definition) else definition.unit,
         )
         # A constraint-driven value is computed from other parameters, so its
@@ -132,29 +170,13 @@ class ParameterTable(QTableWidget):
         # an unconstrained row keeps 1/2/3 editable exactly as before.
         readonly_columns = (0, 1, 2, 3, 4) if definition.constrained else (0, 4)
         for column, value in enumerate(values):
-            item = QTableWidgetItem(value)
-            if column in readonly_columns:
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            if column == 0:
-                item.setData(Qt.ItemDataRole.UserRole, definition.name)
-                item.setToolTip(definition.name)
-            self.setItem(row, column, item)
-        locked = QTableWidgetItem()
-        lock_flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        if not definition.constrained:
-            # Only a free row exposes an interactive lock toggle; a driven row
-            # keeps the checkbox as a read-only indicator of its locked state.
-            lock_flags |= Qt.ItemFlag.ItemIsUserCheckable
-        locked.setFlags(lock_flags)
-        locked.setCheckState(
-            Qt.CheckState.Checked if definition.locked or definition.constrained else Qt.CheckState.Unchecked
-        )
-        if definition.constrained:
-            locked.setToolTip(CONSTRAINT_DRIVEN_TOOLTIP)
-        self.setItem(row, 5, locked)
-        prior = QTableWidgetItem(_prior_summary(definition))
-        prior.setFlags(prior.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        self.setItem(row, 6, prior)
+            self.setItem(
+                row,
+                column,
+                _parameter_item(definition, column, value, numbers, readonly_columns),
+            )
+        self.setItem(row, 5, _lock_item(definition))
+        self.setItem(row, 6, _prior_item(definition))
 
     def _display_values(
         self,
@@ -166,3 +188,44 @@ class ParameterTable(QTableWidget):
             definition.lower * scale,
             definition.upper * scale,
         )
+
+
+def _parameter_item(
+    definition: api.ParameterDefinition,
+    column: int,
+    value: str,
+    numbers: tuple[float, float, float],
+    readonly_columns: tuple[int, ...],
+) -> QTableWidgetItem:
+    item = QTableWidgetItem(value)
+    if column in readonly_columns:
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+    if column == 0:
+        item.setData(Qt.ItemDataRole.UserRole, definition.name)
+        item.setToolTip(definition.name)
+    if column in VALUE_COLUMNS:
+        exact = numbers[column - VALUE_COLUMNS[0]]
+        item.setData(EXACT_VALUE_ROLE, exact)
+        if item.text() != repr(exact):
+            item.setToolTip(repr(exact))
+    return item
+
+
+def _lock_item(definition: api.ParameterDefinition) -> QTableWidgetItem:
+    item = QTableWidgetItem()
+    flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+    if not definition.constrained:
+        flags |= Qt.ItemFlag.ItemIsUserCheckable
+    item.setFlags(flags)
+    item.setCheckState(
+        Qt.CheckState.Checked if definition.locked or definition.constrained else Qt.CheckState.Unchecked
+    )
+    if definition.constrained:
+        item.setToolTip(CONSTRAINT_DRIVEN_TOOLTIP)
+    return item
+
+
+def _prior_item(definition: api.ParameterDefinition) -> QTableWidgetItem:
+    item = QTableWidgetItem(_prior_summary(definition))
+    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+    return item

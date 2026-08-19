@@ -41,6 +41,14 @@ def test_qz_is_derived_from_stored_angles_without_grid_reconstruction() -> None:
     assert positive.tolist() == [True, True, True, True]
 
 
+def test_qz_marks_angles_beyond_the_grazing_incidence_domain_invalid() -> None:
+    angles = np.array([0.0, 0.2, 180.0, 180.2, 360.0])
+
+    _qz, positive = qz_from_two_theta(angles, 1.5406, 0.0)
+
+    assert positive.tolist() == [False, True, True, False, False]
+
+
 def test_instrument_values_enforce_mode_specific_geometry() -> None:
     angle = float(np.rad2deg(np.arcsin(0.1)))
     value = InstrumentSpec(
@@ -55,3 +63,5 @@ def test_instrument_values_enforce_mode_specific_geometry() -> None:
         InstrumentSpec(footprint_mode="fit", sample_length_mm=10.0)
     with pytest.raises(ValueError, match="zero spill"):
         InstrumentSpec(footprint_mode="none", footprint_spill_angle_deg=0.1)
+    with pytest.raises(ValueError, match="footprint_spill_angle_deg"):
+        InstrumentSpec(footprint_mode="fit", footprint_spill_angle_deg=90.1)

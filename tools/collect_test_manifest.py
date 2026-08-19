@@ -2,19 +2,18 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 import hashlib
 import json
 import os
-from pathlib import Path
 import platform as platform_module
 import re
 import subprocess
 import sys
 import sysconfig
 import tempfile
-from typing import Iterable, Iterator, Sequence
-
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
+from pathlib import Path
 
 SCHEMA = "xrr-test-manifest-v1"
 SUITES = ("tests", "tests_r21")
@@ -77,9 +76,7 @@ def _normalize_records(records: Iterable[dict[str, object]]) -> list[dict[str, o
         markers = record.get("markers")
         if not isinstance(nodeid, str) or not nodeid or nodeid in observed:
             raise ValueError("duplicate or invalid test nodeid")
-        if not isinstance(markers, (list, tuple)) or not all(
-            isinstance(marker, str) and marker for marker in markers
-        ):
+        if not isinstance(markers, (list, tuple)) or not all(isinstance(marker, str) and marker for marker in markers):
             raise ValueError(f"invalid marker metadata for {nodeid}")
         marker_list = sorted(set(markers))
         if len(marker_list) != len(markers):
@@ -153,7 +150,7 @@ class CollectionRecorder:
         self.records: list[dict[str, object]] = []
 
     def pytest_collection_finish(self, session: object) -> None:
-        items = getattr(session, "items")
+        items = session.items
         self.records = [
             {
                 "nodeid": str(item.nodeid),
@@ -239,9 +236,7 @@ def _isolated_import_state(python_path: Path, repo_root: Path) -> Iterator[None]
     import_root = str(python_path.resolve())
     repository = str(repo_root.resolve())
     previous_pythonpath = os.environ.get("PYTHONPATH")
-    previous_pytest_environment = {
-        name: value for name, value in os.environ.items() if name.startswith("PYTEST_")
-    }
+    previous_pytest_environment = {name: value for name, value in os.environ.items() if name.startswith("PYTEST_")}
     previous_sys_path = list(sys.path)
     previous_bytecode = sys.dont_write_bytecode
     for name in previous_pytest_environment:

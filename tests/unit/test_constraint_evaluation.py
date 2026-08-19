@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import replace
 
 import numpy as np
@@ -141,18 +142,38 @@ def test_zero_power_constraint_is_constant_at_a_zero_source() -> None:
     )
 
 
-def test_fractional_power_constraint_keeps_a_valid_primal_at_zero_source() -> None:
+def test_fractional_power_constraint_is_invalid_at_zero_for_analytic_solver() -> None:
     source = "instrument.angle_offset_deg"
     problem = _constrained_problem((_rule(TARGET_BACKGROUND, _binary("pow", source, 0.5)),))
     unit = encode_physical_vector(problem, {source: 0.0})
 
-    expected_residual = evaluation.least_squares_residual(problem, unit)
-    expected_jacobian = evaluation.least_squares_residual_jacobian(problem, unit)
     residual, jacobian = evaluation.least_squares_system(problem, unit)
 
-    assert not np.all(residual == 1e6)
-    np.testing.assert_allclose(residual, expected_residual, rtol=0.0, atol=0.0)
-    np.testing.assert_allclose(jacobian, expected_jacobian, rtol=0.0, atol=0.0)
+    np.testing.assert_array_equal(residual, np.full(residual.shape, 1e6))
+    np.testing.assert_array_equal(jacobian, np.zeros_like(jacobian))
+
+
+def test_invalid_candidate_with_scale_prior_keeps_one_zero_prior_jacobian_row() -> None:
+    problem = replace(
+        _constrained_problem(
+            (
+                _rule(
+                    TARGET_BACKGROUND,
+                    _binary("pow", "instrument.angle_offset_deg", 0.5),
+                ),
+            )
+        ),
+        scale_prior_center=1.0,
+    )
+    unit = encode_physical_vector(problem, {"instrument.angle_offset_deg": 0.0})
+
+    residual, jacobian = evaluation.least_squares_system(problem, unit)
+
+    expected_rows = int(np.count_nonzero(problem.data.fit_mask)) + 1
+    assert residual.shape == (expected_rows,)
+    assert jacobian.shape == (expected_rows, len(problem.variables))
+    np.testing.assert_array_equal(residual, np.full(expected_rows, 1e6))
+    np.testing.assert_array_equal(jacobian, np.zeros_like(jacobian))
 
 
 def test_roughness_constraint_jacobian_tracks_dynamic_upper_two_phase() -> None:
@@ -269,3 +290,37 @@ def test_constraint_nonfinite_raises_evaluation_constraint_error() -> None:
     with pytest.raises(EvaluationConstraintError) as excinfo:
         evaluation.values_by_name(problem, unit)
     assert "constraint_nonfinite" in str(excinfo.value)
+
+
+def test_constraint_chain_jacobian_rejects_overflow_without_runtime_warning() -> None:
+    data = replace(
+        prepared_data(size=64),
+        intensity_normalized=np.full(64, np.finfo(float).max),
+    )
+    scaled_background = ConstraintNode(
+        "mul",
+        operands=(_const(1e10), _ref_node(TARGET_BACKGROUND)),
+    )
+    expression = ConstraintNode(
+        "add",
+        operands=(
+            _const(2.0),
+            ConstraintNode("sin", operands=(scaled_background,)),
+        ),
+    )
+    problem = _constrained_problem((_rule(TARGET_SCALE, expression),), structure=simple_structure())
+    problem = compile_fit_problem(
+        data,
+        problem.structure,
+        problem.instrument,
+        problem.config,
+        constraint_rules=problem.constraint_rules,
+    )
+    unit = encode_physical_vector(problem, {TARGET_BACKGROUND: 0.0})
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(FloatingPointError, match="constraint Jacobian"):
+            evaluation.values_and_jacobians(problem, unit)
+
+    assert not any(item.category is RuntimeWarning for item in caught)

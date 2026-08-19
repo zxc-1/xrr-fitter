@@ -160,11 +160,7 @@ def _recovery_support():
 
 def _benchmark_fixture(root: Path, case_id: str, count: int):
     recovery = _recovery_support()
-    fixture = (
-        recovery.build_direct_sld_fixture(root)
-        if count == 1
-        else recovery.build_shared_local_fixture(root)
-    )
+    fixture = recovery.build_direct_sld_fixture(root) if count == 1 else recovery.build_shared_local_fixture(root)
     project = replace(fixture.project, datasets=fixture.project.datasets[:count])
     return replace(
         fixture,
@@ -193,9 +189,7 @@ def _recovery_error(dataset: api.DatasetProject, target) -> float | None:
     if any(name not in fitted for name, _truth in target.parameters):
         return None
     errors = tuple(
-        abs(fitted[name] - truth) / abs(truth)
-        if truth != 0.0
-        else abs(fitted[name] - truth)
+        abs(fitted[name] - truth) / abs(truth) if truth != 0.0 else abs(fitted[name] - truth)
         for name, truth in target.parameters
     )
     return max(errors, default=0.0)
@@ -215,10 +209,7 @@ def _benchmark_recovery_case(
     elapsed = monotonic() - started
     updated = result.updated_project
     ledger.observe(updated)
-    statuses = tuple(
-        (dataset.dataset_id, dataset.automation.status.value)
-        for dataset in updated.datasets
-    )
+    statuses = tuple((dataset.dataset_id, dataset.automation.status.value) for dataset in updated.datasets)
     errors = tuple(
         (dataset.dataset_id, _recovery_error(dataset, target))
         for dataset, target in zip(

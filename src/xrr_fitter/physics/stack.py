@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from functools import partial
 from math import ceil, isfinite
@@ -11,6 +12,8 @@ import numpy as np
 from xrr_fitter.model.parameters import PhysicalValueError
 from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
 from xrr_fitter.model.structure import (
+    MAX_EXPANDED_SLABS,
+    ExpandedSlabLimitError,
     GradientLayerSpec,
     LayerSpec,
     MaterialSpec,
@@ -86,6 +89,12 @@ def _replace_periodic(
     ``None`` top roughness remains an inheritance sentinel rather than being
     materialized from the first layer during reconstruction.
     """
+    raw_repeats = values[f"{prefix}.repeats"]
+    if isinstance(raw_repeats, bool) or not isinstance(raw_repeats, (int, float, np.integer, np.floating)):
+        raise PhysicalValueError(f"periodic repeats must be an integer: {prefix}")
+    repeats_value = float(raw_repeats)
+    if not isfinite(repeats_value) or repeats_value != round(repeats_value) or int(repeats_value) != block.repeats:
+        raise PhysicalValueError(f"periodic repeats must preserve declared topology: {prefix}")
     layers = tuple(
         map(
             partial(_replace_indexed_layer, prefix=prefix, values=values),
@@ -98,7 +107,7 @@ def _replace_periodic(
     return replace(
         block,
         layers=layers,
-        repeats=int(round(values[f"{prefix}.repeats"])),
+        repeats=block.repeats,
         top_roughness_a=top_roughness,
     )
 
@@ -297,18 +306,100 @@ def _append_drift_block(state: _Expansion, block: _ExpandedDriftBlock) -> None:
         _append_layer(state, layer, block.top_roughness_a if position == 0 else None)
 
 
-def _append_gradient(state: _Expansion, gradient: GradientLayerSpec) -> None:
-    count = ceil(gradient.thickness_a / gradient.microslab_max_a)
+def gradient_slab_count(
+    gradient: GradientLayerSpec,
+    prefix: str,
+    fixed_counts: Mapping[str, int] | None = None,
+) -> int:
+    """Resolve one gradient's slab count, optionally from a compiled topology."""
+    if fixed_counts is None:
+        ratio = gradient.thickness_a / gradient.microslab_max_a
+        if not isfinite(ratio) or ratio > MAX_EXPANDED_SLABS:
+            raise PhysicalValueError(f"gradient slab topology exceeds the expanded slab budget: {prefix}")
+        count = ceil(ratio)
+    else:
+        if not isinstance(fixed_counts, Mapping):
+            raise PhysicalValueError(f"gradient slab topology mapping is invalid: {prefix}")
+        raw_count = fixed_counts.get(prefix)
+        if isinstance(raw_count, bool) or not isinstance(raw_count, (int, np.integer)):
+            raise PhysicalValueError(f"gradient slab topology count is invalid: {prefix}")
+        count = int(raw_count)
+    if count < 1 or count > MAX_EXPANDED_SLABS or gradient.thickness_a > count * gradient.microslab_max_a:
+        raise PhysicalValueError(f"gradient slab topology cannot represent {prefix}")
+    return count
+
+
+def _component_slab_count(
+    component: StructureComponent,
+    prefix: str,
+    fixed_counts: Mapping[str, int] | None,
+) -> int:
+    """Count finite slabs before allocating arrays for one expanded component."""
+    if isinstance(component, GradientLayerSpec):
+        return gradient_slab_count(component, prefix, fixed_counts)
+    if isinstance(component, LayerSpec):
+        if component.transition is None:
+            return 1
+        transition = component.transition
+        return (
+            transition_slab_count(
+                transition_width(transition),
+                transition.microslab_max_a,
+            )
+            + 1
+        )
+    if isinstance(component, PeriodicBlock):
+        return component.repeats * sum(
+            1
+            if layer.transition is None
+            else transition_slab_count(
+                transition_width(layer.transition),
+                layer.transition.microslab_max_a,
+            )
+            + 1
+            for layer in component.layers
+        )
+    # A rebuilt drift block is ephemeral and already flattened copy-major.
+    return sum(
+        1
+        if layer.transition is None
+        else transition_slab_count(
+            transition_width(layer.transition),
+            layer.transition.microslab_max_a,
+        )
+        + 1
+        for layer in component.layers
+    )
+
+
+def _append_gradient(
+    state: _Expansion,
+    gradient: GradientLayerSpec,
+    prefix: str,
+    fixed_counts: Mapping[str, int] | None,
+) -> None:
+    count = gradient_slab_count(gradient, prefix, fixed_counts)
     thickness = gradient.thickness_a / count
     delta = gradient.lower_sld_a2 - gradient.upper_sld_a2
     for index in range(count):
         state.thickness.append(thickness)
         state.limit_thickness.append(gradient.thickness_a)
-        state.sld.append(gradient.upper_sld_a2 + ((index + 0.5) / count) * delta)
+        fraction = (index + 0.5) / count
+        if np.isfinite(delta):
+            state.sld.append(gradient.upper_sld_a2 + fraction * delta)
+        else:
+            # Opposite-sign finite endpoints can overflow their difference;
+            # use a convex combination only for that exceptional path.
+            state.sld.append((1.0 - fraction) * gradient.upper_sld_a2 + fraction * gradient.lower_sld_a2)
         state.roughness.append(gradient.roughness_a if index == 0 else 0.0)
 
 
-def _append_component(state: _Expansion, component: StructureComponent) -> None:
+def _append_component(
+    state: _Expansion,
+    component: StructureComponent,
+    prefix: str,
+    fixed_counts: Mapping[str, int] | None,
+) -> None:
     if isinstance(component, LayerSpec):
         _append_layer(state, component)
     elif isinstance(component, _ExpandedDriftBlock):
@@ -316,7 +407,7 @@ def _append_component(state: _Expansion, component: StructureComponent) -> None:
     elif isinstance(component, PeriodicBlock):
         _append_periodic(state, component)
     else:
-        _append_gradient(state, component)
+        _append_gradient(state, component, prefix, fixed_counts)
 
 
 def _finite_neighbors(thickness: np.ndarray, interface: int) -> list[float]:
@@ -340,6 +431,7 @@ def _validate_roughness(thickness: np.ndarray, roughness: np.ndarray) -> None:
 def expand_structure(
     structure: StructureSpec,
     wavelength_a: float,
+    gradient_slab_counts: Mapping[str, int] | None = None,
 ) -> SlabStack:
     """Expand fronting, declared components, and backing at one wavelength.
 
@@ -350,10 +442,24 @@ def expand_structure(
     """
     if not isfinite(wavelength_a) or wavelength_a <= 0.0:
         raise ValueError("wavelength_a must be positive")
+    expanded_count = 0
+    for index, component in enumerate(structure.components):
+        expanded_count += _component_slab_count(
+            component,
+            f"component.{index}",
+            gradient_slab_counts,
+        )
+        if expanded_count > MAX_EXPANDED_SLABS:
+            raise ExpandedSlabLimitError(f"expanded slab count {expanded_count} exceeds {MAX_EXPANDED_SLABS}")
     state = _Expansion(wavelength_a)
     state.sld.append(state.sld_for(structure.fronting, 1.0))
-    for component in structure.components:
-        _append_component(state, component)
+    for index, component in enumerate(structure.components):
+        _append_component(
+            state,
+            component,
+            f"component.{index}",
+            gradient_slab_counts,
+        )
     state.thickness.append(0.0)
     state.limit_thickness.append(0.0)
     state.sld.append(state.sld_for(structure.backing, 1.0))

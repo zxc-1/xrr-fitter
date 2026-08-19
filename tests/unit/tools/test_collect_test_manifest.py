@@ -3,18 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 
 def _canonical(value: object) -> bytes:
     return (
-        json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-        + "\n"
+        json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n"
     ).encode()
 
 
@@ -47,9 +46,7 @@ def _collection_repo(root: Path, *, unknown_marker: bool = False) -> tuple[Path,
     )
     markers = 'markers = ["slow: deliberately collected slow test"]\n' if not unknown_marker else ""
     (root / "pyproject.toml").write_text(
-        "[tool.pytest.ini_options]\n"
-        'addopts = "-m \'not slow\'"\n'
-        f"{markers}",
+        f"[tool.pytest.ini_options]\naddopts = \"-m 'not slow'\"\n{markers}",
         encoding="utf-8",
     )
     lock = root / "requirements.lock"
@@ -99,9 +96,7 @@ def _run_collector(
     )
 
 
-def test_manifest_is_path_free_sorted_hash_bound_and_canonical(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_manifest_is_path_free_sorted_hash_bound_and_canonical(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("collect_test_manifest")
     root = tmp_path / "repo"
     tests = root / "tests"
@@ -123,9 +118,7 @@ def test_manifest_is_path_free_sorted_hash_bound_and_canonical(
         python_version="3.12.11",
         platform="macOS-arm64",
     )
-    assert [item["nodeid"] for item in manifest["nodes"]] == sorted(
-        item["nodeid"] for item in manifest["nodes"]
-    )
+    assert [item["nodeid"] for item in manifest["nodes"]] == sorted(item["nodeid"] for item in manifest["nodes"])
     assert manifest["test_tree"][0] == {
         "path": "tests/test_sample.py",
         "size": source.stat().st_size,
@@ -138,9 +131,7 @@ def test_manifest_is_path_free_sorted_hash_bound_and_canonical(
     assert module.canonical_json_bytes(manifest) == encoded
 
 
-def test_manifest_rejects_duplicate_nodes_unknown_suite_and_bad_output_parent(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_manifest_rejects_duplicate_nodes_unknown_suite_and_bad_output_parent(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("collect_test_manifest")
     root = tmp_path / "repo"
     (root / "tests").mkdir(parents=True)
@@ -242,10 +233,7 @@ def test_collection_accepts_duplicate_module_basenames_in_distinct_directories(
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    nodeids = {
-        item["nodeid"]
-        for item in json.loads(output.read_text(encoding="utf-8"))["nodes"]
-    }
+    nodeids = {item["nodeid"] for item in json.loads(output.read_text(encoding="utf-8"))["nodes"]}
     assert {
         "tests/unit/model/test_parameters.py::test_model_parameters",
         "tests/unit/services/test_parameters.py::test_services_parameters",
@@ -264,9 +252,7 @@ def test_collection_allows_explicit_repository_tool_imports(
     (tools / "__init__.py").write_bytes(b"")
     (tools / "fixture_helper.py").write_text("VALUE = 'tool'\n", encoding="utf-8")
     (root / "tests/test_tool_import.py").write_text(
-        "from tools.fixture_helper import VALUE\n\n"
-        "def test_tool_import():\n"
-        "    assert VALUE == 'tool'\n",
+        "from tools.fixture_helper import VALUE\n\ndef test_tool_import():\n    assert VALUE == 'tool'\n",
         encoding="utf-8",
     )
     _git(root, "add", "tests", "tools")
@@ -284,16 +270,11 @@ def test_collection_allows_explicit_repository_tool_imports(
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    nodeids = {
-        item["nodeid"]
-        for item in json.loads(output.read_text(encoding="utf-8"))["nodes"]
-    }
+    nodeids = {item["nodeid"] for item in json.loads(output.read_text(encoding="utf-8"))["nodes"]}
     assert "tests/test_tool_import.py::test_tool_import" in nodeids
 
 
-def test_collection_rejects_unknown_marker_without_writing_output(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_collection_rejects_unknown_marker_without_writing_output(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("collect_test_manifest")
     root = tmp_path / "repo"
     lock, source_commit = _collection_repo(root, unknown_marker=True)
@@ -351,9 +332,7 @@ def test_collection_restores_caller_process_state(
     assert sys.dont_write_bytecode is original_bytecode
 
 
-def test_manifest_bytes_do_not_depend_on_repository_path(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_manifest_bytes_do_not_depend_on_repository_path(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("collect_test_manifest")
     first = tmp_path / "first/repo"
     lock, source_commit = _collection_repo(first)
@@ -376,9 +355,7 @@ def test_manifest_bytes_do_not_depend_on_repository_path(
     assert outputs[0].read_bytes() == outputs[1].read_bytes()
 
 
-def test_r23_source_commit_must_be_an_ancestor_with_an_unchanged_test_tree(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_r23_source_commit_must_be_an_ancestor_with_an_unchanged_test_tree(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("collect_test_manifest")
     root = tmp_path / "repo"
     _collection_repo(root)
@@ -400,9 +377,7 @@ def test_r23_source_commit_must_be_an_ancestor_with_an_unchanged_test_tree(
         module._assert_r23_source(root, source_commit, "tests")
 
 
-def test_cli_rejects_symlink_output_parent(
-    tmp_path: Path, load_tool_module
-) -> None:
+def test_cli_rejects_symlink_output_parent(tmp_path: Path, load_tool_module) -> None:
     module = load_tool_module("collect_test_manifest")
     root = tmp_path / "repo"
     lock, source_commit = _collection_repo(root)

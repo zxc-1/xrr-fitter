@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -15,7 +16,7 @@ from xrr_fitter.model.structure import (
     _ExpandedDriftBlock,
 )
 from xrr_fitter.physics.materials import material_sld
-from xrr_fitter.physics.stack import expand_structure, rebuild_structure
+from xrr_fitter.physics.stack import expand_structure, gradient_slab_count, rebuild_structure
 from xrr_fitter.physics.transitions import (
     transition_fractions,
     transition_slab_count,
@@ -117,13 +118,16 @@ def _drift_interface_names(prefix: str, block: _ExpandedDriftBlock) -> tuple[str
     return tuple(names)
 
 
-def _expanded_interface_names(structure: StructureSpec) -> tuple[str, ...]:
+def _expanded_interface_names(
+    structure: StructureSpec,
+    gradient_slab_counts: Mapping[str, int] | None = None,
+) -> tuple[str, ...]:
     """Return one source name for every expanded roughness position."""
     names: list[str] = []
     for component_index, component in enumerate(structure.components):
         prefix = f"component.{component_index}"
         if isinstance(component, GradientLayerSpec):
-            count = int(np.ceil(component.thickness_a / component.microslab_max_a))
+            count = gradient_slab_count(component, prefix, gradient_slab_counts)
             names.append(f"{prefix}.roughness_a")
             names.extend((GRADIENT_INTERNAL_INTERFACE,) * (count - 1))
         elif isinstance(component, LayerSpec):
@@ -272,9 +276,10 @@ def _append_gradient_geometry(
     component: GradientLayerSpec,
     prefix: str,
     value_jacobians: dict[str, np.ndarray] | None,
+    gradient_slab_counts: Mapping[str, int] | None,
 ) -> None:
     # Internal gradient boundaries are numerical subdivisions, not fit axes.
-    count = int(np.ceil(component.thickness_a / component.microslab_max_a))
+    count = gradient_slab_count(component, prefix, gradient_slab_counts)
     value = component.thickness_a / count
     tangent = _geometry_tangent(
         value_jacobians,
@@ -291,6 +296,7 @@ def _append_component_geometry(
     component: LayerSpec | PeriodicBlock | GradientLayerSpec | _ExpandedDriftBlock,
     prefix: str,
     value_jacobians: dict[str, np.ndarray] | None,
+    gradient_slab_counts: Mapping[str, int] | None,
 ) -> None:
     # Rebuilt structures close this dispatch over ordinary, baked-drift, periodic,
     # and gradient components; drift geometry is already flattened per copy.
@@ -303,7 +309,14 @@ def _append_component_geometry(
     if isinstance(component, PeriodicBlock):
         _append_periodic_geometry(thickness, tangents, component, prefix, value_jacobians)
         return
-    _append_gradient_geometry(thickness, tangents, component, prefix, value_jacobians)
+    _append_gradient_geometry(
+        thickness,
+        tangents,
+        component,
+        prefix,
+        value_jacobians,
+        gradient_slab_counts,
+    )
 
 
 def _append_limit_rows(
@@ -324,6 +337,7 @@ def _append_component_limit_geometry(
     component: LayerSpec | PeriodicBlock | GradientLayerSpec | _ExpandedDriftBlock,
     prefix: str,
     value_jacobians: dict[str, np.ndarray] | None,
+    gradient_slab_counts: Mapping[str, int] | None,
 ) -> None:
     """Mirror ``physics.stack`` roughness limits without evaluating material SLDs."""
     if isinstance(component, LayerSpec):
@@ -372,7 +386,7 @@ def _append_component_limit_geometry(
                     1,
                 )
         return
-    count = int(np.ceil(component.thickness_a / component.microslab_max_a))
+    count = gradient_slab_count(component, prefix, gradient_slab_counts)
     _append_limit_rows(
         thickness,
         tangents,
@@ -386,6 +400,7 @@ def _expand_limit_geometry(
     structure: StructureSpec,
     parameter_count: int | None,
     value_jacobians: dict[str, np.ndarray] | None,
+    gradient_slab_counts: Mapping[str, int] | None,
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """Expand the declared thicknesses used by stack roughness validation."""
     thickness: list[float] = [0.0]
@@ -397,6 +412,7 @@ def _expand_limit_geometry(
             component,
             f"component.{component_index}",
             value_jacobians,
+            gradient_slab_counts,
         )
     _append_geometry(
         thickness,
@@ -414,6 +430,7 @@ def expand_geometry(
     structure: StructureSpec,
     parameter_count: int | None = None,
     value_jacobians: dict[str, np.ndarray] | None = None,
+    gradient_slab_counts: Mapping[str, int] | None = None,
 ) -> GeometryExpansion:
     """Expand thickness and interface names without evaluating material SLDs.
 
@@ -435,6 +452,7 @@ def expand_geometry(
             component,
             f"component.{component_index}",
             value_jacobians,
+            gradient_slab_counts,
         )
     _append_geometry(
         thickness,
@@ -442,11 +460,12 @@ def expand_geometry(
         0.0,
         None if value_jacobians is None else np.zeros(parameter_count, dtype=float),
     )
-    names = _expanded_interface_names(structure)
+    names = _expanded_interface_names(structure, gradient_slab_counts)
     limit_thickness, limit_tangents = _expand_limit_geometry(
         structure,
         parameter_count,
         value_jacobians,
+        gradient_slab_counts,
     )
     # Source labels and expanded media must remain positionally aligned.
     if len(names) != len(thickness) - 1 or limit_thickness.size != len(thickness):
@@ -656,6 +675,7 @@ class _StackJacobianBuilder:
         layer: GradientLayerSpec,
         prefix: str,
         value_jacobians: dict[str, np.ndarray],
+        gradient_slab_counts: Mapping[str, int] | None,
     ) -> None:
         """Differentiate equal-width microslabs and linear complex-SLD centers.
 
@@ -663,7 +683,7 @@ class _StackJacobianBuilder:
         incident interface carries declared gradient roughness; internal
         numerical boundaries retain exact zero tangents.
         """
-        count = int(np.ceil(layer.thickness_a / layer.microslab_max_a))
+        count = gradient_slab_count(layer, prefix, gradient_slab_counts)
         thickness_jacobian = value_jacobians[f"{prefix}.thickness_a"] / count
         upper_jacobian = (
             value_jacobians[f"{prefix}.upper_sld_real_a2"] + 1j * value_jacobians[f"{prefix}.upper_sld_imag_a2"]
@@ -671,12 +691,18 @@ class _StackJacobianBuilder:
         lower_jacobian = (
             value_jacobians[f"{prefix}.lower_sld_real_a2"] + 1j * value_jacobians[f"{prefix}.lower_sld_imag_a2"]
         )
+        delta_jacobian = lower_jacobian - upper_jacobian
+        finite_delta = np.all(np.isfinite(delta_jacobian.real)) and np.all(np.isfinite(delta_jacobian.imag))
         roughness_jacobians = [self.zero_real()] * count
         roughness_jacobians[0] = value_jacobians[f"{prefix}.roughness_a"].copy()
         for slab_index in range(count):
             fraction = (slab_index + 0.5) / count
             self.thickness.append(thickness_jacobian.copy())
-            self.sld.append(upper_jacobian + fraction * (lower_jacobian - upper_jacobian))
+            self.sld.append(
+                upper_jacobian + fraction * delta_jacobian
+                if finite_delta
+                else (1.0 - fraction) * upper_jacobian + fraction * lower_jacobian
+            )
             self.roughness.append(roughness_jacobians[slab_index])
 
     def append_transition_layer(
@@ -722,6 +748,7 @@ class _StackJacobianBuilder:
         values: dict[str, float],
         value_jacobians: dict[str, np.ndarray],
         wavelength_a: float,
+        gradient_slab_counts: Mapping[str, int] | None,
     ) -> None:
         """Dispatch one validated structure component to its concrete expander.
 
@@ -764,7 +791,7 @@ class _StackJacobianBuilder:
                 wavelength_a,
             )
         else:
-            self.append_gradient(component, prefix, value_jacobians)
+            self.append_gradient(component, prefix, value_jacobians, gradient_slab_counts)
 
     def finish(
         self,
@@ -806,10 +833,11 @@ def expand_structure_with_jacobian(
     value_jacobians: dict[str, np.ndarray],
     wavelength_a: float,
     parameter_count: int,
+    gradient_slab_counts: Mapping[str, int] | None = None,
 ) -> DifferentiableStack:
     """Expand one wavelength-specific structure and its aligned tangents."""
     rebuilt = rebuild_structure(structure, values)
-    stack = expand_structure(rebuilt, wavelength_a)
+    stack = expand_structure(rebuilt, wavelength_a, gradient_slab_counts)
     builder = _StackJacobianBuilder.create(parameter_count)
     for component_index, component in enumerate(rebuilt.components):
         builder.append_component(
@@ -818,6 +846,7 @@ def expand_structure_with_jacobian(
             values,
             value_jacobians,
             wavelength_a,
+            gradient_slab_counts,
         )
     builder.roughness.append(np.asarray(value_jacobians["backing.roughness_a"], dtype=float))
     backing_sld_jacobian = builder.zero_complex()

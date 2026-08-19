@@ -8,9 +8,7 @@ from math import asin, degrees, isfinite, log, pi, sqrt
 import numpy as np
 
 FWHM_TO_SIGMA = 1.0 / (2.0 * sqrt(2.0 * log(2.0)))
-RESOLUTION_KINDS = frozenset(
-    {"sigma_q_a_inv", "fwhm_q_a_inv", "sigma_two_theta_deg", "fwhm_two_theta_deg"}
-)
+RESOLUTION_KINDS = frozenset({"sigma_q_a_inv", "fwhm_q_a_inv", "sigma_two_theta_deg", "fwhm_two_theta_deg"})
 
 
 def _nonempty(value: str, field: str) -> None:
@@ -102,8 +100,8 @@ class InstrumentSpec:
             _nonempty(self.instrument_id, "instrument_id")
         _validate_modes(self.footprint_mode, self.background_kind, self.resolution_domain)
         angle = self.footprint_spill_angle_deg
-        if not isfinite(angle) or angle < 0.0:
-            raise ValueError("footprint_spill_angle_deg must be finite and nonnegative")
+        if not isfinite(angle) or not 0.0 <= angle <= 90.0:
+            raise ValueError("footprint_spill_angle_deg must be finite and in [0, 90]")
         self._validate_footprint()
 
     def _validate_footprint(self) -> None:
@@ -131,12 +129,17 @@ def resolution_to_sigma_q(
 ) -> np.ndarray:
     two_theta, values = _resolution_arrays(two_theta_deg, resolution)
     _validate_resolution(resolution_kind, wavelength_a, angle_offset_deg, values)
-    sigma = values * FWHM_TO_SIGMA if resolution_kind.startswith("fwhm") else values
-    result = sigma if resolution_kind.endswith("q_a_inv") else _angular_sigma_q(
-        two_theta,
-        sigma,
-        wavelength_a,
-        angle_offset_deg,
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        sigma = values * FWHM_TO_SIGMA if resolution_kind.startswith("fwhm") else values
+    result = (
+        sigma
+        if resolution_kind.endswith("q_a_inv")
+        else _angular_sigma_q(
+            two_theta,
+            sigma,
+            wavelength_a,
+            angle_offset_deg,
+        )
     )
     output = np.array(result, dtype=float, copy=True)
     output.setflags(write=False)
@@ -149,13 +152,17 @@ def _angular_sigma_q(
     wavelength_a: float,
     angle_offset_deg: float,
 ) -> np.ndarray:
-    sigma_theta_rad = np.deg2rad(sigma_two_theta_deg / 2.0)
-    theta_deg = two_theta_deg / 2.0 + angle_offset_deg
-    finite = np.isfinite(theta_deg)
-    result = np.full(theta_deg.shape, np.nan, dtype=float)
-    theta_rad = np.deg2rad(theta_deg[finite])
-    result[finite] = (
-        np.abs((4.0 * pi / wavelength_a) * np.cos(theta_rad))
-        * sigma_theta_rad[finite]
-    )
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        sigma_theta_rad = np.deg2rad(sigma_two_theta_deg / 2.0)
+        theta_deg = two_theta_deg / 2.0 + angle_offset_deg
+        finite = np.isfinite(theta_deg)
+        result = np.full(theta_deg.shape, np.nan, dtype=float)
+        theta_rad = np.deg2rad(theta_deg[finite])
+        result[finite] = np.abs((4.0 * pi / wavelength_a) * np.cos(theta_rad)) * sigma_theta_rad[finite]
+        unstable = finite & ~np.isfinite(result)
+        if np.any(unstable):
+            unstable_theta = np.deg2rad(theta_deg[unstable])
+            result[unstable] = 4.0 * pi * np.abs(np.cos(unstable_theta)) * sigma_theta_rad[unstable] / wavelength_a
+    if np.any(~np.isfinite(result[finite])):
+        raise ValueError("converted q resolution must be finite")
     return result

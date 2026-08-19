@@ -14,7 +14,6 @@ from xrr_fitter.evaluation import (
 from xrr_fitter.fit.candidates import best_candidate_index
 from xrr_fitter.fit.checkpoint import build_checkpoint
 from xrr_fitter.fit.resume import ResumePlan, validate_resume_checkpoint
-from xrr_fitter.fit.tasking import TaskRunner
 from xrr_fitter.fit.stages import (
     StageOutcome,
     compile_coarse_problem,
@@ -27,6 +26,7 @@ from xrr_fitter.fit.stages import (
     run_stage_e,
     stage_b_continuation,
 )
+from xrr_fitter.fit.tasking import TaskRunner
 from xrr_fitter.model.fitting import (
     FitCandidate,
     FitCheckpoint,
@@ -71,10 +71,7 @@ def _seed_ledger(request: FitSearchRequest) -> tuple[int, ...]:
         "B-1",
         *(f"E-{index}" for index in range(request.problem.config.final_seed_count)),
     )
-    return tuple(
-        child.seed
-        for child in reserve_child_seeds(request.problem.config.master_seed, streams)
-    )
+    return tuple(child.seed for child in reserve_child_seeds(request.problem.config.master_seed, streams))
 
 
 def _dedupe_warnings(*groups: tuple[str, ...]) -> tuple[str, ...]:
@@ -262,11 +259,7 @@ def run_fit_search(
 
 def _profile_stage_candidates(search_result: FitSearchResult) -> tuple[FitCandidate, ...]:
     summary = next(
-        (
-            value
-            for value in reversed(search_result.stage_summaries)
-            if value.stage in {"E", "stage-e"}
-        ),
+        (value for value in reversed(search_result.stage_summaries) if value.stage in {"E", "stage-e"}),
         None,
     )
     if summary is None:
@@ -294,11 +287,7 @@ def _validated_profile_center(
     if incumbent is None:
         return False
     unit = np.asarray(center_unit, dtype=float)
-    if (
-        unit.shape != (len(problem.variables),)
-        or np.any(~np.isfinite(unit))
-        or np.any((unit < 0.0) | (unit > 1.0))
-    ):
+    if unit.shape != (len(problem.variables),) or np.any(~np.isfinite(unit)) or np.any((unit < 0.0) | (unit > 1.0)):
         return False
     try:
         evaluation = evaluate_model(problem, unit)
@@ -306,9 +295,7 @@ def _validated_profile_center(
         return False
     required = _profile_gain_required(problem, incumbent.objective)
     return bool(
-        evaluation.valid
-        and np.isfinite(evaluation.objective)
-        and evaluation.objective + required < incumbent.objective
+        evaluation.valid and np.isfinite(evaluation.objective) and evaluation.objective + required < incumbent.objective
     )
 
 
@@ -326,16 +313,10 @@ def _replace_profile_candidates(
     search_result: FitSearchResult,
     replacements: dict[str, FitCandidate],
 ) -> tuple[FitCandidate, ...] | None:
-    replaced_count = sum(
-        candidate.candidate_id in replacements
-        for candidate in search_result.candidates
-    )
+    replaced_count = sum(candidate.candidate_id in replacements for candidate in search_result.candidates)
     if replaced_count != 4:
         return None
-    return tuple(
-        replacements.get(candidate.candidate_id, candidate)
-        for candidate in search_result.candidates
-    )
+    return tuple(replacements.get(candidate.candidate_id, candidate) for candidate in search_result.candidates)
 
 
 def _profile_summary(
@@ -367,10 +348,7 @@ def _replace_profile_stage(
     candidates = _replace_profile_candidates(search_result, replacements)
     if candidates is None:
         return None
-    summaries = tuple(
-        _profile_summary(summary, original_ids, rebuilt)
-        for summary in search_result.stage_summaries
-    )
+    summaries = tuple(_profile_summary(summary, original_ids, rebuilt) for summary in search_result.stage_summaries)
     best_index = best_candidate_index(candidates, eligible_ids=original_ids)
     if best_index is None:
         return None

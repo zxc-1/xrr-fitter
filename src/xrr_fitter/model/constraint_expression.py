@@ -12,6 +12,17 @@ class ConstraintArithmeticError(Exception):
     """An expression left the finite real-number domain."""
 
 
+def _finite(value: float) -> float:
+    """Return one finite real scalar or normalize the arithmetic failure."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ConstraintArithmeticError() from error
+    if not isfinite(result):
+        raise ConstraintArithmeticError()
+    return result
+
+
 def _safe_pow(base: float, exponent: float) -> float:
     try:
         result = base**exponent
@@ -24,22 +35,37 @@ def _safe_pow(base: float, exponent: float) -> float:
 
 def _lookup(values: Mapping[object, float], reference: ParameterReference) -> float:
     if reference in values:
-        return float(values[reference])
-    return float(values[reference.parameter_name])
+        return _finite(values[reference])
+    return _finite(values[reference.parameter_name])
 
 
 def _value_for_operator(op: str, left: float, right: float) -> float:
-    if op == "add":
-        return left + right
-    if op == "sub":
-        return left - right
-    if op == "mul":
-        return left * right
-    if op == "div":
-        if right == 0.0:
-            raise ConstraintArithmeticError()
-        return left / right
-    return _safe_pow(left, right)
+    try:
+        if op == "add":
+            result = left + right
+        elif op == "sub":
+            result = left - right
+        elif op == "mul":
+            result = left * right
+        elif op == "div":
+            if right == 0.0:
+                raise ConstraintArithmeticError()
+            result = left / right
+        else:
+            result = _safe_pow(left, right)
+    except (ArithmeticError, OverflowError) as error:
+        if isinstance(error, ConstraintArithmeticError):
+            raise
+        raise ConstraintArithmeticError() from error
+    return _finite(result)
+
+
+def _unary_value(op: str, inner: float) -> float:
+    try:
+        result = sin(inner) if op == "sin" else cos(inner)
+    except (ArithmeticError, ValueError, OverflowError) as error:
+        raise ConstraintArithmeticError() from error
+    return _finite(result)
 
 
 def evaluate_constraint_value(
@@ -48,12 +74,12 @@ def evaluate_constraint_value(
 ) -> float:
     """Evaluate one expression node against resolved physical values."""
     if node.op == "const":
-        return float(node.value)
+        return _finite(node.value)
     if node.op == "ref":
         return _lookup(values, node.reference)
     if node.op in CONSTRAINT_UNARY_OPS:
         inner = evaluate_constraint_value(node.operands[0], values)
-        return sin(inner) if node.op == "sin" else cos(inner)
+        return _unary_value(node.op, inner)
     left, right = node.operands
     return _value_for_operator(
         node.op,
@@ -70,9 +96,9 @@ def _combine_grads(
 ) -> dict[ParameterReference, float]:
     combined: dict[ParameterReference, float] = {}
     for reference, partial in grad_left.items():
-        combined[reference] = combined.get(reference, 0.0) + scale_left * partial
+        combined[reference] = _finite(combined.get(reference, 0.0) + scale_left * partial)
     for reference, partial in grad_right.items():
-        combined[reference] = combined.get(reference, 0.0) + scale_right * partial
+        combined[reference] = _finite(combined.get(reference, 0.0) + scale_right * partial)
     return combined
 
 
@@ -110,12 +136,12 @@ def _power_gradient(
     if right == 0.0:
         return {reference: 0.0 for reference in grad_left}
     if left == 0.0 and 0.0 < right < 1.0:
-        # The primal value is finite at this real-domain boundary, but the
-        # analytic derivative is infinite. Keep the legal candidate and publish
-        # a finite no-step tangent rather than reclassifying it as invalid.
-        return {reference: 0.0 for reference in grad_left}
-    derivative = right * _safe_pow(left, right - 1.0)
-    return {reference: partial * derivative for reference, partial in grad_left.items()}
+        raise ConstraintArithmeticError()
+    try:
+        derivative = right * _safe_pow(left, right - 1.0)
+    except (ArithmeticError, ValueError, OverflowError) as error:
+        raise ConstraintArithmeticError() from error
+    return {reference: _finite(partial * derivative) for reference, partial in grad_left.items()}
 
 
 def constraint_value_and_grad(
@@ -124,17 +150,17 @@ def constraint_value_and_grad(
 ) -> tuple[float, dict[ParameterReference, float]]:
     """Evaluate a node and return partials keyed by referenced parameters."""
     if node.op == "const":
-        return float(node.value), {}
+        return _finite(node.value), {}
     if node.op == "ref":
         reference = node.reference
         return _lookup(values, reference), {reference: 1.0}
     if node.op in CONSTRAINT_UNARY_OPS:
         inner_value, inner_grad = constraint_value_and_grad(node.operands[0], values)
         if node.op == "sin":
-            value, multiplier = sin(inner_value), cos(inner_value)
+            value, multiplier = _unary_value("sin", inner_value), cos(inner_value)
         else:
-            value, multiplier = cos(inner_value), -sin(inner_value)
-        gradient = {reference: multiplier * partial for reference, partial in inner_grad.items()}
+            value, multiplier = _unary_value("cos", inner_value), -sin(inner_value)
+        gradient = {reference: _finite(multiplier * partial) for reference, partial in inner_grad.items()}
         return value, gradient
     left, right = node.operands
     left_value, left_grad = constraint_value_and_grad(left, values)

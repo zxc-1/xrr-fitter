@@ -71,9 +71,7 @@ def test_absent_preview_axes_stay_absent() -> None:
         ([[0.1, 0.2]], [[0.1, 0.2]], "1-dimensional"),
     ],
 )
-def test_preview_axes_reject_unusable_pairs(
-    qz: object, model: object, message: str
-) -> None:
+def test_preview_axes_reject_unusable_pairs(qz: object, model: object, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         freeze_preview_axes(qz, model)
 

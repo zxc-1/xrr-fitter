@@ -33,9 +33,7 @@ def _automation_state(datasets) -> tuple[tuple[object, object, bool], ...]:
 
 def _population_statistics(values: tuple[float, ...]) -> tuple[float, ...]:
     mean = sum(values) / len(values)
-    population_std = sqrt(
-        sum((value - mean) ** 2 for value in values) / len(values)
-    )
+    population_std = sqrt(sum((value - mean) ** 2 for value in values) / len(values))
     return (
         len(values),
         mean,
@@ -119,8 +117,7 @@ def test_model_error_outlier_is_isolated_and_excluded_from_statistics(
     outlier = run.project.datasets[3]
 
     assert all(
-        dataset.automation.status is api.AutomaticStatus.PASSED
-        and dataset.automation.statistics_member
+        dataset.automation.status is api.AutomaticStatus.PASSED and dataset.automation.statistics_member
         for dataset in members
     )
     assert outlier.automation.role is api.AutomaticRole.ISOLATED_RETRY
@@ -151,8 +148,7 @@ def test_roughness_conflict_releases_sharing_and_recovers_local_values(
     )
 
     assert all(
-        dataset.automation.status is api.AutomaticStatus.PASSED
-        and dataset.automation.role is api.AutomaticRole.JOINT
+        dataset.automation.status is api.AutomaticStatus.PASSED and dataset.automation.role is api.AutomaticRole.JOINT
         for dataset in run.project.datasets
     )
     assert recovered == pytest.approx(expected, abs=1.0)

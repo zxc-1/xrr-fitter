@@ -66,6 +66,18 @@ def _fixed_parameters_from_list(value: object) -> tuple[tuple[str, object], ...]
     return tuple(result)
 
 
+def _gradient_slab_counts_from_list(value: object) -> tuple[tuple[str, object], ...]:
+    result = []
+    for item in _sequence(value, "MCMC gradient slab counts"):
+        payload = _mapping(
+            item,
+            {"prefix", "count"},
+            "MCMC gradient slab count",
+        )
+        result.append((payload["prefix"], payload["count"]))
+    return tuple(result)
+
+
 def _mcmc_to_dict(value: McmcReport | None) -> dict[str, object] | None:
     if value is None:
         return None
@@ -93,6 +105,10 @@ def _mcmc_to_dict(value: McmcReport | None) -> dict[str, object] | None:
     if value.fixed_parameter_values:
         payload["fixed_parameter_values"] = [
             {"name": name, "value": fixed_value} for name, fixed_value in value.fixed_parameter_values
+        ]
+    if value.gradient_slab_counts:
+        payload["gradient_slab_counts"] = [
+            {"prefix": prefix, "count": count} for prefix, count in value.gradient_slab_counts
         ]
     return payload
 
@@ -123,6 +139,7 @@ def _mcmc_from_dict(value: object) -> McmcReport | None:
             "derived_parameter_names",
             "derived_samples_physical",
             "fixed_parameter_values",
+            "gradient_slab_counts",
         },
     )
     config = McmcConfig(
@@ -155,6 +172,7 @@ def _mcmc_from_dict(value: object) -> McmcReport | None:
             else _real_array_from_list(payload["derived_samples_physical"])
         ),
         fixed_parameter_values=_fixed_parameters_from_list(payload.get("fixed_parameter_values", [])),
+        gradient_slab_counts=_gradient_slab_counts_from_list(payload.get("gradient_slab_counts", [])),
     )
 
 
