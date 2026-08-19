@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+from xrr_fitter.gui import theme
 from xrr_fitter.gui.structure.dialogs import BackingDialog, LayerDialog, PeriodicDialog
 
 CommitStructure = Callable[[api.StructureSpec], object]
@@ -115,25 +116,25 @@ class StructureEditor(QWidget):
         self.error_label.hide()
         self._connect_actions()
         add_row = QHBoxLayout()
-        add_row.setSpacing(4)
+        add_row.setSpacing(theme.SPACE_XS)
         add_row.addWidget(self.add_layer_button)
         add_row.addWidget(self.add_periodic_button)
         add_row.addWidget(self.edit_backing_button)
         add_row.addStretch(1)
         edit_row = QHBoxLayout()
-        edit_row.setSpacing(4)
+        edit_row.setSpacing(theme.SPACE_XS)
         edit_row.addWidget(self.remove_button)
         edit_row.addWidget(self.up_button)
         edit_row.addWidget(self.down_button)
         edit_row.addStretch(1)
         oxide_row = QHBoxLayout()
-        oxide_row.setSpacing(4)
+        oxide_row.setSpacing(theme.SPACE_XS)
         oxide_row.addWidget(self.oxide_button)
         oxide_row.addWidget(self.refuse_button)
         oxide_row.addStretch(1)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(theme.SPACE_SM)
         layout.addLayout(add_row)
         layout.addLayout(edit_row)
         layout.addLayout(oxide_row)

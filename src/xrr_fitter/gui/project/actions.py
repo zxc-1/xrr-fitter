@@ -80,7 +80,7 @@ class ProjectActions(QWidget):
     def _build_buttons(self) -> None:
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(theme.SPACE_XS)
         for spec in BUTTON_SPECS:
             button = QPushButton(spec.text)
             button.setObjectName(spec.object_name)

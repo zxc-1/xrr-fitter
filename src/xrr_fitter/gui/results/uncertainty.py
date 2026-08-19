@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+from xrr_fitter.gui import theme
 
 CLASSIFICATION_LABELS = {
     "bootstrap_failure_rate": "Bootstrap 失败率超过阈值",
@@ -346,9 +347,9 @@ class McmcControls(QGroupBox):
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.force_button)
         form = QGridLayout(self)
-        form.setContentsMargins(6, 2, 6, 2)
-        form.setHorizontalSpacing(6)
-        form.setVerticalSpacing(4)
+        form.setContentsMargins(theme.SPACE_SM, 2, theme.SPACE_SM, 2)
+        form.setHorizontalSpacing(theme.SPACE_SM)
+        form.setVerticalSpacing(theme.SPACE_XS)
         for row, values in enumerate(
             (
                 (("walkers", self.walkers), ("burn-in", self.burn_in)),

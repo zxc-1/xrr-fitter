@@ -66,7 +66,7 @@ class ResultsPanel(QWidget):
         confidence_row = QWidget()
         confidence_layout = QHBoxLayout(confidence_row)
         confidence_layout.setContentsMargins(0, 0, 0, 0)
-        confidence_layout.setSpacing(6)
+        confidence_layout.setSpacing(theme.SPACE_SM)
         self.confidence_marker = QLabel("○")
         self.confidence_marker.setObjectName("confidenceMarker")
         self.confidence_marker.setAccessibleName("可信度状态标记")
@@ -108,7 +108,7 @@ class ResultsPanel(QWidget):
         self.status_label.setWordWrap(True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(theme.SPACE_SM)
         layout.addWidget(confidence_row)
         layout.addWidget(self.automatic_points)
         layout.addWidget(self.automatic_uniformity)
@@ -197,11 +197,7 @@ class ResultsPanel(QWidget):
 
     def clear_results(self, dataset_ids=None) -> bool:
         self._require_idle("clear results")
-        requested = (
-            (self._require_active_dataset_id(),)
-            if dataset_ids is None
-            else tuple(dataset_ids)
-        )
+        requested = (self._require_active_dataset_id(),) if dataset_ids is None else tuple(dataset_ids)
         current = self.document.project
         updated = api.clear_fit_results(current, requested)
         if updated is current:
@@ -334,9 +330,7 @@ class ResultsPanel(QWidget):
     def _refresh_mcmc_buttons(self, running: bool | None = None) -> None:
         active = self.controller.is_running if running is None else running
         self.candidates.setEnabled(not active)
-        self.clear_button.setEnabled(
-            not active and self.candidates.result is not None
-        )
+        self.clear_button.setEnabled(not active and self.candidates.result is not None)
         self.mcmc_group.set_operation_state(
             running=active,
             ready=self._mcmc_ready(self._selected_candidate()),

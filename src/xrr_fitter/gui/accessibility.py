@@ -58,7 +58,8 @@ ACCESSIBILITY_SPECS = (
         "打开不确定度分析",
         "对当前候选解运行专家 MCMC 采样",
         "在独立窗口中配置并运行 MCMC 采样",
-    ),    AccessibilitySpec("cancelMcmcButton", "取消 MCMC", "请求取消当前 MCMC"),
+    ),
+    AccessibilitySpec("cancelMcmcButton", "取消 MCMC", "请求取消当前 MCMC"),
     AccessibilitySpec("forceStopMcmcButton", "强制停止 MCMC", "强制终止当前 MCMC 进程"),
     AccessibilitySpec("mcmcWalkers", "MCMC walkers 数", "设置 MCMC walkers 数量"),
     AccessibilitySpec("mcmcBurnIn", "MCMC burn-in 步数", "设置 MCMC burn-in 步数"),
@@ -110,7 +111,18 @@ FOCUS_ORDER = (
     "datasetTree",
     "initializeStructureButton",
     "structureTree",
+    # The plot toolbar's own row, in the order it is read on screen. Listing
+    # only the first button used to hand focus straight from it to the export
+    # command, so a keyboard user could reach "查看" but never the range, mask,
+    # navigation or zoom controls sitting beside it.
     "plotModeView",
+    "plotModeRange",
+    "plotModeMask",
+    "plotNavPan",
+    "plotNavZoom",
+    "plotNavHome",
+    "plotZoomToRange",
+    "plotResetZoom",
     "diagnosticTabs",
     "expertModeToggle",
     "parameterTable",
@@ -197,19 +209,13 @@ def _configure_parameter_tables(root: QWidget) -> None:
             for column in range(1, min(table.columnCount(), 5)):
                 item = table.item(row, column)
                 if item is not None:
-                    item.setTextAlignment(
-                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-                    )
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         del blocker
 
 
 def configure_accessibility(root: QWidget) -> tuple[QWidget, ...]:
     """Apply stable names without depending on concrete widget classes."""
-    configured = tuple(
-        widget
-        for spec in ACCESSIBILITY_SPECS
-        if (widget := _apply_spec(root, spec)) is not None
-    )
+    configured = tuple(widget for spec in ACCESSIBILITY_SPECS if (widget := _apply_spec(root, spec)) is not None)
     _configure_dialog_buttons(root)
     _configure_beam_buttons(root)
     _configure_parameter_tables(root)
@@ -237,14 +243,8 @@ def create_copy_button(
 
 
 def configure_focus_navigation(root: QWidget) -> tuple[QWidget, ...]:
-    QApplication.styleHints().setTabFocusBehavior(
-        Qt.TabFocusBehavior.TabFocusAllControls
-    )
-    ordered = tuple(
-        widget
-        for name in FOCUS_ORDER
-        if (widget := _named_widget(root, name)) is not None
-    )
+    QApplication.styleHints().setTabFocusBehavior(Qt.TabFocusBehavior.TabFocusAllControls)
+    ordered = tuple(widget for name in FOCUS_ORDER if (widget := _named_widget(root, name)) is not None)
     for first, second in zip(ordered[:-1], ordered[1:], strict=True):
         QWidget.setTabOrder(first, second)
     return ordered
@@ -255,11 +255,7 @@ def focus_named(root: QWidget, object_name: str) -> QWidget:
     if not candidates:
         raise LookupError(f"focus target is missing: {object_name}")
     target = next(
-        (
-            widget
-            for widget in reversed(candidates)
-            if widget.isEnabled() and widget.isVisibleTo(root)
-        ),
+        (widget for widget in reversed(candidates) if widget.isEnabled() and widget.isVisibleTo(root)),
         candidates[-1],
     )
     target.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -349,7 +345,7 @@ def _active_mapping_editors(dialog: QWidget) -> tuple[QWidget, ...]:
     )
     for check_name, editor_name in optional:
         check = _named_widget(dialog, check_name)
-        if check is not None and bool(getattr(check, "isChecked")()):
+        if check is not None and bool(check.isChecked()):
             names.append(editor_name)
     return tuple(focus for name in names if (focus := _named_widget(dialog, name)) is not None)
 
@@ -358,7 +354,7 @@ def _focus_duplicate_mapping(dialog: QWidget) -> QWidget:
     editors = _active_mapping_editors(dialog)
     seen: set[int] = set()
     for editor in editors:
-        value = int(getattr(editor, "value")())
+        value = int(editor.value())
         if value in seen:
             editor.setFocus(Qt.FocusReason.OtherFocusReason)
             return editor

@@ -41,6 +41,8 @@ TAB_TITLES = (
     "qz⁴R",
     "加权残差",
     "候选解比较",
+    "残差热图",
+    "参数热图",
     "相关性与区间",
     "批量趋势",
 )
@@ -102,6 +104,17 @@ def _panel(qtbot, *, data=None, result=None, bands=None):
 
 def _line_y(view, label):
     return next(line.get_ydata() for line in view.axes.lines if line.get_label() == label)
+
+
+def _colour_keys(view):
+    """The colour-key axes on a figure, in figure order.
+
+    Matplotlib's own label on a colorbar axes is the only handle on it, so that
+    label is what tells a key apart from a plotted pane.
+    """
+    from xrr_fitter.gui.plots.diagnostics import COLORBAR_AXES_LABEL
+
+    return tuple(axes for axes in view.figure.axes if axes.get_label() == COLORBAR_AXES_LABEL)
 
 
 def _artist_snapshot(panel):
@@ -204,6 +217,7 @@ __all__ = (
     "_result",
     "_panel",
     "_line_y",
+    "_colour_keys",
     "_artist_snapshot",
     "_write_curve",
     "_project_with_curves",

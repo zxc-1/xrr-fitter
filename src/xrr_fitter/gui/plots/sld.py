@@ -2,31 +2,16 @@
 
 from __future__ import annotations
 
-from math import isfinite
-
 import numpy as np
 
+from xrr_fitter.gui import theme
 from xrr_fitter.gui.plots.diagnostics import (
     DiagnosticView,
-    apply_figure_font,
+    apply_figure_palette,
+    candidate_is_inspection_only,
     draw_empty,
+    finish_view,
 )
-
-
-def _finish(view: DiagnosticView) -> None:
-    apply_figure_font(view.figure)
-    view.canvas.draw_idle()
-
-
-def _candidate_is_valid_for_comparison(candidate: object) -> bool:
-    """Filter inspection-only candidates from the comparison overlay."""
-    ranking = getattr(candidate, "ranking_objective", None)
-    return bool(
-        getattr(candidate, "valid", False)
-        and getattr(candidate, "stop_reason", "") != "early_eliminated"
-        and isfinite(float(getattr(candidate, "objective", float("inf"))))
-        and (ranking is None or isfinite(float(ranking)))
-    )
 
 
 def draw_sld(
@@ -53,17 +38,20 @@ def draw_sld(
     axes.clear()
     # Draw comparison overlays first so the selected candidate's curves sit on top
     selected_id = candidate.candidate_id
+    overlays: list[object] = []
     for other in others:
-        if other.candidate_id == selected_id or not _candidate_is_valid_for_comparison(other):
+        if other.candidate_id == selected_id or candidate_is_inspection_only(other):
             continue
         other_depth = np.asarray(other.sld_depth_a, dtype=float) / 10.0
         other_profile = np.asarray(other.sld_profile_a2, dtype=complex)
-        axes.plot(
-            other_depth,
-            other_profile.real,
-            linewidth=0.8,
-            alpha=0.35,
-            label=f"{other.candidate_id} 实部",
+        overlays.extend(
+            axes.plot(
+                other_depth,
+                other_profile.real,
+                linewidth=0.8,
+                alpha=0.35,
+                label=f"{other.candidate_id} 实部",
+            )
         )
     # Draw the selected candidate's real/imag at full opacity on top
     axes.plot(depth_nm, profile.real, label="SLD 实部")
@@ -71,9 +59,30 @@ def draw_sld(
     axes.set(title="SLD 深度剖面", xlabel="深度 (nm)", ylabel="SLD (Å⁻²)")
     if bands is not None:
         _draw_bands(axes, bands)
-        axes.set_title(f"SLD 深度剖面 — {bands.caption()}", fontsize=8)
-    axes.legend()
-    _finish(view)
+        axes.set_title(f"SLD 深度剖面 — {bands.caption()}", fontsize=theme.FONT_PT_SM)
+    _draw_legend(axes, overlays)
+    finish_view(view)
+
+
+def _draw_legend(axes: object, overlays: list[object]) -> None:
+    """Key the selected profile and bands, folding comparison curves into one row.
+
+    A run that keeps several candidates gave the key one row per comparison
+    curve, and the key then took most of the pane's width and squeezed the
+    profiles into a strip.  Every curve keeps its own label so selection and
+    inspection still name it; only the key collapses them into a counted entry.
+    """
+    handles, labels = axes.get_legend_handles_labels()
+    entries = [(handle, label) for handle, label in zip(handles, labels, strict=True) if handle not in overlays]
+    if overlays:
+        entries.append((overlays[0], f"其他候选 实部 ×{len(overlays)}"))
+    axes.legend(
+        [handle for handle, _ in entries],
+        [label for _, label in entries],
+        fontsize=theme.FONT_PT_SM,
+        loc="best",
+        framealpha=0.75,
+    )
 
 
 # Credible bands mirror the exported PNG: (quantile pair, fill alpha, legend
@@ -127,12 +136,27 @@ def _unavailable(
     view: DiagnosticView,
     message: str,
 ) -> None:
+    # Both halves get their ticks blanked and their placeholder drawn in the
+    # muted colour.  Leaving the default 0-1 ticks in place made an empty pane
+    # read as a real plot whose curve had failed to draw.
     correlation, profile = _reset_uncertainty_axes(view)
+    for axes in (correlation, profile):
+        axes.set_xticks(())
+        axes.set_yticks(())
     correlation.set_title("相关矩阵")
-    correlation.text(0.5, 0.5, message, ha="center", va="center", transform=correlation.transAxes)
     profile.set_title("profile likelihood 与区间")
-    profile.text(0.5, 0.5, "区间证据不可用", ha="center", va="center", transform=profile.transAxes)
-    _finish(view)
+    palette = apply_figure_palette(view.figure)
+    for axes, text in ((correlation, message), (profile, "区间证据不可用")):
+        axes.text(
+            0.5,
+            0.5,
+            text,
+            ha="center",
+            va="center",
+            transform=axes.transAxes,
+            color=palette.muted,
+        )
+    finish_view(view)
 
 
 def _draw_profiles(axes: object, report: object) -> None:
@@ -152,7 +176,7 @@ def _draw_profiles(axes: object, report: object) -> None:
             transform=axes.transAxes,
         )
     if profiles:
-        axes.legend(fontsize="small")
+        axes.legend(fontsize=theme.FONT_PT_SM)
     elif not report.bootstrap_intervals:
         axes.text(0.5, 0.5, "profile 与区间证据不可用", ha="center", va="center", transform=axes.transAxes)
     axes.set(
@@ -182,9 +206,14 @@ def draw_uncertainty(
     matrix = np.asarray(report.correlation_matrix, dtype=float)
     image = correlation.imshow(matrix, vmin=-1.0, vmax=1.0, cmap="coolwarm")
     image.set_clim(-1.0, 1.0)
+    # Without a colour key the matrix is a field of colours with no stated
+    # scale, so a cell only reads as "reddish" rather than as a correlation near
+    # +1.  The key is rebuilt each draw because the reset above removes it along
+    # with every other companion axes.
+    view.figure.colorbar(image, ax=correlation)
     positions = tuple(range(len(report.correlation_names)))
     correlation.set_xticks(positions, report.correlation_names, rotation=45, ha="right")
     correlation.set_yticks(positions, report.correlation_names)
     correlation.set_title("相关矩阵（固定范围 [-1, 1]）")
     _draw_profiles(profile, report)
-    _finish(view)
+    finish_view(view)

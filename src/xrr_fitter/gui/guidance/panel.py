@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+from xrr_fitter.gui import theme
 from xrr_fitter.gui.document import ProjectDocument
 
 
@@ -98,7 +99,12 @@ class GuidancePanel(QWidget):
             self._pages[spec.name] = page
             self._stack.addWidget(page)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setContentsMargins(
+            theme.SPACE_LG,
+            theme.SPACE_LG,
+            theme.SPACE_LG,
+            theme.SPACE_LG,
+        )
         layout.addStretch(1)
         layout.addWidget(self._stack)
         layout.addStretch(2)
@@ -129,9 +135,7 @@ class GuidancePanel(QWidget):
         back.clicked.connect(lambda _checked=False, name=spec.name: self._step(name, -1))
         forward = QPushButton("下一步", page)
         forward.setObjectName(f"{spec.name}Next")
-        forward.clicked.connect(
-            lambda _checked=False, name=spec.name: self._step(name, 1)
-        )
+        forward.clicked.connect(lambda _checked=False, name=spec.name: self._step(name, 1))
         self._next_buttons[spec.name] = forward
         buttons = QHBoxLayout()
         buttons.addStretch(1)
@@ -142,7 +146,7 @@ class GuidancePanel(QWidget):
         navigation.addStretch(1)
         navigation.addWidget(forward)
         layout = QVBoxLayout(page)
-        layout.setSpacing(12)
+        layout.setSpacing(theme.SPACE_MD)
         layout.addWidget(title)
         layout.addWidget(body)
         layout.addLayout(buttons)
@@ -180,11 +184,7 @@ class GuidancePanel(QWidget):
     def _active_dataset(self, project: api.XrrProject) -> object | None:
         active = project.ui_state.active_dataset_id
         return next(
-            (
-                dataset
-                for dataset in project.datasets
-                if dataset.dataset_id == active
-            ),
+            (dataset for dataset in project.datasets if dataset.dataset_id == active),
             None,
         )
 
@@ -211,6 +211,4 @@ class GuidancePanel(QWidget):
         # own precondition so the flow cannot run ahead of the project.
         self._action_buttons[current].setEnabled(self.step_is_available(current))
         following = names[index + 1] if index + 1 < len(names) else None
-        self._next_buttons[current].setEnabled(
-            following is not None and self.step_is_available(following)
-        )
+        self._next_buttons[current].setEnabled(following is not None and self.step_is_available(following))

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from tests.gui.plot_support import *  # noqa: F403
 
+
 def test_plot_panel_has_all_diagnostic_tabs(qtbot) -> None:
     panel = _panel(qtbot)
 
@@ -15,10 +16,13 @@ def test_plot_panel_has_all_diagnostic_tabs(qtbot) -> None:
         "qz4",
         "residual",
         "candidates",
+        "residual_map",
+        "parameter_map",
         "uncertainty",
         "trend",
         "sld",
     )
+
 
 @pytest.mark.parametrize(
     ("code", "label"),
@@ -41,6 +45,7 @@ def test_known_diagnostic_codes_have_chinese_labels_and_keep_technical_details(
     assert label in text
     assert code in text
     assert "technical detail" in text
+
 
 def test_plot_panel_draws_raw_model_and_excluded_points_without_mutating_data(
     qtbot,
@@ -69,6 +74,7 @@ def test_plot_panel_draws_raw_model_and_excluded_points_without_mutating_data(
     ):
         np.testing.assert_array_equal(actual, expected)
 
+
 def test_plot_panel_raw_markers_separate_included_and_excluded_fill(qtbot) -> None:
     data = prepared_data(size=4, fit_mask=np.array([True, False, True, False]))
     panel = _panel(qtbot, data=data, result=_result(data))
@@ -78,6 +84,7 @@ def test_plot_panel_raw_markers_separate_included_and_excluded_fill(qtbot) -> No
     assert lines["拟合点"].get_markerfacecolor() != "none"
     assert lines["排除点"].get_marker() == "x"
     assert lines["排除点"].get_markerfacecolor() == "none"
+
 
 def test_plot_panel_log_reflectivity_uses_display_floor_without_mutating_arrays(
     qtbot,
@@ -91,6 +98,7 @@ def test_plot_panel_log_reflectivity_uses_display_floor_without_mutating_arrays(
 
     assert np.min(displayed) == data.r_floor
     np.testing.assert_array_equal(data.intensity_normalized, before)
+
 
 def test_plot_panel_draws_qz4_weighted_residual_and_sld_from_candidate_arrays(
     qtbot,
@@ -112,6 +120,22 @@ def test_plot_panel_draws_qz4_weighted_residual_and_sld_from_candidate_arrays(
     np.testing.assert_allclose(sld_lines[0].get_xdata(), candidate.sld_depth_a / 10.0)
     np.testing.assert_allclose(sld_lines[0].get_ydata(), candidate.sld_profile_a2.real)
     np.testing.assert_allclose(sld_lines[1].get_ydata(), candidate.sld_profile_a2.imag)
+
+
+def test_plot_panel_qz4_extreme_qz_uses_finite_scaled_display_values(qtbot) -> None:
+    data = prepared_data(size=2)
+    candidate = _candidate(
+        data,
+        qz_a_inv=np.array([1e80, 2e80]),
+        model_normalized=np.array([1.0, 2.0]),
+    )
+    panel = _panel(qtbot, data=data, result=final_fit_result(candidate))
+
+    qz4 = panel.view("qz4")
+    for line in qz4.axes.lines:
+        assert np.all(np.isfinite(np.asarray(line.get_ydata(), dtype=float)))
+    assert "归一化" in qz4.axes.get_ylabel()
+
 
 def test_plot_panel_sld_overlays_other_candidate_real_profiles_faintly(qtbot) -> None:
     data = prepared_data(size=4)
@@ -138,6 +162,7 @@ def test_plot_panel_sld_overlays_other_candidate_real_profiles_faintly(qtbot) ->
     np.testing.assert_allclose(overlay.get_xdata(), other.sld_depth_a / 10.0)
     np.testing.assert_allclose(overlay.get_ydata(), other.sld_profile_a2.real)
 
+
 def test_plot_panel_hides_uncertainty_owned_by_another_candidate(qtbot) -> None:
     data = prepared_data(size=4)
     result = replace(_result(data), uncertainty=_uncertainty("candidate-b"))
@@ -149,16 +174,14 @@ def test_plot_panel_hides_uncertainty_owned_by_another_candidate(qtbot) -> None:
     assert "candidate-b" in "\n".join(text.get_text() for text in view.axes.texts)
     assert "candidate-a" in "\n".join(text.get_text() for text in view.axes.texts)
 
+
 def test_plot_panel_uncertainty_tab_states_report_is_unavailable(qtbot) -> None:
     data = prepared_data(size=4)
     panel = _panel(qtbot, data=data, result=_result(data, uncertainty=False))
 
-    texts = tuple(
-        text.get_text()
-        for axes in panel.view("uncertainty").figure.axes
-        for text in axes.texts
-    )
+    texts = tuple(text.get_text() for axes in panel.view("uncertainty").figure.axes for text in axes.texts)
     assert any("不可用" in text for text in texts)
+
 
 def test_plot_panel_uses_independent_normalized_axis_for_heterogeneous_profiles(
     qtbot,
@@ -190,6 +213,7 @@ def test_plot_panel_uses_independent_normalized_axis_for_heterogeneous_profiles(
         assert np.max(line.get_xdata()) == pytest.approx(1.0)
     assert "独立归一化" in profile_axes.get_xlabel()
 
+
 def test_plot_panel_draws_fixed_correlation_profile_interval_and_empty_batch_trend(
     qtbot,
 ) -> None:
@@ -198,9 +222,88 @@ def test_plot_panel_draws_fixed_correlation_profile_interval_and_empty_batch_tre
 
     image = panel.view("uncertainty").axes.images[0]
     assert image.get_clim() == (-1.0, 1.0)
-    assert "暂无批量趋势" in "\n".join(
-        text.get_text() for text in panel.view("trend").axes.texts
-    )
+    assert "暂无批量趋势" in "\n".join(text.get_text() for text in panel.view("trend").axes.texts)
+
+
+def test_correlation_matrix_states_what_its_colours_mean(qtbot) -> None:
+    data = prepared_data(size=4)
+    panel = _panel(qtbot, data=data, result=_result(data))
+    view = panel.view("uncertainty")
+
+    keys = _colour_keys(view)
+
+    assert len(keys) == 1
+    assert keys[0].get_visible()
+
+
+def test_repeated_uncertainty_redraws_keep_one_colour_key(qtbot) -> None:
+    """Redrawing must not leave a second key, or a key's artists stacked.
+
+    Each redraw rebuilds the matrix, and the key is attached from scratch as part
+    of that. What has to hold across repaints is that the figure still carries
+    exactly one key axes holding one bar's worth of artists.
+    """
+    data = prepared_data(size=4)
+    result = _result(data)
+    panel = _panel(qtbot, data=data, result=result)
+    view = panel.view("uncertainty")
+    view.canvas.draw()
+    artists = len(_colour_keys(view)[0].collections)
+
+    for _ in range(3):
+        panel.set_result(result, "candidate-a")
+        view.canvas.draw()
+
+    keys = _colour_keys(view)
+    assert len(keys) == 1
+    assert len(keys[0].collections) == artists
+
+
+def test_reflectivity_curve_carries_a_grid_to_read_values_against(qtbot) -> None:
+    data = prepared_data(size=4)
+    panel = _panel(qtbot, data=data, result=_result(data))
+
+    axes = panel.view("log").axes
+
+    assert axes.xaxis.get_gridlines()
+    assert axes.get_axisbelow()
+    assert all(line.get_visible() for line in axes.xaxis.get_gridlines())
+    assert all(line.get_visible() for line in axes.yaxis.get_gridlines())
+
+
+def test_grid_skips_the_matrix_cells_and_the_colour_key_it_would_overdraw(qtbot) -> None:
+    data = prepared_data(size=4)
+    panel = _panel(qtbot, data=data, result=_result(data))
+    view = panel.view("uncertainty")
+
+    matrix = view.axes
+    key = _colour_keys(view)[0]
+
+    for axes in (matrix, key):
+        assert not any(line.get_visible() for line in axes.xaxis.get_gridlines())
+        assert not any(line.get_visible() for line in axes.yaxis.get_gridlines())
+
+
+def test_categorical_trend_axis_gets_no_minor_ticks_between_datasets(qtbot) -> None:
+    """Half a dataset is not a reading, so the dataset axis stays unsubdivided."""
+    panel = _panel(qtbot)
+
+    panel.set_batch_trends(("a", "b"), (30.0, 45.0), (100.0, 120.0))
+
+    axes = panel.view("trend").axes
+    assert len(axes.xaxis.get_minorticklocs()) == 0
+    assert len(axes.yaxis.get_minorticklocs()) > 0
+
+
+def test_empty_uncertainty_view_says_what_each_pane_will_show(qtbot) -> None:
+    """Both panes get a caption; a silent blank pane reads as a failed draw."""
+    panel = _panel(qtbot)
+    view = panel.view("uncertainty")
+
+    for axes in view.figure.axes:
+        assert axes.get_title()
+        assert tuple(text.get_text() for text in axes.texts)
+
 
 def test_plot_panel_draws_project_batch_trends_in_nm(qtbot) -> None:
     panel = _panel(qtbot)
@@ -211,6 +314,7 @@ def test_plot_panel_draws_project_batch_trends_in_nm(qtbot) -> None:
     np.testing.assert_allclose(axes.lines[0].get_ydata(), (3.0, 4.5))
     np.testing.assert_allclose(axes.lines[1].get_ydata(), (10.0, 12.0))
     assert axes.get_ylabel() == "长度 (nm)"
+
 
 @pytest.mark.parametrize("dataset_ids", (("a", "a"), ("", "b")))
 def test_plot_panel_rejects_invalid_batch_trend_dataset_ids_without_redraw(
@@ -226,6 +330,7 @@ def test_plot_panel_rejects_invalid_batch_trend_dataset_ids_without_redraw(
 
     assert _artist_snapshot(panel) == before
 
+
 def test_plot_panel_rejects_misaligned_batch_trend_columns_without_redraw(
     qtbot,
 ) -> None:
@@ -236,6 +341,7 @@ def test_plot_panel_rejects_misaligned_batch_trend_columns_without_redraw(
         panel.set_batch_trends(("a", "b"), (10.0,), (30.0, 40.0))
 
     assert _artist_snapshot(panel) == before
+
 
 @pytest.mark.parametrize(
     ("thickness_a", "period_a"),
@@ -257,6 +363,7 @@ def test_plot_panel_rejects_nonfinite_batch_trend_values_without_redraw(
 
     assert _artist_snapshot(panel) == before
 
+
 def test_plot_panel_rejects_single_dataset_batch_trend_without_redraw(qtbot) -> None:
     panel = _panel(qtbot)
     before = _artist_snapshot(panel)
@@ -265,6 +372,7 @@ def test_plot_panel_rejects_single_dataset_batch_trend_without_redraw(qtbot) -> 
         panel.set_batch_trends(("a",), (10.0,), (30.0,))
 
     assert _artist_snapshot(panel) == before
+
 
 def test_plot_panel_preserves_batch_trends_during_candidate_redraw(qtbot) -> None:
     data = prepared_data(size=4)
@@ -277,6 +385,7 @@ def test_plot_panel_preserves_batch_trends_during_candidate_redraw(qtbot) -> Non
     for actual, expected in zip(panel.view("trend").axes.lines, before, strict=True):
         np.testing.assert_array_equal(actual.get_ydata(), expected)
 
+
 def test_plot_panel_sets_interaction_mode_atomically(qtbot) -> None:
     panel = _panel(qtbot)
 
@@ -287,6 +396,7 @@ def test_plot_panel_sets_interaction_mode_atomically(qtbot) -> None:
 
     assert panel.interaction_mode() == "mask"
     assert tuple(button.isChecked() for button in panel.mode_buttons().values()) == before
+
 
 def test_plot_panel_has_visible_accessible_interaction_modes(qtbot) -> None:
     panel = _panel(qtbot)
@@ -303,6 +413,7 @@ def test_plot_panel_has_visible_accessible_interaction_modes(qtbot) -> None:
     }
     assert all(button.accessibleName() and button.toolTip() for button in buttons.values())
 
+
 def test_plot_panel_emits_ordered_stored_fit_range(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
     emitted: list[tuple[float, float]] = []
@@ -312,6 +423,7 @@ def test_plot_panel_emits_ordered_stored_fit_range(qtbot) -> None:
     panel.select_fit_range(2.5, 0.5)
 
     assert emitted == [(0.5, 2.5)]
+
 
 def test_plot_panel_rejects_nonfinite_fit_range_without_signal(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
@@ -324,6 +436,7 @@ def test_plot_panel_rejects_nonfinite_fit_range_without_signal(qtbot) -> None:
 
     assert emitted == []
 
+
 @pytest.mark.parametrize("mode", ("view", "mask"))
 def test_plot_panel_nonrange_modes_cannot_select_fit_range(qtbot, mode) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
@@ -334,6 +447,7 @@ def test_plot_panel_nonrange_modes_cannot_select_fit_range(qtbot, mode) -> None:
     assert panel.select_fit_range(0.5, 2.5) is False
     assert emitted == []
 
+
 def test_plot_panel_emits_prepared_index_for_direct_point_mask_request(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
     emitted: list[int] = []
@@ -343,6 +457,7 @@ def test_plot_panel_emits_prepared_index_for_direct_point_mask_request(qtbot) ->
     panel.request_point_mask(2)
 
     assert emitted == [2]
+
 
 def test_plot_panel_rejects_out_of_range_point_mask_without_signal(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
@@ -355,6 +470,7 @@ def test_plot_panel_rejects_out_of_range_point_mask_without_signal(qtbot) -> Non
 
     assert emitted == []
 
+
 @pytest.mark.parametrize("mode", ("view", "range"))
 def test_plot_panel_nonmask_modes_cannot_request_point_mask(qtbot, mode) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
@@ -364,3 +480,30 @@ def test_plot_panel_nonmask_modes_cannot_request_point_mask(qtbot, mode) -> None
 
     assert panel.request_point_mask(2) is False
     assert emitted == []
+
+
+def test_plot_panel_sld_legend_folds_comparison_curves_into_one_entry(qtbot) -> None:
+    """Several kept candidates must not let the key crowd out the profiles."""
+    data = prepared_data(size=4)
+    others = tuple(
+        _candidate(
+            data,
+            f"candidate-{suffix}",
+            objective=0.3 + index * 0.05,
+            sld_depth_a=np.array([0.0, 30.0, 70.0]),
+            sld_profile_a2=np.array([0.0 + 0.0j, 3e-5 + 0.0j, 1e-6 + 0.0j]),
+        )
+        for index, suffix in enumerate(("b", "c", "d"))
+    )
+    panel = _panel(qtbot, data=data, result=final_fit_result(_candidate(data), *others))
+
+    axes = panel.view("sld").axes
+    labels = tuple(text.get_text() for text in axes.get_legend().get_texts())
+
+    # The key names the selected profile and folds the three overlays into one
+    # counted row instead of listing each candidate id.
+    assert labels == ("SLD 实部", "SLD 虚部", "其他候选 实部 ×3")
+    # Every overlay curve keeps its own label, so selection still names it.
+    line_labels = {line.get_label() for line in axes.lines}
+    for other in others:
+        assert f"{other.candidate_id} 实部" in line_labels
