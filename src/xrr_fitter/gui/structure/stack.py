@@ -66,29 +66,21 @@ def _medium_detail(material: api.MaterialSpec) -> str:
     return material.name
 
 
-def _proportional_heights(thicknesses: list[float], budget: int) -> list[int]:
-    """Split `budget` px across thicknesses in proportion, floored at MIN_BAND_H.
+def _even_split(budget: int, count: int) -> list[int]:
+    """An even split for when proportion cannot apply: too little room for every
+    band to clear the floor, or no thickness to weight by.  It stops being
+    proportional but keeps every band clickable."""
+    base, extra = divmod(max(budget, 0), count)
+    return [base + (1 if position < extra else 0) for position in range(count)]
 
-    The honest split is the plain proportional one, so the floor applies only to
-    the bands it has to rescue: those round to nothing, get pinned at MIN_BAND_H,
-    and the pixels they borrow are charged to the bands that still have room.
-    Spending the floor on every band instead would dilute the ratio the diagram
-    exists to show, leaving a 20 nm and a 60 nm layer at 57 px and 143 px.  A pin
-    shrinks what the rest have to share and can starve a further band, so the
-    pass repeats until it settles; the last unpinned band always clears the floor
-    because `budget` seats every band at it, which also keeps `order` non-empty.
+
+def _settled_shares(thicknesses: list[float], budget: int, count: int) -> tuple[list[float], set[int]]:
+    """Proportional shares, with any band that rounds below MIN_BAND_H pinned to it.
+
+    A pin shrinks what the rest have to share and can starve a further band, so
+    the pass repeats until it settles; the last unpinned band always clears the
+    floor because `budget` seats every band at it, which keeps `order` non-empty.
     """
-    count = len(thicknesses)
-    if count == 0:
-        return []
-    if budget < MIN_BAND_H * count:
-        # Too many components for the box: an even split stops being
-        # proportional but keeps every band clickable.
-        base, extra = divmod(max(budget, 0), count)
-        return [base + (1 if position < extra else 0) for position in range(count)]
-    if sum(thicknesses) <= 0:
-        base, extra = divmod(budget, count)
-        return [base + (1 if position < extra else 0) for position in range(count)]
     pinned: set[int] = set()
     while True:
         free = budget - MIN_BAND_H * len(pinned)
@@ -97,13 +89,16 @@ def _proportional_heights(thicknesses: list[float], budget: int) -> list[int]:
             float(MIN_BAND_H) if position in pinned else thicknesses[position] / weight * free
             for position in range(count)
         ]
-        starved = {position for position, share in enumerate(shares) if position not in pinned and share < MIN_BAND_H}
+        starved = {position for position, share in enumerate(shares) if share < MIN_BAND_H}
         if not starved:
-            break
+            return shares, pinned
         pinned |= starved
+
+
+def _rounded_heights(shares: list[float], pinned: set[int], count: int, budget: int) -> list[int]:
+    """Floor the shares to whole pixels and hand the truncated remainder to the
+    largest fractional parts, so the section meets the substrate without a seam."""
     heights = [int(share) for share in shares]
-    # Truncation leaves the bands short of the box; hand the missing pixels to the
-    # largest fractional parts so the section meets the substrate without a seam.
     order = sorted(
         (position for position in range(count) if position not in pinned),
         key=lambda position: shares[position] - int(shares[position]),
@@ -112,6 +107,24 @@ def _proportional_heights(thicknesses: list[float], budget: int) -> list[int]:
     for offset in range(budget - sum(heights)):
         heights[order[offset % len(order)]] += 1
     return heights
+
+
+def _proportional_heights(thicknesses: list[float], budget: int) -> list[int]:
+    """Split `budget` px across thicknesses in proportion, floored at MIN_BAND_H.
+
+    The honest split is the plain proportional one, so the floor applies only to
+    the bands it has to rescue: those round to nothing, get pinned at MIN_BAND_H,
+    and the pixels they borrow are charged to the bands that still have room.
+    Spending the floor on every band instead would dilute the ratio the diagram
+    exists to show, leaving a 20 nm and a 60 nm layer at 57 px and 143 px.
+    """
+    count = len(thicknesses)
+    if count == 0:
+        return []
+    if budget < MIN_BAND_H * count or sum(thicknesses) <= 0:
+        return _even_split(budget, count)
+    shares, pinned = _settled_shares(thicknesses, budget, count)
+    return _rounded_heights(shares, pinned, count, budget)
 
 
 def stack_bands(structure: api.StructureSpec | None, height: int) -> tuple[Band, ...]:
