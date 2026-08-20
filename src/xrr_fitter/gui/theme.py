@@ -24,6 +24,7 @@ class ThemeTokens:
     surface_border: str
     muted_text: str
     ok: str
+    info: str
     warn: str
     error: str
     selection_bg: str
@@ -37,6 +38,7 @@ LIGHT_TOKENS = ThemeTokens(
     surface_border="rgba(0, 0, 0, 34)",
     muted_text="rgba(0, 0, 0, 140)",
     ok="#2E7D32",
+    info="#1565C0",
     warn="#9A6700",
     error="#B3261E",
     selection_bg="rgba(47, 107, 216, 46)",
@@ -50,6 +52,7 @@ DARK_TOKENS = ThemeTokens(
     surface_border="rgba(255, 255, 255, 42)",
     muted_text="rgba(255, 255, 255, 150)",
     ok="#7BC67E",
+    info="#8AB4F8",
     warn="#E3B341",
     error="#F28B82",
     selection_bg="rgba(90, 141, 238, 70)",
@@ -74,6 +77,58 @@ FONT_PT_LG = 14
 # inputs alike.  These used to carry three different minimums (22, 20, and
 # unset), which is what made neighbouring controls in one row look mismatched.
 CONTROL_MIN_H = 22
+
+# Unlike the tokens above, these do not follow the appearance.  A series that
+# changed hue when the desktop switched to dark would invalidate the reference a
+# user has already built ("the blue curve is my data"), so each hue is instead
+# chosen to survive both canvas backgrounds.  Okabe-Ito throughout, which keeps
+# the set separable under the common colour vision deficiencies.
+DATA_OBSERVED = "#0072B2"
+DATA_CANDIDATE = "#D55E00"
+DATA_PREVIEW = "#009E73"
+DATA_RANGE = "#E69F00"
+
+# Cycled per component in the structure diagram so neighbouring layers separate
+# at a glance.  The first three are the series hues above: a reader who has
+# learnt "blue is the data" loses nothing by meeting blue again as a layer,
+# whereas a second unrelated six-colour set would be six more things to learn.
+DATA_SEQUENCE = (DATA_OBSERVED, DATA_CANDIDATE, DATA_PREVIEW, "#CC79A7", DATA_RANGE, "#56B4E9")
+
+# Air and the substrate are semi-infinite, so they are not layers and must not
+# borrow a sequence hue.
+DATA_NEUTRAL = "#9AA0A6"
+
+# Captions drawn on top of a fill.  Two are needed because the fills span most
+# of the luminance range: white reaches only 2.25:1 on the orange and black only
+# 4.05:1 on the deep blue, so neither one works for the whole sequence.
+BAND_LABEL_ON_DARK = "#FFFFFF"
+BAND_LABEL_ON_LIGHT = "#101010"
+
+
+def _luminance(value: str) -> float:
+    """WCAG relative luminance of a ``#RRGGBB`` string."""
+    channels = []
+    for index in (1, 3, 5):
+        channel = int(value[index : index + 2], 16) / 255.0
+        channels.append(channel / 12.92 if channel <= 0.03928 else ((channel + 0.055) / 1.055) ** 2.4)
+    red, green, blue = channels
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def _contrast_ratio(first: str, second: str) -> float:
+    lighter, darker = sorted((_luminance(first), _luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def band_label_colour(fill: str) -> str:
+    """The more readable of the two caption colours against `fill`.
+
+    Computed rather than tabulated so a fill added to `DATA_SEQUENCE` later
+    gets a correct label without a matching edit somewhere else.
+    """
+    if _contrast_ratio(BAND_LABEL_ON_DARK, fill) >= _contrast_ratio(BAND_LABEL_ON_LIGHT, fill):
+        return BAND_LABEL_ON_DARK
+    return BAND_LABEL_ON_LIGHT
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,8 +234,10 @@ QLabel[sectionHeader="true"] {{
 QLabel[mutedText="true"] {{ color: {tokens.muted_text}; }}
 QLabel[emptyTitle="true"] {{ font-size: {FONT_PT_LG}pt; font-weight: 700; }}
 QLabel[statusKind="ok"] {{ color: {tokens.ok}; }}
+QLabel[statusKind="info"] {{ color: {tokens.info}; }}
 QLabel[statusKind="warn"] {{ color: {tokens.warn}; }}
 QLabel[statusKind="error"] {{ color: {tokens.error}; }}
+QLabel#confidenceBadge {{ font-weight: 600; }}
 QTabBar::tab {{ padding: {SPACE_XS}px {SPACE_MD}px; }}
 QGroupBox {{
     border: 1px solid {tokens.surface_border};
@@ -250,7 +307,7 @@ def apply_theme(application: QApplication) -> str:
 
 def set_status_kind(widget: QWidget, kind: str) -> None:
     """Set the semantic status property and repolish so QSS reevaluates."""
-    if kind not in ("", "ok", "warn", "error"):
+    if kind not in ("", "ok", "info", "warn", "error"):
         raise ValueError(f"unsupported status kind: {kind}")
     if widget.property("statusKind") == kind:
         return

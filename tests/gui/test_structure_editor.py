@@ -250,6 +250,27 @@ def test_structure_editor_tree_keeps_fixed_roots_and_periodic_children_contained
     assert [periodic.child(index).text(0) for index in range(2)] == ["Mo", "Si"]
 
 
+def test_structure_tree_fits_the_dock_width_without_horizontal_scrolling(
+    qtbot,
+    tmp_path,
+) -> None:
+    # The panel lives in a dock roughly 320 px wide.  Six columns at Qt's default
+    # 100 px each need 600, so the tree cut off at 厚度 and hid 粗糙度 and 重复
+    # behind a horizontal scrollbar - the two numbers a user tunes most.
+    panel = _panel(qtbot, tmp_path)
+    panel.set_structure(api.StructureSpec(AIR, (_layer(), _periodic()), SI))
+    panel.resize(320, 400)
+    panel.show()
+    qtbot.waitExposed(panel)
+    tree = panel.findChild(QTreeWidget, "structureTree")
+
+    total = sum(tree.columnWidth(column) for column in range(tree.columnCount()))
+    assert total <= tree.viewport().width()
+    assert tree.horizontalScrollBar().maximum() == 0
+    # The name is what identifies a row, so it must not be the column that pays.
+    assert tree.columnWidth(0) >= tree.sizeHintForColumn(0)
+
+
 def test_add_layer_dialog_commits_explicit_nm_fields_through_direct_method(qtbot) -> None:
     from xrr_fitter.gui.structure.dialogs import LayerDialog
 

@@ -227,6 +227,35 @@ def test_dataset_tree_presents_compact_columns_with_details_label(
     assert panel.sha256_text("d")[:12] in details.text()
 
 
+def test_dataset_details_fields_each_stay_on_one_line(qtbot, tmp_path) -> None:
+    from math import asin, degrees
+
+    from xrr_fitter.gui.data.panel import DataPanel
+    from xrr_fitter.gui.document import ProjectDocument
+
+    # A named instrument with geometry footprint needs 434 px on one line, so in the
+    # ~320 px dock the field wrapped.  Chinese permits a break between any two
+    # characters, so the break landed mid-word and "分辨率 q" rendered as "分辨" over
+    # "率 q" - the unit split away from the quantity it belongs to.
+    instrument = api.InstrumentSpec(
+        instrument_id="Rigaku SmartLab",
+        footprint_mode="geometry",
+        sample_length_mm=10.0,
+        beam_width_mm=0.1,
+        footprint_spill_angle_deg=degrees(asin(0.1 / 10.0)),
+    )
+    project = api.add_dataset(api.new_project(), _write_curve(tmp_path / "d.xy"), instrument)
+    panel = DataPanel(ProjectDocument(project))
+    qtbot.addWidget(panel)
+
+    details = panel.findChild(QLabel, "datasetDetails")
+
+    # Narrowing the label to dock width must not buy it another line: one field
+    # that no longer fits has to be shortened, never broken across two lines.
+    assert details.heightForWidth(320) == details.heightForWidth(1200)
+    assert not details.wordWrap()
+
+
 def test_readiness_is_reported_once_across_status_bar_and_fit_panel(
     qtbot,
     tmp_path,
@@ -260,3 +289,162 @@ def test_readiness_is_reported_once_across_status_bar_and_fit_panel(
     bar_text = window.findChild(QLabel, "fitReadinessStatus").text()
     assert "就绪" in bar_text
     assert window.fit_panel.status_text() != bar_text
+
+
+def _fitted_window(qtbot, tmp_path, confidence, objective):
+    """A window whose one dataset already carries a persisted fit result."""
+    from dataclasses import replace
+
+    import numpy as np
+    from tests.support.model_cases import fit_candidate, fit_result
+
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.gui.main_window import MainWindow
+
+    project = api.add_dataset(
+        api.new_project(),
+        _write_curve(tmp_path / "q.xy"),
+        api.InstrumentSpec(),
+    )
+    structure = api.StructureSpec(
+        api.MaterialSpec("Air", None, None, 0.0j),
+        (api.LayerSpec("film", api.MaterialSpec("SiO2", "SiO2", 2.20), 40.0),),
+        api.MaterialSpec("Si", "Si", 2.329),
+    )
+    project = api.set_structure(project, "q", structure)
+    # The per-point arrays must match the curve written above, which the plot
+    # panel validates before it will project the result at all.
+    size = 64
+    candidate = replace(
+        fit_candidate("candidate-a", objective),
+        qz_a_inv=np.linspace(0.015, 0.25, size),
+        model_normalized=np.geomspace(0.9, 2e-5, size),
+        log_residuals_decades=np.full(size, 0.1),
+        weighted_residuals=np.zeros(size),
+    )
+    result = api.FitResult.from_search(
+        fit_result(candidate),
+        confidence=confidence,
+        uncertainty=None,
+        classification_evidence=(),
+    )
+    project = replace(project, datasets=(replace(project.datasets[0], last_valid_result=result),))
+    window = MainWindow(ProjectDocument(project))
+    qtbot.addWidget(window)
+    window.show()
+    return window
+
+
+def test_status_bar_reports_the_quality_of_the_fit_that_already_ran(qtbot, tmp_path) -> None:
+    """Readiness answers "can I start", never "was the last answer any good".
+
+    A finished fit whose confidence is 不可信 left the bar still reading 已就绪，
+    which is true about starting again and misleading about what is on screen.
+    The verdict and its objective therefore get their own label.
+    """
+    window = _fitted_window(qtbot, tmp_path, api.ConfidenceClass.UNTRUSTED, 12.5)
+
+    quality = window.findChild(QLabel, "fitQualityStatus")
+    assert quality is not None
+    assert "不可信" in quality.text()
+    assert "12.5" in quality.text()
+    # The readiness label keeps answering only its own question.
+    assert "就绪" in window.findChild(QLabel, "fitReadinessStatus").text()
+
+
+def test_quality_status_carries_the_semantic_kind_matching_its_verdict(qtbot, tmp_path) -> None:
+    """An untrusted result must not be painted in the same colour as a trusted one."""
+    untrusted = _fitted_window(qtbot, tmp_path / "a", api.ConfidenceClass.UNTRUSTED, 12.5)
+    trusted = _fitted_window(qtbot, tmp_path / "b", api.ConfidenceClass.TRUSTED, 0.02)
+
+    assert untrusted.findChild(QLabel, "fitQualityStatus").property("statusKind") == "error"
+    assert trusted.findChild(QLabel, "fitQualityStatus").property("statusKind") == "ok"
+
+
+def test_quality_status_stays_empty_until_a_fit_has_run(qtbot) -> None:
+    """With no result there is no verdict, so the label claims nothing."""
+    window = _window(qtbot)
+
+    assert window.findChild(QLabel, "fitQualityStatus").text() == ""
+
+
+# Each command that chrome surfaces twice, with the toolbar widget and the menu
+# entry that run the same callback.  The two objects are separate instances by
+# construction, so nothing but a shared icon registry keeps them looking alike.
+COMMAND_SURFACES = (
+    ("新建项目", "newProjectButton", "newProjectAction"),
+    ("打开项目", "openProjectButton", "openProjectAction"),
+    ("保存项目", "saveProjectButton", "saveProjectAction"),
+    ("项目另存为", "saveAsProjectButton", "saveAsProjectAction"),
+    ("重新加载数据源", "reloadSourceButton", "reloadSourceAction"),
+    ("重新链接数据源", "relinkSourceButton", "relinkSourceAction"),
+    ("导出结果", "exportResultsButton", "exportResultsAction"),
+)
+
+
+def _menu_action(window, object_name):
+    """The menu's action for a command, wherever chrome parked it."""
+    for action in window.actions():
+        if action.objectName() == object_name:
+            return action
+    action = window.chrome_actions.get(object_name)
+    assert action is not None, f"missing menu action: {object_name}"
+    return action
+
+
+def _icon_bytes(icon) -> bytes:
+    """The rendered glyph, so two icons compare by what the user sees."""
+    return bytes(icon.pixmap(16, 16).toImage().constBits())
+
+
+def test_each_command_wears_one_icon_in_the_toolbar_and_the_menu(qtbot) -> None:
+    """A command must look the same everywhere it is offered.
+
+    The toolbar drives the project commands through QPushButton while the menu
+    drives them through QAction, so "新建" was a labelled icon on the toolbar and
+    bare text in the menu - the user has to learn the command twice.  Hanging the
+    icon off the widget is what allows the two to drift; it belongs to the command.
+    """
+    window = _window(qtbot)
+
+    faults: list[str] = []
+    for label, button_name, action_name in COMMAND_SURFACES:
+        button = window.findChild(QPushButton, button_name)
+        assert button is not None, f"{label}: 缺少工具栏按钮 {button_name}"
+        action = _menu_action(window, action_name)
+        toolbar_bare = button.icon().isNull()
+        menu_bare = action.icon().isNull()
+        if toolbar_bare:
+            faults.append(f"{label}: 工具栏无图标")
+        if menu_bare:
+            faults.append(f"{label}: 菜单无图标")
+        if not toolbar_bare and not menu_bare and _icon_bytes(button.icon()) != _icon_bytes(action.icon()):
+            faults.append(f"{label}: 工具栏与菜单图标不一致")
+
+    assert faults == []
+
+
+def test_fit_commands_carry_their_icon_into_the_menu(qtbot) -> None:
+    """The fit commands are one QAction per command; keep it that way."""
+    window = _window(qtbot)
+
+    for object_name in ("startFitAction", "cancelFitAction"):
+        assert not _menu_action(window, object_name).icon().isNull(), object_name
+
+
+def test_no_two_commands_wear_the_same_icon(qtbot) -> None:
+    """A shared glyph makes two commands one, which is the opposite of the point."""
+    window = _window(qtbot)
+
+    seen: dict[bytes, str] = {}
+    for label, _button_name, action_name in (
+        *COMMAND_SURFACES,
+        ("一键拟合", "", "startFitAction"),
+        ("取消拟合", "", "cancelFitAction"),
+    ):
+        icon = _menu_action(window, action_name).icon()
+        if icon.isNull():
+            continue
+        glyph = _icon_bytes(icon)
+        assert glyph not in seen, f"{label} 与 {seen[glyph]} 用了同一个图标"
+        seen[glyph] = label

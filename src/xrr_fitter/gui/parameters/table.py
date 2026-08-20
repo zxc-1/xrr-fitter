@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from math import exp
 
 from PySide6.QtCore import QSignalBlocker, Qt
@@ -20,10 +21,13 @@ DISPLAY_SIGNIFICANT = 6
 # whole row back off screen, so without this the rounded text of the two cells
 # the user did not touch would be persisted in place of their exact values.
 EXACT_VALUE_ROLE = Qt.ItemDataRole.UserRole + 1
-# Per-column width policy.  Sizing every column to its contents left the two
-# widest columns fighting for the dock width and clipped 单位 and 锁定 outright;
-# the name and prior columns absorb the surplus instead, and the short columns
-# keep exactly the width their text needs.
+# Per-column width policy.  Sizing every column to its contents clipped 单位 and
+# 锁定 outright, so one column has to absorb the surplus dock width.  That column
+# is the name: it carries the longest text and is the one a user reads to tell
+# rows apart.  Letting 先验 stretch as well split the surplus evenly between them,
+# and since most projects configure no priors at all, a blank column then held
+# half the width while the names elided to stubs -- 幂律背景幅值 B₂ and
+# 幂律背景指数 p both rendered as "幂律背..." and became indistinguishable.
 COLUMN_RESIZE_MODES = (
     QHeaderView.ResizeMode.Stretch,
     QHeaderView.ResizeMode.ResizeToContents,
@@ -31,11 +35,34 @@ COLUMN_RESIZE_MODES = (
     QHeaderView.ResizeMode.ResizeToContents,
     QHeaderView.ResizeMode.ResizeToContents,
     QHeaderView.ResizeMode.ResizeToContents,
-    QHeaderView.ResizeMode.Stretch,
+    QHeaderView.ResizeMode.Interactive,
 )
+PRIOR_COLUMN = 6
+# Ceiling on the prior column's share of the viewport.  A configured prior such as
+# soft_range([0.1, 0.9], σ=0.05) is wider than any name, so sizing that column to
+# its contents let it take the width the names need; the summary that no longer
+# fits stays reachable through the cell's tooltip.
+PRIOR_MAX_WIDTH_FRACTION = 0.3
 # Shown on the lock cell of a constraint-driven row, where the checkbox is a
 # read-only indicator rather than a user toggle.
 CONSTRAINT_DRIVEN_TOOLTIP = "该参数由表达式约束驱动，数值不可手动编辑"
+
+# Declarations already arrive clustered by owner -- every parameter of one layer is
+# adjacent, then the next layer, then the backing, then the instrument -- but
+# seventeen identically styled adjacent rows hid that structure completely, and ten
+# of those seventeen belong to the instrument rather than to the sample.  A caption
+# row opens each cluster so a user can tell which layer a 厚度 row belongs to
+# without hovering it.  Grouping by ``category`` instead would scatter one layer's
+# thickness, density and roughness across three distant blocks, which reads worse
+# than the flat table it replaced.
+BACKING_CAPTION = "基底"
+INSTRUMENT_CAPTION = "仪器"
+# A caption is identified by carrying no parameter name in UserRole, so nothing
+# else may be stored there; the group key lives in its own role.
+GROUP_KEY_ROLE = Qt.ItemDataRole.UserRole + 2
+# Placeholder held by ``row_names`` where a caption sits, so a caller locating a
+# row by name still gets the physical row index back.
+CAPTION_ROW_NAME = ""
 
 
 def _uses_nm(definition: api.ParameterDefinition) -> bool:
@@ -78,6 +105,57 @@ def _prior_summary(definition: api.ParameterDefinition) -> str:
     return f"{prior.kind}({_prior_body(prior, _prior_display_scale(definition))})"
 
 
+def _group_key(definition: api.ParameterDefinition) -> str:
+    """Identify the layer, the backing or the instrument owning a declaration.
+
+    Component parameters are keyed on ``component.{index}`` rather than on the
+    leading segment alone, so a periodic block's per-layer and per-repeat rows stay
+    with the block that produced them.
+    """
+    head, _, _ = definition.name.partition(".")
+    if head != "component":
+        return head
+    return ".".join(definition.name.split(".")[:2])
+
+
+def _caption_text(key: str, captions: Mapping[str, str]) -> str:
+    """Name a group the way the structure editor names it.
+
+    A component's caption cannot be recovered from its rows: a periodic block named
+    ML contributes rows reading "W 厚度" and "Si 厚度", which share no token with
+    the block.  The owner therefore supplies the component names and the key is
+    only a fallback for callers that hold no structure.
+    """
+    if key == "instrument":
+        return INSTRUMENT_CAPTION
+    if key == "backing":
+        return BACKING_CAPTION
+    return captions.get(key, key)
+
+
+def _row_layout(
+    definitions: tuple[api.ParameterDefinition, ...],
+    captions: Mapping[str, str],
+) -> tuple[tuple[str, api.ParameterDefinition | None], ...]:
+    """Interleave group captions with the declarations they introduce.
+
+    A caption naming the only group present separates nothing, so a table holding
+    one group is left exactly as it was before grouping existed.
+    """
+    keys = tuple(dict.fromkeys(_group_key(definition) for definition in definitions))
+    if len(keys) < 2:
+        return tuple((_group_key(value), value) for value in definitions)
+    rows: list[tuple[str, api.ParameterDefinition | None]] = []
+    current: str | None = None
+    for definition in definitions:
+        key = _group_key(definition)
+        if key != current:
+            rows.append((key, None))
+            current = key
+        rows.append((key, definition))
+    return tuple(rows)
+
+
 class ParameterTable(QTableWidget):
     """Render immutable declarations without owning persisted settings."""
 
@@ -90,6 +168,7 @@ class ParameterTable(QTableWidget):
         for column, mode in enumerate(COLUMN_RESIZE_MODES):
             header.setSectionResizeMode(column, mode)
         self._definitions: tuple[api.ParameterDefinition, ...] = ()
+        self._rows: tuple[tuple[str, api.ParameterDefinition | None], ...] = ()
 
     @property
     def definitions(self) -> tuple[api.ParameterDefinition, ...]:
@@ -97,22 +176,56 @@ class ParameterTable(QTableWidget):
 
     @property
     def row_names(self) -> tuple[str, ...]:
-        return tuple(definition.name for definition in self._definitions)
+        """Name per physical row, so a caption keeps the indices behind it honest.
+
+        Callers locate a row with ``row_names.index(name)`` and then address cells
+        by that index, so the sequence has to stay aligned with the table rather
+        than with the declarations; a caption contributes ``CAPTION_ROW_NAME``.
+        """
+        return tuple(CAPTION_ROW_NAME if value is None else value.name for _key, value in self._rows)
 
     def load(
         self,
         definitions: tuple[api.ParameterDefinition, ...],
         *,
         expert_mode: bool,
+        captions: Mapping[str, str] | None = None,
     ) -> None:
         visible = tuple(definition for definition in definitions if expert_mode or not definition.expert_only)
+        names = {} if captions is None else captions
+        rows = _row_layout(visible, names)
         blocker = QSignalBlocker(self)
         self.clearContents()
-        self.setRowCount(len(visible))
+        self.setRowCount(len(rows))
         self._definitions = visible
-        for row, definition in enumerate(visible):
-            self._render_row(row, definition)
+        self._rows = rows
+        for row, (key, definition) in enumerate(rows):
+            if definition is None:
+                self._render_caption(row, key, names)
+            else:
+                self._render_row(row, definition)
         del blocker
+        self._apply_prior_width()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._apply_prior_width()
+
+    def _apply_prior_width(self) -> None:
+        """Give the prior column only what its summaries need, capped by the share.
+
+        An empty column still reports a non-zero size hint, so the decision is made
+        from the declarations rather than from pixels: with no prior configured the
+        column collapses and the names take the whole surplus.
+        """
+        available = self.viewport().width()
+        if available <= 0:
+            return
+        if not any(definition.prior is not None for definition in self._definitions):
+            self.setColumnWidth(PRIOR_COLUMN, 0)
+            return
+        cap = int(available * PRIOR_MAX_WIDTH_FRACTION)
+        self.setColumnWidth(PRIOR_COLUMN, min(self.sizeHintForColumn(PRIOR_COLUMN), cap))
 
     def clear_parameters(self) -> None:
         self.load((), expert_mode=False)
@@ -155,6 +268,23 @@ class ParameterTable(QTableWidget):
         definition = self.definition(name)
         scale = 10.0 if _uses_nm(definition) else 1.0
         return initial * scale, lower * scale, upper * scale
+
+    def _render_caption(self, row: int, key: str, captions: Mapping[str, str]) -> None:
+        """Open a group with a bold, inert row naming its owner.
+
+        Only the name column is populated: leaving the numeric columns empty keeps
+        the commit path from ever reading a caption as a parameter row, since
+        ``_read_row`` rejects an incomplete row.  The row is unselectable so
+        keyboard navigation lands on parameters only, and it holds no name in
+        UserRole, which is what distinguishes it from a declaration.
+        """
+        item = QTableWidgetItem(_caption_text(key, captions))
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        item.setData(GROUP_KEY_ROLE, key)
+        font = item.font()
+        font.setBold(True)
+        item.setFont(font)
+        self.setItem(row, 0, item)
 
     def _render_row(self, row: int, definition: api.ParameterDefinition) -> None:
         numbers = self._display_values(definition)
@@ -226,6 +356,11 @@ def _lock_item(definition: api.ParameterDefinition) -> QTableWidgetItem:
 
 
 def _prior_item(definition: api.ParameterDefinition) -> QTableWidgetItem:
-    item = QTableWidgetItem(_prior_summary(definition))
+    summary = _prior_summary(definition)
+    item = QTableWidgetItem(summary)
     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+    if summary:
+        # The column is capped so the names stay readable, which elides the longer
+        # summaries; the tooltip keeps the full text reachable.
+        item.setToolTip(summary)
     return item

@@ -651,7 +651,7 @@ class PlotPanel(QWidget):
                 angles,
                 values,
                 "-",
-                color="#009E73",
+                color=theme.DATA_PREVIEW,
                 linewidth=1.4,
                 label="搜索中模型",
             )[0]
@@ -764,7 +764,7 @@ class PlotPanel(QWidget):
         if visible_range is None:
             return
         for key in ("raw", "log"):
-            views[key].axes.axvspan(*visible_range, color="#E69F00", alpha=0.16, label="拟合范围")
+            views[key].axes.axvspan(*visible_range, color=theme.DATA_RANGE, alpha=0.16, label="拟合范围")
             views[key].canvas.draw_idle()
 
     def release_resources(self) -> None:

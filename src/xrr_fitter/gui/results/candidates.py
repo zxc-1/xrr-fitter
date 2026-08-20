@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from math import isfinite
 
-from PySide6.QtCore import QSignalBlocker, Qt, Signal
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtWidgets import QListWidget, QListWidgetItem, QWidget
+
+# An empty scrolling view reports a fixed 192px height regardless of content, and
+# three of those stacked in the result dock overflowed it while showing nothing.
+# The list asks for the rows it actually holds, floored so a short list still
+# reads as a list and capped so a long one yields to its own scrollbar.
+VISIBLE_ROW_FLOOR = 3
+VISIBLE_ROW_CEILING = 8
 
 
 def candidate_is_selectable(candidate: object) -> bool:
@@ -69,22 +76,14 @@ def candidate_line(candidate: object, *, selected: bool, recommended: bool) -> s
 def active_dataset(project: object) -> object | None:
     dataset_id = project.ui_state.active_dataset_id
     return next(
-        (
-            dataset
-            for dataset in project.datasets
-            if dataset.dataset_id == dataset_id
-        ),
+        (dataset for dataset in project.datasets if dataset.dataset_id == dataset_id),
         None,
     )
 
 
 def persisted_candidate_id(project: object, dataset_id: str) -> str | None:
     return next(
-        (
-            candidate_id
-            for owner, candidate_id in project.ui_state.selected_candidate_ids
-            if owner == dataset_id
-        ),
+        (candidate_id for owner, candidate_id in project.ui_state.selected_candidate_ids if owner == dataset_id),
         None,
     )
 
@@ -107,6 +106,15 @@ class CandidateList(QListWidget):
         self.setToolTip("用方向键或点击切换候选解；证据面板随当前行更新")
         self.setWordWrap(True)
         self.currentItemChanged.connect(self._current_item_changed)
+
+    def sizeHint(self) -> QSize:
+        """Ask for the rows actually held, between the floor and the ceiling."""
+        width = super().sizeHint().width()
+        row_height = self.sizeHintForRow(0)
+        if row_height <= 0:
+            row_height = self.fontMetrics().lineSpacing()
+        rows = min(max(self.count(), VISIBLE_ROW_FLOOR), VISIBLE_ROW_CEILING)
+        return QSize(width, rows * row_height + 2 * self.frameWidth())
 
     @property
     def result(self) -> object | None:
@@ -158,11 +166,7 @@ class CandidateList(QListWidget):
         if candidate_id is None or self._result is None:
             return None
         return next(
-            (
-                candidate
-                for candidate in self._result.candidates
-                if candidate.candidate_id == candidate_id
-            ),
+            (candidate for candidate in self._result.candidates if candidate.candidate_id == candidate_id),
             None,
         )
 
@@ -228,6 +232,4 @@ class CandidateList(QListWidget):
         _previous: QListWidgetItem | None,
     ) -> None:
         if current is not None:
-            self.candidate_requested.emit(
-                str(current.data(Qt.ItemDataRole.UserRole))
-            )
+            self.candidate_requested.emit(str(current.data(Qt.ItemDataRole.UserRole)))

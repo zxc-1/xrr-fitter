@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ROOT_TREE = {
@@ -33,7 +32,11 @@ def test_repository_has_one_parentless_r23_root_commit() -> None:
     assert history
     for commit in history:
         _git("merge-base", "--is-ancestor", root, commit)
-    assert (ROOT / ".git").is_dir() and not (ROOT / ".git").is_symlink()
+    # A linked worktree stores .git as a gitdir pointer file rather than a
+    # directory, so accept either shape; the guard that matters is rejecting a
+    # symlink that could redirect _git() above at some other repository. The
+    # history assertions already proved this tree's git is the sole R23 root.
+    assert (ROOT / ".git").exists() and not (ROOT / ".git").is_symlink()
 
 
 def test_legacy_layout_is_absent_from_filesystem_and_history() -> None:

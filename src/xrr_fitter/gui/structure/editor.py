@@ -8,9 +8,9 @@ from dataclasses import replace
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QPushButton,
-    QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -18,11 +18,31 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.sizing import ContentSizedTree
 from xrr_fitter.gui.structure.dialogs import BackingDialog, LayerDialog, PeriodicDialog
+from xrr_fitter.gui.structure.stack import StackView
 
 CommitStructure = Callable[[api.StructureSpec], object]
 OxideAction = Callable[[], object]
-TREE_HEADERS = ("名称", "材料", "密度", "厚度 (nm)", "粗糙度 (nm)", "重复")
+TREE_HEADERS = ("名称", "材料", "密度", "厚度", "粗糙度", "重复")
+
+# Both numeric columns carry nm.  Spelling the unit into the header cost 66 px of
+# a ~318 px dock and pushed 粗糙度 and 重复 behind a horizontal scrollbar; the unit
+# now lives in the header tooltip, where it stays available without taking width.
+TREE_HEADER_TOOLTIPS = {3: "厚度 (nm)", 4: "粗糙度 (nm)"}
+
+# Sizing every column to its contents leaves the surplus width unassigned, so the
+# name column absorbs it: names are the longest text and the field a user reads to
+# tell rows apart.  The last section must stop stretching for this to hold,
+# otherwise 重复 keeps Qt's default 100 px regardless of its resize mode.
+TREE_COLUMN_RESIZE_MODES = (
+    QHeaderView.ResizeMode.Stretch,
+    QHeaderView.ResizeMode.ResizeToContents,
+    QHeaderView.ResizeMode.ResizeToContents,
+    QHeaderView.ResizeMode.ResizeToContents,
+    QHeaderView.ResizeMode.ResizeToContents,
+    QHeaderView.ResizeMode.ResizeToContents,
+)
 
 # The tree annotates a drifting block in its tooltip rather than adding a
 # column, so these mirror the dialog's Chinese labels for kind and target.
@@ -95,12 +115,21 @@ class StructureEditor(QWidget):
         self.clear()
 
     def _build_widgets(self) -> None:
-        self.tree = QTreeWidget()
+        self.tree = ContentSizedTree()
         self.tree.setObjectName("structureTree")
         self.tree.setHeaderLabels(TREE_HEADERS)
+        header = self.tree.header()
+        header.setStretchLastSection(False)
+        for column, mode in enumerate(TREE_COLUMN_RESIZE_MODES):
+            header.setSectionResizeMode(column, mode)
+        for column, tooltip in TREE_HEADER_TOOLTIPS.items():
+            self.tree.headerItem().setToolTip(column, tooltip)
         self.tree.setAlternatingRowColors(True)
         self.tree.setUniformRowHeights(True)
+        self.stack = StackView()
         self.tree.currentItemChanged.connect(self._refresh_action_state)
+        self.tree.currentItemChanged.connect(self._sync_stack_selection)
+        self.stack.component_selected.connect(self._select_component)
         self.add_layer_button = self._button("添加普通层", "addLayerButton")
         self.add_periodic_button = self._button("添加周期块", "addPeriodicBlockButton")
         self.edit_backing_button = self._button("编辑基底", "editBackingButton")
@@ -138,6 +167,7 @@ class StructureEditor(QWidget):
         layout.addLayout(add_row)
         layout.addLayout(edit_row)
         layout.addLayout(oxide_row)
+        layout.addWidget(self.stack)
         layout.addWidget(self.tree)
         layout.addWidget(self.error_label)
 
@@ -171,6 +201,7 @@ class StructureEditor(QWidget):
         self._decisions = tuple(decisions)
         self.error_label.hide()
         self._render()
+        self.stack.load(structure)
         self._refresh_oxide()
 
     def clear(self) -> None:
@@ -178,6 +209,7 @@ class StructureEditor(QWidget):
         self._decisions = ()
         self._suggestion = None
         self.tree.clear()
+        self.stack.clear()
         for button in (
             self.add_layer_button,
             self.add_periodic_button,
@@ -304,6 +336,22 @@ class StructureEditor(QWidget):
             return None
         value = item.data(0, Qt.ItemDataRole.UserRole)
         return value if isinstance(value, int) else None
+
+    def _sync_stack_selection(self, *_args) -> None:
+        """Mirror the tree's current row into the diagram."""
+        self.stack.set_selected_index(self._selected_index())
+
+    def _select_component(self, index: int) -> None:
+        """Make the clicked band the tree's current row.
+
+        The buttons act on the tree's current row, so a click that highlighted only
+        the diagram would leave 删除 pointing at whatever was selected before.
+        """
+        for position in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(position)
+            if item.data(0, Qt.ItemDataRole.UserRole) == index:
+                self.tree.setCurrentItem(item)
+                return
 
     def _refresh_action_state(self, *_args) -> None:
         index = self._selected_index()

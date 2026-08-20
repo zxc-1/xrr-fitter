@@ -16,12 +16,12 @@ from PySide6.QtWidgets import (
     QMenuBar,
     QMessageBox,
     QStatusBar,
-    QStyle,
     QToolBar,
     QWidget,
 )
 
 from xrr_fitter.gui import messages, theme
+from xrr_fitter.gui.command_icons import command_icon
 from xrr_fitter.gui.plots.diagnostics import TAB_SPECS
 
 # The SLD profile is no longer a selectable view; it is a permanent companion
@@ -35,13 +35,15 @@ VIEW_GROUPS = (
     ("诊断", ("candidates", "residual_map", "parameter_map", "uncertainty", "trend")),
 )
 
-BUTTON_ICONS = (
-    ("newProjectButton", QStyle.StandardPixmap.SP_FileIcon),
-    ("openProjectButton", QStyle.StandardPixmap.SP_DirOpenIcon),
-    ("saveProjectButton", QStyle.StandardPixmap.SP_DialogSaveButton),
-    ("reloadSourceButton", QStyle.StandardPixmap.SP_BrowserReload),
-    ("relinkSourceButton", QStyle.StandardPixmap.SP_FileLinkIcon),
-)
+# Semantic status colour per confidence class. 可用但相关 is deliberately not "ok":
+# the numbers are usable but the correlation is something to know about before
+# quoting them, so it warns rather than reassures.
+QUALITY_STATUS_KINDS = {
+    "可信": "ok",
+    "可用但相关": "warn",
+    "多解": "warn",
+    "不可信": "error",
+}
 
 ABOUT_TEXT = (
     "XRR Fitter\n\n"
@@ -66,12 +68,17 @@ def _action(
     callback,
     *,
     checkable: bool = False,
+    command: str | None = None,
 ) -> QAction:
     action = QAction(text, window)
     action.setObjectName(object_name)
     action.setToolTip(text)
     action.setStatusTip(text)
     action.setCheckable(checkable)
+    # The icon follows the command's identity, so this menu action renders the
+    # same glyph as any toolbar twin that names the same callback.
+    if command is not None:
+        action.setIcon(command_icon(command))
     if checkable:
         action.toggled.connect(callback)
     else:
@@ -94,18 +101,12 @@ def _install_toolbar(window: QWidget) -> None:
     toolbar.setMovable(False)
     toolbar.setFloatable(False)
     toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-    style = window.style()
-    for name, pixmap in BUTTON_ICONS:
-        button = window.project_actions.button(name)
-        button.setIcon(style.standardIcon(pixmap))
+    # Buttons and actions already carry their command icon from creation, so the
+    # toolbar only lays them out; it no longer re-applies glyphs of its own.
     toolbar.addWidget(window.project_actions)
     toolbar.addSeparator()
-    start = _window_action(window, "startFitAction")
-    cancel = _window_action(window, "cancelFitAction")
-    start.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-    cancel.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_BrowserStop))
-    toolbar.addAction(start)
-    toolbar.addAction(cancel)
+    toolbar.addAction(_window_action(window, "startFitAction"))
+    toolbar.addAction(_window_action(window, "cancelFitAction"))
     # Export sits directly after the fit commands.  An expanding spacer used to
     # push it to the far right edge, which left the middle of the toolbar empty
     # and put the button furthest from the actions that produce what it exports.
@@ -138,17 +139,19 @@ def _install_file_menu(window: QWidget, bar: QMenuBar) -> None:
             "importFilesMenuAction",
             "导入数据文件…",
             window.data_panel.import_files_button.click,
+            "import_files",
         ),
         (
             "importFolderMenuAction",
             "导入数据文件夹…",
             window.data_panel.import_folder_button.click,
+            "import_folder",
         ),
-        ("reloadSourceAction", "重新加载数据源", window.reload_source_dialog),
-        ("relinkSourceAction", "重新链接数据源…", window.relink_source_dialog),
+        ("reloadSourceAction", "重新加载数据源", window.reload_source_dialog, "reload_source_dialog"),
+        ("relinkSourceAction", "重新链接数据源…", window.relink_source_dialog, "relink_source_dialog"),
     )
-    for object_name, text, callback in specs:
-        action = _action(window, object_name, text, callback)
+    for object_name, text, callback, command in specs:
+        action = _action(window, object_name, text, callback, command=command)
         window.chrome_actions[object_name] = action
         menu.addAction(action)
         if object_name in ("importFolderMenuAction", "relinkSourceAction"):
@@ -248,6 +251,7 @@ def _install_fit_menu(window: QWidget, bar: QMenuBar) -> None:
         "forceStopFitAction",
         "强制停止拟合",
         window.fit_panel.controller.force_stop,
+        command="force_stop",
     )
     force.setEnabled(cancel.isEnabled())
     cancel.changed.connect(lambda: force.setEnabled(cancel.isEnabled()))
@@ -278,8 +282,13 @@ def _install_status_bar(window: QWidget) -> None:
     readiness.setObjectName("fitReadinessStatus")
     dataset = QLabel(bar)
     dataset.setObjectName("activeDatasetStatus")
+    # Readiness only answers "can a fit start". A finished run's verdict is a
+    # separate question and gets its own label so neither overwrites the other.
+    quality = QLabel(bar)
+    quality.setObjectName("fitQualityStatus")
     source = window.project_actions.source_status_label
     bar.addWidget(readiness, 1)
+    bar.addPermanentWidget(quality)
     bar.addPermanentWidget(dataset)
     bar.addPermanentWidget(source)
     window.setStatusBar(bar)
@@ -311,6 +320,31 @@ def _active_dataset_text(window: QWidget) -> str:
     return f"数据集：{dataset.display_name or dataset.dataset_id}"
 
 
+def _fit_quality(window: QWidget) -> tuple[str, str]:
+    """Report the active dataset's finished verdict as text and semantic kind.
+
+    Readiness stays true about starting another fit even when the run that just
+    finished is 不可信, so the bar would otherwise read as reassuring about a
+    result it says nothing about.
+    """
+    dataset_id = window.document.active_dataset_id
+    if dataset_id is None:
+        return "", ""
+    dataset = next(
+        (value for value in window.document.project.datasets if value.dataset_id == dataset_id),
+        None,
+    )
+    result = None if dataset is None else dataset.last_valid_result
+    if result is None:
+        return "", ""
+    verdict = str(result.confidence.value)
+    parts = [f"拟合结果：{verdict}"]
+    best = result.best_candidate
+    if best is not None:
+        parts.append(f"J={best.objective:g}")
+    return " · ".join(parts), QUALITY_STATUS_KINDS.get(verdict, "warn")
+
+
 def refresh_status(window: QWidget, readiness: object) -> None:
     """Project readiness, active dataset, and source-action enablement."""
     label = window.findChild(QLabel, "fitReadinessStatus")
@@ -318,6 +352,10 @@ def refresh_status(window: QWidget, readiness: object) -> None:
         return
     label.setText(messages.readiness_text(readiness.message))
     theme.set_status_kind(label, "ok" if readiness.ready else "warn")
+    quality_label = window.findChild(QLabel, "fitQualityStatus")
+    quality_text, quality_kind = _fit_quality(window)
+    quality_label.setText(quality_text)
+    theme.set_status_kind(quality_label, quality_kind)
     dataset_label = window.findChild(QLabel, "activeDatasetStatus")
     dataset_label.setText(_active_dataset_text(window))
     has_active = window.document.active_dataset_id is not None

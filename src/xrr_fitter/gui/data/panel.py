@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -35,6 +34,7 @@ from xrr_fitter.gui.data.import_dialog import ImportDialog
 from xrr_fitter.gui.data.mask_editor import MaskEditor
 from xrr_fitter.gui.data.substrate_dialog import SubstrateDialog
 from xrr_fitter.gui.document import ProjectDocument
+from xrr_fitter.gui.sizing import ContentSizedTree
 
 DATA_FILTER = "XRR 数据 (*.xy *.dat *.txt);;所有文件 (*)"
 SUPPORTED_SUFFIXES = {".xy", ".dat", ".txt"}
@@ -77,6 +77,9 @@ class DataPanel(QWidget):
         self.setObjectName("dataPanel")
         self.setAccessibleName("数据与掩膜")
         self._force_preset_dialog = False
+        # Untruncated detail fields, kept so a resize can re-elide them to the new
+        # width without re-deriving them from the project.
+        self._detail_fields: tuple[str, ...] = ()
         self._build_controls()
         self._mask_editor = MaskEditor(document, self)
         self._mask_editor.mask_changed.connect(self.mask_changed.emit)
@@ -112,7 +115,7 @@ class DataPanel(QWidget):
         )
         self.import_files_shortcut.activated.connect(self._import_files)
         self.import_folder_shortcut.activated.connect(self._import_folder)
-        self.tree = QTreeWidget()
+        self.tree = ContentSizedTree()
         self.tree.setObjectName("datasetTree")
         self.tree.setAccessibleName("数据集列表")
         self.tree.setColumnCount(len(TREE_HEADERS))
@@ -131,7 +134,6 @@ class DataPanel(QWidget):
         self.details_label = QLabel()
         self.details_label.setObjectName("datasetDetails")
         self.details_label.setProperty("mutedText", True)
-        self.details_label.setWordWrap(True)
         self.details_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.details_label.hide()
         self.failure_table = QTableWidget(0, 3)
@@ -430,22 +432,47 @@ class DataPanel(QWidget):
         if dataset_id is None or not any(
             dataset.dataset_id == dataset_id for dataset in self.document.project.datasets
         ):
+            self._detail_fields = ()
             self.details_label.clear()
             self.details_label.hide()
             return
         dataset = self._dataset(dataset_id)
+        self._detail_fields = (
+            f"源文件：{Path(dataset.source_path).name}",
+            f"光路：{self.beam_text(dataset_id)}",
+            f"仪器：{self.instrument_text(dataset_id)}",
+            f"状态：{self.status_text(dataset_id)} · SHA-256 {dataset.source_sha256[:12]}…",
+        )
+        self._elide_details()
+        self.details_label.setToolTip(
+            "\n".join((*self._detail_fields, str(dataset.source_path), f"SHA-256：{dataset.source_sha256}"))
+        )
+        self.details_label.show()
+
+    def _elide_details(self) -> None:
+        """Keep one field per line, shortening the text instead of wrapping it.
+
+        A geometry footprint makes the 仪器 field about 430 px wide against a dock
+        near 320 px.  Wrapping broke it, and because a line may break between any
+        two CJK characters the break fell inside 分辨率 q, detaching the unit from
+        the quantity.  Eliding keeps each field on its own line and holds the block
+        at four lines; the tooltip carries the untruncated text.
+        """
+        if not self._detail_fields:
+            return
+        metrics = self.details_label.fontMetrics()
+        available = self.details_label.width()
         self.details_label.setText(
             "\n".join(
-                (
-                    f"源文件：{Path(dataset.source_path).name}",
-                    f"光路：{self.beam_text(dataset_id)}",
-                    f"仪器：{self.instrument_text(dataset_id)}",
-                    f"状态：{self.status_text(dataset_id)} · SHA-256 {dataset.source_sha256[:12]}…",
-                )
+                metrics.elidedText(field, Qt.TextElideMode.ElideRight, available) for field in self._detail_fields
             )
         )
-        self.details_label.setToolTip(f"{dataset.source_path}\nSHA-256：{dataset.source_sha256}")
-        self.details_label.show()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        # Elision is measured against the label's width, so a widened dock has to
+        # recompute it or the fields stay cut at the narrower size.
+        self._elide_details()
 
     def _tree_item(self, dataset: api.DatasetProject) -> QTreeWidgetItem:
         marker = self.status_marker(dataset.dataset_id)

@@ -9,6 +9,7 @@ import numpy as np
 from matplotlib.ticker import LogFormatter
 
 import xrr_fitter.api as api
+from xrr_fitter.gui import theme
 from xrr_fitter.gui.plots.diagnostics import (
     DiagnosticView,
     current_plot_palette,
@@ -139,6 +140,33 @@ def prepare_project_plots(project: api.XrrProject) -> PreparedProjectPlots:
     )
 
 
+def _quality_caption(axes: object, candidate: object | None) -> None:
+    """Annotate how well the drawn candidate agrees with the data.
+
+    Two overlaid curves on a log axis look close whatever their disagreement, so
+    the axes state the objective the search minimised together with the mean
+    absolute log-decade miss, which reads as "off by this many decades on
+    average" and is the same quantity the exported residual plot labels.
+    """
+    if candidate is None:
+        return
+    residuals = np.asarray(candidate.log_residuals_decades, dtype=float)
+    finite = residuals[np.isfinite(residuals)]
+    parts = [f"J={candidate.objective:.4g}"]
+    if finite.size:
+        parts.append(f"平均残差 {np.mean(np.abs(finite)):.3g} decade")
+    axes.text(
+        0.99,
+        0.02,
+        " · ".join(parts),
+        ha="right",
+        va="bottom",
+        transform=axes.transAxes,
+        color=current_plot_palette().muted,
+        fontsize=theme.FONT_PT_SM,
+    )
+
+
 def draw_raw(
     view: DiagnosticView,
     data: api.PreparedData,
@@ -157,8 +185,8 @@ def draw_raw(
         raw[included],
         linestyle="none",
         marker="o",
-        color="#0072B2",
-        markerfacecolor="#0072B2",
+        color=theme.DATA_OBSERVED,
+        markerfacecolor=theme.DATA_OBSERVED,
         label="拟合点",
     )
     axes.plot(
@@ -178,11 +206,12 @@ def draw_raw(
             angles,
             np.asarray(candidate.model_normalized) * data.normalization,
             "--",
-            color="#D55E00",
+            color=theme.DATA_CANDIDATE,
             label="当前候选模型",
         )
     axes.set(title="原始数据与模型", xlabel="2θ (deg)", ylabel="原始强度")
     axes.legend()
+    _quality_caption(axes, candidate)
     finish_view(view)
 
 
@@ -195,10 +224,10 @@ def draw_log(
     axes.clear()
     angles = np.asarray(data.two_theta_deg, dtype=float)
     observed = np.maximum(np.asarray(data.intensity_normalized, dtype=float), data.r_floor)
-    axes.plot(angles, observed, "o", color="#0072B2", label="归一化数据")
+    axes.plot(angles, observed, "o", color=theme.DATA_OBSERVED, label="归一化数据")
     if candidate is not None:
         model = np.maximum(np.asarray(candidate.model_normalized, dtype=float), data.r_floor)
-        axes.plot(angles, model, "--", color="#D55E00", label="当前候选模型")
+        axes.plot(angles, model, "--", color=theme.DATA_CANDIDATE, label="当前候选模型")
     axes.set(
         title="对数反射率",
         xlabel="2θ (deg)",
@@ -207,6 +236,7 @@ def draw_log(
     )
     axes.yaxis.set_major_formatter(LogFormatter())
     axes.legend()
+    _quality_caption(axes, candidate)
     finish_view(view)
 
 
