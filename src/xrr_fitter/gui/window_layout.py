@@ -10,14 +10,11 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QStackedWidget,
-    QToolButton,
-    QVBoxLayout,
     QWidget,
 )
 
-from xrr_fitter.gui import theme
+from xrr_fitter.gui.command_icons import command_icon
 from xrr_fitter.gui.data.panel import DataPanel
 from xrr_fitter.gui.fitting.panel import FitPanel
 from xrr_fitter.gui.guidance.panel import GuidancePanel
@@ -32,58 +29,6 @@ WORKFLOW_ACTION_SPECS = (
     ("cancelFitAction", "取消拟合", "Esc", "cancel_fit"),
     ("exportResultsAction", "导出结果", "Ctrl+Shift+E", "export_results_dialog"),
 )
-
-
-class AnalysisSection(QFrame):
-    """A titled analysis card whose header toggles its body.
-
-    Three permanently expanded cards overflowed the analysis column at the
-    documented minimum window size, leaving the lower ones reachable only by
-    scrolling. Collapsing is per section rather than mutually exclusive, because
-    reading fit progress against the parameter table needs two open at once.
-    """
-
-    def __init__(self, title: str, name: str, inner: QWidget) -> None:
-        super().__init__()
-        self.setObjectName(name)
-        self.setProperty("sectionCard", True)
-        self.body = inner
-        self.toggle = QToolButton()
-        self.toggle.setObjectName(f"{name}Header")
-        self.toggle.setText(title)
-        self.toggle.setCheckable(True)
-        self.toggle.setChecked(True)
-        self.toggle.setAccessibleName(f"{title}分区")
-        self.toggle.setToolTip(f"展开或折叠{title}分区")
-        self.toggle.setProperty("sectionHeader", True)
-        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.toggle.setArrowType(Qt.ArrowType.DownArrow)
-        self.toggle.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Fixed,
-        )
-        self.toggle.toggled.connect(self.set_expanded)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(
-            theme.SPACE_SM,
-            theme.SPACE_SM,
-            theme.SPACE_SM,
-            theme.SPACE_SM,
-        )
-        layout.setSpacing(theme.SPACE_SM)
-        layout.addWidget(self.toggle)
-        layout.addWidget(inner)
-
-    def is_expanded(self) -> bool:
-        return self.toggle.isChecked()
-
-    def set_expanded(self, expanded: bool) -> None:
-        """Show or hide the body, keeping the header reachable either way."""
-        if self.toggle.isChecked() != expanded:
-            self.toggle.setChecked(expanded)
-            return
-        self.body.setVisible(expanded)
-        self.toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
 
 
 DOCK_SPECS = (
@@ -127,21 +72,6 @@ def _scrolled(name: str, inner: QWidget) -> QScrollArea:
     return scroll
 
 
-def _build_analysis_sections(window: object) -> None:
-    """Create the collapsible analysis cards each analysis dock will hold."""
-    specs = (
-        ("参数", "parametersSection", window.parameters_panel),
-        ("拟合", "fitSection", window.fit_panel),
-        ("结果", "resultsSection", window.result_panel),
-    )
-    window.analysis_sections = {name: AnalysisSection(title, name, panel) for title, name, panel in specs}
-    # The result card carries the candidate list, uncertainty evidence, and
-    # automatic tables, which together exceed a dock's height at the documented
-    # minimum size. A fresh project has no result to read, so it starts collapsed
-    # and the user expands it once a fit has produced something.
-    window.analysis_sections["resultsSection"].set_expanded(False)
-
-
 def _guidance_actions(window: object) -> dict:
     """Bind each guided step's action to the panel that already performs it.
 
@@ -168,16 +98,14 @@ def install_workspace(window: object, document: object) -> None:
     window.export_button.setObjectName("exportResultsButton")
     window.export_button.setAccessibleName("导出拟合结果")
     window.export_button.setToolTip("将当前项目的拟合结果导出到所选目录")
+    window.export_button.setIcon(command_icon("export_results_dialog"))
     window.export_button.clicked.connect(window.export_results_dialog)
-    # Each analysis panel keeps its collapsible card so a dock holding several of
-    # them still fits; the cards are split across dedicated docks here.
-    _build_analysis_sections(window)
     widgets = {
         "dataDock": window.data_panel,
         "structureDock": window.structure_panel,
-        "parametersDock": window.analysis_sections["parametersSection"],
-        "fitDock": window.analysis_sections["fitSection"],
-        "resultsDock": window.analysis_sections["resultsSection"],
+        "parametersDock": window.parameters_panel,
+        "fitDock": window.fit_panel,
+        "resultsDock": window.result_panel,
     }
     window.docks = {}
     for name, title, accessible, area in DOCK_SPECS:
@@ -221,6 +149,7 @@ def install_workflow_actions(window: object) -> None:
         action.setShortcut(QKeySequence(shortcut))
         action.setToolTip(text)
         action.setStatusTip(text)
+        action.setIcon(command_icon(callback_name))
         callback = getattr(window, callback_name)
         action.triggered.connect(lambda _checked=False, operation=callback: operation())
         window.addAction(action)

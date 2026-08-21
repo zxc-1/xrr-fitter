@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from math import isfinite
 
+from PySide6.QtCore import QSize
 from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
@@ -80,6 +81,13 @@ DISPLAY_UNITS = (
     ("sld_imag_a2", "Å⁻²"),
     ("linear_background_per_a_inv", "Å"),
 )
+
+# An empty text view reports a fixed 192px height whatever it holds, and the
+# evidence starts out as a single placeholder line.  The floor keeps a short
+# report from collapsing into an unreadable sliver; past the ceiling the view
+# scrolls rather than pushing the rest of the dock out.
+EVIDENCE_LINE_FLOOR = 3
+EVIDENCE_LINE_CEILING = 12
 
 
 def _joined(values: object) -> str:
@@ -433,6 +441,20 @@ class UncertaintyView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.evidence)
+
+    def sizeHint(self) -> QSize:
+        """Ask for the evidence lines actually held, floored and capped.
+
+        An empty text view reports a fixed 192px height, which claimed a third of
+        the result dock while displaying a single placeholder line.  The view now
+        grows with its evidence and hands anything past the ceiling to its own
+        scrollbar.
+        """
+        width = super().sizeHint().width()
+        spacing = self.evidence.fontMetrics().lineSpacing()
+        blocks = self.evidence.document().blockCount()
+        lines = min(max(blocks, EVIDENCE_LINE_FLOOR), EVIDENCE_LINE_CEILING)
+        return QSize(width, lines * spacing + 2 * self.evidence.frameWidth())
 
     def clear_evidence(self, message: str) -> None:
         self.evidence.setPlainText(message)

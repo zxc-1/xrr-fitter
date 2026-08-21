@@ -279,6 +279,49 @@ def _table(qtbot, *definitions: api.ParameterDefinition):
     return table
 
 
+def test_empty_prior_column_yields_its_surplus_to_the_name_column(qtbot) -> None:
+    # Most projects configure no priors, leaving column 6 blank.  A blank column
+    # that still absorbs surplus width steals it from the name column, which then
+    # elides the parameter names down to an unreadable "幂律背..." stub -- and the
+    # two distinct power-law background parameters then render identically.
+    definitions = (
+        _definition("instrument.background.power_law_amplitude", display_name="幂律背景幅值 B₂"),
+        _definition("instrument.background.power_law_exponent", display_name="幂律背景指数 p"),
+        _definition("instrument.resolution.relative_sigma", display_name="相对分辨率 σq/q"),
+    )
+    table = _table(qtbot, *definitions)
+    table.resize(380, 200)  # the width parametersDock actually gets on screen
+
+    # An empty column has no content to show, so it must not hold a share of the
+    # width comparable to the names it is starving.
+    assert table.columnWidth(6) < table.columnWidth(0) / 2
+    assert table.columnWidth(0) >= table.sizeHintForColumn(0)
+
+
+def test_populated_prior_column_does_not_starve_the_name_column(qtbot) -> None:
+    # A soft_range summary is long enough to claim the whole dock width on its
+    # own.  The parameter name identifies the row and cannot be traded away for
+    # a bound summary, so the prior column gives up its overflow to a tooltip.
+    definitions = (
+        _definition(
+            "instrument.background.power_law_amplitude",
+            display_name="幂律背景幅值 B₂",
+            prior=api.PriorSpec("soft_range", (1.0, 9.0, 0.5)),
+        ),
+        _definition(
+            "instrument.background.power_law_exponent",
+            display_name="幂律背景指数 p",
+            prior=api.PriorSpec("normal", (2.0, 0.3)),
+        ),
+    )
+    table = _table(qtbot, *definitions)
+    table.resize(380, 200)
+
+    assert table.columnWidth(0) >= table.sizeHintForColumn(0)
+    # Nothing is lost: the full summary stays reachable on the cell itself.
+    assert "soft_range" in table.item(0, 6).toolTip()
+
+
 def test_prior_column_header_and_readonly(qtbot) -> None:
     table = _table(qtbot, _definition("component.0.thickness_a"))
 
@@ -429,3 +472,121 @@ def test_editing_one_cell_persists_untouched_bounds_at_full_precision(
     assert setting.initial == pytest.approx(4.0)
     # The untouched bound keeps every digit instead of the rounded 0.0371677.
     assert setting.lower == pytest.approx(0.37167741227456, rel=0, abs=1e-15)
+
+
+def _grouped_project(tmp_path):
+    """A structure with two layers, so the table holds more than one group."""
+    project = api.add_dataset(
+        api.new_project(),
+        _write_curve(tmp_path / "grouped.xy"),
+        api.InstrumentSpec(instrument_id="parameter-groups"),
+    )
+    structure = api.StructureSpec(
+        AIR,
+        (
+            api.LayerSpec("film", SIO2, 40.0, roughness_a=3.0),
+            api.LayerSpec("cap", SIO2, 12.0, roughness_a=2.0),
+        ),
+        SI,
+    )
+    return api.set_structure(project, "grouped", structure)
+
+
+def _grouped_panel(qtbot, tmp_path):
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.gui.parameters.panel import ParametersPanel
+
+    panel = ParametersPanel(ProjectDocument(_grouped_project(tmp_path)))
+    qtbot.addWidget(panel)
+    return panel
+
+
+def _group_rows(table) -> dict[int, str]:
+    """Rows that caption a group rather than declaring a parameter."""
+    return {
+        row: table.item(row, 0).text()
+        for row in range(table.rowCount())
+        if table.item(row, 0) is not None and table.item(row, 0).data(Qt.ItemDataRole.UserRole) is None
+    }
+
+
+def test_every_parameter_row_sits_under_a_caption_naming_its_owner(qtbot, tmp_path) -> None:
+    """Ten of seventeen rows are instrument parameters; nothing on screen says so.
+
+    The declarations already arrive clustered -- film's thickness/density/roughness
+    are adjacent, then cap's, then the backing, then ten instrument rows -- but the
+    table renders all seventeen as identical adjacent rows, so the clustering is
+    invisible and a user cannot tell which layer 厚度 belongs to without opening
+    the tooltip on every row.
+    """
+    panel = _grouped_panel(qtbot, tmp_path)
+    table = panel.findChild(QTableWidget, "parameterTable")
+    captions = _group_rows(table)
+
+    assert captions, "no group captions rendered"
+    # Every parameter row must be reachable by scanning up to a caption, and that
+    # caption must name the layer, the backing or the instrument that owns it.
+    owners = {
+        "component.0": "film",
+        "component.1": "cap",
+        "backing": "基底",
+        "instrument": "仪器",
+    }
+    current = None
+    seen: dict[str, list[str]] = {}
+    for row in range(table.rowCount()):
+        if row in captions:
+            current = captions[row]
+            continue
+        name = str(table.item(row, 0).data(Qt.ItemDataRole.UserRole))
+        assert current is not None, f"{name} precedes every caption"
+        prefix = "component.0" if name.startswith("component.0") else name.split(".")[0]
+        prefix = "component.1" if name.startswith("component.1") else prefix
+        seen.setdefault(prefix, []).append(current)
+    for prefix, expected in owners.items():
+        assert prefix in seen, prefix
+        assert all(expected in caption for caption in seen[prefix]), (prefix, seen[prefix])
+
+
+def test_group_caption_is_not_mistaken_for_a_parameter(qtbot, tmp_path) -> None:
+    """A caption carries no value, so it must not read or write as a row."""
+    panel = _grouped_panel(qtbot, tmp_path)
+    table = panel.findChild(QTableWidget, "parameterTable")
+    captions = _group_rows(table)
+
+    assert captions, "no group captions rendered"
+    for row in captions:
+        caption = table.item(row, 0)
+        assert not (caption.flags() & Qt.ItemFlag.ItemIsEditable)
+        assert not (caption.flags() & Qt.ItemFlag.ItemIsSelectable)
+        # The numeric columns hold nothing to edit or commit.
+        for column in (1, 2, 3, 5):
+            assert table.item(row, column) is None, (row, column)
+    # Captions stay out of the declaration projection entirely.
+    assert len(panel.visible_definitions) == table.rowCount() - len(captions)
+    assert all(name != "" for name in panel.row_names if name)
+
+
+def test_row_names_stay_aligned_with_physical_rows_across_captions(qtbot, tmp_path) -> None:
+    """Callers locate a row by name, so the index must survive the captions."""
+    panel = _grouped_panel(qtbot, tmp_path)
+    table = panel.findChild(QTableWidget, "parameterTable")
+
+    # Without captions the index is trivially aligned, so the guarantee only
+    # means something once rows have been inserted between the parameters.
+    assert _group_rows(table), "no group captions rendered"
+    for name in ("component.0.thickness_a", "component.1.roughness_a", "instrument.scale"):
+        row = panel.row_names.index(name)
+        assert str(table.item(row, 0).data(Qt.ItemDataRole.UserRole)) == name
+
+
+def test_single_group_is_left_uncaptioned(qtbot) -> None:
+    """A caption naming the only group present separates nothing."""
+    table = _table(
+        qtbot,
+        _definition("instrument.scale", category="instrument"),
+        _definition("instrument.background", category="instrument"),
+    )
+
+    assert _group_rows(table) == {}
+    assert table.rowCount() == 2

@@ -163,6 +163,33 @@ def test_plot_panel_sld_overlays_other_candidate_real_profiles_faintly(qtbot) ->
     np.testing.assert_allclose(overlay.get_ydata(), other.sld_profile_a2.real)
 
 
+def test_plot_panel_sld_depth_axis_follows_the_selected_candidate(qtbot) -> None:
+    # A search that has not converged can hold a candidate whose stack is an order
+    # of magnitude too thick.  Drawing it as an overlay let autoscale take the
+    # union of every profile, so a selected structure that only occupies the first
+    # few nm was squeezed into a sliver at the left edge of a 266 nm axis.
+    data = prepared_data(size=4)
+    selected = _candidate(
+        data,
+        sld_depth_a=np.array([0.0, 25.0, 50.0]),
+        sld_profile_a2=np.array([0.0 + 0.0j, 2e-5 + 0.0j, 4e-6 + 0.0j]),
+    )
+    runaway = _candidate(
+        data,
+        "candidate-runaway",
+        objective=0.9,
+        sld_depth_a=np.array([0.0, 1330.0, 2660.0]),
+        sld_profile_a2=np.array([0.0 + 0.0j, 3e-5 + 0.0j, 1e-6 + 0.0j]),
+    )
+    panel = _panel(qtbot, data=data, result=final_fit_result(selected, runaway))
+
+    lower, upper = panel.view("sld").axes.get_xlim()
+    # The overlay stays drawn for comparison, but it must not set the scale: the
+    # selected profile ends at 5 nm, so the axis has to stay near that.
+    assert upper < 2.0 * selected.sld_depth_a.max() / 10.0
+    assert lower <= 0.0
+
+
 def test_plot_panel_hides_uncertainty_owned_by_another_candidate(qtbot) -> None:
     data = prepared_data(size=4)
     result = replace(_result(data), uncertainty=_uncertainty("candidate-b"))

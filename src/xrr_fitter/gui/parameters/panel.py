@@ -376,11 +376,28 @@ class ParametersPanel(QWidget):
         except (OSError, ValueError) as error:
             self._clear_projection(str(error))
             return
-        self.parameter_table.load(self._definitions, expert_mode=self.expert_mode)
+        self.parameter_table.load(
+            self._definitions,
+            expert_mode=self.expert_mode,
+            captions=self._component_captions(dataset_id),
+        )
         # The row count is legible from the table itself, so the status line
         # stays empty here and is reserved for validation problems and the
         # outcome of a reset.
         self.status_label.clear()
+
+    def _component_captions(self, dataset_id: str) -> dict[str, str]:
+        """Name each component group the way the structure editor names it.
+
+        A component's own name is not recoverable from its parameter rows: a
+        periodic block named ML contributes rows reading "W 厚度" and "Si 厚度",
+        which share no token with the block.  The structure is therefore read here,
+        where it is available, and the table only renders what it is handed.
+        """
+        structure = self._dataset(dataset_id).structure
+        if structure is None:
+            return {}
+        return {f"component.{index}": component.name for index, component in enumerate(structure.components)}
 
     def _clear_projection(self, message: str) -> None:
         self._definitions = ()

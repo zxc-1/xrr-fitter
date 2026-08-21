@@ -401,3 +401,35 @@ def test_plot_toolbar_zoom_button_focuses_views_and_reset_restores(qtbot) -> Non
     reset.click()
     restored = panel.view("raw").axes.get_xlim()
     assert restored[0] < 0.8 and restored[1] > 1.2
+
+
+def _quality_captions(panel, key):
+    """The quality caption drawn on one view, if it carries one."""
+    return tuple(text.get_text() for text in panel.view(key).axes.texts if "J=" in text.get_text())
+
+
+def test_data_and_model_views_caption_the_fit_quality_they_are_showing(qtbot) -> None:
+    """A curve overlay alone does not say how well it agrees with the data.
+
+    The candidate's objective and its mean log-decade miss are both already
+    computed; without them on the axes a user judges the fit by eyeballing how
+    close two lines look, which a log axis makes unreliable.
+    """
+    data = prepared_data(size=4)
+    candidate = _candidate(data, objective=0.25, log_residuals_decades=np.full(4, 0.1))
+    panel = _panel(qtbot, data=data, result=final_fit_result(candidate))
+
+    for key in ("log", "raw"):
+        caption = _quality_captions(panel, key)
+        assert len(caption) == 1, f"{key} view carries no quality caption"
+        assert "J=0.25" in caption[0]
+        # Mean |log residual| in decades: a physical reading of the same miss.
+        assert "0.1" in caption[0]
+
+
+def test_quality_caption_stays_off_the_views_until_a_candidate_exists(qtbot) -> None:
+    """Prepared data with no fit has no quality to report, so nothing is claimed."""
+    panel = _panel(qtbot, data=prepared_data(size=4))
+
+    for key in ("log", "raw"):
+        assert _quality_captions(panel, key) == ()

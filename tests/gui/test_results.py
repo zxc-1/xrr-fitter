@@ -464,7 +464,14 @@ def test_unknown_fit_warning_codes_pass_through_verbatim(qtbot) -> None:
     assert "some_future_warning_code" in panel.warning_texts()
 
 
-def test_confidence_uses_redundant_marker_and_semantic_color(qtbot) -> None:
+def test_confidence_uses_redundant_marker_and_semantic_status_kind(qtbot) -> None:
+    """The badge must take its colour from the theme, not an inline sheet.
+
+    The four hardcoded hex values were the light-theme colours, so on a dark
+    desktop the badge stayed light green while every control around it had
+    switched.  They also reached the screen through ``setStyleSheet``, which
+    outranks the application sheet and so cannot follow the palette at all.
+    """
     result = _two_candidate_result()
     multiple = replace(result, confidence=type(result.confidence).MULTIPLE)
     panel = _panel(qtbot, _project_with_result(multiple))
@@ -472,7 +479,27 @@ def test_confidence_uses_redundant_marker_and_semantic_color(qtbot) -> None:
     assert panel.confidence_text() == "多解"
     assert panel.confidence_marker.text() == "▲"
     assert panel.confidence_marker.accessibleDescription() == "多解"
-    assert panel.confidence_label.property("semanticColor") == "#B36B00"
+    assert panel.confidence_label.property("statusKind") == "warn"
+    assert panel.confidence_marker.property("statusKind") == "warn"
+    assert panel.confidence_label.styleSheet() == ""
+    assert panel.confidence_marker.styleSheet() == ""
+
+
+@pytest.mark.parametrize(
+    ("level", "kind"),
+    [("TRUSTED", "ok"), ("CORRELATED", "info"), ("MULTIPLE", "warn"), ("UNTRUSTED", "error")],
+)
+def test_every_confidence_level_reaches_a_distinct_painted_kind(qtbot, level: str, kind: str) -> None:
+    """Four levels over three status colours is why `info` exists.
+
+    Collapsing "可用但相关" onto either neighbour would erase the distinction
+    the classification is published to make.
+    """
+    result = _two_candidate_result()
+    confidence = getattr(type(result.confidence), level)
+    panel = _panel(qtbot, _project_with_result(replace(result, confidence=confidence)))
+
+    assert panel.confidence_label.property("statusKind") == kind
 
 
 def test_mcmc_configuration_tracks_selected_candidate_free_dimension(qtbot) -> None:

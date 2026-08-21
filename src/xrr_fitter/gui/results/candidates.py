@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from math import isfinite
 
-from PySide6.QtCore import QSignalBlocker, Qt, Signal
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtWidgets import QListWidget, QListWidgetItem, QWidget
+
+# An empty scrolling view reports a fixed 192px height regardless of content, and
+# three of those stacked in the result dock overflowed it while showing nothing.
+# The list asks for the rows it actually holds, floored so a short list still
+# reads as a list and capped so a long one yields to its own scrollbar.
+VISIBLE_ROW_FLOOR = 3
+VISIBLE_ROW_CEILING = 8
 
 
 def candidate_is_selectable(candidate: object) -> bool:
@@ -99,6 +106,15 @@ class CandidateList(QListWidget):
         self.setToolTip("用方向键或点击切换候选解；证据面板随当前行更新")
         self.setWordWrap(True)
         self.currentItemChanged.connect(self._current_item_changed)
+
+    def sizeHint(self) -> QSize:
+        """Ask for the rows actually held, between the floor and the ceiling."""
+        width = super().sizeHint().width()
+        row_height = self.sizeHintForRow(0)
+        if row_height <= 0:
+            row_height = self.fontMetrics().lineSpacing()
+        rows = min(max(self.count(), VISIBLE_ROW_FLOOR), VISIBLE_ROW_CEILING)
+        return QSize(width, rows * row_height + 2 * self.frameWidth())
 
     @property
     def result(self) -> object | None:

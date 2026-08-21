@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.command_icons import command_icon
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.project import dialogs
 
@@ -87,6 +88,7 @@ class ProjectActions(QWidget):
             button.setAccessibleName(spec.accessible_name)
             button.setToolTip(spec.tooltip)
             button.setProperty("commandBar", True)
+            button.setIcon(command_icon(spec.callback_name))
             button.clicked.connect(
                 lambda _checked=False, name=spec.callback_name: getattr(
                     self._owner,
@@ -109,6 +111,7 @@ class ProjectActions(QWidget):
             action.setToolTip(text)
             action.setStatusTip(text)
             action.setShortcut(QKeySequence(shortcut))
+            action.setIcon(command_icon(callback_name))
             action.triggered.connect(
                 lambda _checked=False, name=callback_name: getattr(
                     self._owner,

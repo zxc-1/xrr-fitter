@@ -60,8 +60,31 @@ def draw_sld(
     if bands is not None:
         _draw_bands(axes, bands)
         axes.set_title(f"SLD 深度剖面 — {bands.caption()}", fontsize=theme.FONT_PT_SM)
+    _limit_depth_axis(axes, depth_nm)
     _draw_legend(axes, overlays)
     finish_view(view)
+
+
+def _limit_depth_axis(axes: object, depth_nm: np.ndarray) -> None:
+    """Scale the depth axis to the selected candidate, not to the overlays.
+
+    A run that keeps a badly fitted candidate can carry a stack hundreds of nm
+    thick.  Letting the shared autoscale see that overlay stretched the axis to
+    its depth, and the selected profile - the one the user is reading - collapsed
+    into a sliver at the left edge.  The overlays stay drawn for comparison; they
+    just no longer decide the scale, so the part of them that falls outside the
+    selected range is simply out of frame.
+    """
+    finite = depth_nm[np.isfinite(depth_nm)]
+    if finite.size == 0:
+        return
+    lower = float(np.min(finite))
+    upper = float(np.max(finite))
+    span = upper - lower
+    if span <= 0.0:
+        return
+    margin = 0.05 * span
+    axes.set_xlim(lower - margin, upper + margin)
 
 
 def _draw_legend(axes: object, overlays: list[object]) -> None:

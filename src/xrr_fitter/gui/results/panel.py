@@ -35,11 +35,15 @@ from xrr_fitter.gui.results.uncertainty import (
     classification_summary,
 )
 
+# Shape plus colour, so the classification survives a colour-blind reader and a
+# greyscale screenshot alike.  The colour itself is named, not spelled: the theme
+# resolves each status kind against the active appearance, which is what the four
+# hardcoded light-theme hex values here used to get wrong on a dark desktop.
 CONFIDENCE_VISUALS = {
-    "可信": ("●", "#2E7D32"),
-    "可用但相关": ("◆", "#1565C0"),
-    "多解": ("▲", "#B36B00"),
-    "不可信": ("■", "#B3261E"),
+    "可信": ("●", "ok"),
+    "可用但相关": ("◆", "info"),
+    "多解": ("▲", "warn"),
+    "不可信": ("■", "error"),
 }
 
 
@@ -307,16 +311,18 @@ class ResultsPanel(QWidget):
         theme.set_status_kind(self.status_label, kind)
 
     def _set_confidence(self, text: str, detail: str = "") -> None:
-        marker, color = CONFIDENCE_VISUALS.get(text, ("○", "#666666"))
+        # An unclassified badge falls back to the inherited text colour rather
+        # than a grey of its own, so "no result yet" cannot be mistaken for a
+        # fourth state.
+        marker, kind = CONFIDENCE_VISUALS.get(text, ("○", ""))
         self.confidence_label.setText(text)
-        self.confidence_label.setProperty("semanticColor", color)
-        self.confidence_label.setStyleSheet(f"color: {color}; font-weight: 600;")
+        theme.set_status_kind(self.confidence_label, kind)
         self.confidence_marker.setText(marker)
         # Bind the reasons to the badge itself so hovering it answers "why";
         # the accessible description carries the same text for screen readers.
         described = f"{text}：{detail}" if detail else text
         self.confidence_marker.setAccessibleDescription(described)
-        self.confidence_marker.setStyleSheet(f"color: {color};")
+        theme.set_status_kind(self.confidence_marker, kind)
         tooltip = described if detail else ""
         self.confidence_label.setToolTip(tooltip)
         self.confidence_marker.setToolTip(tooltip)
