@@ -174,6 +174,11 @@ def _lock_all_but_first_thickness(window, initial_nm: float) -> None:
     table.item(row, 1).setText(f"{initial_nm:.8g}")
     QApplication.processEvents()
     for name in tuple(panel.row_names):
+        if not name:
+            # Group caption rows carry no parameter and no lock cell; row_names
+            # holds a blank placeholder for them to keep physical row indices
+            # aligned, so there is nothing to lock here.
+            continue
         row = panel.row_names.index(name)
         item = table.item(row, 5)
         desired = Qt.CheckState.Unchecked if name == free_name else Qt.CheckState.Checked
