@@ -121,7 +121,7 @@ def test_plot_panel_set_dataset_clears_stale_candidate_diagnostics(qtbot) -> Non
 
     assert panel.selected_dataset_id() == "second"
     assert panel.selected_candidate_id() is None
-    assert "暂无" in "\n".join(text.get_text() for text in panel.view("qz4").axes.texts)
+    assert "暂无" in (panel.view("qz4").placeholder_text() or "")
 
 
 def test_plot_rejects_unknown_dataset_without_mutating_active_state(qtbot) -> None:
@@ -187,7 +187,7 @@ def test_active_dataset_selection_updates_plot_canvas(qtbot, tmp_path) -> None:
     window.select_active_dataset(second.dataset_id)
 
     assert window.plot_panel.selected_dataset_id() == second.dataset_id
-    raw_x = next(line.get_xdata() for line in window.plot_panel.view("raw").axes.lines if line.get_label() == "拟合点")
+    raw_x = _line_x(window.plot_panel.view("raw"), "拟合点")
     assert raw_x[0] == pytest.approx(0.06)
 
 
@@ -290,9 +290,7 @@ def test_import_plots_core_invalid_points_as_excluded(qtbot) -> None:
     )
     panel = _panel(qtbot, data=data)
 
-    excluded = next(line for line in panel.view("raw").axes.lines if line.get_label() == "排除点")
-
-    np.testing.assert_array_equal(excluded.get_xdata(), data.two_theta_deg[[1]])
+    np.testing.assert_array_equal(_line_x(panel.view("raw"), "排除点"), data.two_theta_deg[[1]])
 
 
 def test_main_window_connects_plot_range_and_point_mask_to_active_dataset(
@@ -360,10 +358,10 @@ def test_plot_panel_zoom_to_range_focuses_angle_views_on_visible_region(qtbot) -
 
     assert panel.zoom_to_range() is True
 
-    raw_xlim = panel.view("raw").axes.get_xlim()
-    log_xlim = panel.view("log").axes.get_xlim()
-    assert raw_xlim == (0.8, 1.2)
-    assert log_xlim == (0.8, 1.2)
+    raw_xrange = _view_xrange(panel.view("raw"))
+    log_xrange = _view_xrange(panel.view("log"))
+    assert raw_xrange == (0.8, 1.2)
+    assert log_xrange == (0.8, 1.2)
 
 
 def test_plot_panel_zoom_to_range_without_range_is_noop(qtbot) -> None:
@@ -381,8 +379,8 @@ def test_plot_panel_reset_zoom_restores_autoscale(qtbot) -> None:
     assert panel.reset_zoom() is True
 
     # Autoscale makes xlim span the full data extent again.
-    raw_xlim = panel.view("raw").axes.get_xlim()
-    assert raw_xlim[0] < 0.8 and raw_xlim[1] > 1.2
+    raw_xrange = _view_xrange(panel.view("raw"))
+    assert raw_xrange[0] < 0.8 and raw_xrange[1] > 1.2
 
 
 def test_plot_toolbar_zoom_button_focuses_views_and_reset_restores(qtbot) -> None:
@@ -394,18 +392,22 @@ def test_plot_toolbar_zoom_button_focuses_views_and_reset_restores(qtbot) -> Non
     reset = panel.toolbar.findChild(QToolButton, "plotResetZoom")
 
     zoom.click()
-    assert panel.view("raw").axes.get_xlim() == (0.8, 1.2)
+    assert _view_xrange(panel.view("raw")) == (0.8, 1.2)
     # Zooming is an action, not a mode: the active mode is left untouched.
     assert panel.interaction_mode() == "view"
 
     reset.click()
-    restored = panel.view("raw").axes.get_xlim()
+    restored = _view_xrange(panel.view("raw"))
     assert restored[0] < 0.8 and restored[1] > 1.2
 
 
 def _quality_captions(panel, key):
     """The quality caption drawn on one view, if it carries one."""
-    return tuple(text.get_text() for text in panel.view(key).axes.texts if "J=" in text.get_text())
+    view = panel.view(key)
+    if _is_live(view):
+        text = view.quality_caption_text()
+        return (text,) if text and "J=" in text else ()
+    return tuple(text.get_text() for text in view.axes.texts if "J=" in text.get_text())
 
 
 def test_data_and_model_views_caption_the_fit_quality_they_are_showing(qtbot) -> None:

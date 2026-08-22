@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from matplotlib.backend_bases import MouseEvent
+from matplotlib.backend_bases import MouseButton, MouseEvent
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtWidgets import QApplication, QLineEdit, QToolButton, QTreeWidget, QVBoxLayout, QWidget
 from shiboken6 import isValid
@@ -32,6 +32,7 @@ from tests.support.model_cases import (
 )
 
 import xrr_fitter.api as api
+from xrr_fitter.gui.plots.live import LiveReflectivityPlot
 
 # The SLD profile left the tab bar for a permanent companion pane, so these are
 # the switchable diagnostic tabs only, with the log view leading.
@@ -102,8 +103,84 @@ def _panel(qtbot, *, data=None, result=None, bands=None):
     return panel
 
 
+def _is_live(view):
+    """Report whether a view is a pyqtgraph reflectivity pane rather than mpl."""
+    return isinstance(view, LiveReflectivityPlot)
+
+
+# The four pg panes expose fixed managed items set once at construction, so a
+# curve's contextual label (what the matplotlib draw_* functions passed to the
+# legend) maps to the owning item rather than to a per-draw artist. The residual
+# curve and the raw included points both ride the observed item, so several
+# labels collapse onto one attribute.
+PG_ITEM_BY_LABEL = {
+    "归一化数据": "observed_item",
+    "拟合点": "observed_item",
+    "加权残差": "observed_item",
+    "当前候选模型": "model_item",
+    "排除点": "excluded_item",
+    "零参考线": "reference_item",
+    "搜索中模型": "preview_item",
+}
+
+
+def _pg_xy(item):
+    """Coerce a managed item's data to finite arrays; an empty item reads empty."""
+    if item is None:
+        return np.asarray([], dtype=float), np.asarray([], dtype=float)
+    x, y = item.getData()
+    x = np.asarray([] if x is None else x, dtype=float)
+    y = np.asarray([] if y is None else y, dtype=float)
+    return x, y
+
+
 def _line_y(view, label):
+    if _is_live(view):
+        y = _pg_xy(getattr(view, PG_ITEM_BY_LABEL[label]))[1]
+        # A log-mode viewbox delivers y in log10 display space; delinearize so the
+        # assertion reads the physical value the reader sees on the axis.
+        if view.plot_item.ctrl.logYCheck.isChecked():
+            return np.power(10.0, y)
+        return y
     return next(line.get_ydata() for line in view.axes.lines if line.get_label() == label)
+
+
+def _line_x(view, label):
+    if _is_live(view):
+        return _pg_xy(getattr(view, PG_ITEM_BY_LABEL[label]))[0]
+    return next(line.get_xdata() for line in view.axes.lines if line.get_label() == label)
+
+
+def _marker(view, label):
+    if _is_live(view):
+        return getattr(view, PG_ITEM_BY_LABEL[label]).opts["symbol"]
+    return next(line.get_marker() for line in view.axes.lines if line.get_label() == label)
+
+
+def _marker_filled(view, label):
+    if _is_live(view):
+        return getattr(view, PG_ITEM_BY_LABEL[label]).opts["symbolBrush"] is not None
+    facecolor = next(line.get_markerfacecolor() for line in view.axes.lines if line.get_label() == label)
+    return facecolor != "none"
+
+
+def _view_xrange(view):
+    if _is_live(view):
+        return tuple(view.plot_item.vb.viewRange()[0])
+    return view.axes.get_xlim()
+
+
+def _addressable(view):
+    """Return the widget that carries the object name and takes focus.
+
+    A pg pane is its own widget; an mpl view exposes it through ``.canvas``.
+    """
+    return view if _is_live(view) else view.canvas
+
+
+def _mpl_view_keys(panel):
+    """The still-matplotlib view keys, in panel order (the six static views)."""
+    return tuple(key for key in panel.view_keys() if not _is_live(panel.view(key)))
 
 
 def _colour_keys(view):
@@ -118,15 +195,27 @@ def _colour_keys(view):
 
 
 def _artist_snapshot(panel):
-    return tuple(
-        (
-            key,
-            len(panel.view(key).axes.lines),
-            len(panel.view(key).axes.collections),
-            tuple(text.get_text() for text in panel.view(key).axes.texts),
-        )
-        for key in panel.view_keys()
-    )
+    snapshot = []
+    for key in panel.view_keys():
+        view = panel.view(key)
+        if _is_live(view):
+            # A pg pane has no artist list; its state is the length of each managed
+            # curve plus the two annotations, which is what a redraw would change.
+            lengths = tuple(
+                _pg_xy(getattr(view, attr))[0].size
+                for attr in ("observed_item", "model_item", "excluded_item", "reference_item", "preview_item")
+            )
+            snapshot.append((key, lengths, view.placeholder_text(), view.quality_caption_text()))
+        else:
+            snapshot.append(
+                (
+                    key,
+                    len(view.axes.lines),
+                    len(view.axes.collections),
+                    tuple(text.get_text() for text in view.axes.texts),
+                )
+            )
+    return tuple(snapshot)
 
 
 def _write_curve(path: Path, *, offset: float = 0.0, invalid_index: int | None = None) -> Path:
@@ -160,10 +249,100 @@ def _mouse_event(name: str, panel, xdata: float, *, button: int = 1) -> MouseEve
 
 
 def _drag_range(panel, lower: float, upper: float) -> None:
-    canvas = panel.view("raw").canvas
+    raw = panel.view("raw")
+    if _is_live(raw):
+        # The pg range selector is a draggable region; a test drives it by setting
+        # the region and firing the finished signal the widget listens on, which is
+        # the twin of the matplotlib press/motion/release the mpl branch replays.
+        region = raw.range_item
+        if region is None:
+            return
+        # setRegion already emits sigRegionChangeFinished once; block it so the
+        # explicit emit below fires exactly one commit, matching a real drag.
+        region.blockSignals(True)
+        region.setRegion((lower, upper))
+        region.blockSignals(False)
+        region.sigRegionChangeFinished.emit(region)
+        return
+    canvas = raw.canvas
     canvas.callbacks.process("button_press_event", _mouse_event("button_press_event", panel, lower))
     canvas.callbacks.process("motion_notify_event", _mouse_event("motion_notify_event", panel, upper))
     canvas.callbacks.process("button_release_event", _mouse_event("button_release_event", panel, upper))
+
+
+def _drag_sld_interface(panel, from_nm: float, to_nm: float) -> None:
+    """Drag an interface handle on the SLD companion pane, in depth (nm).
+
+    The handle is a full-height vertical line, so the vertical position of the
+    gesture carries no meaning; the middle of the current view is used so the
+    press lands inside the axes whatever the SLD range happens to be.
+    """
+    view = panel.view("sld")
+    view.canvas.draw()
+    lower, upper = view.axes.get_ylim()
+    ydata = 0.5 * (float(lower) + float(upper))
+    names = ("button_press_event", "motion_notify_event", "button_release_event")
+    for name, depth_nm in zip(names, (from_nm, to_nm, to_nm), strict=True):
+        x, y = view.axes.transData.transform((depth_nm, ydata))
+        # A motion event also has to say which buttons are still down, the same
+        # way a pan gesture does; see _drag_on_view.
+        held = {MouseButton.LEFT} if name == "motion_notify_event" else None
+        event = MouseEvent(name, view.canvas, x, y, button=MouseButton.LEFT, buttons=held)
+        view.canvas.callbacks.process(name, event)
+
+
+def _drag_sld_level(panel, index: int, depth_nm: float, factor: float) -> tuple[float, float]:
+    """Drag layer ``index``'s SLD level handle to ``factor`` times its height.
+
+    The gesture is expressed as a ratio rather than an absolute SLD so a case
+    stays readable without restating the material's tabulated scattering length;
+    the handle's current height is read off the pane and returned so the caller
+    can state what it expected the ratio to become.
+    """
+    view = panel.view("sld")
+    view.canvas.draw()
+    label = f"_level_{index}"
+    handle = next(line for line in view.axes.lines if line.get_label() == label)
+    from_level = float(np.asarray(handle.get_ydata())[0])
+    to_level = from_level * float(factor)
+    names = ("button_press_event", "motion_notify_event", "button_release_event")
+    for name, level in zip(names, (from_level, to_level, to_level), strict=True):
+        x, y = view.axes.transData.transform((depth_nm, level))
+        # A motion event also has to say which buttons are still down; see _drag_on_view.
+        held = {MouseButton.LEFT} if name == "motion_notify_event" else None
+        event = MouseEvent(name, view.canvas, x, y, button=MouseButton.LEFT, buttons=held)
+        view.canvas.callbacks.process(name, event)
+    return from_level, to_level
+
+
+def _drag_sld_roughness(panel, index: int, to_sigma_nm: float) -> tuple[float, float]:
+    """Drag interface ``index``'s roughness whisker so its width becomes ``to_sigma_nm``.
+
+    The whisker runs from the interface depth outward by the interface's current
+    roughness; its outer tip is the grab point.  The gesture reads the tip off the
+    pane and drags it to ``interface + to_sigma_nm`` along the tip's own height, so
+    the press lands on the handle whatever the SLD range happens to be.  The width
+    the whisker was drawn at and the width the drag asks for are returned so the
+    caller can state what it expected the interface roughness to become.
+    """
+    view = panel.view("sld")
+    view.canvas.draw()
+    label = f"_roughness_{index}"
+    handle = next(line for line in view.axes.lines if line.get_label() == label)
+    xs = np.asarray(handle.get_xdata(), dtype=float)
+    ys = np.asarray(handle.get_ydata(), dtype=float)
+    interface_nm = float(xs[0])
+    height = float(ys[0])
+    from_sigma_nm = float(xs[1]) - interface_nm
+    to_x = interface_nm + float(to_sigma_nm)
+    names = ("button_press_event", "motion_notify_event", "button_release_event")
+    for name, depth_nm in zip(names, (float(xs[1]), to_x, to_x), strict=True):
+        x, y = view.axes.transData.transform((depth_nm, height))
+        # A motion event also has to say which buttons are still down; see _drag_on_view.
+        held = {MouseButton.LEFT} if name == "motion_notify_event" else None
+        event = MouseEvent(name, view.canvas, x, y, button=MouseButton.LEFT, buttons=held)
+        view.canvas.callbacks.process(name, event)
+    return from_sigma_nm, float(to_sigma_nm)
 
 
 def _zero_width_bands():
@@ -196,6 +375,7 @@ __all__ = (
     "weakref",
     "np",
     "pytest",
+    "MouseButton",
     "MouseEvent",
     "QCoreApplication",
     "QEvent",
@@ -208,6 +388,7 @@ __all__ = (
     "QWidget",
     "isValid",
     "api",
+    "LiveReflectivityPlot",
     "final_fit_result",
     "fit_candidate",
     "prepared_data",
@@ -216,12 +397,24 @@ __all__ = (
     "_uncertainty",
     "_result",
     "_panel",
+    "_is_live",
+    "PG_ITEM_BY_LABEL",
+    "_pg_xy",
     "_line_y",
+    "_line_x",
+    "_marker",
+    "_marker_filled",
+    "_view_xrange",
+    "_addressable",
+    "_mpl_view_keys",
     "_colour_keys",
     "_artist_snapshot",
     "_write_curve",
     "_project_with_curves",
     "_mouse_event",
     "_drag_range",
+    "_drag_sld_interface",
+    "_drag_sld_level",
+    "_drag_sld_roughness",
     "_zero_width_bands",
 )

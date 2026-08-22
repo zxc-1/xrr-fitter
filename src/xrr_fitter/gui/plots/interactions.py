@@ -12,11 +12,13 @@ from math import isfinite
 
 import numpy as np
 from matplotlib.backend_bases import NavigationToolbar2
-from matplotlib.widgets import SpanSelector
 from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QToolButton, QWidget
 
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.plots.live import LiveReflectivityPlot
+from xrr_fitter.gui.plots.plot_icons import plot_icon
+from xrr_fitter.gui.plots.sld_drag import SldHandleDragMixin
 
 MODE_SPECS = (
     ("view", "plotModeView", "查看", "查看和缩放诊断图"),
@@ -35,6 +37,23 @@ NAVIGATION_SPECS = (
 
 PAN_MODE = "pan/zoom"
 
+# One wheel notch scales each axis span by this factor.  Matplotlib reports a
+# scroll-up as a positive step, which reads as "look closer", so scrolling up
+# divides the span (zooms in) and scrolling down multiplies it (zooms out).
+WHEEL_ZOOM_STEP = 1.2
+
+
+def _wear_glyph(button: QToolButton, glyph: str) -> None:
+    """Hang the painted glyph beside the label so the tool reads at a glance.
+
+    The label stays: the icon names the tool for the eye that already knows it,
+    the words spell it out for the eye that does not, and keeping both is what a
+    graphical control is for.  ``ToolButtonTextBesideIcon`` is the style the shell
+    toolbar uses too, so the plot row lines up with the rest of the window.
+    """
+    button.setIcon(plot_icon(glyph))
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+
 
 class PlotNavigator(NavigationToolbar2):
     """Drive one canvas's pan, box zoom and view history without Qt chrome.
@@ -46,8 +65,9 @@ class PlotNavigator(NavigationToolbar2):
     whichever one belongs to the view currently on screen.
     """
 
-    def __init__(self, canvas: object) -> None:
+    def __init__(self, canvas: object, message_sink: object | None = None) -> None:
         super().__init__(canvas)
+        self._message_sink = message_sink
         self._connected = True
 
     def push_baseline(self) -> None:
@@ -89,7 +109,16 @@ class PlotNavigator(NavigationToolbar2):
         self.canvas.drawRectangle(None)
 
     def set_message(self, message: str) -> None:
-        """Discard the cursor read-out; this panel has no status bar for it."""
+        """Route the cursor read-out to the panel's coordinate label.
+
+        Matplotlib feeds this on every ``motion_notify_event`` with the data
+        coordinates under the pointer, and clears it with an empty string when
+        the pointer leaves the axes.  This panel carries no Matplotlib status
+        bar, so the message is forwarded to a Qt label instead of discarded.
+        """
+        sink = self._message_sink
+        if sink is not None:
+            sink(str(message))
 
     def set_history_buttons(self) -> None:
         """No back/forward buttons are exposed, so there is none to enable."""
@@ -124,6 +153,7 @@ class PlotInteractionToolbar(QWidget):
             button.setCheckable(True)
             button.setAccessibleName(text)
             button.setToolTip(description)
+            _wear_glyph(button, mode)
             self._group.addButton(button, index)
             self._buttons[mode] = button
             layout.addWidget(button)
@@ -157,6 +187,7 @@ class PlotInteractionToolbar(QWidget):
             button.setCheckable(action != "home")
             button.setAccessibleName(text)
             button.setToolTip(description)
+            _wear_glyph(button, action)
             button.setProperty("plotNavigation", action)
             button.clicked.connect(self._navigation_clicked)
             self._navigation[action] = button
@@ -192,12 +223,14 @@ class PlotInteractionToolbar(QWidget):
         self._zoom_to_range.setText("缩放拟合区")
         self._zoom_to_range.setAccessibleName("缩放到拟合范围")
         self._zoom_to_range.setToolTip("将反射率视图缩放到当前拟合角度范围")
+        _wear_glyph(self._zoom_to_range, "zoom_to_range")
         self._zoom_to_range.clicked.connect(lambda: self.zoom_to_range_requested.emit())
         self._reset_zoom = QToolButton(self)
         self._reset_zoom.setObjectName("plotResetZoom")
         self._reset_zoom.setText("全览")
         self._reset_zoom.setAccessibleName("恢复完整视图")
         self._reset_zoom.setToolTip("恢复到完整角度范围")
+        _wear_glyph(self._reset_zoom, "reset_zoom")
         self._reset_zoom.clicked.connect(lambda: self.reset_zoom_requested.emit())
         layout.addWidget(self._zoom_to_range)
         layout.addWidget(self._reset_zoom)
@@ -241,7 +274,7 @@ def prepared_point_index(index: int, point_count: int) -> int:
     return index
 
 
-class PlotInteractionController(QObject):
+class PlotInteractionController(SldHandleDragMixin, QObject):
     """Own Matplotlib callbacks, tab visibility, and scoped keyboard input."""
 
     def __init__(self, panel: object, toolbar: PlotInteractionToolbar) -> None:
@@ -253,22 +286,54 @@ class PlotInteractionController(QObject):
         self._watched_parent = None
         self._requested_tab_index = 0
         self._projecting_tabs = False
-        self._range_selector = SpanSelector(
-            panel.view("raw").axes,
-            self._span_selected,
-            "horizontal",
-            useblit=False,
-            button=1,
-        )
-        self._range_selector.set_active(False)
-        self._mask_callback_id = panel.view("raw").canvas.mpl_connect(
-            "button_press_event",
-            self._point_clicked,
-        )
-        # One navigator per canvas: a navigator binds to the canvas it drives,
-        # and the companion SLD pane is on screen alongside whichever tab is
-        # selected, so no single canvas could stand in for the panel.
-        self._navigators = {key: PlotNavigator(view.canvas) for key, view in self._views.items()}
+        # The reflectivity panes render through pyqtgraph and carry their own
+        # gestures: a draggable region for range selection, a masking click,
+        # native wheel zoom and pan/box-zoom modes all live on the widget, so the
+        # controller only wires their signals back to the panel.  The static
+        # matplotlib views keep the NavigationToolbar2 driver, one per canvas: a
+        # navigator binds to the canvas it drives, and the companion SLD pane is
+        # on screen alongside whichever tab is selected, so no single canvas could
+        # stand in for the panel.
+        self._navigators = {
+            key: PlotNavigator(view.canvas, self._show_cursor_message)
+            for key, view in self._views.items()
+            if not isinstance(view, LiveReflectivityPlot)
+        }
+        # Wheel zoom on the matplotlib views is a direct-manipulation gesture that
+        # stays live in every mode, so it is connected once per canvas here rather
+        # than armed by a mode.  Connecting once also keeps the per-canvas callback
+        # counts stable across redraws, which the teardown contract asserts.  The
+        # pyqtgraph panes zoom on the wheel natively and need no such connection.
+        self._scroll_ids = {
+            key: view.canvas.mpl_connect("scroll_event", self._wheel_zoom)
+            for key, view in self._views.items()
+            if not isinstance(view, LiveReflectivityPlot)
+        }
+        # The companion SLD pane carries two kinds of grabbable handle: a vertical
+        # interface line that sets a layer's thickness by eye, and a horizontal
+        # level line spanning a layer that raises or lowers its SLD.  The three
+        # gesture callbacks connect once here for the same reason wheel zoom does:
+        # a constant per-canvas callback count is what the teardown contract
+        # checks.  ``_sld_drag`` holds the grabbed ``(kind, index, handle, origin)``
+        # between press and release, and is ``None`` when no drag is in flight.
+        # ``origin`` is where the handle sat when it was grabbed, recorded then
+        # rather than read back on release: the motion moves the artist, so by
+        # release it no longer remembers where the gesture started.
+        self._sld_drag: tuple[str, int, object, float] | None = None
+        self._sld_drag_ids: tuple[int, ...] = ()
+        sld_view = self._views.get("sld")
+        if sld_view is not None and not isinstance(sld_view, LiveReflectivityPlot):
+            sld_canvas = sld_view.canvas
+            self._sld_drag_ids = (
+                sld_canvas.mpl_connect("button_press_event", self._sld_press),
+                sld_canvas.mpl_connect("motion_notify_event", self._sld_motion),
+                sld_canvas.mpl_connect("button_release_event", self._sld_release),
+            )
+        for pane in self._live_panes():
+            pane.fit_range_selected.connect(self._pg_range_selected)
+            pane.point_mask_requested.connect(self._pg_mask_requested)
+            pane.cursor_moved.connect(self._pg_cursor_moved)
+            pane.cursor_left.connect(self._pg_cursor_left)
         toolbar.mode_changed.connect(self._mode_changed)
         toolbar.zoom_to_range_requested.connect(self._zoom_to_range)
         toolbar.reset_zoom_requested.connect(self._reset_zoom)
@@ -278,6 +343,16 @@ class PlotInteractionController(QObject):
         for child in panel.findChildren(QWidget):
             child.installEventFilter(self)
         self.watch_parent()
+
+    def _live_panes(self) -> tuple[LiveReflectivityPlot, ...]:
+        return tuple(view for view in self._views.values() if isinstance(view, LiveReflectivityPlot))
+
+    def _current_live_pane(self) -> LiveReflectivityPlot | None:
+        """Return the pyqtgraph pane on screen, or None when a static view shows."""
+        if self._panel is None:
+            return None
+        view = self._views.get(self.current_view_key())
+        return view if isinstance(view, LiveReflectivityPlot) else None
 
     def current_view_key(self) -> str:
         return self._panel.tab_keys()[self._tabs.currentIndex()]
@@ -322,7 +397,14 @@ class PlotInteractionController(QObject):
         self._toolbar.set_mode("view")
 
     def callback_counts(self) -> tuple[tuple[str, tuple[tuple[str, int], ...]], ...]:
-        return tuple((key, self._canvas_callback_counts(view.canvas)) for key, view in self._views.items())
+        # Only the matplotlib views expose a callback registry; the pyqtgraph
+        # panes carry their gestures on the widget and are torn down through
+        # ``release`` on the widget itself, so they never enter this contract.
+        return tuple(
+            (key, self._canvas_callback_counts(view.canvas))
+            for key, view in self._views.items()
+            if not isinstance(view, LiveReflectivityPlot)
+        )
 
     def _canvas_callback_counts(self, canvas: object) -> tuple[tuple[str, int], ...]:
         return tuple(sorted((name, len(callbacks)) for name, callbacks in canvas.callbacks.callbacks.items()))
@@ -339,14 +421,34 @@ class PlotInteractionController(QObject):
     def release(self, *_args: object) -> None:
         if self._panel is None:
             return
-        selector = self._range_selector
-        self._range_selector = None
-        selector.disconnect_events()
-        selector.set_active(False)
-        raw = self._views.get("raw")
-        if raw is not None and self._mask_callback_id is not None:
-            raw.canvas.mpl_disconnect(self._mask_callback_id)
-        self._mask_callback_id = None
+        # The pyqtgraph panes emit range, mask and cursor signals into this
+        # controller; drop those first so a pane torn down after this call cannot
+        # reach a half-released controller.  The pane's own ``release`` (driven by
+        # the panel) then silences its scene callbacks.
+        for pane in self._live_panes():
+            for signal, slot in (
+                (pane.fit_range_selected, self._pg_range_selected),
+                (pane.point_mask_requested, self._pg_mask_requested),
+                (pane.cursor_moved, self._pg_cursor_moved),
+                (pane.cursor_left, self._pg_cursor_left),
+            ):
+                try:
+                    signal.disconnect(slot)
+                except (RuntimeError, TypeError):
+                    # Idempotent teardown: a connection may already be gone if the
+                    # pane's C++ object was destroyed first.
+                    pass
+        for key, identifier in self._scroll_ids.items():
+            view = self._views.get(key)
+            if view is not None:
+                view.canvas.mpl_disconnect(identifier)
+        self._scroll_ids = {}
+        sld_view = self._views.get("sld")
+        for identifier in self._sld_drag_ids:
+            if sld_view is not None:
+                sld_view.canvas.mpl_disconnect(identifier)
+        self._sld_drag_ids = ()
+        self._sld_drag = None
         for navigator in self._navigators.values():
             navigator.disconnect_events()
         self._navigators = {}
@@ -367,22 +469,36 @@ class PlotInteractionController(QObject):
             navigator.push_baseline()
 
     def navigation_mode(self) -> str:
+        pane = self._current_live_pane()
+        if pane is not None:
+            return pane.navigation_mode()
         navigator = self._navigators.get(self.current_view_key())
         return "" if navigator is None else str(navigator.mode)
 
     def _navigation_requested(self, action: str) -> None:
-        """Drive the navigator behind the view the user is looking at."""
+        """Drive pan/box-zoom/home for the view the user is looking at.
+
+        A pyqtgraph pane is always in pan or box-zoom, so home just restores the
+        data bounds and the button row is put back in step with the pane's own
+        mode.  A matplotlib view keeps the latching NavigationToolbar2 behaviour,
+        where claiming the widget lock is what makes the range and mask handlers
+        stand down, so ``_leave_click_mode`` drops the mode row alongside it.
+        """
+        pane = self._current_live_pane()
+        if pane is not None:
+            if action == "home":
+                pane.go_home()
+            else:
+                self._leave_click_mode()
+                pane.set_navigation_mode(action)
+            self._toolbar.show_navigation_mode(pane.navigation_mode())
+            return
         navigator = self._navigators.get(self.current_view_key())
         if navigator is None:
             return
         if action == "home":
             navigator.home()
         else:
-            # Latching pan or box zoom claims the canvas widget lock, which is
-            # what makes the range and mask handlers stand down: both refuse to
-            # act while another owner holds it.  The button is put back in step
-            # with that so the mode row does not keep advertising a mode whose
-            # clicks are now being swallowed.
             self._leave_click_mode()
             getattr(navigator, action)()
         self._sync_navigation_buttons(navigator)
@@ -397,13 +513,20 @@ class PlotInteractionController(QObject):
         self._toolbar.show_navigation_mode("pan" if mode == PAN_MODE else "zoom" if mode else "")
 
     def _mode_changed(self, mode: str) -> None:
-        if self._range_selector is not None:
-            self._range_selector.set_active(mode == "range")
+        # Range and mask are angle-domain gestures, so they arm on the two
+        # angle-domain reflectivity panes (raw and log); qz⁴R and residual live
+        # in qz space and stay read-only.  The pyqtgraph region and mask click
+        # coexist with pan, so arming them does not need to claim a lock.
+        for key in ("raw", "log"):
+            pane = self._views.get(key)
+            if isinstance(pane, LiveReflectivityPlot):
+                pane.enable_range_selection(mode == "range")
+                pane.enable_masking(mode == "mask")
         if mode != "view":
-            # Range and mask work by clicking the curve, so an active pan or box
-            # zoom would swallow the very press they need.  Whichever the user
-            # picks second wins; the earlier one is switched off rather than
-            # silently ignored.
+            # On a matplotlib view, range and mask work by clicking the curve, so
+            # an active pan or box zoom would swallow the very press they need.
+            # Whichever the user picks second wins; the earlier one is switched
+            # off rather than silently ignored.
             self._stop_navigation()
 
     def _stop_navigation(self) -> None:
@@ -420,52 +543,115 @@ class PlotInteractionController(QObject):
         if self._panel is not None:
             self._panel.reset_zoom()
 
-    def _span_selected(self, first: float, second: float) -> None:
-        panel = self._panel
-        selector = self._range_selector
-        canvas = panel.view("raw").canvas
-        if selector is None or not canvas.widgetlock.available(selector):
+    def _wheel_zoom(self, event: object) -> None:
+        """Zoom the axes under the pointer around the cursor, in any mode.
+
+        The wheel is the one gesture every user already knows for "look
+        closer", so it answers directly without first arming a mode.  The point
+        under the pointer keeps its place on screen because each axis is scaled
+        about the cursor's data coordinate, which makes the zoom feel anchored
+        rather than recentred.
+        """
+        axes = getattr(event, "inaxes", None)
+        step = float(getattr(event, "step", 0.0) or 0.0)
+        if axes is None or not axes.get_navigate() or step == 0.0:
             return
-        lower, upper = ordered_finite_range(first, second)
+        factor = 1.0 / WHEEL_ZOOM_STEP if step > 0.0 else WHEEL_ZOOM_STEP
+        self._zoom_axis(axes.get_xlim(), axes.set_xlim, axes.get_xscale(), event.xdata, factor)
+        self._zoom_axis(axes.get_ylim(), axes.set_ylim, axes.get_yscale(), event.ydata, factor)
+        axes.figure.canvas.draw_idle()
+
+    @staticmethod
+    def _zoom_axis(limits: object, setter: object, scale: str, center: object, factor: float) -> None:
+        """Scale one axis about ``center`` by ``factor``, honouring a log scale.
+
+        Both endpoints move toward the centre by the same factor, so their order
+        is preserved: an inverted ``imshow`` axis keeps reading top-down.  On a
+        log axis the interpolation happens in decade space, which keeps both
+        limits strictly positive and never crosses zero.
+        """
+        low, high = float(limits[0]), float(limits[1])
+        if center is None or not isfinite(float(center)):
+            center = 0.5 * (low + high)
+        center = float(center)
+        if scale == "log":
+            if low <= 0.0 or high <= 0.0 or center <= 0.0:
+                return
+            log_low, log_high, log_center = np.log10(low), np.log10(high), np.log10(center)
+            setter(
+                10.0 ** (log_center + (log_low - log_center) * factor),
+                10.0 ** (log_center + (log_high - log_center) * factor),
+            )
+        else:
+            setter(center + (low - center) * factor, center + (high - center) * factor)
+
+    def _show_cursor_message(self, message: str) -> None:
+        """Forward a navigator's cursor read-out to the panel's coordinate label."""
+        panel = self._panel
+        if panel is not None:
+            panel.set_cursor_readout(message)
+
+    def _pg_range_selected(self, low: float, high: float) -> None:
+        """Commit a range the reader dragged on a pyqtgraph pane.
+
+        The widget only emits while its region is armed (range mode), so this
+        mirrors the old span selector: shade the window immediately and notify
+        the app that a fit range was requested.
+        """
+        panel = self._panel
+        if panel is None:
+            return
+        lower, upper = ordered_finite_range(low, high)
         panel.show_range(lower, upper)
         panel.fit_range_requested.emit(lower, upper)
 
-    def _point_clicked(self, event: object) -> None:
-        panel = self._panel
-        canvas = panel.view("raw").canvas
-        if not self._point_event_is_available(event, panel, canvas):
-            return
-        data = panel._active_data()
-        indices = np.asarray(panel.displayed_prepared_indices(), dtype=int)
-        if indices.size:
-            angles = np.asarray(data.two_theta_deg, dtype=float)
-            nearest = int(indices[np.argmin(np.abs(angles[indices] - float(event.xdata)))])
-            panel.request_point_mask(nearest)
+    def _pg_mask_requested(self, x_view: float) -> None:
+        """Map a masking click's angle to the nearest displayed point.
 
-    def _point_event_is_available(
-        self,
-        event: object,
-        panel: object,
-        canvas: object,
-    ) -> bool:
-        return bool(
-            self._toolbar.mode() == "mask"
-            and event.inaxes is panel.view("raw").axes
-            and event.button == 1
-            and event.xdata is not None
-            and canvas.widgetlock.available(self)
-        )
+        The pane emits the view-x (a 2θ angle) only while masking is armed; the
+        controller owns the data, so it resolves the nearest prepared index and
+        asks the panel to toggle it.
+        """
+        panel = self._panel
+        if panel is None:
+            return
+        indices = np.asarray(panel.displayed_prepared_indices(), dtype=int)
+        if not indices.size:
+            return
+        angles = np.asarray(panel._active_data().two_theta_deg, dtype=float)
+        nearest = int(indices[np.argmin(np.abs(angles[indices] - float(x_view)))])
+        panel.request_point_mask(nearest)
+
+    def _pg_cursor_moved(self, x_view: float, y_view: float) -> None:
+        """Read out the pointer over a pyqtgraph pane in that pane's own units."""
+        panel = self._panel
+        if panel is None:
+            return
+        pane = self._current_live_pane()
+        if pane is None:
+            return
+        _title, xlabel, ylabel = pane.axis_labels()
+        panel.set_cursor_readout(f"{xlabel} {x_view:.4g} · {ylabel} {y_view:.4g}")
+
+    def _pg_cursor_left(self) -> None:
+        panel = self._panel
+        if panel is not None:
+            panel.set_cursor_readout("")
 
     def _tab_changed(self, index: int) -> None:
         if self._projecting_tabs or index < 0:
             return
         self._requested_tab_index = index
-        # Each canvas navigates independently, so the buttons have to follow the
-        # view that is now on screen.  Otherwise pan left latched on the previous
-        # tab would keep the button pressed over a canvas that is not panning.
-        navigator = self._navigators.get(self.current_view_key())
-        if navigator is not None:
-            self._sync_navigation_buttons(navigator)
+        # Each view navigates independently, so the buttons have to follow the
+        # view now on screen.  Otherwise pan left latched on the previous tab
+        # would keep the button pressed over a view that is not panning.
+        pane = self._current_live_pane()
+        if pane is not None:
+            self._toolbar.show_navigation_mode(pane.navigation_mode())
+        else:
+            navigator = self._navigators.get(self.current_view_key())
+            if navigator is not None:
+                self._sync_navigation_buttons(navigator)
         self._panel.view_changed.emit(index)
 
     def _apply_tabs(self, expert_mode: bool, requested_index: int) -> None:

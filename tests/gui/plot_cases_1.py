@@ -65,8 +65,7 @@ def test_plot_panel_draws_raw_model_and_excluded_points_without_mutating_data(
     raw = panel.view("raw")
 
     np.testing.assert_allclose(_line_y(raw, "当前候选模型"), candidate.model_normalized * data.normalization)
-    excluded = next(line for line in raw.axes.lines if line.get_label() == "排除点")
-    np.testing.assert_allclose(excluded.get_xdata(), data.two_theta_deg[~mask])
+    np.testing.assert_allclose(_line_x(raw, "排除点"), data.two_theta_deg[~mask])
     for actual, expected in zip(
         (data.two_theta_deg, data.intensity_raw, data.fit_mask, candidate.model_normalized),
         before,
@@ -79,11 +78,11 @@ def test_plot_panel_raw_markers_separate_included_and_excluded_fill(qtbot) -> No
     data = prepared_data(size=4, fit_mask=np.array([True, False, True, False]))
     panel = _panel(qtbot, data=data, result=_result(data))
 
-    lines = {line.get_label(): line for line in panel.view("raw").axes.lines}
-    assert lines["拟合点"].get_marker() == "o"
-    assert lines["拟合点"].get_markerfacecolor() != "none"
-    assert lines["排除点"].get_marker() == "x"
-    assert lines["排除点"].get_markerfacecolor() == "none"
+    raw = panel.view("raw")
+    assert _marker(raw, "拟合点") == "o"
+    assert _marker_filled(raw, "拟合点")
+    assert _marker(raw, "排除点") == "x"
+    assert not _marker_filled(raw, "排除点")
 
 
 def test_plot_panel_log_reflectivity_uses_display_floor_without_mutating_arrays(
@@ -100,6 +99,30 @@ def test_plot_panel_log_reflectivity_uses_display_floor_without_mutating_arrays(
     np.testing.assert_array_equal(data.intensity_normalized, before)
 
 
+def test_plot_labels_avoid_english_and_jargon_leaks(qtbot) -> None:
+    """傻瓜式界面不该在中文标签里夹生词。
+
+    对数视图曾把纵轴写成 "归一化 R (display floor=...)"，不确定性视图把子图
+    标题写成 "profile likelihood 与区间"——两处都把英文术语直接漏给用户。标签
+    应当整句中文（保留数字与单位原文），所以这里断言换成中文说法、且旧生词不再
+    出现在任一坐标轴上。
+    """
+    from dataclasses import replace
+
+    data = prepared_data(size=4)
+    candidate = _candidate(data)
+    result = replace(final_fit_result(candidate), uncertainty=_uncertainty())
+    panel = _panel(qtbot, data=data, result=result)
+
+    log_ylabel = panel.view("log").axis_labels()[2]
+    assert "显示下限" in log_ylabel
+    assert "display floor" not in log_ylabel
+
+    titles = [axes.get_title() for axes in panel.view("uncertainty").figure.axes]
+    assert any("剖面似然" in title for title in titles)
+    assert not any("profile likelihood" in title for title in titles)
+
+
 def test_plot_panel_draws_qz4_weighted_residual_and_sld_from_candidate_arrays(
     qtbot,
 ) -> None:
@@ -111,12 +134,10 @@ def test_plot_panel_draws_qz4_weighted_residual_and_sld_from_candidate_arrays(
     result = replace(final_fit_result(candidate), uncertainty=_uncertainty())
     panel = _panel(qtbot, data=data, result=result)
 
-    qz4 = panel.view("qz4").axes.lines[0]
-    residual = panel.view("residual").axes.lines[0]
     sld_lines = panel.view("sld").axes.lines
-    np.testing.assert_array_equal(qz4.get_xdata(), candidate.qz_a_inv)
-    np.testing.assert_array_equal(residual.get_xdata(), candidate.qz_a_inv)
-    np.testing.assert_array_equal(residual.get_ydata(), candidate.weighted_residuals)
+    np.testing.assert_array_equal(_line_x(panel.view("qz4"), "归一化数据"), candidate.qz_a_inv)
+    np.testing.assert_array_equal(_line_x(panel.view("residual"), "加权残差"), candidate.qz_a_inv)
+    np.testing.assert_array_equal(_line_y(panel.view("residual"), "加权残差"), candidate.weighted_residuals)
     np.testing.assert_allclose(sld_lines[0].get_xdata(), candidate.sld_depth_a / 10.0)
     np.testing.assert_allclose(sld_lines[0].get_ydata(), candidate.sld_profile_a2.real)
     np.testing.assert_allclose(sld_lines[1].get_ydata(), candidate.sld_profile_a2.imag)
@@ -132,9 +153,9 @@ def test_plot_panel_qz4_extreme_qz_uses_finite_scaled_display_values(qtbot) -> N
     panel = _panel(qtbot, data=data, result=final_fit_result(candidate))
 
     qz4 = panel.view("qz4")
-    for line in qz4.axes.lines:
-        assert np.all(np.isfinite(np.asarray(line.get_ydata(), dtype=float)))
-    assert "归一化" in qz4.axes.get_ylabel()
+    for label in ("归一化数据", "当前候选模型"):
+        assert np.all(np.isfinite(_line_y(qz4, label)))
+    assert "归一化" in qz4.axis_labels()[2]
 
 
 def test_plot_panel_sld_overlays_other_candidate_real_profiles_faintly(qtbot) -> None:
@@ -290,12 +311,14 @@ def test_reflectivity_curve_carries_a_grid_to_read_values_against(qtbot) -> None
     data = prepared_data(size=4)
     panel = _panel(qtbot, data=data, result=_result(data))
 
-    axes = panel.view("log").axes
+    plot_item = panel.view("log").plot_item
 
-    assert axes.xaxis.get_gridlines()
-    assert axes.get_axisbelow()
-    assert all(line.get_visible() for line in axes.xaxis.get_gridlines())
-    assert all(line.get_visible() for line in axes.yaxis.get_gridlines())
+    # The pg pane carries its reference grid through showGrid on both axes, the
+    # twin of the matplotlib gridlines the mpl draw_* functions drew.
+    assert plot_item.ctrl.xGridCheck.isChecked()
+    assert plot_item.ctrl.yGridCheck.isChecked()
+    assert plot_item.getAxis("bottom").grid
+    assert plot_item.getAxis("left").grid
 
 
 def test_grid_skips_the_matrix_cells_and_the_colour_key_it_would_overdraw(qtbot) -> None:

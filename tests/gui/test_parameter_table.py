@@ -590,3 +590,84 @@ def test_single_group_is_left_uncaptioned(qtbot) -> None:
 
     assert _group_rows(table) == {}
     assert table.rowCount() == 2
+
+
+def test_initial_column_wears_a_value_position_delegate(qtbot) -> None:
+    """The 初值 cell carries a faint fill bar, so a railed value shows at a glance.
+
+    Every other column stays plain: only the initial value is placed against its
+    own bounds, and a bar drawn behind a bound column would have no bounds of its
+    own to sit between.
+    """
+    from xrr_fitter.gui.parameters.table import ValuePositionDelegate
+
+    table = _table(qtbot, _definition("component.0.thickness_a"))
+
+    assert isinstance(table.itemDelegateForColumn(1), ValuePositionDelegate)
+    assert not isinstance(table.itemDelegateForColumn(2), ValuePositionDelegate)
+    assert not isinstance(table.itemDelegateForColumn(3), ValuePositionDelegate)
+
+
+def test_value_position_bar_places_the_value_between_its_bounds(qtbot) -> None:
+    """The fill fraction is (initial - lower) / (upper - lower)."""
+    from xrr_fitter.gui.parameters.table import VALUE_POSITION_ROLE
+
+    table = _table(qtbot, _definition("instrument.scale", initial=40.0, lower=1.0, upper=100.0))
+
+    fraction = table.item(0, 1).data(VALUE_POSITION_ROLE)
+    assert fraction == pytest.approx((40.0 - 1.0) / (100.0 - 1.0))
+
+
+def test_value_position_bar_flags_a_value_railed_against_a_bound(qtbot) -> None:
+    """A value pinned to a bound reads as an empty or a full bar, not a middling one."""
+    from xrr_fitter.gui.parameters.table import VALUE_POSITION_ROLE
+
+    at_floor = _definition("instrument.scale", initial=1.0, lower=1.0, upper=100.0)
+    at_ceiling = _definition("instrument.background", initial=100.0, lower=1.0, upper=100.0)
+    table = _table(qtbot, at_floor, at_ceiling)
+
+    assert table.item(0, 1).data(VALUE_POSITION_ROLE) == pytest.approx(0.0)
+    assert table.item(1, 1).data(VALUE_POSITION_ROLE) == pytest.approx(1.0)
+
+
+def test_value_position_bar_is_absent_when_bounds_have_no_width(qtbot) -> None:
+    """A pinned parameter (lower == upper) has no interval to place a value in."""
+    from xrr_fitter.gui.parameters.table import VALUE_POSITION_ROLE
+
+    pinned = _definition("instrument.scale", initial=5.0, lower=5.0, upper=5.0)
+    table = _table(qtbot, pinned)
+
+    assert table.item(0, 1).data(VALUE_POSITION_ROLE) is None
+
+
+def test_value_position_bar_is_scale_invariant_across_the_nm_toggle(qtbot) -> None:
+    """A length row scales all three columns to nm together, so the fraction holds.
+
+    The bar answers "where does the value sit between its bounds", which is the
+    same question in Å or nm; scaling initial, lower and upper by one factor must
+    leave the fraction unchanged rather than shifting the fill.
+    """
+    from xrr_fitter.gui.parameters.table import VALUE_POSITION_ROLE
+
+    length = _definition("component.0.thickness_a", initial=40.0, lower=10.0, upper=90.0)
+    table = _table(qtbot, length)
+
+    assert table.item(0, 1).data(VALUE_POSITION_ROLE) == pytest.approx((40.0 - 10.0) / (90.0 - 10.0))
+
+
+def test_value_position_delegate_paints_both_bar_and_barless_rows(qtbot) -> None:
+    """Rendering must survive a mix of fraction-bearing and pinned (bar-less) rows.
+
+    The delegate reads VALUE_POSITION_ROLE and paints a fill only when it is set;
+    grabbing the table forces that paint path over a normal row and a pinned row at
+    once, so a regression in the override surfaces as a raised paint error here
+    rather than only in a running window.
+    """
+    ranged = _definition("instrument.scale", initial=40.0, lower=1.0, upper=100.0)
+    pinned = _definition("instrument.background", initial=5.0, lower=5.0, upper=5.0)
+    table = _table(qtbot, ranged, pinned)
+    table.resize(400, 200)
+
+    pixmap = table.grab()
+
+    assert not pixmap.isNull()

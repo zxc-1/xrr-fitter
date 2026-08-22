@@ -128,7 +128,11 @@ def test_plot_panel_candidate_redraw_failure_restores_all_views(
 
 def test_plot_panel_close_cancels_pending_draws_and_releases_plot_resources(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
-    canvases = tuple(panel.view(key).canvas for key in panel.view_keys())
+    # Only the matplotlib panes own a canvas with a deferred-draw timer; the live
+    # reflectivity panes drive their own scene, so the release contract is read
+    # off the static views.
+    mpl_keys = _mpl_view_keys(panel)
+    canvases = tuple(panel.view(key).canvas for key in mpl_keys)
     for canvas in canvases:
         canvas.draw_idle()
 
@@ -136,12 +140,14 @@ def test_plot_panel_close_cancels_pending_draws_and_releases_plot_resources(qtbo
 
     assert panel.resources_released() is True
     assert all(not canvas._draw_timer.isActive() for canvas in canvases)
-    assert all(not panel.view(key).figure.axes for key in panel.view_keys())
+    assert all(not panel.view(key).figure.axes for key in mpl_keys)
 
 
 def test_plot_panel_close_releases_agg_renderer_buffers(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
-    view = panel.view("raw")
+    # The Agg renderer buffer belongs to a matplotlib canvas; the raw pane is now
+    # a live pg widget, so the buffer-release contract is read off a static view.
+    view = panel.view("candidates")
     view.figure.set_layout_engine(None)
     view.figure.set_size_inches(0.8, 0.6)
     view.canvas.draw()
@@ -154,9 +160,10 @@ def test_plot_panel_close_releases_agg_renderer_buffers(qtbot) -> None:
 
 def test_hidden_plot_canvas_defers_queued_draw_until_visible(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
-    # Only the selected tab's canvas becomes visible, so the deferral contract
-    # is observed on the default view rather than an arbitrary background tab.
-    canvas = panel.view(panel.current_view_key()).canvas
+    # The deferral contract belongs to the matplotlib canvases; the default tab is
+    # now a live pg pane, so a static view is selected and its canvas observed.
+    panel.select_view("candidates")
+    canvas = panel.view("candidates").canvas
 
     QApplication.processEvents()
 
@@ -210,8 +217,10 @@ def test_plot_panel_python_collection_does_not_invoke_destroyed_child_slot(qapp)
 
 def test_plot_panel_create_redraw_close_releases_qt_and_matplotlib_objects(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
-    canvas_ref = weakref.ref(panel.view("raw").canvas)
-    figure_ref = weakref.ref(panel.view("raw").figure)
+    # The Qt/matplotlib object graph under test lives on the static views; the raw
+    # pane is a live pg widget with no figure, so a static view is weak-referenced.
+    canvas_ref = weakref.ref(panel.view("candidates").canvas)
+    figure_ref = weakref.ref(panel.view("candidates").figure)
     panel_ref = weakref.ref(panel)
 
     panel.close()
@@ -260,11 +269,13 @@ def test_plot_panel_keyboard_activates_modes_and_canvases_are_accessible(qtbot) 
     qtbot.keyClick(button, Qt.Key.Key_Space)
 
     assert panel.interaction_mode() == "mask"
+    # A live pane is its own addressable widget; an mpl view exposes one through
+    # .canvas. build_tabs gives both the same name/description/focus contract.
     for key in panel.view_keys():
-        canvas = panel.view(key).canvas
-        assert canvas.accessibleName()
-        assert canvas.accessibleDescription()
-        assert canvas.focusPolicy() == Qt.FocusPolicy.StrongFocus
+        widget = _addressable(panel.view(key))
+        assert widget.accessibleName()
+        assert widget.accessibleDescription()
+        assert widget.focusPolicy() == Qt.FocusPolicy.StrongFocus
 
 
 def test_plot_panel_mask_mode_click_requests_prepared_point(qtbot) -> None:
@@ -273,12 +284,12 @@ def test_plot_panel_mask_mode_click_requests_prepared_point(qtbot) -> None:
     emitted: list[int] = []
     panel.point_mask_requested.connect(emitted.append)
     panel.set_interaction_mode("mask")
-    canvas = panel.view("raw").canvas
+    raw = panel.view("raw")
 
-    canvas.callbacks.process(
-        "button_press_event",
-        _mouse_event("button_press_event", panel, float(data.two_theta_deg[2])),
-    )
+    # The pg pane reports a mask click as a scene view-x (a 2θ angle); the
+    # controller maps that angle to the nearest prepared point, the twin of the
+    # old canvas button-press the mpl pane fielded.
+    raw.point_mask_requested.emit(float(data.two_theta_deg[2]))
 
     assert emitted == [2]
 
@@ -296,7 +307,9 @@ def test_plot_panel_matplotlib_text_has_no_missing_cjk_glyphs(
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        for key in panel.view_keys():
+        # The missing-glyph warning is a matplotlib text-rendering concern; the
+        # live pg panes render labels through Qt, so only the static views draw.
+        for key in _mpl_view_keys(panel):
             view = panel.view(key)
             view.figure.set_layout_engine(None)
             view.figure.set_size_inches(0.8, 0.6)
@@ -311,19 +324,16 @@ def test_plot_panel_matplotlib_text_has_no_missing_cjk_glyphs(
 def test_live_preview_legend_draws_without_missing_cjk_glyphs(qtbot) -> None:
     data = prepared_data(size=4)
     panel = _panel(qtbot, data=data, result=_result(data))
+    log = panel.view("log")
 
+    # The searching-model preview is a lazily-created managed item named "搜索中
+    # 模型" on the live log pane; pg renders its label through Qt, so publishing
+    # then clearing must add and then drop exactly that one item.
     assert panel.set_preview_curve(data.qz_a_inv, np.full(data.qz_a_inv.size, 0.5))
+    assert log.preview_item is not None
 
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "error",
-            message=r"Glyph .* missing from font.*",
-            category=UserWarning,
-        )
-        panel.view("log").canvas.draw()
-
-        panel.clear_preview_curve()
-        panel.view("log").canvas.draw()
+    panel.clear_preview_curve()
+    assert log.preview_item is None
 
 
 def test_plot_panel_no_best_redraw_failure_restores_previous_candidate(
@@ -385,7 +395,9 @@ def test_plot_panel_parent_destroy_releases_diagnostic_views(qtbot) -> None:
     parent = QWidget()
     panel = PlotPanel(parent)
     panel.set_dataset("curve", prepared_data(size=4))
-    figures = tuple(panel.view(key).figure for key in panel.view_keys())
+    # Only the matplotlib views own a figure; the live panes release their own
+    # scene, so the figure-teardown contract is read off the static views.
+    figures = tuple(panel.view(key).figure for key in _mpl_view_keys(panel))
 
     parent.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
@@ -403,7 +415,9 @@ def test_plot_panel_range_drag_remains_visible_after_dataset_redraw(qtbot) -> No
     panel.set_dataset("curve", data)
 
     assert panel.visible_range() == pytest.approx((0.5, 2.5))
-    assert panel.view("raw").axes.patches
+    # The committed band rides the live pane's read-only region, redrawn from the
+    # retained visible range -- the twin of the matplotlib axvspan patch.
+    assert panel.view("raw").fit_range_item is not None
 
 
 def test_plot_panel_range_mode_drag_emits_stored_two_theta(qtbot) -> None:
@@ -422,15 +436,18 @@ def test_plot_panel_repeated_candidate_redraw_keeps_artists_axes_and_callbacks(q
     data = prepared_data(size=4)
     result = _result(data)
     panel = _panel(qtbot, data=data, result=result)
-    axes_ids = tuple(id(panel.view(key).axes) for key in panel.view_keys())
+    # Only the matplotlib views carry reusable axes and mpl callbacks; the live
+    # panes update managed items in place, so axis identity is read off them.
+    mpl_keys = _mpl_view_keys(panel)
+    axes_ids = tuple(id(panel.view(key).axes) for key in mpl_keys)
     callback_counts = panel.callback_counts()
 
     for index in range(8):
         panel.set_result(result, "candidate-a" if index % 2 == 0 else "candidate-b")
 
-    assert tuple(id(panel.view(key).axes) for key in panel.view_keys()) == axes_ids
+    assert tuple(id(panel.view(key).axes) for key in mpl_keys) == axes_ids
     assert panel.callback_counts() == callback_counts
-    assert max(len(panel.view(key).axes.lines) for key in panel.view_keys()) <= 4
+    assert max(len(panel.view(key).axes.lines) for key in mpl_keys) <= 4
 
 
 def test_plot_panel_replaces_stale_candidate_with_untrusted_no_best_result(qtbot) -> None:
@@ -448,7 +465,7 @@ def test_plot_panel_replaces_stale_candidate_with_untrusted_no_best_result(qtbot
     panel.set_result(no_best, None)
 
     assert panel.selected_candidate_id() is None
-    assert "暂无当前候选" in "\n".join(text.get_text() for text in panel.view("qz4").axes.texts)
+    assert "暂无当前候选" in (panel.view("qz4").placeholder_text() or "")
     labels = tuple(line.get_label() for line in panel.view("candidates").axes.lines)
     assert any("candidate-invalid" in label and "仅供检查" in label for label in labels)
 
@@ -461,7 +478,9 @@ def test_plot_panel_teardown_does_not_leave_deleted_canvas_traceback(
 
     panel = PlotPanel()
     panel.set_dataset("curve", prepared_data(size=4))
-    for key in panel.view_keys():
+    # Only the matplotlib canvases can leave a deleted-C++ traceback on teardown;
+    # the live panes have no canvas, so the static views drive the queued draws.
+    for key in _mpl_view_keys(panel):
         panel.view(key).canvas.draw_idle()
 
     panel.deleteLater()

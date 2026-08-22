@@ -55,7 +55,10 @@ def test_plot_text_meets_minimum_contrast_in_both_palettes() -> None:
 
 
 def test_diagnostic_views_paint_the_resolved_background(qtbot) -> None:
+    import numpy as np
+
     from xrr_fitter.gui.plots.diagnostics import build_tabs
+    from xrr_fitter.gui.plots.live import LiveReflectivityPlot
 
     tabs, views = build_tabs()
     qtbot.addWidget(tabs)
@@ -64,8 +67,17 @@ def test_diagnostic_views_paint_the_resolved_background(qtbot) -> None:
     expected = theme.plot_palette(theme.palette_tokens(application.palette())).background
 
     for view in views.values():
-        assert view.figure.get_facecolor() == expected
-        assert view.axes.get_facecolor() == expected
+        # The four reflectivity panes render through pyqtgraph, which the Qt
+        # stylesheet and apply_figure_palette never reach, so they take the
+        # resolved background explicitly; QColor stores channels at reduced
+        # precision, so that hand-off round-trips to only ~1e-6 and is compared
+        # with a tolerance. The matplotlib views paint the palette straight onto
+        # the figure and axes at full float precision, so they still match ==.
+        if isinstance(view, LiveReflectivityPlot):
+            assert np.allclose(view.background_color(), expected, atol=1e-6)
+        else:
+            assert view.figure.get_facecolor() == expected
+            assert view.axes.get_facecolor() == expected
 
 
 def test_palette_survives_a_real_draw_that_clears_the_axes(qtbot, monkeypatch) -> None:
@@ -88,7 +100,10 @@ def test_palette_survives_a_real_draw_that_clears_the_axes(qtbot, monkeypatch) -
     )
     tabs, views = diagnostics.build_tabs()
     qtbot.addWidget(tabs)
-    view = views["log"]
+    # The log pane now renders through pyqtgraph, so this exercises the
+    # matplotlib clear-and-redraw path on the candidates view, a single-axes
+    # figure that still owns the .axes/.figure draw_log clears and repaints.
+    view = views["candidates"]
     expected = theme.DARK_PLOT_PALETTE
 
     draw_log(view, prepared_data(size=4), None)
@@ -104,7 +119,9 @@ def test_empty_state_message_uses_the_palette_rather_than_a_fixed_grey(qtbot) ->
 
     tabs, views = build_tabs()
     qtbot.addWidget(tabs)
-    view = views["log"]
+    # draw_empty writes its centred message onto a matplotlib axes; the log pane
+    # is now pyqtgraph, so the candidates view is the single-axes mpl stand-in.
+    view = views["candidates"]
 
     draw_empty(view, "标题")
 

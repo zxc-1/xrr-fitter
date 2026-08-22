@@ -8,7 +8,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from matplotlib.backend_bases import MouseEvent
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
@@ -192,36 +191,24 @@ def _lock_all_but_first_thickness(window, initial_nm: float) -> None:
     assert tuple(item.name for item in definitions if not item.locked) == (free_name,)
 
 
-def _mouse_event(name: str, window, xdata: float) -> MouseEvent:
-    view = window.plot_panel.view("raw")
-    view.canvas.draw()
-    ydata = float(np.nanmedian(view.axes.lines[0].get_ydata()))
-    x, y = view.axes.transData.transform((xdata, ydata))
-    return MouseEvent(name, view.canvas, x, y, button=1)
-
-
 def _drag_fit_range(window, lower: float, upper: float) -> None:
-    canvas = window.plot_panel.view("raw").canvas
-    canvas.callbacks.process(
-        "button_press_event",
-        _mouse_event("button_press_event", window, lower),
-    )
-    canvas.callbacks.process(
-        "motion_notify_event",
-        _mouse_event("motion_notify_event", window, upper),
-    )
-    canvas.callbacks.process(
-        "button_release_event",
-        _mouse_event("button_release_event", window, upper),
-    )
+    # The raw pane is a pyqtgraph widget (P2-10), so a fit range is dragged by
+    # moving its armed LinearRegionItem and firing the same "drag finished"
+    # signal a mouse release raises, driving the real _emit_range path.
+    region = window.plot_panel.view("raw").range_item
+    # setRegion already emits sigRegionChangeFinished once; block it so the
+    # explicit emit below fires exactly one commit, matching a real drag.
+    region.blockSignals(True)
+    region.setRegion((float(lower), float(upper)))
+    region.blockSignals(False)
+    region.sigRegionChangeFinished.emit(region)
 
 
 def _click_point_mask(window, angle: float) -> None:
-    canvas = window.plot_panel.view("raw").canvas
-    canvas.callbacks.process(
-        "button_press_event",
-        _mouse_event("button_press_event", window, angle),
-    )
+    # Masking on the pyqtgraph pane resolves the clicked 2θ angle through the
+    # same view-x entry point a scene click uses, so it honours the masking
+    # guard the mask-mode button arms.
+    window.plot_panel.view("raw")._mask_from_view_x(float(angle))
 
 
 def _install_fast_fit_config(window) -> None:

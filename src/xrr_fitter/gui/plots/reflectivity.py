@@ -29,6 +29,37 @@ class PreparedProjectPlots:
     candidate_id: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class ReflectivityPaneArrays:
+    """Backend-neutral arrays for the four interactive reflectivity panes.
+
+    Each field is exactly what the matching ``LiveReflectivityPlot.show_*`` method
+    consumes, so panel dispatch becomes a dumb hand-off and the pyqtgraph panes
+    render the same numbers the matplotlib ``draw_*`` functions used to plot. The
+    log observed/model values are stored unfloored because the widget applies the
+    display floor on show, matching ``draw_log``; a ``None`` candidate leaves every
+    fit-dependent member empty so those panes clear rather than draw a bare data
+    series as if it were a fit, matching the matplotlib placeholder state. The
+    ``qz4_ylabel`` mirrors ``draw_qz4``'s dynamic axis label (it records the
+    scaling reference on overflow) and ``quality_caption`` mirrors the log/raw
+    ``J=… · 平均残差 …`` note, so the pg panes annotate identically; both are
+    ``None`` without a candidate.
+    """
+
+    log_angles: np.ndarray
+    log_observed: np.ndarray
+    log_model: np.ndarray | None
+    r_floor: float
+    raw_angles: np.ndarray
+    raw_intensity: np.ndarray
+    raw_mask: np.ndarray
+    raw_model: np.ndarray | None
+    qz4: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None
+    residual: tuple[np.ndarray, np.ndarray] | None
+    qz4_ylabel: str | None
+    quality_caption: str | None
+
+
 def validate_plot_data(data: api.PreparedData, mask: object) -> np.ndarray:
     arrays = (
         np.asarray(data.two_theta_deg),
@@ -140,6 +171,23 @@ def prepare_project_plots(project: api.XrrProject) -> PreparedProjectPlots:
     )
 
 
+def _quality_caption_text(candidate: object | None) -> str | None:
+    """Compose the ``J=… · 平均残差 …`` note both backends annotate with.
+
+    Factoring the string here keeps the matplotlib ``_quality_caption`` overlay and
+    the pyqtgraph ``ReflectivityPaneArrays.quality_caption`` byte-identical, so the
+    parity test that compares them is really pinning one source of truth.
+    """
+    if candidate is None:
+        return None
+    residuals = np.asarray(candidate.log_residuals_decades, dtype=float)
+    finite = residuals[np.isfinite(residuals)]
+    parts = [f"J={candidate.objective:.4g}"]
+    if finite.size:
+        parts.append(f"平均残差 {np.mean(np.abs(finite)):.3g} decade")
+    return " · ".join(parts)
+
+
 def _quality_caption(axes: object, candidate: object | None) -> None:
     """Annotate how well the drawn candidate agrees with the data.
 
@@ -148,17 +196,13 @@ def _quality_caption(axes: object, candidate: object | None) -> None:
     absolute log-decade miss, which reads as "off by this many decades on
     average" and is the same quantity the exported residual plot labels.
     """
-    if candidate is None:
+    caption = _quality_caption_text(candidate)
+    if caption is None:
         return
-    residuals = np.asarray(candidate.log_residuals_decades, dtype=float)
-    finite = residuals[np.isfinite(residuals)]
-    parts = [f"J={candidate.objective:.4g}"]
-    if finite.size:
-        parts.append(f"平均残差 {np.mean(np.abs(finite)):.3g} decade")
     axes.text(
         0.99,
         0.02,
-        " · ".join(parts),
+        caption,
         ha="right",
         va="bottom",
         transform=axes.transAxes,
@@ -231,7 +275,7 @@ def draw_log(
     axes.set(
         title="对数反射率",
         xlabel="2θ (deg)",
-        ylabel=f"归一化 R (display floor={data.r_floor:g})",
+        ylabel=f"归一化 R（显示下限 {data.r_floor:g}）",
         yscale="log",
     )
     axes.yaxis.set_major_formatter(LogFormatter())
@@ -305,6 +349,68 @@ def _qz4_display_values(
     return qz_finite, scaled, label
 
 
+def _qz4_axis_label(data_label: str, model_label: str) -> str:
+    """Combine the data and model qz⁴ labels the way ``draw_qz4`` renders them.
+
+    The two curves normally share a label; they diverge only when one overflowed
+    and got scaled, in which case the axis spells out both references so a reader
+    is never misled about which reference each series used.
+    """
+    if data_label == model_label:
+        return data_label
+    return f"数据: {data_label}; 模型: {model_label}"
+
+
+def reflectivity_pane_arrays(
+    data: api.PreparedData,
+    mask: np.ndarray,
+    candidate: object | None,
+) -> ReflectivityPaneArrays:
+    """Project prepared data and a candidate into the four panes' display arrays.
+
+    This is the fallible preflight of the pyqtgraph transaction: the qz⁴ transform
+    is the one non-trivial computation, and it is already overflow-guarded, so a
+    successful return means every pane can be pushed with an infallible ``setData``.
+    """
+    angles = np.asarray(data.two_theta_deg, dtype=float)
+    observed = np.asarray(data.intensity_normalized, dtype=float)
+    raw = np.asarray(data.intensity_raw, dtype=float)
+    keep = np.asarray(mask, dtype=bool)
+    if candidate is None:
+        return ReflectivityPaneArrays(
+            log_angles=angles,
+            log_observed=observed,
+            log_model=None,
+            r_floor=float(data.r_floor),
+            raw_angles=angles,
+            raw_intensity=raw,
+            raw_mask=keep,
+            raw_model=None,
+            qz4=None,
+            residual=None,
+            qz4_ylabel=None,
+            quality_caption=None,
+        )
+    model_normalized = np.asarray(candidate.model_normalized, dtype=float)
+    qz = np.asarray(candidate.qz_a_inv, dtype=float)
+    data_qz, data_values, data_label = _qz4_display_values(qz, observed)
+    model_qz, model_values, model_label = _qz4_display_values(qz, model_normalized)
+    return ReflectivityPaneArrays(
+        log_angles=angles,
+        log_observed=observed,
+        log_model=model_normalized,
+        r_floor=float(data.r_floor),
+        raw_angles=angles,
+        raw_intensity=raw,
+        raw_mask=keep,
+        raw_model=model_normalized * data.normalization,
+        qz4=(data_qz, data_values, model_qz, model_values),
+        residual=(qz, np.asarray(candidate.weighted_residuals, dtype=float)),
+        qz4_ylabel=_qz4_axis_label(data_label, model_label),
+        quality_caption=_quality_caption_text(candidate),
+    )
+
+
 def draw_qz4(
     view: DiagnosticView,
     data: api.PreparedData,
@@ -326,10 +432,7 @@ def draw_qz4(
     axes.clear()
     axes.plot(data_qz, data_transform, "o", label="归一化数据")
     axes.plot(model_qz, model_transform, "--", label="当前候选模型")
-    if ylabel == model_label:
-        axis_label = ylabel
-    else:
-        axis_label = f"数据: {ylabel}; 模型: {model_label}"
+    axis_label = _qz4_axis_label(ylabel, model_label)
     axes.set(title="qz⁴R 诊断变换（非拟合数据）", xlabel="qz (Å⁻¹)", ylabel=axis_label)
     axes.legend()
     finish_view(view)

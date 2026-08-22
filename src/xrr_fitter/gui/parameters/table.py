@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from math import exp
+from math import exp, isfinite
 
-from PySide6.QtCore import QSignalBlocker, Qt
-from PySide6.QtWidgets import QHeaderView, QTableWidget, QTableWidgetItem
+from PySide6.QtCore import QRectF, QSignalBlocker, Qt
+from PySide6.QtGui import QPalette
+from PySide6.QtWidgets import (
+    QHeaderView,
+    QStyledItemDelegate,
+    QTableWidget,
+    QTableWidgetItem,
+)
 
 import xrr_fitter.api as api
 
@@ -21,6 +27,12 @@ DISPLAY_SIGNIFICANT = 6
 # whole row back off screen, so without this the rounded text of the two cells
 # the user did not touch would be persisted in place of their exact values.
 EXACT_VALUE_ROLE = Qt.ItemDataRole.UserRole + 1
+# Fraction in [0, 1] locating the initial value between its lower and upper bound,
+# painted as a faint fill behind the 初值 cell by ValuePositionDelegate.  A value
+# railed against a bound then reads as an empty or a full bar at a glance, the way
+# GenX marks parameters that have hit their limits.  Left unset (None) when the
+# bounds have no width, so a pinned parameter draws no misleading bar.
+VALUE_POSITION_ROLE = Qt.ItemDataRole.UserRole + 3
 # Per-column width policy.  Sizing every column to its contents clipped 单位 and
 # 锁定 outright, so one column has to absorb the surplus dock width.  That column
 # is the name: it carries the longest text and is the one a user reads to tell
@@ -156,6 +168,33 @@ def _row_layout(
     return tuple(rows)
 
 
+class ValuePositionDelegate(QStyledItemDelegate):
+    """Paint a faint fill bar behind a cell marking where its value sits in range.
+
+    The bar is drawn first and the cell's text over it, so the reading stays
+    legible while the fill gives an at-a-glance sense of how close a parameter is
+    to a bound.  The tint follows the palette's highlight colour at low opacity so
+    it reads the same under the light and the dark appearance, and a cell carrying
+    no VALUE_POSITION_ROLE (a caption, or a pinned parameter) renders plainly.
+    """
+
+    # Opacity of the fill over the cell background: strong enough to see, faint
+    # enough to leave the digits legible.
+    BAR_ALPHA = 48
+
+    def paint(self, painter, option, index) -> None:  # noqa: N802 - Qt override
+        fraction = index.data(VALUE_POSITION_ROLE)
+        if fraction is not None:
+            colour = option.palette.color(QPalette.ColorRole.Highlight)
+            colour.setAlpha(self.BAR_ALPHA)
+            bar = QRectF(option.rect)
+            bar.setWidth(bar.width() * float(fraction))
+            painter.save()
+            painter.fillRect(bar, colour)
+            painter.restore()
+        super().paint(painter, option, index)
+
+
 class ParameterTable(QTableWidget):
     """Render immutable declarations without owning persisted settings."""
 
@@ -167,6 +206,9 @@ class ParameterTable(QTableWidget):
         header = self.horizontalHeader()
         for column, mode in enumerate(COLUMN_RESIZE_MODES):
             header.setSectionResizeMode(column, mode)
+        # The 初值 column carries a value-position bar behind its text; the bounds
+        # columns stay plain.  VALUE_COLUMNS[0] is that initial column.
+        self.setItemDelegateForColumn(VALUE_COLUMNS[0], ValuePositionDelegate(self))
         self._definitions: tuple[api.ParameterDefinition, ...] = ()
         self._rows: tuple[tuple[str, api.ParameterDefinition | None], ...] = ()
 
@@ -338,7 +380,26 @@ def _parameter_item(
         item.setData(EXACT_VALUE_ROLE, exact)
         if item.text() != repr(exact):
             item.setToolTip(repr(exact))
+    if column == VALUE_COLUMNS[0]:
+        fraction = _value_position(numbers)
+        if fraction is not None:
+            item.setData(VALUE_POSITION_ROLE, fraction)
     return item
+
+
+def _value_position(numbers: tuple[float, float, float]) -> float | None:
+    """Where the initial value sits between its bounds, or None if that is ill-defined.
+
+    The fraction is a ratio of like-scaled quantities, so it is identical whether
+    the row shows Å or nm.  A zero-width or non-finite interval has no position to
+    report, and the result is clamped so a value at or past a bound never paints a
+    bar wider than the cell.
+    """
+    initial, lower, upper = numbers
+    width = upper - lower
+    if not isfinite(width) or width <= 0.0:
+        return None
+    return min(1.0, max(0.0, (initial - lower) / width))
 
 
 def _lock_item(definition: api.ParameterDefinition) -> QTableWidgetItem:
