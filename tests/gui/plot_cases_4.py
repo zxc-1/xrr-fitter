@@ -280,14 +280,21 @@ def test_plot_controls_wear_distinct_icons(qtbot) -> None:
         seen[glyph] = name
 
 
-def test_plot_controls_keep_their_text_beside_the_icon(qtbot) -> None:
-    """Icons name the tool at a glance; the label still spells it out in full."""
+def test_plot_controls_show_the_glyph_alone(qtbot) -> None:
+    """The bar floats over the plot, so it shows icons and no words.
+
+    Labels are what made the bar as wide as the panel; over the data they would
+    curtain the curve the tool acts on.  The name is not lost, it moves to the
+    tooltip and the accessible name, which is where peer charting tools keep it.
+    """
     panel = _panel(qtbot, data=prepared_data(size=4))
 
     for name in PLOT_CONTROL_NAMES:
         button = panel.findChild(QToolButton, name)
-        assert button.text() != ""
-        assert button.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        assert button.text() == ""
+        assert button.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonIconOnly
+        assert button.toolTip() != ""
+        assert button.accessibleName() != ""
 
 
 def _scroll_on_view(panel, key: str, *, step: float, xfrac: float = 0.5, yfrac: float = 0.5):

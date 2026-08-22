@@ -12,7 +12,7 @@ from math import isfinite
 
 import numpy as np
 from matplotlib.backend_bases import NavigationToolbar2
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal
 from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QToolButton, QWidget
 
 from xrr_fitter.gui import theme
@@ -42,17 +42,25 @@ PAN_MODE = "pan/zoom"
 # divides the span (zooms in) and scrolling down multiplies it (zooms out).
 WHEEL_ZOOM_STEP = 1.2
 
+# The glyph painters lay their strokes out on a 16px grid, so drawing at 16
+# applies a scale of exactly 1 and every stroke lands on a whole pixel; any
+# other size resamples them and softens the edges.
+GLYPH_PX = 16
+
 
 def _wear_glyph(button: QToolButton, glyph: str) -> None:
-    """Hang the painted glyph beside the label so the tool reads at a glance.
+    """Wear the painted glyph alone, with the name kept for hover and screen readers.
 
-    The label stays: the icon names the tool for the eye that already knows it,
-    the words spell it out for the eye that does not, and keeping both is what a
-    graphical control is for.  ``ToolButtonTextBesideIcon`` is the style the shell
-    toolbar uses too, so the plot row lines up with the rest of the window.
+    These controls float over the plot itself, the way every peer charting tool
+    puts its mode bar, and a floating bar has to stay small enough not to cover
+    the data it acts on.  Labels are what made it wide, so the glyph carries the
+    meaning and the words move to the tooltip and the accessible name.
     """
-    button.setIcon(plot_icon(glyph))
-    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+    button.setIcon(plot_icon(glyph, size=GLYPH_PX))
+    button.setIconSize(QSize(GLYPH_PX, GLYPH_PX))
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+    button.setAutoRaise(True)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
 
 
 class PlotNavigator(NavigationToolbar2):
@@ -144,15 +152,16 @@ class PlotInteractionToolbar(QWidget):
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(theme.SPACE_XS)
+        # Padding of its own, because the bar floats over the plot as a card
+        # rather than sitting in a row that already carries the panel's margins.
+        layout.setContentsMargins(theme.SPACE_XS, theme.SPACE_XS, theme.SPACE_XS, theme.SPACE_XS)
+        layout.setSpacing(2)
         for index, (mode, name, text, description) in enumerate(MODE_SPECS):
             button = QToolButton(self)
             button.setObjectName(name)
-            button.setText(text)
             button.setCheckable(True)
             button.setAccessibleName(text)
-            button.setToolTip(description)
+            button.setToolTip(f"{text}：{description}")
             _wear_glyph(button, mode)
             self._group.addButton(button, index)
             self._buttons[mode] = button
@@ -160,14 +169,13 @@ class PlotInteractionToolbar(QWidget):
             button.setProperty("plotMode", mode)
             button.clicked.connect(self._button_clicked)
         # Three related groups read as three groups because of the gaps between
-        # them, and the row ends with the stretch rather than carrying it in the
-        # middle: a spring between the modes and the zoom actions used to open a
-        # void as wide as the panel, leaving the buttons stranded at both edges.
-        layout.addSpacing(theme.SPACE_MD)
+        # them.  No trailing stretch: the bar is sized to its contents so it can
+        # be placed as a card in the plot's corner, and a stretch would make it
+        # claim the full width and curtain the data behind it.
+        layout.addSpacing(theme.SPACE_SM)
         self._install_navigation_buttons(layout)
-        layout.addSpacing(theme.SPACE_MD)
+        layout.addSpacing(theme.SPACE_SM)
         self._install_zoom_buttons(layout)
-        layout.addStretch(1)
         self._buttons["view"].setChecked(True)
         self._mode = "view"
 
@@ -183,10 +191,9 @@ class PlotInteractionToolbar(QWidget):
         for action, name, text, description in NAVIGATION_SPECS:
             button = QToolButton(self)
             button.setObjectName(name)
-            button.setText(text)
             button.setCheckable(action != "home")
             button.setAccessibleName(text)
-            button.setToolTip(description)
+            button.setToolTip(f"{text}：{description}")
             _wear_glyph(button, action)
             button.setProperty("plotNavigation", action)
             button.clicked.connect(self._navigation_clicked)
@@ -220,16 +227,14 @@ class PlotInteractionToolbar(QWidget):
         """
         self._zoom_to_range = QToolButton(self)
         self._zoom_to_range.setObjectName("plotZoomToRange")
-        self._zoom_to_range.setText("缩放拟合区")
         self._zoom_to_range.setAccessibleName("缩放到拟合范围")
-        self._zoom_to_range.setToolTip("将反射率视图缩放到当前拟合角度范围")
+        self._zoom_to_range.setToolTip("缩放拟合区：将反射率视图缩放到当前拟合角度范围")
         _wear_glyph(self._zoom_to_range, "zoom_to_range")
         self._zoom_to_range.clicked.connect(lambda: self.zoom_to_range_requested.emit())
         self._reset_zoom = QToolButton(self)
         self._reset_zoom.setObjectName("plotResetZoom")
-        self._reset_zoom.setText("全览")
         self._reset_zoom.setAccessibleName("恢复完整视图")
-        self._reset_zoom.setToolTip("恢复到完整角度范围")
+        self._reset_zoom.setToolTip("全览：恢复到完整角度范围")
         _wear_glyph(self._reset_zoom, "reset_zoom")
         self._reset_zoom.clicked.connect(lambda: self.reset_zoom_requested.emit())
         layout.addWidget(self._zoom_to_range)

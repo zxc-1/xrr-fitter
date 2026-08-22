@@ -78,6 +78,12 @@ FONT_PT_LG = 14
 # unset), which is what made neighbouring controls in one row look mismatched.
 CONTROL_MIN_H = 22
 
+# The side of one cell in the plot's floating mode bar.  That bar is the one
+# place a button holds a glyph and nothing else, so it opts out of CONTROL_MIN_H
+# and the general button padding: a square cell a little larger than the glyph
+# keeps the bar a narrow strip over the data instead of a slab across it.
+GLYPH_CELL_PX = 24
+
 # Unlike the tokens above, these do not follow the appearance.  A series that
 # changed hue when the desktop switched to dark would invalidate the reference a
 # user has already built ("the blue curve is my data"), so each hue is instead
@@ -242,6 +248,24 @@ QFrame[sectionCard="true"] {{
     border-radius: 8px;
     background: transparent;
 }}
+QWidget#plotInteractionToolbar {{
+    background: {tokens.surface};
+    border: 1px solid {tokens.surface_border};
+    border-radius: 7px;
+}}
+/* The floating mode bar sits on top of the data, so its buttons must not carry
+   the padding and min-height the general rule gives a button holding text: that
+   turned an 18px glyph into a 39x43 slab and made the bar wide enough to crowd
+   the plot title.  Square, glyph-sized cells keep the bar the narrow strip a
+   charting mode bar is supposed to be. */
+QWidget#plotInteractionToolbar QToolButton {{
+    padding: 0px;
+    min-width: {GLYPH_CELL_PX}px;
+    max-width: {GLYPH_CELL_PX}px;
+    min-height: {GLYPH_CELL_PX}px;
+    max-height: {GLYPH_CELL_PX}px;
+    border-radius: 4px;
+}}
 QLabel[sectionHeader="true"] {{
     font-weight: 700;
     padding: 2px 0px;
@@ -254,6 +278,13 @@ QLabel[statusKind="warn"] {{ color: {tokens.warn}; }}
 QLabel[statusKind="error"] {{ color: {tokens.error}; }}
 QLabel#confidenceBadge {{ font-weight: 600; }}
 QTabBar::tab {{ padding: {SPACE_XS}px {SPACE_MD}px; }}
+/* Nine diagnostic labels want 495px of text; the tab stack gets 568px once both
+   docks are open.  At the general 12px side padding the chrome alone eats 216px
+   and every label elides down to two characters, which is where 加权残差 /
+   残差热图 / 参数热图 become indistinguishable.  Trimming just this bar's side
+   padding to 4px fits all nine names in full with no ellipsis, and leaves the
+   roomier padding to the tab bars that hold two or three labels. */
+QTabWidget#diagnosticTabs QTabBar::tab {{ padding: {SPACE_XS}px {SPACE_XS}px; }}
 QGroupBox {{
     border: 1px solid {tokens.surface_border};
     border-radius: 8px;
