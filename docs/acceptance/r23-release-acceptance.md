@@ -32,8 +32,9 @@ verdict, and the GitHub Release remains a draft for owner review.
   failures retain the resolver's stderr for diagnosis.
 - Fresh locked-environment evidence for this delta: `quality` 186 passed,
   `tools` 448 passed, `unit` 1688 passed, `integration` 14 passed, `gui` 520
-  passed, `spawn` 4 passed, and `regression` 50 passed. The statistical corpus
-  remains governed by the dedicated long-running gate below.
+  passed, `spawn` 4 passed, `regression` 50 passed, and the statistical corpus
+  `2 passed in 8510.99s (2:21:50)`. The corpus report retained its approved
+  `220/220` result with no failed case IDs.
 
 The delta does not change the owner-data, distribution, or release-identity
 claims above. Those claims still require a clean exact-SHA run after the final
