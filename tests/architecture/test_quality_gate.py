@@ -147,6 +147,7 @@ def _readiness_job() -> dict[str, object]:
                 "run": "\n".join(
                     (
                         "set -euo pipefail",
+                        'git fetch --force --no-tags origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"',
                         "python3.12 tools/release_version.py \\",
                         '  --repo-root "$GITHUB_WORKSPACE" \\',
                         '  --tag "$GITHUB_REF_NAME"',

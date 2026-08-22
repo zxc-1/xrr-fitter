@@ -30,6 +30,16 @@ def test_candidate_readiness_validates_the_version_tag() -> None:
     assert '"$GITHUB_REF_NAME"' in validation["run"]
 
 
+def test_candidate_readiness_restores_the_remote_annotated_tag_before_validation() -> None:
+    job = _payload()["jobs"]["candidate-readiness"]
+    validation = next(step for step in job["steps"] if step.get("name") == "Validate release version tag")
+    run = validation["run"]
+    restore = 'git fetch --force --no-tags origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"'
+
+    assert restore in run
+    assert run.index(restore) < run.index("python3.12 tools/release_version.py")
+
+
 def test_version_tag_release_builds_windows_after_release_gates() -> None:
     windows = _payload()["jobs"]["windows"]
     assert windows["needs"] == ["release"]
