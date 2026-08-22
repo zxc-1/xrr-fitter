@@ -25,14 +25,21 @@ COMMAND_PIXMAPS: dict[str, QStyle.StandardPixmap] = {
     # drive glyph: a save aimed at a chosen location rather than the open file.
     "save_project_as_dialog": QStyle.StandardPixmap.SP_DriveFDIcon,
     "reload_source_dialog": QStyle.StandardPixmap.SP_BrowserReload,
-    "relink_source_dialog": QStyle.StandardPixmap.SP_FileLinkIcon,
+    # Not SP_FileLinkIcon: the native macOS style has no "linked file" pixmap and
+    # falls back to the plain SP_FileIcon, so 重新链接 rendered pixel-identical to
+    # 新建项目.  A forward arrow keeps it in the same family as its sibling 重新加载
+    # (a reload arrow) while reading as "re-point the source at a new file".
+    "relink_source_dialog": QStyle.StandardPixmap.SP_ArrowForward,
     "export_results_dialog": QStyle.StandardPixmap.SP_FileDialogDetailedView,
     "start_fit": QStyle.StandardPixmap.SP_MediaPlay,
     "cancel_fit": QStyle.StandardPixmap.SP_BrowserStop,
     "import_files": QStyle.StandardPixmap.SP_FileDialogContentsView,
-    # Not SP_DirOpenIcon: that is 打开项目, and a menu of three folder glyphs
-    # tells the three commands apart by nothing.
-    "import_folder": QStyle.StandardPixmap.SP_DirLinkIcon,
+    # Not SP_DirLinkIcon: like the file-link glyph above it degrades to the bare
+    # folder the native style also hands 打开项目 (SP_DirOpenIcon), so the two were
+    # indistinguishable.  SP_FileDialogNewFolder is the one folder-flavoured pixmap
+    # this style renders distinctly, and a menu of look-alike folders tells its
+    # commands apart by nothing.
+    "import_folder": QStyle.StandardPixmap.SP_FileDialogNewFolder,
     "force_stop": QStyle.StandardPixmap.SP_MediaStop,
 }
 

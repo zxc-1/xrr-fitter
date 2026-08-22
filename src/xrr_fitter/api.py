@@ -127,6 +127,7 @@ from xrr_fitter.services.structures import (
     analyze_structure,
     record_oxide_decision,
     set_structure,
+    sld_nominal_profile,
     suggest_oxide_layers,
     validate_structure,
 )
@@ -258,6 +259,7 @@ __all__ = (
     "set_sharing_rules",
     "set_structure",
     "set_workspace_state",
+    "sld_nominal_profile",
     "sld_uncertainty_bands",
     "start_fit_job",
     "start_automatic_fit_job",

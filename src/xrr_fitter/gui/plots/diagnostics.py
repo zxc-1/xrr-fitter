@@ -20,9 +20,10 @@ from matplotlib.figure import Figure
 from matplotlib.text import Text
 from matplotlib.ticker import AutoMinorLocator, FixedLocator, LogFormatter
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QApplication, QTabWidget
+from PySide6.QtWidgets import QTabWidget
 
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.plots.live import LiveReflectivityPlot
 
 # The switchable diagnostic tabs, in display order. The log view leads because
 # reflectivity spans several decades: on a linear axis everything below the
@@ -46,6 +47,13 @@ TAB_SPECS = (
 COMPANION_SPEC = ("sld", "SLD 深度剖面", "查看当前候选的实部和虚部 SLD")
 
 VIEW_SPECS = (*TAB_SPECS, COMPANION_SPEC)
+
+# The four interactive reflectivity panes render live through pyqtgraph
+# (LiveReflectivityPlot); every other view stays matplotlib. build_tabs keys on
+# this set to build heterogeneous tabs, and panel dispatch keys on the widget
+# type (isinstance) so the all-matplotlib scratch preflight still takes the
+# draw_* path while the live dict takes the show_* path.
+LIVE_PANE_KEYS = ("log", "raw", "qz4", "residual")
 
 DIAGNOSTIC_LABELS = {
     "gauss_hermite_unconverged": "Gauss-Hermite 积分未收敛",
@@ -199,7 +207,7 @@ def draw_empty(view: DiagnosticView, title: str, message: str = "暂无可用数
 def _axes(figure: Figure, key: str) -> object:
     if key == "uncertainty":
         correlation, profile = figure.subplots(1, 2)
-        profile.set_title("profile likelihood 与区间")
+        profile.set_title("参数剖面似然与区间")
         return correlation
     return figure.subplots()
 
@@ -207,14 +215,13 @@ def _axes(figure: Figure, key: str) -> object:
 def current_plot_palette() -> theme.PlotPalette:
     """Resolve the figure palette from the running application's palette.
 
-    Figures are drawn outside the stylesheet, so each draw reads the palette
-    afresh; that is what lets a system appearance change reach the plots on the
-    next repaint without any switching logic.
+    Delegates to :func:`theme.current_plot_palette` so the matplotlib figures
+    and the pyqtgraph panes share one resolver.  Kept as a module-global name
+    here because ``apply_figure_palette`` and the ``draw_*`` functions call it
+    late-bound, and tests monkeypatch ``diagnostics.current_plot_palette`` to
+    force a palette onto that matplotlib path.
     """
-    application = QApplication.instance()
-    if application is None:
-        return theme.LIGHT_PLOT_PALETTE
-    return theme.plot_palette(theme.palette_tokens(application.palette()))
+    return theme.current_plot_palette()
 
 
 def apply_figure_palette(figure: Figure) -> theme.PlotPalette:
@@ -279,21 +286,34 @@ def _view(key: str, *, qt: bool) -> DiagnosticView:
     return view
 
 
-def build_tabs() -> tuple[QTabWidget, dict[str, DiagnosticView]]:
+def build_tabs() -> tuple[QTabWidget, dict[str, DiagnosticView | LiveReflectivityPlot]]:
     tabs = QTabWidget()
     tabs.setObjectName("diagnosticTabs")
     tabs.setAccessibleName("拟合诊断图标签")
     tabs.setToolTip("切换原始曲线、残差、候选解和专家诊断视图")
-    views: dict[str, DiagnosticView] = {}
+    views: dict[str, DiagnosticView | LiveReflectivityPlot] = {}
     for key, title, description in VIEW_SPECS:
-        view = _view(key, qt=True)
-        view.canvas.setObjectName(f"diagnosticCanvas:{key}")
-        view.canvas.setAccessibleName(title)
-        view.canvas.setAccessibleDescription(description)
-        view.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # The live reflectivity panes ARE their own QWidget; the matplotlib views
+        # expose their addable/queryable widget through .canvas. Both accept the
+        # same object-name and accessibility contract so lookups keep working.
+        if key in LIVE_PANE_KEYS:
+            view: DiagnosticView | LiveReflectivityPlot = LiveReflectivityPlot()
+            # A pg pane is not styled by the Qt stylesheet or by
+            # apply_figure_palette, so it needs the resolved palette handed to it
+            # explicitly -- otherwise it keeps pyqtgraph's default black canvas
+            # regardless of the desktop appearance.
+            view.apply_palette(current_plot_palette())
+            canvas: object = view
+        else:
+            view = _view(key, qt=True)
+            canvas = view.canvas
+        canvas.setObjectName(f"diagnosticCanvas:{key}")
+        canvas.setAccessibleName(title)
+        canvas.setAccessibleDescription(description)
+        canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         views[key] = view
         if key != COMPANION_SPEC[0]:
-            tabs.addTab(view.canvas, title)
+            tabs.addTab(canvas, title)
     return tabs, views
 
 

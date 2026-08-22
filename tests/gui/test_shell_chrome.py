@@ -448,3 +448,25 @@ def test_no_two_commands_wear_the_same_icon(qtbot) -> None:
         glyph = _icon_bytes(icon)
         assert glyph not in seen, f"{label} 与 {seen[glyph]} 用了同一个图标"
         seen[glyph] = label
+
+
+def test_every_registered_command_wears_a_distinct_icon(qtbot) -> None:
+    """The registry is the source of truth, so no two commands may share a glyph.
+
+    The menu-level test above only sees the commands chrome surfaces twice; a
+    command with no toolbar twin (导入文件夹, 强制停止) could still collide and go
+    unnoticed.  Worse, two QStyle pixmaps the native style lacks fall back to the
+    same generic glyph, so "SP_DirLinkIcon != SP_DirOpenIcon" is true of the enums
+    yet false of what renders.  Distinctness therefore has to be asserted against
+    the rendered bytes of every registered command, not against the enum values.
+    """
+    from xrr_fitter.gui.command_icons import COMMAND_PIXMAPS, command_icon
+
+    _window(qtbot)  # a styled QApplication, as every other icon test relies on
+    seen: dict[bytes, str] = {}
+    for command in COMMAND_PIXMAPS:
+        icon = command_icon(command)
+        assert not icon.isNull(), f"{command}: 命令无图标"
+        glyph = _icon_bytes(icon)
+        assert glyph not in seen, f"{command} 与 {seen[glyph]} 用了同一个图标"
+        seen[glyph] = command

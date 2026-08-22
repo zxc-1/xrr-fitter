@@ -36,7 +36,6 @@ from xrr_fitter.gui.plots.diagnostics import (
     TAB_SPECS,
     VIEW_SPECS,
     DiagnosticView,
-    apply_figure_font,
     build_scratch_views,
     build_tabs,
     draw_batch_trends,
@@ -51,6 +50,7 @@ from xrr_fitter.gui.plots.interactions import (
     PlotInteractionToolbar,
     ordered_finite_range,
 )
+from xrr_fitter.gui.plots.live import LiveReflectivityPlot
 from xrr_fitter.gui.plots.reflectivity import (
     draw_log,
     draw_qz4,
@@ -58,6 +58,7 @@ from xrr_fitter.gui.plots.reflectivity import (
     draw_residual,
     prepare_project_plots,
     preview_display_values,
+    reflectivity_pane_arrays,
     validate_plot_data,
     validate_result,
 )
@@ -127,6 +128,15 @@ class PlotPanel(QWidget):
     point_mask_requested = Signal(int)
     view_changed = Signal(int)
     import_requested = Signal()
+    # Emitted when an interface handle on the SLD pane is dragged: the payload is
+    # the edited StructureSpec, committed by the window through the structure
+    # editor so a hand edit and a typed edit take exactly the same path.
+    structure_edit_requested = Signal(object)
+
+    # The standing hint shown when the pointer is not over any curve; it names
+    # the gesture rather than leaving the coordinate strip blank, so an empty
+    # readout never reads as a broken control.
+    CURSOR_IDLE_HINT = "将指针移到曲线上可读取坐标"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -141,7 +151,6 @@ class PlotPanel(QWidget):
         self._sld_band_cache: SldBandReplay | None = None
         self._trends: BatchTrends | None = None
         self._visible_range: tuple[float, float] | None = None
-        self._preview_line: object | None = None
         self._released = False
         self.toolbar = PlotInteractionToolbar(self)
         self.tabs, self._views = build_tabs()
@@ -171,6 +180,13 @@ class PlotPanel(QWidget):
         content_layout.setSpacing(theme.SPACE_SM)
         content_layout.addWidget(self.toolbar)
         content_layout.addWidget(self.plot_splitter, 1)
+        # A graphical plot should say where the pointer is, like every peer
+        # tool.  The controller feeds this label from the navigator's cursor
+        # read-out, so it has to exist before the controller is built below.
+        self.cursor_readout = QLabel(self.CURSOR_IDLE_HINT, content)
+        self.cursor_readout.setObjectName("plotCursorReadout")
+        self.cursor_readout.setProperty("mutedText", True)
+        content_layout.addWidget(self.cursor_readout)
         self._pages = QStackedLayout(self)
         self._pages.addWidget(_empty_state_widget(self))
         self._pages.addWidget(content)
@@ -224,7 +240,7 @@ class PlotPanel(QWidget):
         """Every owned view, including the companion pane outside the tab bar."""
         return tuple(key for key, _title, _description in VIEW_SPECS)
 
-    def view(self, key: str) -> DiagnosticView:
+    def view(self, key: str) -> DiagnosticView | LiveReflectivityPlot:
         try:
             return self._views[key]
         except KeyError as error:
@@ -450,8 +466,8 @@ class PlotPanel(QWidget):
             return False
         for key in ("raw", "log"):
             view = self._views[key]
-            view.axes.set_xlim(*visible)
-            view.canvas.draw_idle()
+            if isinstance(view, LiveReflectivityPlot):
+                view.set_view_xrange(*visible)
         return True
 
     def reset_zoom(self) -> bool:
@@ -460,10 +476,8 @@ class PlotPanel(QWidget):
             return False
         for key in ("raw", "log"):
             view = self._views[key]
-            view.axes.autoscale(enable=True, axis="x")
-            view.axes.relim()
-            view.axes.autoscale_view(scalex=True, scaley=False)
-            view.canvas.draw_idle()
+            if isinstance(view, LiveReflectivityPlot):
+                view.autoscale_view()
         return True
 
     def cancel_interaction(self) -> None:
@@ -484,6 +498,17 @@ class PlotPanel(QWidget):
 
     def resources_released(self) -> bool:
         return self._released
+
+    def set_cursor_readout(self, message: str) -> None:
+        """Show the pointer's coordinates, or the standing hint when it leaves.
+
+        Matplotlib clears the read-out with an empty string as the pointer
+        leaves the axes, so an empty message restores the idle hint rather than
+        letting a stale reading linger as if the pointer were still on the curve.
+        """
+        if self._released:
+            return
+        self.cursor_readout.setText(message if message else self.CURSOR_IDLE_HINT)
 
     def project_project(self, project: api.XrrProject) -> None:
         prepared = prepare_project_plots(project)
@@ -634,9 +659,10 @@ class PlotPanel(QWidget):
     ) -> bool:
         """Overlay the searching model on the log view without a projection.
 
-        A live preview updates many times per search, so it mutates one owned
-        line artist instead of running the transactional redraw. It carries no
-        committed evidence and is discarded whenever a real projection lands.
+        A live preview updates many times per search, so it pushes into one
+        owned pyqtgraph curve instead of running the transactional redraw. It
+        carries no committed evidence and is discarded whenever a real
+        projection lands.
         """
         if self._dataset_id is None or self._released:
             return False
@@ -646,33 +672,17 @@ class PlotPanel(QWidget):
             model_normalized,
         )
         view = self._views["log"]
-        if self._preview_line is None:
-            self._preview_line = view.axes.plot(
-                angles,
-                values,
-                "-",
-                color=theme.DATA_PREVIEW,
-                linewidth=1.4,
-                label="搜索中模型",
-            )[0]
-            view.axes.legend()
-            apply_figure_font(view.figure)
-        else:
-            self._preview_line.set_data(angles, values)
-        view.canvas.draw_idle()
-        return True
+        if not isinstance(view, LiveReflectivityPlot):
+            return False
+        return view.set_preview(angles, values)
 
     def clear_preview_curve(self) -> None:
         """Drop the live overlay so committed evidence renders on its own."""
-        line = self._preview_line
-        self._preview_line = None
-        if line is None or self._released:
+        if self._released:
             return
-        line.remove()
         view = self._views["log"]
-        view.axes.legend()
-        apply_figure_font(view.figure)
-        view.canvas.draw_idle()
+        if isinstance(view, LiveReflectivityPlot):
+            view.clear_preview()
 
     def _transact(
         self,
@@ -683,9 +693,10 @@ class PlotPanel(QWidget):
     ) -> None:
         if self._released:
             raise RuntimeError("plot panel resources have been released")
-        # A full projection clears every axes, so the preview artist it owned
-        # is already gone; dropping the reference avoids reusing a dead line.
-        self._preview_line = None
+        # A full projection supersedes the live preview overlay. The pyqtgraph
+        # log pane keeps its preview curve across show_log_reflectivity (unlike
+        # the old axes.clear() path), so the overlay is dropped explicitly here.
+        self.clear_preview_curve()
         scratch = build_scratch_views()
         try:
             self._draw(scratch, projection)
@@ -720,7 +731,11 @@ class PlotPanel(QWidget):
             self._structure,
         )
 
-    def _draw(self, views: dict[str, DiagnosticView], projection: Projection) -> None:
+    def _draw(
+        self,
+        views: dict[str, DiagnosticView | LiveReflectivityPlot],
+        projection: Projection,
+    ) -> None:
         data = projection.data
         candidate = candidate_for_result(projection.result, projection.candidate_id)
         bands = projection_bands(projection.result)
@@ -732,13 +747,15 @@ class PlotPanel(QWidget):
         )
         if data is None or projection.mask is None:
             for key in ("raw", "log", "qz4", "residual", "sld"):
+                view = views[key]
                 title = next(title for name, title, _description in VIEW_SPECS if name == key)
-                draw_empty(views[key], title)
+                if isinstance(view, LiveReflectivityPlot):
+                    view.show_placeholder("暂无可用数据")
+                    view.clear_fit_range()
+                else:
+                    draw_empty(view, title)
         else:
-            draw_raw(views["raw"], data, projection.mask, candidate)
-            draw_log(views["log"], data, candidate)
-            draw_qz4(views["qz4"], data, candidate)
-            draw_residual(views["residual"], candidate)
+            self._draw_reflectivity_panes(views, data, projection.mask, candidate)
             shown = visible_bands(
                 checked=self.sld_bands_toggle.isChecked(),
                 cache=self._sld_band_cache,
@@ -748,7 +765,14 @@ class PlotPanel(QWidget):
                 alignment=ALIGN_KEYS[self.sld_align_selector.currentIndex()],
                 surface_label=self.sld_align_selector.itemText(1),
             )
-            draw_sld(views["sld"], candidate, comparison_candidates(projection.result, projection.candidate_id), shown)
+            draw_sld(
+                views["sld"],
+                candidate,
+                comparison_candidates(projection.result, projection.candidate_id),
+                shown,
+                structure=projection.structure,
+                wavelength_a=data.beam.effective_wavelength_a,
+            )
             self._draw_range(views, projection.visible_range)
         draw_candidate_comparison(views["candidates"], projection.result, projection.candidate_id)
         draw_residual_heatmap(views["residual_map"], projection.result, projection.candidate_id)
@@ -756,16 +780,69 @@ class PlotPanel(QWidget):
         draw_uncertainty(views["uncertainty"], projection.result, projection.candidate_id)
         draw_batch_trends(views["trend"], projection.trends)
 
+    def _draw_reflectivity_panes(
+        self,
+        views: dict[str, DiagnosticView | LiveReflectivityPlot],
+        data: api.PreparedData,
+        mask: np.ndarray,
+        candidate: object | None,
+    ) -> None:
+        """Draw the four reflectivity panes through whichever backend holds them.
+
+        The scratch preflight dict is all-matplotlib, while the live dict holds
+        pyqtgraph widgets for these four keys, so one projection reaches two
+        rendering paths. The four panes always share a backend within a dict, so
+        the log pane's type decides for all of them. The matplotlib path keeps
+        the byte-identical draw_* functions; the live path computes the pane
+        arrays once and pushes them into the pyqtgraph curves.
+        """
+        log = views["log"]
+        if not isinstance(log, LiveReflectivityPlot):
+            draw_raw(views["raw"], data, mask, candidate)
+            draw_log(views["log"], data, candidate)
+            draw_qz4(views["qz4"], data, candidate)
+            draw_residual(views["residual"], candidate)
+            return
+        arrays = reflectivity_pane_arrays(data, mask, candidate)
+        log.show_log_reflectivity(
+            arrays.log_angles,
+            arrays.log_observed,
+            arrays.log_model,
+            r_floor=arrays.r_floor,
+        )
+        log.set_quality_caption(arrays.quality_caption)
+        raw = views["raw"]
+        raw.show_raw_reflectivity(arrays.raw_angles, arrays.raw_intensity, arrays.raw_mask, arrays.raw_model)
+        raw.set_quality_caption(arrays.quality_caption)
+        qz4 = views["qz4"]
+        if arrays.qz4 is None:
+            qz4.show_placeholder("暂无当前候选")
+        else:
+            qz4.show_qz4(*arrays.qz4, ylabel=arrays.qz4_ylabel or "qz⁴R")
+        residual = views["residual"]
+        if arrays.residual is None:
+            residual.show_placeholder("暂无当前候选")
+        else:
+            residual.show_residual(*arrays.residual)
+
     def _draw_range(
         self,
-        views: dict[str, DiagnosticView],
+        views: dict[str, DiagnosticView | LiveReflectivityPlot],
         visible_range: tuple[float, float] | None,
     ) -> None:
-        if visible_range is None:
-            return
         for key in ("raw", "log"):
-            views[key].axes.axvspan(*visible_range, color=theme.DATA_RANGE, alpha=0.16, label="拟合范围")
-            views[key].canvas.draw_idle()
+            view = views[key]
+            if isinstance(view, LiveReflectivityPlot):
+                # pyqtgraph range items persist across show_*, so an absent
+                # range must be cleared explicitly rather than relying on a
+                # cleared axes.
+                if visible_range is None:
+                    view.clear_fit_range()
+                else:
+                    view.show_fit_range(*visible_range)
+            elif visible_range is not None:
+                view.axes.axvspan(*visible_range, color=theme.DATA_RANGE, alpha=0.16, label="拟合范围")
+                view.canvas.draw_idle()
 
     def release_resources(self) -> None:
         if self._released:
@@ -773,9 +850,12 @@ class PlotPanel(QWidget):
         self._released = True
         self._interactions.release()
         for view in self._views.values():
-            view.canvas.release()
-            view.figure.clear()
-            view.figure.set_canvas(None)
+            if isinstance(view, LiveReflectivityPlot):
+                view.release()
+            else:
+                view.canvas.release()
+                view.figure.clear()
+                view.figure.set_canvas(None)
         self._datasets.clear()
         self._masks.clear()
         self._result = None

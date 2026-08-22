@@ -98,6 +98,7 @@ class MainWindow(QMainWindow):
         self.plot_panel.point_mask_requested.connect(self._plot_point_requested)
         self.plot_panel.view_changed.connect(self._plot_tab_changed)
         self.plot_panel.import_requested.connect(self.data_panel.import_files_button.click)
+        self.plot_panel.structure_edit_requested.connect(self._plot_structure_edited)
         for dock in self.docks.values():
             dock.dockLocationChanged.connect(self._dock_layout_changed)
             dock.topLevelChanged.connect(self._dock_layout_changed)
@@ -158,6 +159,15 @@ class MainWindow(QMainWindow):
     def _project_preview(self, qz_a_inv: object, model_normalized: object) -> None:
         """Show the searching model without touching committed project state."""
         self.plot_panel.set_preview_curve(qz_a_inv, model_normalized)
+
+    def _plot_structure_edited(self, structure: api.StructureSpec) -> None:
+        """Commit a structure hand-edited by dragging on the SLD companion pane.
+
+        The drag emits the whole edited :class:`StructureSpec`; routing it
+        through the structure panel's ``set_structure`` means a dragged edit and
+        a typed edit take exactly the same validated, refit-triggering path.
+        """
+        self.structure_panel.set_structure(structure)
 
     def _discard_preview_when_idle(self, running: bool) -> None:
         if not running:

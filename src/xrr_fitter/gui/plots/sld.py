@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.plots.diagnostics import (
     DiagnosticView,
@@ -13,12 +14,187 @@ from xrr_fitter.gui.plots.diagnostics import (
     finish_view,
 )
 
+# A layer thinner than this reads as roughness, not a film; dragging an interface
+# past its predecessor is clamped here so a gesture can never invert the stack.
+MIN_LAYER_THICKNESS_A = 2.0
+
+# ``LayerSpec`` rejects a density scale that is not finite and positive, so a
+# level dragged down to or past the axis floor is clamped to a vanishing film
+# rather than an invalid one the commit would refuse.
+MIN_DENSITY_SCALE = 1e-6
+
+
+def _plain_layers(structure: object | None) -> tuple[object, ...]:
+    """Return the stack's components when every one is a plain, drag-editable layer.
+
+    A periodic block or a gradient layer has neither a single thickness nor a
+    single SLD a handle could stand for, so a stack holding one offers no handles
+    at all rather than a partial set the reader would have to reason about.
+    """
+    if structure is None:
+        return ()
+    components = tuple(getattr(structure, "components", ()))
+    if not components or not all(isinstance(component, api.LayerSpec) for component in components):
+        return ()
+    return components
+
+
+def draggable_interfaces(structure: object | None) -> tuple[tuple[int, float], ...]:
+    """Return ``(layer_index, backing_depth_nm)`` for each drag-editable interface.
+
+    Each layer contributes one handle at its backing edge, whose depth is the
+    running sum of every thickness up to and including it.
+    """
+    interfaces: list[tuple[int, float]] = []
+    cumulative_a = 0.0
+    for index, component in enumerate(_plain_layers(structure)):
+        cumulative_a += float(component.thickness_a)
+        interfaces.append((index, cumulative_a / 10.0))
+    return tuple(interfaces)
+
+
+def draggable_layers(structure: object | None) -> tuple[tuple[int, float, float], ...]:
+    """Return ``(layer_index, front_depth_nm, backing_depth_nm)`` per editable layer.
+
+    A level handle spans the whole layer it stands for rather than marking one
+    point of it, so a grab anywhere across the film raises or lowers that film
+    and not a neighbour.
+    """
+    spans: list[tuple[int, float, float]] = []
+    cumulative_a = 0.0
+    for index, component in enumerate(_plain_layers(structure)):
+        front_a = cumulative_a
+        cumulative_a += float(component.thickness_a)
+        spans.append((index, front_a / 10.0, cumulative_a / 10.0))
+    return tuple(spans)
+
+
+def draggable_roughness(structure: object | None) -> tuple[tuple[int, float, float], ...]:
+    """Return ``(layer_index, interface_nm, sigma_nm)`` per drag-editable interface.
+
+    Each layer's backing edge carries the roughness of the interface just below
+    it: an interior layer ``k`` is smeared by ``components[k+1].roughness_a`` and
+    the deepest layer by the stack's ``backing_roughness_a``.  The air/film
+    interface (``components[0].roughness_a``) sits at depth zero with no backing
+    edge of its own, so no handle stands for it.
+
+    A layer whose backing neighbour draws its width from an interface transition
+    offers no whisker at all: a transition and a plain roughness cannot both set
+    that width, so committing a roughness there is refused, and a handle that
+    could only ever snap back would mislead more than it helps.
+    """
+    components = _plain_layers(structure)
+    if not components:
+        return ()
+    whiskers: list[tuple[int, float, float]] = []
+    cumulative_a = 0.0
+    last = len(components) - 1
+    for index, component in enumerate(components):
+        cumulative_a += float(component.thickness_a)
+        if index == last:
+            sigma_a = float(getattr(structure, "backing_roughness_a", 0.0))
+        else:
+            backing = components[index + 1]
+            if getattr(backing, "transition", None) is not None:
+                continue
+            sigma_a = float(backing.roughness_a)
+        whiskers.append((index, cumulative_a / 10.0, sigma_a / 10.0))
+    return tuple(whiskers)
+
+
+def _nominal_level_at(depth_nm: np.ndarray, profile_real: np.ndarray, target_nm: float) -> float:
+    """Sample the nominal real SLD nearest ``target_nm`` off an already-drawn grid.
+
+    Nearest grid point rather than an interpolation: the handle then sits on a
+    value the pane actually drew, so what the reader grabs is what the reader
+    sees.
+    """
+    if depth_nm.size == 0:
+        return float("nan")
+    return float(profile_real[int(np.argmin(np.abs(depth_nm - float(target_nm))))])
+
+
+def _draw_nominal_structure(axes: object, structure: object, wavelength_a: float) -> np.ndarray:
+    """Overlay the structure's nominal real SLD and its draggable handles.
+
+    Returns the nominal depth grid in nm so a nominal-only pane can scale to it.
+    """
+    depth_a, profile = api.sld_nominal_profile(structure, wavelength_a=float(wavelength_a))
+    depth_nm = np.asarray(depth_a, dtype=float) / 10.0
+    profile = np.asarray(profile, dtype=complex)
+    axes.plot(
+        depth_nm,
+        profile.real,
+        color=theme.DATA_NEUTRAL,
+        linestyle=":",
+        linewidth=1.2,
+        label="结构标称 实部",
+    )
+    for index, interface_nm in draggable_interfaces(structure):
+        # An underscore-prefixed label keeps the handle out of the key while still
+        # giving the drag controller a stable name to grab and move it by.
+        axes.axvline(
+            interface_nm,
+            color=theme.DATA_RANGE,
+            linestyle="--",
+            linewidth=1.0,
+            label=f"_interface_{index}",
+        )
+    for index, front_nm, backing_nm in draggable_layers(structure):
+        level = _nominal_level_at(depth_nm, profile.real, 0.5 * (front_nm + backing_nm))
+        axes.plot(
+            [front_nm, backing_nm],
+            [level, level],
+            color=theme.DATA_RANGE,
+            linestyle="-",
+            linewidth=1.6,
+            alpha=0.7,
+            label=f"_level_{index}",
+        )
+    for index, interface_nm, sigma_nm in draggable_roughness(structure):
+        # The whisker runs from the interface outward by its current roughness, so
+        # its visible length is the width the reader is editing.  It rides the
+        # nominal level at the interface and carries a tick at each end so the
+        # grabbable outer tip reads as a handle rather than a stray segment.
+        level = _nominal_level_at(depth_nm, profile.real, interface_nm)
+        axes.plot(
+            [interface_nm, interface_nm + sigma_nm],
+            [level, level],
+            color=theme.DATA_RANGE,
+            linestyle="-",
+            linewidth=1.0,
+            marker="|",
+            markersize=8,
+            alpha=0.9,
+            label=f"_roughness_{index}",
+        )
+    return depth_nm
+
+
+def _draw_nominal_only(view: DiagnosticView, structure: object, wavelength_a: float) -> None:
+    """Draw the structure's nominal profile when no fitted candidate exists yet.
+
+    A user can shape the stack by hand before the first fit, so the companion
+    pane shows the current declaration and its handles rather than an empty
+    placeholder.
+    """
+    axes = view.axes
+    axes.clear()
+    depth_nm = _draw_nominal_structure(axes, structure, wavelength_a)
+    axes.set(title="SLD 深度剖面（结构标称）", xlabel="深度 (nm)", ylabel="SLD (Å⁻²)")
+    _limit_depth_axis(axes, depth_nm)
+    _draw_legend(axes, [])
+    finish_view(view)
+
 
 def draw_sld(
     view: DiagnosticView,
     candidate: object | None,
     others: tuple[object, ...] = (),
     bands: object | None = None,
+    *,
+    structure: object | None = None,
+    wavelength_a: float | None = None,
 ) -> None:
     """Draw the selected candidate's SLD with comparison overlays from others.
 
@@ -28,8 +204,16 @@ def draw_sld(
     prominent at full opacity, while other valid candidates' real parts appear as
     faint overlays behind them. This lets users compare structural interpretations
     side-by-side without switching between rows.
+
+    When a structure is supplied its nominal real profile and draggable interface
+    handles are overlaid too, so the depth axis doubles as a hand-editing surface.
+    With no fitted candidate the nominal profile stands in for the empty pane.
     """
+    has_nominal = structure is not None and wavelength_a is not None
     if candidate is None:
+        if has_nominal:
+            _draw_nominal_only(view, structure, wavelength_a)
+            return
         draw_empty(view, "SLD 深度剖面", "暂无当前候选")
         return
     depth_nm = np.asarray(candidate.sld_depth_a, dtype=float) / 10.0
@@ -53,10 +237,14 @@ def draw_sld(
                 label=f"{other.candidate_id} 实部",
             )
         )
-    # Draw the selected candidate's real/imag at full opacity on top
+    # Draw the selected candidate's real/imag at full opacity on top. These stay
+    # the first two entries in axes.lines; the nominal overlay is appended after
+    # so index-addressed assertions keep reading the candidate curves.
     axes.plot(depth_nm, profile.real, label="SLD 实部")
     axes.plot(depth_nm, profile.imag, "--", label="SLD 虚部")
     axes.set(title="SLD 深度剖面", xlabel="深度 (nm)", ylabel="SLD (Å⁻²)")
+    if has_nominal:
+        _draw_nominal_structure(axes, structure, wavelength_a)
     if bands is not None:
         _draw_bands(axes, bands)
         axes.set_title(f"SLD 深度剖面 — {bands.caption()}", fontsize=theme.FONT_PT_SM)
@@ -167,7 +355,7 @@ def _unavailable(
         axes.set_xticks(())
         axes.set_yticks(())
     correlation.set_title("相关矩阵")
-    profile.set_title("profile likelihood 与区间")
+    profile.set_title("参数剖面似然与区间")
     palette = apply_figure_palette(view.figure)
     for axes, text in ((correlation, message), (profile, "区间证据不可用")):
         axes.text(
@@ -201,9 +389,9 @@ def _draw_profiles(axes: object, report: object) -> None:
     if profiles:
         axes.legend(fontsize=theme.FONT_PT_SM)
     elif not report.bootstrap_intervals:
-        axes.text(0.5, 0.5, "profile 与区间证据不可用", ha="center", va="center", transform=axes.transAxes)
+        axes.text(0.5, 0.5, "剖面似然与区间证据不可用", ha="center", va="center", transform=axes.transAxes)
     axes.set(
-        title="profile likelihood 与区间",
+        title="参数剖面似然与区间",
         xlabel="参数坐标（各参数独立归一化至 [0, 1]）",
         ylabel="目标函数",
     )

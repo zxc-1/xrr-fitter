@@ -24,6 +24,7 @@ from xrr_fitter.model.structure import (
     PeriodicBlock,
     StructureSpec,
 )
+from xrr_fitter.physics.sld_profile import sld_depth_profile
 from xrr_fitter.physics.stack import expand_structure
 from xrr_fitter.services import fitting
 from xrr_fitter.services.datasets import _prepared_current, _replace_invalidated
@@ -55,6 +56,11 @@ def validate_structure(structure: StructureSpec, beam: BeamSpec) -> None:
     wavelengths = (beam.wavelength_a,) if beam.kind == "monochromatic" else (beam.wavelength_1_a, beam.wavelength_2_a)
     for wavelength in wavelengths:
         expand_structure(structure, wavelength)
+
+
+def sld_nominal_profile(structure, *, wavelength_a, step_a=0.5):
+    """Return the view-only SLD profile of a declaration at its nominal values."""
+    return sld_depth_profile(expand_structure(structure, wavelength_a), step_a=step_a)
 
 
 def analyze_structure(

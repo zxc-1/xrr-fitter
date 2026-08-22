@@ -162,6 +162,7 @@ THIRD_PARTY_ROOTS = {
     "pandas",
     "xlsxwriter",
     "matplotlib",
+    "pyqtgraph",
     "PySide6",
     "jsonschema",
     "orsopy",
@@ -177,6 +178,7 @@ THIRD_PARTY_MODULE_ALLOWLIST = {
     "pandas": {"io.export_tables"},
     "xlsxwriter": {"io.export_tables"},
     "matplotlib": {"io.export_plots", "gui.plots"},
+    "pyqtgraph": {"gui.plots.live"},
     "jsonschema": {"io.orso"},
     "orsopy": {"io.orso"},
 }

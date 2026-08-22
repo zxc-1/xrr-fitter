@@ -127,7 +127,7 @@ def test_reflectivity_and_sld_are_visible_together(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
     panel.show()
 
-    reflectivity = panel.view(panel.current_view_key()).canvas
+    reflectivity = _addressable(panel.view(panel.current_view_key()))
     sld = panel.view("sld").canvas
 
     assert reflectivity.isVisibleTo(panel) is True
@@ -452,3 +452,215 @@ def test_new_project_live_failure_restores_surface_sld_projection_and_dataset(
     assert panel.sld_align_selector.currentIndex() == 1
     assert panel.view("sld").axes.get_title() == before_title
     assert len(panel.view("sld").axes.collections) == before_collections
+
+
+def _structure_only_panel(qtbot, tmp_path, name: str = "curve", *, structure=None):
+    """A projected panel that carries a structure but no fitted result.
+
+    The companion pane must show the current structure's nominal profile and its
+    draggable interface handles even before a fit exists, so a user can shape the
+    stack by hand and then fit.  ``structure`` overrides the default single film
+    so a case can pin what a stack that is not drag-editable looks like.
+    """
+    from xrr_fitter.gui.plots.panel import PlotPanel
+
+    source = tmp_path / f"{name}.xy"
+    source.write_text("0.1 100\n0.2 50\n0.3 25\n0.4 12\n", encoding="utf-8")
+    project = api.add_dataset(
+        api.new_project(),
+        source,
+        api.InstrumentSpec(instrument_id=f"{name}-instrument"),
+    )
+    dataset_id = project.datasets[0].dataset_id
+    project = api.set_structure(project, dataset_id, _simple_structure() if structure is None else structure)
+    panel = PlotPanel()
+    qtbot.addWidget(panel)
+    panel.project_project(project)
+    return panel
+
+
+def test_sld_pane_draws_nominal_structure_and_interface_handles(qtbot, tmp_path) -> None:
+    panel = _structure_only_panel(qtbot, tmp_path)
+    axes = panel.view("sld").axes
+    labels = {line.get_label() for line in axes.lines}
+
+    assert "结构标称 实部" in labels
+    # A single film gives exactly one draggable interface, at its backing side.
+    handles = [line for line in axes.lines if line.get_label() == "_interface_0"]
+    assert len(handles) == 1
+    assert float(np.asarray(handles[0].get_xdata())[0]) == pytest.approx(2.0, abs=0.05)
+
+
+def test_sld_interface_handles_stay_out_of_the_legend(qtbot, tmp_path) -> None:
+    panel = _structure_only_panel(qtbot, tmp_path)
+    axes = panel.view("sld").axes
+    legend = axes.get_legend()
+    labels = () if legend is None else tuple(text.get_text() for text in legend.get_texts())
+
+    assert all(not label.startswith("_interface_") for label in labels)
+
+
+def test_sld_interface_drag_edits_layer_thickness(qtbot, tmp_path) -> None:
+    panel, _result_value = _projected_sld_panel(qtbot, tmp_path)
+    panel.set_expert_mode(True)
+    edits: list[object] = []
+    panel.structure_edit_requested.connect(edits.append)
+
+    # simple_structure has a 20 A film -> a backing interface at 2.0 nm; dragging
+    # it to 3.0 nm asks for a 30 A film.
+    _drag_sld_interface(panel, 2.0, 3.0)
+
+    assert len(edits) == 1
+    assert edits[0].components[0].thickness_a == pytest.approx(30.0, abs=0.5)
+
+
+def _nominal_level_at(axes, depth_nm: float) -> float:
+    """Sample the nominal real SLD the pane draws at a depth, in A^-2."""
+    nominal = next(line for line in axes.lines if line.get_label() == "结构标称 实部")
+    depths = np.asarray(nominal.get_xdata(), dtype=float)
+    levels = np.asarray(nominal.get_ydata(), dtype=float)
+    return float(levels[int(np.argmin(np.abs(depths - float(depth_nm))))])
+
+
+def test_sld_pane_draws_a_level_handle_per_layer(qtbot, tmp_path) -> None:
+    panel = _structure_only_panel(qtbot, tmp_path)
+    axes = panel.view("sld").axes
+    handles = [line for line in axes.lines if line.get_label() == "_level_0"]
+
+    assert len(handles) == 1
+    # The handle spans the layer it stands for, so a grab anywhere across the
+    # film raises or lowers that film and not a neighbour.
+    xdata = np.asarray(handles[0].get_xdata(), dtype=float)
+    assert float(xdata.min()) == pytest.approx(0.0, abs=0.05)
+    assert float(xdata.max()) == pytest.approx(2.0, abs=0.05)
+    # And it sits at the level the pane actually draws mid-film, so what the
+    # reader grabs is what the reader sees.
+    midpoint = _nominal_level_at(axes, 1.0)
+    ydata = np.asarray(handles[0].get_ydata(), dtype=float)
+    assert float(ydata.min()) == pytest.approx(midpoint, rel=1e-6)
+    assert float(ydata.max()) == pytest.approx(midpoint, rel=1e-6)
+
+
+def test_sld_level_handles_stay_out_of_the_legend(qtbot, tmp_path) -> None:
+    panel = _structure_only_panel(qtbot, tmp_path)
+    legend = panel.view("sld").axes.get_legend()
+    labels = () if legend is None else tuple(text.get_text() for text in legend.get_texts())
+
+    assert all(not label.startswith("_level_") for label in labels)
+
+
+def test_sld_level_drag_edits_layer_density_scale(qtbot, tmp_path) -> None:
+    panel, _result_value = _projected_sld_panel(qtbot, tmp_path)
+    panel.set_expert_mode(True)
+    edits: list[object] = []
+    panel.structure_edit_requested.connect(edits.append)
+
+    # The SLD is exactly linear in density_scale, so halving the drawn level
+    # halves the scale.  The grab is mid-film, clear of the interface handle at
+    # 2.0 nm, so the vertical gesture cannot be read as a thickness edit.
+    _drag_sld_level(panel, 0, 1.0, 0.5)
+
+    assert len(edits) == 1
+    assert edits[0].components[0].density_scale == pytest.approx(0.5, abs=0.02)
+    assert edits[0].components[0].thickness_a == pytest.approx(20.0, abs=0.05)
+
+
+def test_sld_level_drag_leaves_a_gradient_stack_alone(qtbot, tmp_path) -> None:
+    """A stack that has no single per-layer level offers nothing to grab.
+
+    A gradient layer's SLD varies across its own thickness, so there is no one
+    plateau a handle could stand for; the pane still draws the nominal profile
+    but offers no level handle, the same way it offers no interface handle.
+    """
+    gradient = api.GradientLayerSpec("ramp", 10e-6 + 1e-6j, 30e-6 + 3e-6j, 20.0, microslab_max_a=2.0)
+    structure = replace(_simple_structure(), components=(gradient,))
+    panel = _structure_only_panel(qtbot, tmp_path, structure=structure)
+    axes = panel.view("sld").axes
+    labels = [line.get_label() for line in axes.lines]
+
+    assert "结构标称 实部" in labels
+    assert not [label for label in labels if label.startswith("_level_")]
+    assert not [label for label in labels if label.startswith("_interface_")]
+
+
+def test_sld_pane_draws_a_roughness_handle_per_editable_interface(qtbot, tmp_path) -> None:
+    panel = _structure_only_panel(qtbot, tmp_path)
+    axes = panel.view("sld").axes
+    handles = [line for line in axes.lines if line.get_label() == "_roughness_0"]
+
+    assert len(handles) == 1
+    # The whisker starts at the backing interface (2.0 nm) and runs outward by the
+    # interface's roughness; simple_structure's backing roughness is 3.0 A = 0.3 nm.
+    xdata = np.asarray(handles[0].get_xdata(), dtype=float)
+    assert float(xdata.min()) == pytest.approx(2.0, abs=0.05)
+    assert float(xdata.max()) == pytest.approx(2.3, abs=0.05)
+
+
+def test_sld_roughness_handles_stay_out_of_the_legend(qtbot, tmp_path) -> None:
+    panel = _structure_only_panel(qtbot, tmp_path)
+    legend = panel.view("sld").axes.get_legend()
+    labels = () if legend is None else tuple(text.get_text() for text in legend.get_texts())
+
+    assert all(not label.startswith("_roughness_") for label in labels)
+
+
+def test_sld_roughness_drag_edits_backing_roughness(qtbot, tmp_path) -> None:
+    panel, _result_value = _projected_sld_panel(qtbot, tmp_path)
+    panel.set_expert_mode(True)
+    edits: list[object] = []
+    panel.structure_edit_requested.connect(edits.append)
+
+    # The sole backing-edge handle governs the deepest interface, so its width
+    # commits backing_roughness_a, not a component's roughness.  Widening the
+    # whisker to 0.6 nm asks for a 6.0 A interface, well under the 9.8 A ceiling.
+    _drag_sld_roughness(panel, 0, 0.6)
+
+    assert len(edits) == 1
+    assert edits[0].backing_roughness_a == pytest.approx(6.0, abs=0.1)
+    assert edits[0].components[0].thickness_a == pytest.approx(20.0, abs=0.05)
+
+
+def test_sld_roughness_drag_clamps_below_the_domain_ceiling(qtbot, tmp_path) -> None:
+    panel, _result_value = _projected_sld_panel(qtbot, tmp_path)
+    panel.set_expert_mode(True)
+    edits: list[object] = []
+    panel.structure_edit_requested.connect(edits.append)
+
+    # The stack rejects a roughness at or above 0.49 x min(neighbour thickness);
+    # the 20 A film puts that ceiling at 9.8 A.  Dragging far past it (2.0 nm =
+    # 20 A) must land strictly below the ceiling, not at or beyond it.
+    _drag_sld_roughness(panel, 0, 2.0)
+
+    assert len(edits) == 1
+    assert edits[0].backing_roughness_a < 9.8
+    assert edits[0].backing_roughness_a == pytest.approx(9.8, abs=0.01)
+    # The clamp must land strictly below the ceiling the stack itself enforces, so
+    # expanding the committed structure raises nothing (roughness validation is
+    # wavelength-independent, so any positive wavelength proves it).
+    from xrr_fitter.physics.stack import expand_structure
+
+    expand_structure(edits[0], wavelength_a=1.5406)
+
+
+def test_sld_roughness_handle_skips_a_layer_whose_transition_sets_the_width(qtbot, tmp_path) -> None:
+    """A layer whose interface width is a transition offers no roughness whisker.
+
+    The stack forbids a nonzero roughness on a layer that carries a transition, so
+    the interface backing onto such a layer must not present a grabbable width; the
+    deepest interface, backing onto the substrate, still does.
+    """
+    base = _simple_structure()
+    graded = api.LayerSpec(
+        "graded",
+        base.components[0].material,
+        30.0,
+        transition=api.InterfaceTransition((api.TransitionBranch("erf", 1.0, 8.0),), microslab_max_a=2.0),
+    )
+    structure = replace(base, components=(base.components[0], graded))
+    panel = _structure_only_panel(qtbot, tmp_path, structure=structure)
+    labels = [line.get_label() for line in panel.view("sld").axes.lines]
+
+    # Handle 0 backs onto the graded layer, whose width the transition owns; handle
+    # 1 backs onto the substrate and keeps its width grabbable.
+    assert "_roughness_0" not in labels
+    assert "_roughness_1" in labels

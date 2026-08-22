@@ -177,6 +177,21 @@ def palette_tokens(palette: QPalette) -> ThemeTokens:
     return DARK_TOKENS if window.lightness() < 128 else LIGHT_TOKENS
 
 
+def current_plot_palette() -> PlotPalette:
+    """Resolve the plot palette from the running application's palette.
+
+    Plots are drawn outside the stylesheet, so each draw reads the palette
+    afresh; that is what lets a system appearance change reach both the
+    matplotlib figures and the pyqtgraph panes on the next repaint without any
+    switching logic.  This lives in ``theme`` rather than ``plots.diagnostics``
+    so ``plots.live`` can share it without importing ``diagnostics`` (a cycle).
+    """
+    application = QApplication.instance()
+    if application is None:
+        return LIGHT_PLOT_PALETTE
+    return plot_palette(palette_tokens(application.palette()))
+
+
 def _button_styles(tokens: ThemeTokens) -> str:
     return f"""
 QPushButton {{
