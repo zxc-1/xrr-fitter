@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import tempfile
@@ -647,8 +648,28 @@ def _write_all(file_descriptor: int, payload: bytes) -> None:
         remaining = remaining[written:]
 
 
+UNSUPPORTED_DIRECTORY_FSYNC = frozenset({errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP} - {None})
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError as error:
+        if os.name == "nt" and error.errno in {errno.EACCES, errno.EPERM}:
+            return
+        raise
+    try:
+        try:
+            os.fsync(descriptor)
+        except OSError as error:
+            if error.errno not in UNSUPPORTED_DIRECTORY_FSYNC:
+                raise
+    finally:
+        os.close(descriptor)
+
+
 def atomic_replace_bytes(target: Path, payload: bytes) -> None:
-    """Fsync a same-directory temporary file before atomic replacement."""
+    """Fsync a same-directory temporary file and publish it durably."""
     descriptor, temp_name = tempfile.mkstemp(
         dir=str(target.parent),
         prefix=f".{target.name}.",
@@ -662,6 +683,7 @@ def atomic_replace_bytes(target: Path, payload: bytes) -> None:
         descriptor = -1
         os.close(closing_descriptor)
         os.replace(temp_path, target)
+        _fsync_directory(target.parent)
     except BaseException:
         if descriptor >= 0:
             os.close(descriptor)

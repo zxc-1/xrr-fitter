@@ -64,6 +64,28 @@ def test_equivalent_distant_cluster_precedes_singleton_best_gate() -> None:
     assert reasons == ("distinct_equivalent_clusters",)
 
 
+def test_equivalent_supported_cluster_precedes_rounding_better_singleton() -> None:
+    vectors = np.asarray([[0.10], [0.16], [0.17], [0.18]])
+    costs = np.asarray([1e-12, 2e-12, 3e-12, 4e-12])
+    clusters = ((0,), (1, 2, 3))
+
+    confidence, reasons = classify_candidate_evidence_with_reasons(vectors, costs, clusters)
+
+    assert confidence is ConfidenceClass.TRUSTED
+    assert reasons == ()
+
+
+def test_materially_better_singleton_remains_untrusted() -> None:
+    vectors = np.asarray([[0.10], [0.16], [0.17], [0.18]])
+    costs = np.asarray([1e-12, 1e-3, 1.001e-3, 1.002e-3])
+    clusters = ((0,), (1, 2, 3))
+
+    confidence, reasons = classify_candidate_evidence_with_reasons(vectors, costs, clusters)
+
+    assert confidence is ConfidenceClass.UNTRUSTED
+    assert reasons == ("insufficient_cluster_support",)
+
+
 def test_cluster_candidates_uses_candidate_unit_vectors_in_input_order() -> None:
     candidates = tuple(
         SimpleNamespace(unit_vector=np.asarray(vector, dtype=float))

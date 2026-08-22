@@ -41,10 +41,14 @@ from xrr_fitter.model.structure import (
     PeriodicBlock,
     StructureSpec,
 )
-from xrr_fitter.physics.sld_profile import sld_depth_profile
+from xrr_fitter.physics.sld_profile import (
+    sld_depth_profile,
+    sld_profile_step_for_point_limit,
+)
 
 CURVE_MERGE_DECADES = 0.02
 PARAMETER_PRECLUSTER_DISTANCE = 0.25
+MAX_CANDIDATE_SLD_PROFILE_POINTS = 20_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -713,7 +717,11 @@ def candidate_from_evaluation(
         depth = np.empty(0, dtype=float)
         profile = np.empty(0, dtype=np.complex128)
     else:
-        depth, profile = sld_depth_profile(evaluation.expanded_stack)
+        step_a = sld_profile_step_for_point_limit(
+            evaluation.expanded_stack,
+            point_limit=MAX_CANDIDATE_SLD_PROFILE_POINTS,
+        )
+        depth, profile = sld_depth_profile(evaluation.expanded_stack, step_a=step_a)
     return FitCandidate(
         candidate_id=candidate_id,
         seed_index=seed_index,

@@ -10,7 +10,7 @@ from xrr_fitter.model.slab_stack import SlabStack
 MAX_SLD_PROFILE_POINTS = 1_000_000
 
 
-def _depth_grid(stack: SlabStack, step_a: float) -> tuple[np.ndarray, np.ndarray]:
+def _depth_extents(stack: SlabStack) -> tuple[np.ndarray, float, float]:
     with np.errstate(over="ignore", invalid="ignore", under="ignore"):
         interfaces = np.r_[0.0, np.cumsum(stack.thickness_a[1:-1])]
         total = float(np.sum(stack.thickness_a[1:-1]))
@@ -21,10 +21,40 @@ def _depth_grid(stack: SlabStack, step_a: float) -> tuple[np.ndarray, np.ndarray
         stop_value = float(np.max(right_extent))
         start = min(-10.0, start_value)
         stop = max(total + 10.0, stop_value)
-        estimated = (stop - start) / step_a
-    if not all(np.isfinite(value) for value in (total, start_value, stop_value, start, stop, estimated)):
+    if not all(np.isfinite(value) for value in (total, start_value, stop_value, start, stop)):
         raise ValueError("SLD profile depth span must be finite")
-    if not np.isfinite(estimated) or estimated > MAX_SLD_PROFILE_POINTS - 1:
+    return interfaces, start, stop
+
+
+def sld_profile_step_for_point_limit(
+    stack: SlabStack,
+    preferred_step_a: float = 0.5,
+    point_limit: int = MAX_SLD_PROFILE_POINTS,
+) -> float:
+    """Keep a preferred profile resolution within a fixed point budget."""
+    if not np.isfinite(preferred_step_a) or preferred_step_a <= 0.0:
+        raise ValueError("preferred_step_a must be finite and positive")
+    if (
+        isinstance(point_limit, bool)
+        or not isinstance(point_limit, int)
+        or not 3 <= point_limit <= MAX_SLD_PROFILE_POINTS
+    ):
+        raise ValueError(f"point_limit must be an integer from 3 to {MAX_SLD_PROFILE_POINTS}")
+    _interfaces, start, stop = _depth_extents(stack)
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        required_step = (stop - start) / (point_limit - 2)
+    if not np.isfinite(required_step):
+        raise ValueError("SLD profile depth span must be finite")
+    return max(float(preferred_step_a), float(np.nextafter(required_step, np.inf)))
+
+
+def _depth_grid(stack: SlabStack, step_a: float) -> tuple[np.ndarray, np.ndarray]:
+    interfaces, start, stop = _depth_extents(stack)
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        estimated = (stop - start) / step_a
+    if not np.isfinite(estimated):
+        raise ValueError("SLD profile depth span must be finite")
+    if estimated > MAX_SLD_PROFILE_POINTS - 1:
         raise ValueError(f"SLD profile grid exceeds {MAX_SLD_PROFILE_POINTS} points")
     count = int(np.ceil(estimated))
     depth = start + np.arange(count + 1, dtype=float) * step_a

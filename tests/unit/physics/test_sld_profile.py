@@ -6,7 +6,10 @@ import numpy as np
 import pytest
 
 from xrr_fitter.model.slab_stack import SlabStack
-from xrr_fitter.physics.sld_profile import sld_depth_profile
+from xrr_fitter.physics.sld_profile import (
+    sld_depth_profile,
+    sld_profile_step_for_point_limit,
+)
 
 MAX_EXPECTED_SLD_PROFILE_POINTS = 1_000_000
 
@@ -90,6 +93,55 @@ def test_profile_rejects_oversized_depth_grid_before_allocation() -> None:
 
     with pytest.raises(ValueError, match="profile grid.*exceeds"):
         sld_depth_profile(stack, step_a=1.0)
+
+
+def test_profile_step_for_point_limit_preserves_resolution_when_budget_allows() -> None:
+    stack = SlabStack([0.0, 20.0, 0.0], [0j, 10e-6, 20e-6], [2.0, 3.0])
+
+    step = sld_profile_step_for_point_limit(stack, preferred_step_a=0.5, point_limit=100)
+
+    assert step == 0.5
+    depth, _ = sld_depth_profile(stack, step_a=step)
+    assert depth.size <= 100
+
+
+def test_profile_step_for_point_limit_scales_long_stack_within_budget() -> None:
+    stack = SlabStack([0.0, 600_000.0, 0.0], [0j, 10e-6, 20e-6], [2.0, 3.0])
+    point_limit = 101
+
+    step = sld_profile_step_for_point_limit(stack, preferred_step_a=0.5, point_limit=point_limit)
+    depth, profile = sld_depth_profile(stack, step_a=step)
+
+    assert step > 0.5
+    assert depth.size <= point_limit
+    assert depth[0] <= -10.0
+    assert depth[-1] >= 600_010.0
+    assert np.all(np.isfinite(profile.real))
+    assert np.all(np.isfinite(profile.imag))
+
+
+@pytest.mark.parametrize(
+    ("preferred_step_a", "point_limit"),
+    (
+        (0.0, 100),
+        (float("nan"), 100),
+        (0.5, 2),
+        (0.5, 1_000_001),
+        (0.5, True),
+    ),
+)
+def test_profile_step_for_point_limit_rejects_invalid_budget_inputs(
+    preferred_step_a: float,
+    point_limit: object,
+) -> None:
+    stack = SlabStack([0.0, 20.0, 0.0], [0j, 10e-6, 20e-6], [2.0, 3.0])
+
+    with pytest.raises(ValueError):
+        sld_profile_step_for_point_limit(
+            stack,
+            preferred_step_a=preferred_step_a,
+            point_limit=point_limit,  # type: ignore[arg-type]
+        )
 
 
 def test_profile_rejects_finite_roughness_that_overflows_tail_extent() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,22 @@ def test_target_arguments_pin_the_windows_wheel_platform(load_tool_module) -> No
         "--abi",
         "cp312",
     )
+
+
+def test_resolver_failure_keeps_subprocess_stderr_visible(load_tool_module, capfd) -> None:
+    module = load_tool_module("lock_windows_environment")
+    marker = "resolver stderr remains visible"
+
+    with pytest.raises(module.subprocess.CalledProcessError):
+        module._run_resolver(
+            (
+                sys.executable,
+                "-c",
+                f"import sys; print({marker!r}, file=sys.stderr); raise SystemExit(7)",
+            )
+        )
+
+    assert marker in capfd.readouterr().err
 
 
 def test_reads_build_runtime_and_windows_packaging_requirements(load_tool_module, tmp_path: Path) -> None:

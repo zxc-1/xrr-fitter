@@ -17,6 +17,28 @@ The canonical distribution and identity are produced only by the clean exact-SHA
 release gates. The source-candidate verdict does not claim an owner real-data
 verdict, and the GitHub Release remains a draft for owner review.
 
+## 2026-08-22 audit delta
+
+- Candidate classification now chooses the largest support cluster inside the
+  equivalent-objective band before applying the objective tie-break. This
+  prevents floating-point round-off from making a supported result
+  `UNTRUSTED`; a materially better singleton remains untrusted.
+- SLD reporting validates finite depth extents and adapts the reporting step to
+  a bounded point budget. Long periodic stacks therefore fail explicitly or
+  produce a finite, bounded diagnostic profile instead of an unbounded
+  allocation.
+- Project replacement now follows `fsync(file) -> replace -> fsync(directory)`
+  where the platform supports directory synchronization. Windows resolver
+  failures retain the resolver's stderr for diagnosis.
+- Fresh locked-environment evidence for this delta: `quality` 186 passed,
+  `tools` 448 passed, `unit` 1688 passed, `integration` 14 passed, `gui` 520
+  passed, `spawn` 4 passed, and `regression` 50 passed. The statistical corpus
+  remains governed by the dedicated long-running gate below.
+
+The delta does not change the owner-data, distribution, or release-identity
+claims above. Those claims still require a clean exact-SHA run after the final
+source and test manifest commit.
+
 ## Machine evidence
 
 - Synthetic node:

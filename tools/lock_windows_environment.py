@@ -83,7 +83,7 @@ def read_windows_dependencies(path: str | Path) -> tuple[tuple[str, ...], tuple[
 
 
 def _run_resolver(command: tuple[str, ...]) -> None:
-    subprocess.run(command, check=True, text=True, capture_output=True, env=_resolver_environment())
+    subprocess.run(command, check=True, text=True, env=_resolver_environment())
 
 
 def _installation_report(report: Path) -> tuple[dict[str, object], ...]:

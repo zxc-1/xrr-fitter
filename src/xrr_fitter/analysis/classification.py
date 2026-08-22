@@ -119,23 +119,48 @@ def _cluster_representatives(
     return representatives, best_position, best_cluster, best_objective, representatives[best_position]
 
 
+def _equivalent_primary_position(
+    clusters: tuple[tuple[int, ...], ...],
+    representatives: tuple[int, ...],
+    costs: np.ndarray,
+    global_best_objective: float,
+    equivalent_delta: float,
+) -> int:
+    """Choose the best-supported cluster inside the global cost-equivalence band."""
+    limit = global_best_objective + equivalent_delta
+    equivalent = tuple(
+        position for position, representative in enumerate(representatives) if costs[representative] <= limit
+    )
+    return min(
+        equivalent,
+        key=lambda position: (
+            -len(clusters[position]),
+            costs[representatives[position]],
+            representatives[position],
+        ),
+    )
+
+
 def _multiple_reason(
     vectors: np.ndarray,
     costs: np.ndarray,
     clusters: tuple[tuple[int, ...], ...],
     *,
+    best_position: int,
+    best_index: int,
+    equivalent_limit: float,
     distinct_cluster_distance: float,
-    equivalent_delta: float,
     profile_path_merge: Callable[[np.ndarray, np.ndarray, float], bool] | None,
 ) -> str | None:
-    representatives, best_position, _cluster, best_objective, best_index = _cluster_representatives(clusters, costs)
-    limit = best_objective + equivalent_delta
+    representatives = tuple(min(cluster, key=lambda index: (costs[index], index)) for cluster in clusters)
     for position, other_index in enumerate(representatives):
-        if position == best_position or costs[other_index] > limit:
+        if position == best_position or costs[other_index] > equivalent_limit:
             continue
         if _rms_distance(vectors[best_index], vectors[other_index]) >= distinct_cluster_distance:
             return "distinct_equivalent_clusters"
-        if profile_path_merge is not None and not profile_path_merge(vectors[best_index], vectors[other_index], limit):
+        if profile_path_merge is not None and not profile_path_merge(
+            vectors[best_index], vectors[other_index], equivalent_limit
+        ):
             return "profile_path_merge_failed"
     return None
 
@@ -185,17 +210,28 @@ def classify_candidate_evidence_with_reasons(
     if evidence is None:
         return ConfidenceClass.UNTRUSTED, ("invalid_candidate_evidence",)
     values, objective = evidence
-    representatives, best_position, best_cluster, best_objective, _best_index = _cluster_representatives(
+    representatives, _raw_best_position, _raw_best_cluster, best_objective, _raw_best_index = _cluster_representatives(
         clusters, objective
     )
-    del representatives, best_position
     delta = max(equivalent_cost_fraction * abs(best_objective), equivalent_cost_floor)
+    equivalent_limit = best_objective + delta
+    best_position = _equivalent_primary_position(
+        clusters,
+        representatives,
+        objective,
+        best_objective,
+        delta,
+    )
+    best_cluster = clusters[best_position]
+    best_index = representatives[best_position]
     multiple = _multiple_reason(
         values,
         objective,
         clusters,
+        best_position=best_position,
+        best_index=best_index,
+        equivalent_limit=equivalent_limit,
         distinct_cluster_distance=distinct_cluster_distance,
-        equivalent_delta=delta,
         profile_path_merge=None if len(best_cluster) < 2 else profile_path_merge,
     )
     if multiple is not None:

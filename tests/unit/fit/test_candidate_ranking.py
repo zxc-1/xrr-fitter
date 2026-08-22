@@ -11,6 +11,7 @@ from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec, PhysicsDiagnostic
+from xrr_fitter.model.slab_stack import SlabStack
 
 
 def _api():
@@ -161,3 +162,39 @@ def test_physics_diagnostics_survive_candidate_conversion() -> None:
 
     assert candidate.diagnostics == (diagnostic,)
     assert candidate.diagnostics[0] is diagnostic
+
+
+def test_candidate_conversion_bounds_long_stack_reporting_profile() -> None:
+    api = _api()
+    problem = compile_fit_problem(
+        prepared_data(size=40),
+        simple_structure(),
+        InstrumentSpec(footprint_mode="none"),
+        replace(FitConfig.fast(859), scale_prior_enabled=False),
+    )
+    unit = encode_physical_vector(problem, {})
+    total_depth_a = 600_000.0
+    evaluation = replace(
+        evaluate_vector(problem, unit),
+        expanded_stack=SlabStack(
+            [0.0, total_depth_a, 0.0],
+            [0.0j, 2.0e-5 + 1.0e-7j, 4.0e-6 + 0.0j],
+            [2.0, 3.0],
+        ),
+    )
+
+    candidate = api.candidate_from_evaluation(
+        problem,
+        unit,
+        evaluation,
+        "E-0",
+        0,
+        "converged",
+        3,
+    )
+
+    assert candidate.valid
+    assert candidate.sld_depth_a.size <= api.MAX_CANDIDATE_SLD_PROFILE_POINTS
+    assert candidate.sld_depth_a[0] <= -10.0
+    assert candidate.sld_depth_a[-1] >= total_depth_a + 10.0
+    assert np.all(np.isfinite(candidate.sld_profile_a2))
