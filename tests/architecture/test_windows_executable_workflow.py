@@ -20,7 +20,7 @@ def _step(name: str) -> dict[str, object]:
     return matches[0]
 
 
-def test_patch_release_version_is_0_2_2() -> None:
+def test_patch_release_version_is_0_2_3() -> None:
     payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = payload["project"]
     version_module = (ROOT / "src" / "xrr_fitter" / "version.py").read_text(encoding="utf-8")
@@ -30,7 +30,7 @@ def test_patch_release_version_is_0_2_2() -> None:
     assert payload["tool"]["setuptools"]["dynamic"]["version"] == {
         "attr": "xrr_fitter.version.__version__",
     }
-    assert '__version__ = "0.2.2"' in version_module
+    assert '__version__ = "0.2.3"' in version_module
 
 
 def test_windows_spec_collects_orsopy_schema_files() -> None:
