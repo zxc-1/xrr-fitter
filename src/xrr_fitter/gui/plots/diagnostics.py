@@ -170,7 +170,31 @@ def apply_figure_font(figure: Figure) -> None:
     families = _cjk_font().get_family()
     for artist in figure.findobj(match=Text):
         artist.set_fontfamily(families)
+    _left_align_titles(figure)
     apply_figure_palette(figure)
+
+
+def _left_align_titles(figure: Figure) -> None:
+    """Send each axes title to its left edge, clear of the floating mode bar.
+
+    That bar hovers over the plot's top-right corner, which is the band a centred
+    title occupies: at the width the plot gets once both docks are open, the title
+    runs under the bar's leftmost glyph.  Moving it to the opposite corner lets the
+    two share one band.
+
+    The title Matplotlib already owns is repositioned rather than swapped for the
+    ``loc="left"`` one, because that alternative is a *different* artist: the text
+    would move to ``_left_title`` and the default ``get_title()`` would start
+    answering with an empty string, which is how the drawn titles are asserted.
+    This runs on every draw because ``Axes.clear()`` rebuilds the title centred,
+    and each draw_* clears before it paints.
+    """
+    for axes in figure.axes:
+        title = axes.title
+        title.set_horizontalalignment("left")
+        # _update_title_position rewrites y on every render but preserves x, so
+        # this survives resizes and redraws without being reapplied there.
+        title.set_position((0.0, title.get_position()[1]))
 
 
 def draw_empty(view: DiagnosticView, title: str, message: str = "暂无可用数据") -> None:
@@ -291,6 +315,16 @@ def build_tabs() -> tuple[QTabWidget, dict[str, DiagnosticView | LiveReflectivit
     tabs.setObjectName("diagnosticTabs")
     tabs.setAccessibleName("拟合诊断图标签")
     tabs.setToolTip("切换原始曲线、残差、候选解和专家诊断视图")
+    # The nine labels want 784px; with both docks open the stack gets 568px, so
+    # Qt's default response is to hide the last three behind scroll arrows --
+    # three diagnostics a user cannot see are three they will not know exist.
+    # Eliding instead keeps every tab on screen and readable: the labels share
+    # the shortfall as trimmed characters rather than one of them absorbing it
+    # as total absence.  tabText() still returns the full label, so lookups and
+    # the documented titles are unaffected.
+    tab_bar = tabs.tabBar()
+    tab_bar.setUsesScrollButtons(False)
+    tab_bar.setElideMode(Qt.TextElideMode.ElideRight)
     views: dict[str, DiagnosticView | LiveReflectivityPlot] = {}
     for key, title, description in VIEW_SPECS:
         # The live reflectivity panes ARE their own QWidget; the matplotlib views
@@ -313,7 +347,12 @@ def build_tabs() -> tuple[QTabWidget, dict[str, DiagnosticView | LiveReflectivit
         canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         views[key] = view
         if key != COMPANION_SPEC[0]:
-            tabs.addTab(canvas, title)
+            index = tabs.addTab(canvas, title)
+            # Eliding trims characters off the label, so the full name has to be
+            # reachable some other way: the per-tab tip carries it plus what the
+            # view answers, which the bar-wide tip cannot do because it says the
+            # same sentence over all nine.
+            tabs.setTabToolTip(index, f"{title} — {description}")
     return tabs, views
 
 

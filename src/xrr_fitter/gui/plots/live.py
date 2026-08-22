@@ -85,6 +85,14 @@ class LiveReflectivityPlot(pg.PlotWidget):
         # A reference grid lets a reader read values off the curve, matching the
         # grid the matplotlib draw_* functions drew.
         self.plot_item.showGrid(x=True, y=True, alpha=0.25)
+        # The floating mode bar sits in this pane's top-right corner, which is the
+        # same band pyqtgraph centres its title in: at the width the plot gets once
+        # both docks are open, a centred title runs under the bar's first glyph.
+        # Left-aligning sends the title to the opposite corner so the two share the
+        # band instead of stacking.  ``justify`` lives in the label's opts, which
+        # setText only updates rather than replaces, so setting it once here
+        # survives every later retitle.
+        self.plot_item.titleLabel.setAttr("justify", "left")
         # The quality caption and the empty-state placeholder ride the scene as
         # annotations that never widen autoRange (ignoreBounds); a range-change
         # handler pins them to the view corners so they track pan and zoom the way

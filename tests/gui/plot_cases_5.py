@@ -12,6 +12,8 @@ from __future__ import annotations
 from tests.gui.plot_support import *  # noqa: F403
 from tests.support.model_cases import simple_structure as _simple_structure
 
+from xrr_fitter.gui.theme import build_stylesheet
+
 
 def _aligned_bands(label: str, marker: float = 0.0):
     depth = np.linspace(0.0, 40.0, 4)
@@ -157,6 +159,53 @@ def test_remaining_tabs_keep_their_order_after_sld_leaves(qtbot) -> None:
         "uncertainty",
         "trend",
     )
+
+
+def test_every_tab_reads_in_full_at_the_documented_window_width(qtbot) -> None:
+    """No diagnostic may hide behind a scroll arrow or an ellipsis at 1280.
+
+    Qt's default answer to nine labels wanting more room than the stack has is to
+    park the overflow behind scroll arrows, and a diagnostic a user never sees is
+    one they will not know exists.  Turning the arrows off is only half an
+    answer: at the general 12px tab padding the labels then elide down to two
+    characters, where 加权残差 / 残差热图 / 参数热图 all read as the same trimmed
+    stub.  The narrower padding this bar asks for buys back the characters, so
+    the contract is the strong one -- every label drawn whole.
+
+    Qt elides exactly when a tab's rect is narrower than its size hint, so
+    ``rect >= hint`` is the assertion for "drawn without an ellipsis", and it
+    implies the weaker "inside the bar" check it replaces.
+    """
+    panel = _panel(qtbot, data=prepared_data(size=4))
+    # _panel builds the widget directly, bypassing apply_theme, so the padding
+    # rule under test would not otherwise be in play.
+    panel.setStyleSheet(build_stylesheet(panel.palette()))
+    panel.show()
+    qtbot.waitExposed(panel)
+    panel.resize(568, 600)
+    qtbot.wait(20)
+
+    bar = panel.tabs.tabBar()
+    assert bar.usesScrollButtons() is False
+    assert bar.elideMode() == Qt.TextElideMode.ElideRight
+    assert bar.width() <= 568, "the bar got more room than the documented layout leaves it"
+    for index in range(bar.count()):
+        label = bar.tabText(index)
+        rect = bar.tabRect(index)
+        assert rect.x() + rect.width() <= bar.width(), f"tab {label!r} overflows the bar"
+        assert rect.width() >= bar.tabSizeHint(index).width(), f"tab {label!r} is drawn elided"
+
+
+def test_each_tab_names_itself_in_full_through_its_tooltip(qtbot) -> None:
+    """Labels elide at narrower widths, so the full name lives in the per-tab tip."""
+    panel = _panel(qtbot)
+    tabs = panel.tabs
+
+    for index in range(tabs.count()):
+        tip = tabs.tabToolTip(index)
+        assert tabs.tabText(index) in tip
+        # A tip that only repeats the label adds nothing over reading the tab.
+        assert tip != tabs.tabText(index)
 
 
 def test_sld_pane_is_expert_only(qtbot) -> None:
