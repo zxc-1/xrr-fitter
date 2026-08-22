@@ -173,12 +173,12 @@ class PlotPanel(QWidget):
         # the height because it plots two smooth curves against one axis.
         self.plot_splitter.setStretchFactor(0, 2)
         self.plot_splitter.setStretchFactor(1, 1)
+        self._float_toolbar_over_plot()
         content = QWidget(self)
         content.setObjectName("plotContent")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(theme.SPACE_SM)
-        content_layout.addWidget(self.toolbar)
         content_layout.addWidget(self.plot_splitter, 1)
         # A graphical plot should say where the pointer is, like every peer
         # tool.  The controller feeds this label from the navigator's cursor
@@ -193,6 +193,56 @@ class PlotPanel(QWidget):
         self._sync_pages()
         self._interactions = PlotInteractionController(self, self.toolbar)
         self._install_view_shortcuts()
+
+    def _float_toolbar_over_plot(self) -> None:
+        """Lift the interaction bar out of the layout and onto the plot itself.
+
+        Peer charting tools put their mode bar over the chart rather than in a
+        labelled row above it: the controls belong to the picture they act on,
+        and a row of their own spent a band of vertical space on chrome.  The bar
+        parents to the tab stack, not to a tab page, so it survives a view switch
+        instead of being rebuilt once per diagnostic.
+        """
+        self.toolbar.setParent(self.tabs)
+        self.tabs.installEventFilter(self)
+        self.tabs.currentChanged.connect(self._raise_toolbar_overlay)
+        self._position_toolbar_overlay()
+
+    def _position_toolbar_overlay(self) -> None:
+        """Pin the bar inside the plot's top-right corner, clear of the tab bar.
+
+        Sized to its own content: the bar has no stretch, so it covers only the
+        strip of plot it needs.  The left edge is clamped to the margin so a
+        narrow panel slides the bar leftward instead of pushing it off-screen.
+        """
+        if self._released:
+            return
+        tab_bar = self.tabs.tabBar()
+        top = tab_bar.height() if tab_bar.isVisible() else 0
+        hint = self.toolbar.sizeHint()
+        margin = theme.SPACE_SM
+        left = max(margin, self.tabs.width() - hint.width() - margin)
+        self.toolbar.setGeometry(left, top + margin, hint.width(), hint.height())
+        self.toolbar.raise_()
+
+    def _raise_toolbar_overlay(self, *_args: object) -> None:
+        """Re-assert the bar's place after a view switch restacks the children."""
+        self._position_toolbar_overlay()
+
+    def eventFilter(self, watched: object, event: QEvent) -> bool:
+        """Hold the floating bar in the corner as the plot stack is resized.
+
+        An overlay is outside the layout, so nothing else moves it: without this
+        the bar would keep its first geometry and drift away from the corner the
+        moment the window, the splitter or the dock changed the plot's width.
+        """
+        if watched is self.tabs and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+            QEvent.Type.LayoutRequest,
+        ):
+            self._position_toolbar_overlay()
+        return super().eventFilter(watched, event)
 
     def _install_view_shortcuts(self) -> None:
         """Bind Alt+1..Alt+8 to the diagnostic tabs by visible position.
@@ -848,6 +898,11 @@ class PlotPanel(QWidget):
         if self._released:
             return
         self._released = True
+        # The floating bar's keepers outlive the layout, so they have to be undone
+        # by hand: a filter left on the tab stack would still be called while the
+        # panel is being torn down.
+        self.tabs.removeEventFilter(self)
+        self.tabs.currentChanged.disconnect(self._raise_toolbar_overlay)
         self._interactions.release()
         for view in self._views.values():
             if isinstance(view, LiveReflectivityPlot):
