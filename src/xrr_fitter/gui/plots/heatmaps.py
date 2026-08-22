@@ -117,7 +117,18 @@ def draw_residual_heatmap(
     view.figure.colorbar(image, ax=axes)
     _label_rows(axes, _row_labels(candidates, candidate_id))
     xlabel = _label_columns_with_qz(axes, candidates[0], matrix.shape[1])
-    axes.set(title=f"{RESIDUAL_TITLE}（固定范围 ±{limit:.3g}）", xlabel=xlabel, ylabel="候选")
+    axes.set(title=RESIDUAL_TITLE, xlabel=xlabel, ylabel="候选")
+    axes.text(
+        1.0,
+        1.02,
+        f"固定范围 ±{limit:.3g}",
+        transform=axes.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        color=view.figure.axes[0].title.get_color(),
+        alpha=0.7,
+    )
     finish_view(view)
 
 
@@ -167,8 +178,19 @@ def draw_parameter_heatmap(
     _label_rows(axes, _row_labels(candidates, candidate_id))
     axes.set_xticks(tuple(range(len(names))), names, rotation=45, ha="right")
     axes.set(
-        title=f"{PARAMETER_TITLE}（各参数独立归一化至 [0, 1]）",
+        title=PARAMETER_TITLE,
         xlabel="参数",
         ylabel="候选",
+    )
+    axes.text(
+        1.0,
+        1.02,
+        "各参数独立归一化至 [0, 1]",
+        transform=axes.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        color=axes.title.get_color(),
+        alpha=0.7,
     )
     finish_view(view)

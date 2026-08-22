@@ -167,8 +167,10 @@ class StackView(QWidget):
         self.setMinimumHeight(MIN_VIEW_H)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
         self._structure: api.StructureSpec | None = None
         self._selected: int | None = None
+        self._hovered: int | None = None
         self._bands: tuple[Band, ...] = ()
 
     def load(self, structure: api.StructureSpec) -> None:
@@ -206,6 +208,20 @@ class StackView(QWidget):
         self.update()
         self.component_selected.emit(band.index)
 
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().mouseMoveEvent(event)
+        band = self._band_at(int(event.position().y()))
+        hovered = None if band is None else band.index
+        if hovered != self._hovered:
+            self._hovered = hovered
+            self.update()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().leaveEvent(event)
+        if self._hovered is not None:
+            self._hovered = None
+            self.update()
+
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         del event
         painter = QPainter(self)
@@ -218,10 +234,16 @@ class StackView(QWidget):
         for band in self._bands:
             rect = QRect(0, band.top, width, band.height)
             fill = QColor(band.fill)
-            fill.setAlpha(255 if band.index == self._selected else 190)
+            is_selected = band.index == self._selected
+            is_hovered = band.index == self._hovered and not is_selected
+            fill.setAlpha(255 if is_selected else 190)
             painter.fillRect(rect, fill)
-            border = QColor(tokens.accent if band.index == self._selected else band.fill)
-            painter.setPen(QPen(border, 2 if band.index == self._selected else 1))
+            if is_hovered:
+                overlay = QColor(255, 255, 255, 30) if tokens is theme.DARK_TOKENS else QColor(0, 0, 0, 18)
+                painter.fillRect(rect, overlay)
+            border_color = QColor(tokens.accent if is_selected else tokens.surface_border)
+            border_width = 2 if is_selected else 1
+            painter.setPen(QPen(border_color, border_width))
             painter.drawRect(rect.adjusted(0, 0, -1, -1))
             self._draw_caption(painter, band, rect)
         painter.end()

@@ -16,12 +16,14 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _launch(argv: Sequence[str]) -> int:
-    from xrr_fitter.gui.application import create_application
+    from xrr_fitter.gui.application import create_application, show_splash
     from xrr_fitter.gui.main_window import MainWindow
 
     application = create_application(list(argv))
+    splash = show_splash(application)
     window = MainWindow()
     window.show()
+    splash.finish(window)
     return application.exec()
 
 

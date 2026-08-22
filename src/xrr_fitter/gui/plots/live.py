@@ -84,7 +84,7 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self._nav_mode = "pan"
         # A reference grid lets a reader read values off the curve, matching the
         # grid the matplotlib draw_* functions drew.
-        self.plot_item.showGrid(x=True, y=True, alpha=0.25)
+        self.plot_item.showGrid(x=True, y=True, alpha=theme.LIGHT_PLOT_PALETTE.grid[3])
         # The floating mode bar sits in this pane's top-right corner, which is the
         # same band pyqtgraph centres its title in: at the width the plot gets once
         # both docks are open, a centred title runs under the bar's first glyph.
@@ -108,6 +108,16 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self._placeholder_item.hide()
         self.addItem(self._placeholder_item, ignoreBounds=True)
         self._palette = theme.LIGHT_PLOT_PALETTE
+        # Crosshair: two thin lines + coordinate readout, hidden until hover.
+        self._crosshair_v = pg.InfiniteLine(angle=90, movable=False)
+        self._crosshair_h = pg.InfiniteLine(angle=0, movable=False)
+        self._crosshair_label = pg.TextItem(anchor=(0, 1))
+        self._crosshair_label.setZValue(30)
+        for line in (self._crosshair_v, self._crosshair_h):
+            line.setZValue(30)
+            self.addItem(line, ignoreBounds=True)
+        self.addItem(self._crosshair_label, ignoreBounds=True)
+        self._set_crosshair_visible(False)
         self.apply_palette(theme.current_plot_palette())
         self.plot_item.vb.sigRangeChanged.connect(self._reposition_annotations)
         self.scene().sigMouseMoved.connect(self._on_scene_moved)
@@ -154,6 +164,8 @@ class LiveReflectivityPlot(pg.PlotWidget):
             self.plot_item.setTitle(self._title)
         self._caption_item.setColor(muted)
         self._placeholder_item.setColor(muted)
+        self._apply_crosshair_pen()
+        self.plot_item.showGrid(x=True, y=True, alpha=palette.grid[3])
 
     def background_color(self) -> tuple[float, float, float, float]:
         """Read back the painted canvas background as an RGBA 0..1 tuple.
@@ -309,7 +321,13 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self.clear_series()
         self.set_quality_caption(None)
         self._placeholder_text = text
-        self._placeholder_item.setText(text)
+        muted = QColor.fromRgbF(*self._palette.muted)
+        html = (
+            f'<div style="text-align:center; color:{muted.name()};"'
+            f'><p style="font-size:24px; margin:0;">📈</p>'
+            f'<p style="font-size:11px; margin:4px 0 0 0;">{text}</p></div>'
+        )
+        self._placeholder_item.setHtml(html)
         self._placeholder_item.show()
         self._reposition_annotations()
 
@@ -382,6 +400,18 @@ class LiveReflectivityPlot(pg.PlotWidget):
         """Restore the latest draw's data bounds, the pg twin of the home button."""
         self.plot_item.vb.autoRange()
 
+    def _set_crosshair_visible(self, visible: bool) -> None:
+        for item in (self._crosshair_v, self._crosshair_h, self._crosshair_label):
+            item.setVisible(visible)
+
+    def _apply_crosshair_pen(self) -> None:
+        muted = QColor.fromRgbF(*self._palette.muted)
+        muted.setAlpha(120)
+        pen = pg.mkPen(muted, width=1.0, style=Qt.PenStyle.DashLine)
+        self._crosshair_v.setPen(pen)
+        self._crosshair_h.setPen(pen)
+        self._crosshair_label.setColor(QColor.fromRgbF(*self._palette.muted))
+
     def _emit_cursor(self, x_view: float, y_view: float) -> None:
         if self._released:
             return
@@ -400,8 +430,15 @@ class LiveReflectivityPlot(pg.PlotWidget):
             return
         if self.plot_item.sceneBoundingRect().contains(scene_pos):
             point = self.plot_item.vb.mapSceneToView(scene_pos)
+            self._crosshair_v.setPos(point.x())
+            self._crosshair_h.setPos(point.y())
+            y_display = 10.0 ** point.y() if self.plot_item.ctrl.logYCheck.isChecked() else point.y()
+            self._crosshair_label.setText(f"{point.x():.4g}, {y_display:.4g}")
+            self._crosshair_label.setPos(point.x(), point.y())
+            self._set_crosshair_visible(True)
             self._emit_cursor(point.x(), point.y())
         else:
+            self._set_crosshair_visible(False)
             self._emit_cursor_left()
 
     def set_preview(self, angles: object, values: object) -> bool:

@@ -232,7 +232,7 @@ class ProgressView(QWidget):
         self._render_meta(elapsed)
         self.detail_label.setText(
             f"{progress.stage} {_stage_percent_text(progress.completed, progress.total)}"
-            f" · {progress.message} · best={progress.best_objective:.12g}"
+            f" · {progress.message} · best={progress.best_objective:.4g}"
         )
         if not self._heartbeat.isActive():
             self._heartbeat.start()

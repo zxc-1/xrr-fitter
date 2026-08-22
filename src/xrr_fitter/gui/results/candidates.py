@@ -5,6 +5,7 @@ from __future__ import annotations
 from math import isfinite
 
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import QListWidget, QListWidgetItem, QWidget
 
 # An empty scrolling view reports a fixed 192px height regardless of content, and
@@ -115,6 +116,19 @@ class CandidateList(QListWidget):
             row_height = self.fontMetrics().lineSpacing()
         rows = min(max(self.count(), VISIBLE_ROW_FLOOR), VISIBLE_ROW_CEILING)
         return QSize(width, rows * row_height + 2 * self.frameWidth())
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if self.count() > 0:
+            return
+        painter = QPainter(self.viewport())
+        painter.setPen(QPen(self.palette().placeholderText().color()))
+        painter.drawText(
+            self.viewport().rect(),
+            Qt.AlignmentFlag.AlignCenter,
+            "运行拟合后，候选解将显示在此处",
+        )
+        painter.end()
 
     @property
     def result(self) -> object | None:

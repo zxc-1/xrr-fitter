@@ -144,6 +144,179 @@ def _paint_reset_zoom(p: QPainter, c: QColor) -> None:
         _arrow_head(p, QPointF(bx, by), dx / norm, dy / norm, c)
 
 
+# --- Guidance step icon painters ---
+
+
+def _paint_data_curve(p: QPainter, c: QColor) -> None:
+    # A wavy line representing imported data.
+    path = QPainterPath()
+    path.moveTo(2.0, 11.0)
+    path.cubicTo(4.5, 5.0, 6.5, 13.0, 8.0, 8.0)
+    path.cubicTo(9.5, 3.0, 11.5, 10.0, 14.0, 5.0)
+    p.drawPath(path)
+    p.setBrush(c)
+    p.drawEllipse(QPointF(3.0, 10.0), 1.2, 1.2)
+    p.drawEllipse(QPointF(8.0, 8.0), 1.2, 1.2)
+    p.drawEllipse(QPointF(13.0, 5.5), 1.2, 1.2)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+
+
+def _paint_layer_stack(p: QPainter, c: QColor) -> None:
+    # Horizontal stacked layers.
+    fill = QColor(c)
+    fill.setAlpha(40)
+    p.fillRect(QRectF(3.0, 2.5, 10.0, 3.0), fill)
+    p.drawRect(QRectF(3.0, 2.5, 10.0, 3.0))
+    p.fillRect(QRectF(3.0, 6.5, 10.0, 3.0), fill)
+    p.drawRect(QRectF(3.0, 6.5, 10.0, 3.0))
+    p.fillRect(QRectF(3.0, 10.5, 10.0, 3.0), fill)
+    p.drawRect(QRectF(3.0, 10.5, 10.0, 3.0))
+
+
+def _paint_fit_progress(p: QPainter, c: QColor) -> None:
+    # A progress chart: rising line with a checkmark at end.
+    p.drawLine(QPointF(2.0, 13.0), QPointF(2.0, 3.0))
+    p.drawLine(QPointF(2.0, 13.0), QPointF(14.0, 13.0))
+    path = QPainterPath()
+    path.moveTo(3.5, 11.0)
+    path.lineTo(6.0, 9.0)
+    path.lineTo(9.0, 6.0)
+    path.lineTo(12.5, 4.0)
+    p.drawPath(path)
+    p.setBrush(c)
+    p.drawEllipse(QPointF(12.5, 4.0), 1.3, 1.3)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+
+
+def _paint_result_table(p: QPainter, c: QColor) -> None:
+    # A simplified table/list.
+    p.drawRect(QRectF(2.5, 2.5, 11.0, 11.0))
+    p.drawLine(QPointF(2.5, 5.5), QPointF(13.5, 5.5))
+    p.drawLine(QPointF(2.5, 8.5), QPointF(13.5, 8.5))
+    p.drawLine(QPointF(2.5, 11.5), QPointF(13.5, 11.5))
+    p.drawLine(QPointF(6.5, 2.5), QPointF(6.5, 13.5))
+
+
+# --- Command icon painters (toolbar / menu commands) ---
+
+
+def _paint_new_project(p: QPainter, c: QColor) -> None:
+    # A blank page with a folded corner.
+    p.drawLine(QPointF(4.0, 2.0), QPointF(4.0, 14.0))
+    p.drawLine(QPointF(4.0, 14.0), QPointF(12.0, 14.0))
+    p.drawLine(QPointF(12.0, 14.0), QPointF(12.0, 5.0))
+    p.drawLine(QPointF(12.0, 5.0), QPointF(9.0, 2.0))
+    p.drawLine(QPointF(9.0, 2.0), QPointF(4.0, 2.0))
+    p.drawLine(QPointF(9.0, 2.0), QPointF(9.0, 5.0))
+    p.drawLine(QPointF(9.0, 5.0), QPointF(12.0, 5.0))
+
+
+def _paint_open_project(p: QPainter, c: QColor) -> None:
+    # An open folder.
+    p.drawLine(QPointF(2.0, 5.0), QPointF(2.0, 13.0))
+    p.drawLine(QPointF(2.0, 13.0), QPointF(12.0, 13.0))
+    p.drawLine(QPointF(12.0, 13.0), QPointF(14.0, 7.0))
+    p.drawLine(QPointF(14.0, 7.0), QPointF(5.0, 7.0))
+    p.drawLine(QPointF(5.0, 7.0), QPointF(2.0, 13.0))
+    p.drawLine(QPointF(2.0, 5.0), QPointF(6.0, 5.0))
+    p.drawLine(QPointF(6.0, 5.0), QPointF(7.5, 3.5))
+    p.drawLine(QPointF(7.5, 3.5), QPointF(12.0, 3.5))
+    p.drawLine(QPointF(12.0, 3.5), QPointF(12.0, 7.0))
+
+
+def _paint_save_project(p: QPainter, c: QColor) -> None:
+    # A floppy disk.
+    p.drawRect(QRectF(3.0, 2.0, 10.0, 12.0))
+    p.drawRect(QRectF(5.5, 2.0, 5.0, 4.5))
+    p.drawRect(QRectF(5.0, 9.0, 6.0, 5.0))
+
+
+def _paint_save_project_as(p: QPainter, c: QColor) -> None:
+    # A floppy disk with a small down-arrow in the corner.
+    p.drawRect(QRectF(2.0, 1.5, 9.0, 10.5))
+    p.drawRect(QRectF(4.0, 1.5, 4.0, 3.5))
+    p.drawRect(QRectF(4.0, 7.5, 5.0, 4.5))
+    p.drawLine(QPointF(12.5, 9.0), QPointF(12.5, 14.0))
+    _arrow_head(p, QPointF(12.5, 14.5), 0.0, 1.0, c)
+
+
+def _paint_reload_source(p: QPainter, c: QColor) -> None:
+    # A circular refresh arrow.
+    path = QPainterPath()
+    path.arcMoveTo(QRectF(3.0, 3.0, 10.0, 10.0), 60.0)
+    path.arcTo(QRectF(3.0, 3.0, 10.0, 10.0), 60.0, 300.0)
+    p.drawPath(path)
+    _arrow_head(p, path.currentPosition(), 0.6, -0.8, c)
+
+
+def _paint_relink_source(p: QPainter, c: QColor) -> None:
+    # Two chain links with a right arrow.
+    p.drawRoundedRect(QRectF(2.5, 5.5, 4.5, 5.0), 2.2, 2.2)
+    p.drawRoundedRect(QRectF(5.5, 5.5, 4.5, 5.0), 2.2, 2.2)
+    p.drawLine(QPointF(11.0, 8.0), QPointF(14.5, 8.0))
+    _arrow_head(p, QPointF(14.5, 8.0), 1.0, 0.0, c)
+
+
+def _paint_export_results(p: QPainter, c: QColor) -> None:
+    # A document with a right-pointing arrow emerging.
+    p.drawLine(QPointF(3.0, 2.5), QPointF(3.0, 13.5))
+    p.drawLine(QPointF(3.0, 13.5), QPointF(9.5, 13.5))
+    p.drawLine(QPointF(9.5, 13.5), QPointF(9.5, 10.0))
+    p.drawLine(QPointF(3.0, 2.5), QPointF(9.5, 2.5))
+    p.drawLine(QPointF(9.5, 2.5), QPointF(9.5, 6.0))
+    p.drawLine(QPointF(7.0, 8.0), QPointF(14.0, 8.0))
+    _arrow_head(p, QPointF(14.0, 8.0), 1.0, 0.0, c)
+
+
+def _paint_start_fit(p: QPainter, c: QColor) -> None:
+    # A filled play triangle.
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(c)
+    triangle = QPolygonF([QPointF(4.5, 2.5), QPointF(4.5, 13.5), QPointF(13.5, 8.0)])
+    p.drawPolygon(triangle)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.setPen(_pen(c))
+
+
+def _paint_cancel_fit(p: QPainter, c: QColor) -> None:
+    # A stop square (outlined).
+    p.drawRect(QRectF(3.5, 3.5, 9.0, 9.0))
+
+
+def _paint_import_files(p: QPainter, c: QColor) -> None:
+    # A file with a down arrow.
+    p.drawLine(QPointF(4.5, 2.0), QPointF(4.5, 14.0))
+    p.drawLine(QPointF(4.5, 14.0), QPointF(11.5, 14.0))
+    p.drawLine(QPointF(11.5, 14.0), QPointF(11.5, 5.0))
+    p.drawLine(QPointF(11.5, 5.0), QPointF(9.0, 2.0))
+    p.drawLine(QPointF(9.0, 2.0), QPointF(4.5, 2.0))
+    p.drawLine(QPointF(8.0, 6.5), QPointF(8.0, 12.0))
+    _arrow_head(p, QPointF(8.0, 12.0), 0.0, 1.0, c)
+
+
+def _paint_import_folder(p: QPainter, c: QColor) -> None:
+    # A folder with a down arrow.
+    p.drawLine(QPointF(2.0, 5.0), QPointF(2.0, 13.0))
+    p.drawLine(QPointF(2.0, 13.0), QPointF(14.0, 13.0))
+    p.drawLine(QPointF(14.0, 13.0), QPointF(14.0, 6.5))
+    p.drawLine(QPointF(14.0, 6.5), QPointF(2.0, 6.5))
+    p.drawLine(QPointF(2.0, 5.0), QPointF(5.5, 5.0))
+    p.drawLine(QPointF(5.5, 5.0), QPointF(7.0, 3.5))
+    p.drawLine(QPointF(7.0, 3.5), QPointF(14.0, 3.5))
+    p.drawLine(QPointF(14.0, 3.5), QPointF(14.0, 6.5))
+    p.drawLine(QPointF(8.0, 7.5), QPointF(8.0, 11.5))
+    _arrow_head(p, QPointF(8.0, 11.5), 0.0, 1.0, c)
+
+
+def _paint_force_stop(p: QPainter, c: QColor) -> None:
+    # A filled square: hard stop.
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(c)
+    p.drawRect(QRectF(3.5, 3.5, 9.0, 9.0))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.setPen(_pen(c))
+
+
 PAINTERS: dict[str, Callable[[QPainter, QColor], None]] = {
     "view": _paint_view,
     "range": _paint_range,
@@ -153,6 +326,22 @@ PAINTERS: dict[str, Callable[[QPainter, QColor], None]] = {
     "home": _paint_home,
     "zoom_to_range": _paint_zoom_to_range,
     "reset_zoom": _paint_reset_zoom,
+    "data_curve": _paint_data_curve,
+    "layer_stack": _paint_layer_stack,
+    "fit_progress": _paint_fit_progress,
+    "result_table": _paint_result_table,
+    "new_project_dialog": _paint_new_project,
+    "open_project_dialog": _paint_open_project,
+    "save_project_dialog": _paint_save_project,
+    "save_project_as_dialog": _paint_save_project_as,
+    "reload_source_dialog": _paint_reload_source,
+    "relink_source_dialog": _paint_relink_source,
+    "export_results_dialog": _paint_export_results,
+    "start_fit": _paint_start_fit,
+    "cancel_fit": _paint_cancel_fit,
+    "import_files": _paint_import_files,
+    "import_folder": _paint_import_folder,
+    "force_stop": _paint_force_stop,
 }
 
 

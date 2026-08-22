@@ -11,10 +11,10 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
+    QDialogButtonBox,
     QLabel,
     QMenu,
     QMenuBar,
-    QMessageBox,
     QStatusBar,
     QToolBar,
     QWidget,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from xrr_fitter.gui import messages, theme
 from xrr_fitter.gui.command_icons import command_icon
+from xrr_fitter.gui.dialog_template import StyledDialog
 from xrr_fitter.gui.plots.diagnostics import TAB_SPECS
 
 # The SLD profile is no longer a selectable view; it is a permanent companion
@@ -260,6 +261,29 @@ def _install_fit_menu(window: QWidget, bar: QMenuBar) -> None:
     bar.addMenu(menu)
 
 
+def _show_about_dialog(window: QWidget) -> None:
+    dialog = StyledDialog(
+        "关于 XRR Fitter",
+        description="X 射线反射率全自动拟合桌面应用",
+        parent=window,
+        buttons=QDialogButtonBox.StandardButton.Close,
+    )
+    from xrr_fitter.gui.application import _build_app_icon
+
+    icon_label = QLabel()
+    icon_label.setPixmap(_build_app_icon().pixmap(64, 64))
+    icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    dialog.body_layout.addWidget(icon_label)
+    info = QLabel(
+        "导入 .xy / .dat / .txt 反射率数据，初始化样品结构，\n"
+        "一键拟合并导出结果。\n\n"
+        "支持的 Python 边界：xrr_fitter.api"
+    )
+    info.setWordWrap(True)
+    dialog.body_layout.addWidget(info)
+    dialog.exec()
+
+
 def _install_help_menu(window: QWidget, bar: QMenuBar) -> None:
     menu = QMenu("帮助", bar)
     menu.setObjectName("helpMenu")
@@ -267,7 +291,7 @@ def _install_help_menu(window: QWidget, bar: QMenuBar) -> None:
         window,
         "aboutAction",
         "关于 XRR Fitter",
-        lambda: QMessageBox.about(window, "关于 XRR Fitter", ABOUT_TEXT),
+        lambda: _show_about_dialog(window),
     )
     window.chrome_actions["aboutAction"] = about
     menu.addAction(about)
@@ -278,18 +302,26 @@ def _install_status_bar(window: QWidget) -> None:
     bar = QStatusBar(window)
     bar.setObjectName("mainStatusBar")
     bar.setSizeGripEnabled(False)
+    readiness_dot = QLabel("●", bar)
+    readiness_dot.setObjectName("fitReadinessDot")
     readiness = QLabel(bar)
     readiness.setObjectName("fitReadinessStatus")
     dataset = QLabel(bar)
     dataset.setObjectName("activeDatasetStatus")
     # Readiness only answers "can a fit start". A finished run's verdict is a
     # separate question and gets its own label so neither overwrites the other.
+    quality_dot = QLabel("●", bar)
+    quality_dot.setObjectName("fitQualityDot")
     quality = QLabel(bar)
     quality.setObjectName("fitQualityStatus")
     source = window.project_actions.source_status_label
+    bar.addWidget(readiness_dot)
     bar.addWidget(readiness, 1)
+    bar.addPermanentWidget(quality_dot)
     bar.addPermanentWidget(quality)
+    bar.addPermanentWidget(QLabel("│", bar))
     bar.addPermanentWidget(dataset)
+    bar.addPermanentWidget(QLabel("│", bar))
     bar.addPermanentWidget(source)
     window.setStatusBar(bar)
 
@@ -350,12 +382,20 @@ def refresh_status(window: QWidget, readiness: object) -> None:
     label = window.findChild(QLabel, "fitReadinessStatus")
     if label is None:
         return
+    readiness_kind = "ok" if readiness.ready else "warn"
     label.setText(messages.readiness_text(readiness.message))
-    theme.set_status_kind(label, "ok" if readiness.ready else "warn")
+    theme.set_status_kind(label, readiness_kind)
+    readiness_dot = window.findChild(QLabel, "fitReadinessDot")
+    if readiness_dot is not None:
+        theme.set_status_kind(readiness_dot, readiness_kind)
     quality_label = window.findChild(QLabel, "fitQualityStatus")
     quality_text, quality_kind = _fit_quality(window)
     quality_label.setText(quality_text)
     theme.set_status_kind(quality_label, quality_kind)
+    quality_dot = window.findChild(QLabel, "fitQualityDot")
+    if quality_dot is not None:
+        quality_dot.setVisible(bool(quality_text))
+        theme.set_status_kind(quality_dot, quality_kind)
     dataset_label = window.findChild(QLabel, "activeDatasetStatus")
     dataset_label.setText(_active_dataset_text(window))
     has_active = window.document.active_dataset_id is not None

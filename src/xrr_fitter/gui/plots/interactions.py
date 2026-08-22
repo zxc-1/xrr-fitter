@@ -13,7 +13,8 @@ from math import isfinite
 import numpy as np
 from matplotlib.backend_bases import NavigationToolbar2
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal
-from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QToolButton, QWidget
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QButtonGroup, QGraphicsDropShadowEffect, QHBoxLayout, QToolButton, QWidget
 
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.plots.live import LiveReflectivityPlot
@@ -178,6 +179,11 @@ class PlotInteractionToolbar(QWidget):
         self._install_zoom_buttons(layout)
         self._buttons["view"].setChecked(True)
         self._mode = "view"
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(12)
+        shadow.setOffset(0, 2)
+        shadow.setColor(QColor(0, 0, 0, 40))
+        self.setGraphicsEffect(shadow)
 
     def _install_navigation_buttons(self, layout: QHBoxLayout) -> None:
         """Add the pan, box-zoom and reset controls onto the same row.

@@ -14,8 +14,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPointF, QPropertyAnimation, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
+    QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -27,6 +30,7 @@ from PySide6.QtWidgets import (
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.document import ProjectDocument
+from xrr_fitter.gui.plots.plot_icons import plot_icon
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +42,7 @@ class StepSpec:
     body: str
     action_text: str
     action: str
+    icon: str
 
 
 STEP_SPECS = (
@@ -47,6 +52,7 @@ STEP_SPECS = (
         "选择 .xy / .dat / .txt 反射率数据文件。导入时确认光路与仪器设置。",
         "导入数据文件…",
         "import_files",
+        "data_curve",
     ),
     StepSpec(
         "structureStep",
@@ -54,6 +60,7 @@ STEP_SPECS = (
         "初始化样品结构，必要时添加膜层。默认基底为 Si，可在结构面板调整。",
         "初始化样品结构",
         "initialize_structure",
+        "layer_stack",
     ),
     StepSpec(
         "fitStep",
@@ -61,6 +68,7 @@ STEP_SPECS = (
         "一键拟合会先全局筛选再局部精修。拟合过程中可以随时取消。",
         "开始一键拟合",
         "start_fit",
+        "fit_progress",
     ),
     StepSpec(
         "resultStep",
@@ -68,8 +76,74 @@ STEP_SPECS = (
         "查看候选解与可信度。需要完整的参数表、诊断图或导出时，切换到专家模式。",
         "切换到专家模式",
         "leave_guidance",
+        "result_table",
     ),
 )
+
+
+class _StepIndicator(QWidget):
+    """Horizontal step indicator: dots connected by lines."""
+
+    DOT_RADIUS = 5.0
+    LINE_LENGTH = 28.0
+    TOTAL_STEPS = 4
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("stepIndicator")
+        self._current = 0
+        self.setFixedHeight(28)
+        self.setMinimumWidth(200)
+
+    def set_current(self, index: int) -> None:
+        if self._current != index:
+            self._current = index
+            self.update()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        width = self.width()
+        total_w = (self.TOTAL_STEPS - 1) * self.LINE_LENGTH + self.TOTAL_STEPS * self.DOT_RADIUS * 2
+        start_x = (width - total_w) / 2.0
+        cy = self.height() / 2.0
+
+        from PySide6.QtWidgets import QApplication
+
+        from xrr_fitter.gui.theme import palette_tokens
+
+        tokens = palette_tokens(QApplication.instance().palette())
+        accent = QColor(tokens.accent)
+        muted = QColor(tokens.muted_text)
+
+        for i in range(self.TOTAL_STEPS):
+            cx = start_x + i * (self.DOT_RADIUS * 2 + self.LINE_LENGTH) + self.DOT_RADIUS
+            if i < self.TOTAL_STEPS - 1:
+                line_start = cx + self.DOT_RADIUS + 2
+                line_end = cx + self.DOT_RADIUS + self.LINE_LENGTH - 2
+                line_color = accent if i < self._current else muted
+                pen = QPen(line_color, 1.5)
+                p.setPen(pen)
+                p.drawLine(QPointF(line_start, cy), QPointF(line_end, cy))
+
+            if i < self._current:
+                p.setPen(QPen(accent, 1.5))
+                p.setBrush(accent)
+                p.drawEllipse(QPointF(cx, cy), self.DOT_RADIUS, self.DOT_RADIUS)
+                # checkmark
+                p.setPen(QPen(QColor("white"), 1.5))
+                p.drawLine(QPointF(cx - 2.5, cy), QPointF(cx - 0.5, cy + 2.5))
+                p.drawLine(QPointF(cx - 0.5, cy + 2.5), QPointF(cx + 3.0, cy - 2.0))
+            elif i == self._current:
+                p.setPen(QPen(accent, 2.0))
+                p.setBrush(accent)
+                p.drawEllipse(QPointF(cx, cy), self.DOT_RADIUS, self.DOT_RADIUS)
+            else:
+                p.setPen(QPen(muted, 1.5))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawEllipse(QPointF(cx, cy), self.DOT_RADIUS, self.DOT_RADIUS)
+
+        p.end()
 
 
 class GuidancePanel(QWidget):
@@ -92,6 +166,7 @@ class GuidancePanel(QWidget):
         self._pages: dict[str, QWidget] = {}
         self._action_buttons: dict[str, QPushButton] = {}
         self._next_buttons: dict[str, QPushButton] = {}
+        self._step_indicator = _StepIndicator(self)
         self._stack = QStackedWidget(self)
         self._stack.setObjectName("guidanceStack")
         for spec in STEP_SPECS:
@@ -106,6 +181,7 @@ class GuidancePanel(QWidget):
             theme.SPACE_LG,
         )
         layout.addStretch(1)
+        layout.addWidget(self._step_indicator, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self._stack)
         layout.addStretch(2)
         document.project_changed.connect(self._refresh)
@@ -115,41 +191,65 @@ class GuidancePanel(QWidget):
         page = QWidget()
         page.setObjectName(spec.name)
         page.setAccessibleName(spec.title)
-        title = QLabel(spec.title, page)
+
+        # Card container
+        card = QFrame(page)
+        card.setProperty("sectionCard", True)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(theme.SPACE_LG, theme.SPACE_LG, theme.SPACE_LG, theme.SPACE_LG)
+        card_layout.setSpacing(theme.SPACE_MD)
+
+        # Step icon
+        icon_label = QLabel(card)
+        icon_label.setObjectName(f"{spec.name}Icon")
+        icon_label.setPixmap(plot_icon(spec.icon, size=48).pixmap(48, 48))
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        card_layout.addWidget(icon_label)
+
+        title = QLabel(spec.title, card)
         title.setObjectName(f"{spec.name}Title")
         title.setProperty("emptyTitle", True)
         title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        body = QLabel(spec.body, page)
+        card_layout.addWidget(title)
+
+        body = QLabel(spec.body, card)
         body.setObjectName(f"{spec.name}Body")
         body.setProperty("mutedText", True)
         body.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         body.setWordWrap(True)
-        action = QPushButton(spec.action_text, page)
+        card_layout.addWidget(body)
+
+        action = QPushButton(spec.action_text, card)
         action.setObjectName(f"{spec.name}Action")
         action.setProperty("primary", True)
         action.setAccessibleName(spec.action_text)
         action.clicked.connect(lambda _checked=False, key=spec.action: self._run(key))
         self._action_buttons[spec.name] = action
-        back = QPushButton("上一步", page)
-        back.setObjectName(f"{spec.name}Back")
-        back.clicked.connect(lambda _checked=False, name=spec.name: self._step(name, -1))
-        forward = QPushButton("下一步", page)
-        forward.setObjectName(f"{spec.name}Next")
-        forward.clicked.connect(lambda _checked=False, name=spec.name: self._step(name, 1))
-        self._next_buttons[spec.name] = forward
         buttons = QHBoxLayout()
         buttons.addStretch(1)
         buttons.addWidget(action)
         buttons.addStretch(1)
+        card_layout.addLayout(buttons)
+
+        # Ghost-styled navigation
+        back = QPushButton("← 上一步", page)
+        back.setObjectName(f"{spec.name}Back")
+        back.setProperty("ghost", True)
+        back.clicked.connect(lambda _checked=False, name=spec.name: self._step(name, -1))
+        forward = QPushButton("下一步 →", page)
+        forward.setObjectName(f"{spec.name}Next")
+        forward.setProperty("ghost", True)
+        forward.clicked.connect(lambda _checked=False, name=spec.name: self._step(name, 1))
+        self._next_buttons[spec.name] = forward
+
         navigation = QHBoxLayout()
         navigation.addWidget(back)
         navigation.addStretch(1)
         navigation.addWidget(forward)
+
         layout = QVBoxLayout(page)
         layout.setSpacing(theme.SPACE_MD)
-        layout.addWidget(title)
-        layout.addWidget(body)
-        layout.addLayout(buttons)
+        layout.addWidget(card)
         layout.addLayout(navigation)
         return page
 
@@ -163,9 +263,23 @@ class GuidancePanel(QWidget):
         page = self._pages.get(name)
         if page is None:
             raise KeyError(f"unknown guidance step: {name}")
+        old_page = self._stack.currentWidget()
+        if old_page is not page:
+            self._animate_transition(old_page, page)
         self._stack.setCurrentWidget(page)
+        self._step_indicator.set_current(self.step_names().index(name))
         self._refresh()
         self.step_changed.emit(name)
+
+    def _animate_transition(self, old_page: object, new_page: object) -> None:
+        effect = QGraphicsOpacityEffect(new_page)
+        new_page.setGraphicsEffect(effect)
+        animation = QPropertyAnimation(effect, b"opacity", self)
+        animation.setDuration(200)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.finished.connect(lambda: new_page.setGraphicsEffect(None))
+        animation.start()
 
     def step_is_available(self, name: str) -> bool:
         """Answer a step's gate from the project, never from local UI state."""

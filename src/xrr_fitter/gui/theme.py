@@ -223,6 +223,18 @@ QPushButton[primary="true"]:disabled {{
     color: {tokens.muted_text};
     font-weight: 400;
 }}
+QPushButton[ghost="true"] {{
+    border: none;
+    background: transparent;
+    color: {tokens.accent};
+    font-weight: 400;
+    padding: {SPACE_XS}px {SPACE_SM}px;
+    min-height: {CONTROL_MIN_H}px;
+}}
+QPushButton[ghost="true"]:hover:enabled {{
+    text-decoration: underline;
+    color: {tokens.accent_hover};
+}}
 QPushButton[commandBar="true"] {{
     padding: {SPACE_XS}px {SPACE_SM}px;
     min-height: {CONTROL_MIN_H}px;
@@ -328,7 +340,29 @@ QHeaderView::section {{
     font-weight: 600;
 }}
 QScrollArea#analysisScroll {{ border: 0px; background: transparent; }}
-QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {{ min-height: {CONTROL_MIN_H}px; }}
+QDockWidget::title {{
+    padding: {SPACE_SM}px;
+    background: transparent;
+    border-bottom: 1px solid {tokens.surface_border};
+}}
+QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {{
+    border: 1px solid {tokens.surface_border};
+    border-radius: 6px;
+    padding: 2px {SPACE_SM}px;
+    min-height: {CONTROL_MIN_H}px;
+    background: transparent;
+}}
+QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus {{
+    border-color: {tokens.accent};
+    outline: none;
+}}
+QComboBox:hover:enabled, QSpinBox:hover:enabled, QDoubleSpinBox:hover:enabled, QLineEdit:hover:enabled {{
+    border-color: {tokens.accent};
+}}
+QComboBox::drop-down {{
+    border: 0px;
+    padding-right: {SPACE_SM}px;
+}}
 """
 
 

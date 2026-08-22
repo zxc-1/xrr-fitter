@@ -162,9 +162,9 @@ def _draw_nominal_structure(axes: object, structure: object, wavelength_a: float
             [level, level],
             color=theme.DATA_RANGE,
             linestyle="-",
-            linewidth=1.0,
-            marker="|",
-            markersize=8,
+            linewidth=1.4,
+            marker="o",
+            markersize=10,
             alpha=0.9,
             label=f"_roughness_{index}",
         )
