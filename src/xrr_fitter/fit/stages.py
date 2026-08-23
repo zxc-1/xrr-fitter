@@ -323,7 +323,6 @@ def _evaluate_stage_a_pool(
     for index, start in enumerate(pool):
         _poll(cancelled)
         candidate = _stage_a_candidate(problem, start, index)
-        improved = False
         if candidate is None:
             rejected_count += 1
         elif candidate.valid and np.isfinite(candidate.objective):
@@ -331,7 +330,6 @@ def _evaluate_stage_a_pool(
             if candidate.objective < best:
                 best = candidate.objective
                 incumbent = candidate
-                improved = True
         else:
             invalid_count += 1
         message = (
@@ -339,8 +337,9 @@ def _evaluate_stage_a_pool(
             f"physically rejected {rejected_count}; "
             f"invalid evaluations {invalid_count}"
         )
-        # Only a changed incumbent carries a preview, so the live curve redraws
-        # exactly when it would look different and the queue stays small.
+        # Always emit the current incumbent so the preview curve stays alive
+        # even during long stretches without improvement. The panel-side
+        # throttle (50ms) prevents canvas flicker.
         _emit(
             progress,
             dataset_id,
@@ -349,7 +348,7 @@ def _evaluate_stage_a_pool(
             len(pool),
             best,
             message,
-            incumbent if improved else None,
+            incumbent,
         )
     return tuple(evaluated), rejected_count, invalid_count
 

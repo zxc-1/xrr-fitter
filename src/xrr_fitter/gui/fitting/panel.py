@@ -35,7 +35,7 @@ class FitPanel(QWidget):
     # can emit previews many times per second; repainting every one makes the
     # canvas flicker without adding information, so intermediate frames are
     # dropped and only the newest survivor of each window is drawn.
-    PREVIEW_MIN_INTERVAL_S = 0.2
+    PREVIEW_MIN_INTERVAL_S = 0.05
 
     def __init__(
         self,
