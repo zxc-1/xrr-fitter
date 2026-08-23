@@ -81,7 +81,8 @@ def test_gui_launch_creates_application_then_window_and_propagates_exit(
             create_application=lambda argv: (
                 events.append(("application", tuple(argv))),
                 FakeApplication(),
-            )[1]
+            )[1],
+            show_splash=lambda app: SimpleNamespace(finish=lambda w: None),
         ),
     )
     monkeypatch.setitem(

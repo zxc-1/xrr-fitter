@@ -24,8 +24,8 @@ from xrr_fitter.gui import theme
 MEDIUM_BAND_H = 18
 
 # 3D pseudo-perspective parameters: the side/top faces that give depth.
-_DEPTH_X = 14  # horizontal extent of the side face
-_DEPTH_Y = 5  # vertical extent of the top face
+DEPTH_X = 14  # horizontal extent of the side face
+DEPTH_Y = 5  # vertical extent of the top face
 
 # A native oxide beside a micron film earns a fraction of a pixel.  Rounding it
 # away would erase the layer the diagram exists to show, so every component keeps
@@ -237,7 +237,7 @@ class StackView(QWidget):
         w = self.width()
         margin = 2
         front_left = float(margin)
-        front_right = float(w - margin - _DEPTH_X)
+        front_right = float(w - margin - DEPTH_X)
         front_width = front_right - front_left
         edge_pen = QPen(QColor(0, 0, 0, 90), 1.0)
         for idx, band in enumerate(self._bands):
@@ -245,7 +245,7 @@ class StackView(QWidget):
             is_selected = band.index == self._selected
             is_hovered = band.index == self._hovered and not is_selected
             fill.setAlpha(240 if is_selected else 210)
-            ft = float(band.top + _DEPTH_Y)
+            ft = float(band.top + DEPTH_Y)
             fh = float(band.height)
             front_rect = QRectF(front_left, ft, front_width, fh)
             self._paint_band_3d(painter, fill, front_left, front_right, ft, fh, band.index is not None, idx == 0)
@@ -274,8 +274,8 @@ class StackView(QWidget):
             side_poly = QPolygonF(
                 [
                     QPointF(front_right, ft),
-                    QPointF(front_right + _DEPTH_X, ft - _DEPTH_Y),
-                    QPointF(front_right + _DEPTH_X, ft + fh - _DEPTH_Y),
+                    QPointF(front_right + DEPTH_X, ft - DEPTH_Y),
+                    QPointF(front_right + DEPTH_X, ft + fh - DEPTH_Y),
                     QPointF(front_right, ft + fh),
                 ]
             )
@@ -287,8 +287,8 @@ class StackView(QWidget):
             top_poly = QPolygonF(
                 [
                     QPointF(front_left, ft),
-                    QPointF(front_left + _DEPTH_X, ft - _DEPTH_Y),
-                    QPointF(front_right + _DEPTH_X, ft - _DEPTH_Y),
+                    QPointF(front_left + DEPTH_X, ft - DEPTH_Y),
+                    QPointF(front_right + DEPTH_X, ft - DEPTH_Y),
                     QPointF(front_right, ft),
                 ]
             )
@@ -328,7 +328,7 @@ class StackView(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawLine(QPointF(front_left, ft + fh), QPointF(front_right, ft + fh))
         if is_component and fh >= MIN_BAND_H:
-            painter.drawLine(QPointF(front_right, ft + fh), QPointF(front_right + _DEPTH_X, ft + fh - _DEPTH_Y))
+            painter.drawLine(QPointF(front_right, ft + fh), QPointF(front_right + DEPTH_X, ft + fh - DEPTH_Y))
 
     def _draw_caption(self, painter: QPainter, band: Band, rect: QRect) -> None:
         """Label a band only when its own height leaves room to read one."""
