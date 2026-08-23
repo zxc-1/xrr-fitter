@@ -118,7 +118,8 @@ def test_partial_import_waits_for_manual_fit_keeps_failure_recovery_and_publishe
 
     monkeypatch.setattr(api, "start_automatic_fit_job", start, raising=False)
     valid = _write_curve(tmp_path / "P1 Zr.xy")
-    bad = _write_curve(tmp_path / "bad-name.xy")
+    bad = tmp_path / "bad-name.xy"
+    bad.write_text("not numeric\n", encoding="utf-8")
 
     result = window.data_panel.import_paths((valid, bad))
 

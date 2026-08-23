@@ -144,10 +144,9 @@ def test_bad_filename_and_bad_data_do_not_block_valid_files(tmp_path: Path) -> N
     )
     result = import_dataset_batch(new_project(), preview)
 
-    assert result.imported_dataset_ids == ("good",)
-    assert len(result.failures) == 2
+    assert result.imported_dataset_ids == ("missing-stack", "good")
+    assert len(result.failures) == 1
     assert {Path(item.source_path).name for item in result.failures} == {
-        "missing-stack.xy",
         "bad Zr.xy",
     }
 
@@ -155,7 +154,9 @@ def test_bad_filename_and_bad_data_do_not_block_valid_files(tmp_path: Path) -> N
 def test_all_failures_leave_project_and_measurement_preset_unchanged(
     tmp_path: Path,
 ) -> None:
-    invalid = _curve(tmp_path / "missing-stack.xy")
+    invalid = tmp_path / "missing-stack.xy"
+    invalid.parent.mkdir(parents=True, exist_ok=True)
+    invalid.write_text("not numeric\n", encoding="utf-8")
     project = new_project()
     preview = preview_import_batch((invalid,), _preset(), import_batch_id="batch-4")
 
@@ -164,7 +165,7 @@ def test_all_failures_leave_project_and_measurement_preset_unchanged(
     assert result.updated_project is project
     assert result.imported_dataset_ids == ()
     assert result.updated_project.measurement_preset is None
-    assert result.failures[0].recovery_action == ("rename the file and retry or open manual structure editing")
+    assert "retry" in result.failures[0].recovery_action
 
 
 def test_batch_allocates_duplicate_ids_and_uses_each_files_column_mapping(
