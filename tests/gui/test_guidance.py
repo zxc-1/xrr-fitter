@@ -62,11 +62,11 @@ def _window(qtbot, project=None):
 
 
 def test_guidance_is_the_default_surface_for_a_new_project(qtbot) -> None:
-    """A newcomer meets the full workspace; guidance is toggled from the View menu."""
+    """A newcomer meets the guided flow, not the full dock workspace."""
     window = _window(qtbot)
 
-    assert window.guidance.isVisibleTo(window) is False
-    assert window.docks["parametersDock"].isVisibleTo(window) is True
+    assert window.guidance.isVisibleTo(window) is True
+    assert window.docks["parametersDock"].isVisibleTo(window) is False
 
 
 def test_guidance_declares_the_four_workflow_steps(qtbot) -> None:
@@ -136,8 +136,8 @@ def test_guidance_toggle_lives_in_the_view_menu(qtbot) -> None:
     action = window.chrome_actions["guidanceModeAction"]
 
     assert action.isCheckable() is True
-    assert action.isChecked() is False
+    assert action.isChecked() is True
 
-    action.setChecked(True)
+    action.setChecked(False)
 
-    assert window.guidance.isVisibleTo(window) is True
+    assert window.guidance.isVisibleTo(window) is False

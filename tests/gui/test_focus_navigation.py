@@ -217,7 +217,7 @@ def test_parameter_controls_expose_display_units_metadata_alignment_and_tab_focu
     module.configure_accessibility(table)
 
     assert table.item(0, 4).text() == "nm"
-    assert table.item(0, 0).toolTip() == f"{definition.display_name}\n({definition.name})"
+    assert table.item(0, 0).toolTip() == definition.name
     assert table.item(0, 1).textAlignment() & Qt.AlignmentFlag.AlignRight
     assert table.focusPolicy() & Qt.FocusPolicy.TabFocus
 

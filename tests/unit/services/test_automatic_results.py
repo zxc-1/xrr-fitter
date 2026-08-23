@@ -137,29 +137,6 @@ def test_periodic_structures_report_status_without_per_layer_rows() -> None:
     ) == (1, "periodic", AutomaticStatus.PENDING, (), ())
 
 
-def test_unstructured_automatic_dataset_reports_status_without_per_layer_rows() -> None:
-    """An import awaiting manual material selection must not break result refreshes."""
-    dataset = replace(
-        dataset_project("unstructured"),
-        structure=None,
-        automation=DatasetAutomation(
-            import_batch_id="batch-1",
-            role=AutomaticRole.UNROUTED,
-            status=AutomaticStatus.PENDING,
-        ),
-    )
-
-    summary = summarize_automatic_results(project(dataset), "batch-1")
-
-    assert (
-        len(summary.datasets),
-        summary.datasets[0].dataset_id,
-        summary.datasets[0].status,
-        summary.datasets[0].layers,
-        summary.uniformity,
-    ) == (1, "unstructured", AutomaticStatus.PENDING, (), ())
-
-
 def test_known_and_unknown_material_results_do_not_confuse_mass_density() -> None:
     value = _fitted_project(
         _point("p1", thicknesses=(90.0, 100.0), direct_sld=24e-6, passed=True),

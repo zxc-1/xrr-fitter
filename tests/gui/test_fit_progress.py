@@ -468,16 +468,16 @@ def test_fit_panel_throttles_preview_frames(qtbot, tmp_path) -> None:
     from xrr_fitter.gui.document import ProjectDocument
     from xrr_fitter.gui.fitting.panel import FitPanel
 
-    clock = _StepClock(0.0, 0.02, 0.04, 0.10)  # window is 0.05s
+    clock = _StepClock(0.0, 0.05, 0.10, 0.30)  # window is 0.2s
     panel = FitPanel(ProjectDocument(_project(tmp_path)), clock=clock)
     qtbot.addWidget(panel)
     emitted: list[object] = []
     panel.preview_available.connect(lambda _qz, model: emitted.append(model[0]))
 
     panel._project_preview(_preview_progress(1.0))  # t=0.00 → emit
-    panel._project_preview(_preview_progress(2.0))  # t=0.02 → dropped
-    panel._project_preview(_preview_progress(3.0))  # t=0.04 → dropped
-    panel._project_preview(_preview_progress(4.0))  # t=0.10 → emit (past window)
+    panel._project_preview(_preview_progress(2.0))  # t=0.05 → dropped
+    panel._project_preview(_preview_progress(3.0))  # t=0.10 → dropped
+    panel._project_preview(_preview_progress(4.0))  # t=0.30 → emit (past window)
 
     assert emitted == [1.0, 4.0]
 

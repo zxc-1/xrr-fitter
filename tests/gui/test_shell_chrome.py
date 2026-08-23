@@ -41,7 +41,7 @@ def test_main_window_has_menu_bar_with_workflow_menus(qtbot) -> None:
     bar = window.findChild(QMenuBar, "mainMenuBar")
     assert bar is not None
     titles = [action.text() for action in bar.actions()]
-    assert titles == ["文件", "编辑", "视图", "拟合", "帮助"]
+    assert titles == ["文件", "视图", "拟合", "帮助"]
 
     file_menu = bar.actions()[0].menu()
     names = [action.objectName() for action in file_menu.actions() if not action.isSeparator()]
@@ -87,7 +87,7 @@ def test_view_menu_switches_plot_views_and_syncs_expert_mode(qtbot) -> None:
     window = _window(qtbot)
 
     bar = window.findChild(QMenuBar, "mainMenuBar")
-    view_menu = bar.actions()[2].menu()
+    view_menu = bar.actions()[1].menu()
     by_name = {action.objectName(): action for action in view_menu.actions()}
 
     log_action = by_name["plotViewAction:log"]
