@@ -305,7 +305,9 @@ class GuidancePanel(QWidget):
     def _step(self, name: str, offset: int) -> None:
         names = self.step_names()
         target = names.index(name) + offset
-        if 0 <= target < len(names):
+        if target >= len(names):
+            self.leave_requested.emit()
+        elif 0 <= target:
             self.show_step(names[target])
 
     def _run(self, key: str) -> None:
@@ -325,4 +327,6 @@ class GuidancePanel(QWidget):
         # own precondition so the flow cannot run ahead of the project.
         self._action_buttons[current].setEnabled(self.step_is_available(current))
         following = names[index + 1] if index + 1 < len(names) else None
-        self._next_buttons[current].setEnabled(following is not None and self.step_is_available(following))
+        self._next_buttons[current].setEnabled(True)
+        if following is None:
+            self._next_buttons[current].setText("进入主界面 →")

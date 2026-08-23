@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from math import asin, degrees
 from pathlib import Path
 
+import numpy as np
+import pyqtgraph as pg
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -25,6 +28,10 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+from xrr_fitter.gui import theme
+from xrr_fitter.io.xy import read_xy
+
+_log = logging.getLogger(__name__)
 
 VALIDATION_TEXT = "请选择光路类型：单色 / 混合 Kα"
 RESOLUTION_KINDS = (
@@ -161,6 +168,7 @@ class ImportDialog(QDialog):
         self._build_source_controls(folder_mode)
         self._build_beam_controls()
         self._build_instrument_controls()
+        self._build_preview_plot()
         self._build_buttons()
         self._arrange()
 
@@ -206,6 +214,53 @@ class ImportDialog(QDialog):
         self.footprint.currentIndexChanged.connect(self._refresh_geometry_controls)
         self._refresh_geometry_controls()
 
+    def _build_preview_plot(self) -> None:
+        self._preview = pg.PlotWidget()
+        self._preview.setObjectName("importPreviewPlot")
+        self._preview.setMinimumHeight(150)
+        self._preview.setMaximumHeight(200)
+        self._preview.setBackground("w")
+        self._preview.getPlotItem().setLabel("bottom", "2θ / °")
+        self._preview.getPlotItem().setLabel("left", "Intensity")
+        self._preview.getPlotItem().setLogMode(y=True)
+        self._preview_curve = self._preview.plot(
+            [],
+            [],
+            pen=pg.mkPen(theme.DATA_OBSERVED, width=1.5),
+        )
+        self._preview_error = QLabel()
+        self._preview_error.setObjectName("importPreviewError")
+        self._preview_error.setWordWrap(True)
+        self._preview_error.hide()
+        self._refresh_preview()
+
+    def _refresh_preview(self) -> None:
+        """Try to parse the first file and draw a preview curve."""
+        if not self._paths:
+            self._preview_curve.setData([], [])
+            return
+        path = self._paths[0]
+        beam_kind = self.beam_kind()
+        if beam_kind is None:
+            beam = api.BeamSpec("monochromatic", wavelength_a=1.5406)
+        else:
+            try:
+                beam = self.beam_spec()
+            except (ValueError, TypeError):
+                beam = api.BeamSpec("monochromatic", wavelength_a=1.5406)
+        try:
+            data = read_xy(path, beam, column_mapping=self._column_mapping)
+            x = np.asarray(data.two_theta_deg, dtype=float)
+            y = np.asarray(data.intensity_raw, dtype=float)
+            valid = np.isfinite(x) & np.isfinite(y) & (y > 0)
+            self._preview_curve.setData(x[valid], y[valid])
+            self._preview_error.hide()
+        except Exception as exc:
+            _log.debug("preview parse failed: %s", exc)
+            self._preview_curve.setData([], [])
+            self._preview_error.setText(f"预览不可用：{exc}")
+            self._preview_error.show()
+
     def _build_buttons(self) -> None:
         self.mapping_button = QPushButton("高级列映射…")
         self.mapping_button.setObjectName("columnMappingButton")
@@ -244,6 +299,8 @@ class ImportDialog(QDialog):
         layout.addWidget(self.recursive_check)
         layout.addWidget(beam_box)
         layout.addWidget(instrument_box)
+        layout.addWidget(self._preview)
+        layout.addWidget(self._preview_error)
         layout.addWidget(self.mapping_button)
         layout.addWidget(self.validation_label)
         layout.addWidget(self.button_box)
@@ -257,11 +314,13 @@ class ImportDialog(QDialog):
         selected = self.beam_kind() is not None
         self._import_button.setEnabled(selected)
         self.validation_label.setVisible(not selected)
+        self._refresh_preview()
 
     def _edit_column_mapping(self) -> None:
         dialog = ColumnMappingDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._column_mapping = dialog.mapping()
+            self._refresh_preview()
 
     def beam_kind(self) -> str | None:
         if self.mono_button.isChecked():

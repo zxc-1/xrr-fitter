@@ -120,6 +120,7 @@ def _install_menu_bar(window: QWidget) -> None:
     bar = QMenuBar(window)
     bar.setObjectName("mainMenuBar")
     _install_file_menu(window, bar)
+    _install_edit_menu(window, bar)
     _install_view_menu(window, bar)
     _install_fit_menu(window, bar)
     _install_help_menu(window, bar)
@@ -158,6 +159,40 @@ def _install_file_menu(window: QWidget, bar: QMenuBar) -> None:
         if object_name in ("importFolderMenuAction", "relinkSourceAction"):
             menu.addSeparator()
     menu.addAction(_window_action(window, "exportResultsAction"))
+    bar.addMenu(menu)
+
+
+def _install_edit_menu(window: QWidget, bar: QMenuBar) -> None:
+    menu = QMenu("编辑", bar)
+    menu.setObjectName("editMenu")
+    undo = _action(
+        window,
+        "undoAction",
+        "撤销",
+        window.document.undo,
+        command="undo",
+    )
+    undo.setShortcut("Ctrl+Z")
+    undo.setEnabled(window.document.can_undo)
+    window.chrome_actions["undoAction"] = undo
+    menu.addAction(undo)
+    redo = _action(
+        window,
+        "redoAction",
+        "重做",
+        window.document.redo,
+        command="redo",
+    )
+    redo.setShortcut("Ctrl+Shift+Z")
+    redo.setEnabled(window.document.can_redo)
+    window.chrome_actions["redoAction"] = redo
+    menu.addAction(redo)
+    window.document.undo_state_changed.connect(
+        lambda can_undo, can_redo: (
+            undo.setEnabled(can_undo),
+            redo.setEnabled(can_redo),
+        )
+    )
     bar.addMenu(menu)
 
 

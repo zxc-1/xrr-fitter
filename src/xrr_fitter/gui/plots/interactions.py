@@ -145,6 +145,7 @@ class PlotInteractionToolbar(QWidget):
     zoom_to_range_requested = Signal()
     reset_zoom_requested = Signal()
     navigation_requested = Signal(str)
+    overlay_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -246,6 +247,15 @@ class PlotInteractionToolbar(QWidget):
         self._reset_zoom.clicked.connect(lambda: self.reset_zoom_requested.emit())
         layout.addWidget(self._zoom_to_range)
         layout.addWidget(self._reset_zoom)
+        layout.addSpacing(theme.SPACE_SM)
+        self._overlay_toggle = QToolButton(self)
+        self._overlay_toggle.setObjectName("plotOverlayToggle")
+        self._overlay_toggle.setCheckable(True)
+        self._overlay_toggle.setAccessibleName("叠加对比")
+        self._overlay_toggle.setToolTip("叠加对比：显示所有数据集的反射率曲线")
+        _wear_glyph(self._overlay_toggle, "home")
+        self._overlay_toggle.toggled.connect(self.overlay_toggled.emit)
+        layout.addWidget(self._overlay_toggle)
 
     def buttons(self) -> dict[str, QToolButton]:
         return dict(self._buttons)

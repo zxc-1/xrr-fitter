@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
 import xrr_fitter.api as api
+
+MAX_UNDO_DEPTH = 50
 
 
 def _with_active_dataset(project: api.XrrProject) -> api.XrrProject:
@@ -24,6 +27,7 @@ class ProjectDocument(QObject):
     path_changed = Signal(object)
     dirty_changed = Signal(bool)
     source_validation_changed = Signal(object)
+    undo_state_changed = Signal(bool, bool)
 
     def __init__(self, project: api.XrrProject | None = None) -> None:
         super().__init__()
@@ -32,6 +36,8 @@ class ProjectDocument(QObject):
         self._dirty = False
         self._source_validation = api.inspect_sources(self._project)
         self._project_projections: list[Callable[[api.XrrProject], None]] = []
+        self._undo_stack: deque[api.XrrProject] = deque(maxlen=MAX_UNDO_DEPTH)
+        self._redo_stack: list[api.XrrProject] = []
 
     @property
     def project(self) -> api.XrrProject:
@@ -95,6 +101,8 @@ class ProjectDocument(QObject):
             api.ProjectValidation,
         ):
             raise TypeError("source_validation must be a ProjectValidation")
+        self._undo_stack.append(self._project)
+        self._redo_stack.clear()
         self._precommit_project(project)
         self._project = project
         if source_validation is not None:
@@ -103,6 +111,7 @@ class ProjectDocument(QObject):
         if source_validation is not None:
             self.source_validation_changed.emit(source_validation)
         self._set_dirty(dirty)
+        self._emit_undo_state()
 
     def _precommit_project(self, project: api.XrrProject) -> None:
         previous = self._project
@@ -122,6 +131,41 @@ class ProjectDocument(QObject):
                 error.add_note("project projection rollback failures: " + "; ".join(rollback_errors))
             raise
 
+    @property
+    def can_undo(self) -> bool:
+        return bool(self._undo_stack)
+
+    @property
+    def can_redo(self) -> bool:
+        return bool(self._redo_stack)
+
+    def undo(self) -> bool:
+        if not self._undo_stack:
+            return False
+        self._redo_stack.append(self._project)
+        previous = self._undo_stack.pop()
+        self._precommit_project(previous)
+        self._project = previous
+        self.project_changed.emit(previous)
+        self._set_dirty(True)
+        self._emit_undo_state()
+        return True
+
+    def redo(self) -> bool:
+        if not self._redo_stack:
+            return False
+        self._undo_stack.append(self._project)
+        next_project = self._redo_stack.pop()
+        self._precommit_project(next_project)
+        self._project = next_project
+        self.project_changed.emit(next_project)
+        self._set_dirty(True)
+        self._emit_undo_state()
+        return True
+
+    def _emit_undo_state(self) -> None:
+        self.undo_state_changed.emit(self.can_undo, self.can_redo)
+
     def new(self) -> None:
         project = api.new_project()
         validation = api.inspect_sources(project)
@@ -129,10 +173,13 @@ class ProjectDocument(QObject):
         self._project = project
         self._source_validation = validation
         self._path = None
+        self._undo_stack.clear()
+        self._redo_stack.clear()
         self.project_changed.emit(self._project)
         self.source_validation_changed.emit(validation)
         self.path_changed.emit(None)
         self._set_dirty(False)
+        self._emit_undo_state()
 
     def open(self, path: str | Path) -> None:
         target = Path(path)
@@ -142,10 +189,13 @@ class ProjectDocument(QObject):
         self._project = project
         self._source_validation = validation
         self._path = target
+        self._undo_stack.clear()
+        self._redo_stack.clear()
         self.project_changed.emit(project)
         self.source_validation_changed.emit(validation)
         self.path_changed.emit(target)
         self._set_dirty(False)
+        self._emit_undo_state()
 
     def save(self, path: str | Path | None = None) -> None:
         target = self._path if path is None else Path(path)

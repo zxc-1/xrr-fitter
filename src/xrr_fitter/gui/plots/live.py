@@ -40,6 +40,7 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self._masking = False
         self.preview_item: pg.PlotDataItem | None = None
         self.range_item: pg.LinearRegionItem | None = None
+        self._overlay_items: list[pg.PlotDataItem] = []
         self.observed_item = self.plot(
             [],
             [],
@@ -459,6 +460,40 @@ class LiveReflectivityPlot(pg.PlotWidget):
         if item is None or self._released:
             return
         self.removeItem(item)
+
+    def set_overlay_datasets(
+        self,
+        datasets: tuple[tuple[str, object, object], ...],
+    ) -> None:
+        """Draw additional dataset curves as an overlay comparison.
+
+        Each entry is (label, angles_array, values_array).  Curves use colours
+        from DATA_SEQUENCE starting at index 3 (skipping the ones already
+        reserved for observed/candidate/preview), with a per-curve vertical
+        offset of one decade for readability.
+        """
+        self.clear_overlay()
+        if self._released or not datasets:
+            return
+        colours = theme.DATA_SEQUENCE[3:]
+        for index, (label, angles, values) in enumerate(datasets):
+            colour = colours[index % len(colours)]
+            x = np.asarray(angles, dtype=float)
+            y = np.asarray(values, dtype=float)
+            item = self.plot(
+                x,
+                y,
+                pen=pg.mkPen(colour, width=1.2, style=Qt.PenStyle.DashDotLine),
+                name=label,
+            )
+            self._overlay_items.append(item)
+
+    def clear_overlay(self) -> None:
+        """Remove all overlay curves."""
+        for item in self._overlay_items:
+            if not self._released:
+                self.removeItem(item)
+        self._overlay_items.clear()
 
     def set_log_mode(self, enabled: bool) -> None:
         self.plot_item.setLogMode(y=bool(enabled))

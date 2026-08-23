@@ -374,7 +374,7 @@ def _parameter_item(
         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
     if column == 0:
         item.setData(Qt.ItemDataRole.UserRole, definition.name)
-        item.setToolTip(definition.name)
+        item.setToolTip(f"{definition.display_name}\n({definition.name})")
     if column in VALUE_COLUMNS:
         exact = numbers[column - VALUE_COLUMNS[0]]
         item.setData(EXACT_VALUE_ROLE, exact)

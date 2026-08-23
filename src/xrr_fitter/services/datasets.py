@@ -189,16 +189,17 @@ def preview_import_batch(
         path = Path(declaration)
         try:
             dataset_id_stem, tokens = _strict_source_materials(path)
-        except ValueError as error:
+        except ValueError:
+            # Filename has no material stack — still importable, just no
+            # auto-generated structure.
             files.append(
                 ImportFilePreview(
                     str(path),
                     path.stem,
-                    None,
+                    path.stem,
                     (),
                     None,
                     False,
-                    str(error),
                 )
             )
             continue
@@ -323,6 +324,27 @@ def _import_preview_row(
 ) -> DatasetProject:
     if row.error is not None:
         raise ValueError(row.error)
+    if not row.layers_backing_to_surface:
+        # No material info from filename — import data without auto-structure.
+        data = import_data(
+            row.source_path,
+            preview.preset.beam,
+            preview.preset.import_angle_offset_deg,
+            mappings.get(row.source_path),
+        )
+        return _from_prepared(
+            _dataset_id(project, row.dataset_id_stem),
+            row.display_name,
+            data,
+            preview.preset.instrument,
+            source_path=row.source_path,
+            structure=None,
+            automation=DatasetAutomation(
+                import_batch_id=preview.import_batch_id,
+                role=AutomaticRole.UNROUTED,
+                status=AutomaticStatus.PENDING,
+            ),
+        )
     backing_token = "Si"
     if row.requires_substrate_choice:
         if row.substrate_group_id not in choices:

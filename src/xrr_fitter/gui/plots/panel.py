@@ -177,7 +177,8 @@ class PlotPanel(QWidget):
         self.plot_splitter.addWidget(self.sld_pane)
         self.plot_splitter.setStretchFactor(0, 3)
         self.plot_splitter.setStretchFactor(1, 2)
-        self.plot_splitter.setStretchFactor(2, 1)
+        self.plot_splitter.setStretchFactor(2, 2)
+        self.sld_pane.setMinimumHeight(140)
         self._float_toolbar_over_plot()
         content = QWidget(self)
         content.setObjectName("plotContent")
@@ -195,6 +196,7 @@ class PlotPanel(QWidget):
         self._sync_pages()
         self._interactions = PlotInteractionController(self, self.toolbar)
         self._install_view_shortcuts()
+        self.toolbar.overlay_toggled.connect(self._on_overlay_toggled)
 
     def _float_toolbar_over_plot(self) -> None:
         """Lift the interaction bar out of the layout and onto the plot itself.
@@ -286,6 +288,11 @@ class PlotPanel(QWidget):
 
     def _sync_pages(self) -> None:
         self._pages.setCurrentIndex(0 if self._dataset_id is None else 1)
+        self._sync_analysis_visibility()
+
+    def _sync_analysis_visibility(self) -> None:
+        """Hide the analysis pane when no fit result exists for the active dataset."""
+        self.analysis_tabs.setVisible(self._result is not None)
 
     def tab_titles(self) -> tuple[str, ...]:
         ref = tuple(self.reflectivity_tabs.tabText(i) for i in range(self.reflectivity_tabs.count()))
@@ -492,6 +499,7 @@ class PlotPanel(QWidget):
         )
         self._result = result
         self._candidate_id = candidate_id
+        self._sync_analysis_visibility()
 
     def set_batch_trends(
         self,
@@ -706,6 +714,25 @@ class PlotPanel(QWidget):
                 self.sld_bands_toggle,
                 self.sld_align_selector,
             )
+
+    def _on_overlay_toggled(self, checked: bool) -> None:
+        """Show or hide all non-active dataset curves on the log pane."""
+        view = self._views["log"]
+        if not isinstance(view, LiveReflectivityPlot):
+            return
+        if not checked:
+            view.clear_overlay()
+            return
+        if self._dataset_id is None or len(self._datasets) < 2:
+            view.clear_overlay()
+            return
+        entries: list[tuple[str, object, object]] = []
+        for did, data in self._datasets.items():
+            if did == self._dataset_id:
+                continue
+            label = data.source_path.stem if data.source_path else did
+            entries.append((label, data.two_theta_deg, data.intensity_normalized))
+        view.set_overlay_datasets(tuple(entries))
 
     def _current_projection(self, **changes: object) -> Projection:
         return current_projection(

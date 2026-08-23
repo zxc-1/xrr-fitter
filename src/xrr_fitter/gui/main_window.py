@@ -84,9 +84,9 @@ class MainWindow(QMainWindow):
         self._connect_workflows()
         configure_accessibility(self)
         configure_focus_navigation(self)
-        # Guidance is the opening surface: a newcomer should meet four steps, not
-        # the full dock workspace. Expert users switch once from the View menu.
-        self.set_guidance_visible(True)
+        # Default to the full workspace. Guided mode is available from the View
+        # menu for users who prefer a step-by-step workflow.
+        self.set_guidance_visible(False)
         self._refresh_operation_state()
         self._refresh_window_title()
         self.setMinimumSize(1280, 760)
