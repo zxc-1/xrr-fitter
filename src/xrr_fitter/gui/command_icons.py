@@ -16,11 +16,8 @@ from xrr_fitter.gui.plots.plot_icons import PAINTERS, plot_icon
 
 # The commands that carry a painted glyph.  Tests iterate this to assert that
 # every registered command resolves to a distinct non-null icon.
-COMMAND_PAINTERS: dict[str, object] = {
-    name: fn
-    for name, fn in PAINTERS.items()
-    if name
-    in {
+GLYPH_COMMANDS = frozenset(
+    {
         "new_project_dialog",
         "open_project_dialog",
         "save_project_dialog",
@@ -34,7 +31,14 @@ COMMAND_PAINTERS: dict[str, object] = {
         "import_folder",
         "force_stop",
     }
-}
+)
+
+
+def _build_command_painters() -> dict[str, object]:
+    return {k: v for k, v in PAINTERS.items() if k in GLYPH_COMMANDS}
+
+
+COMMAND_PAINTERS: dict[str, object] = _build_command_painters()
 
 # Backwards-compatible name used by tests.
 COMMAND_PIXMAPS = COMMAND_PAINTERS
