@@ -201,8 +201,14 @@ class MainWindow(QMainWindow):
         ``restoreState``; rebuilding every dock while Qt is still delivering its
         own dock notification destroys the widgets Qt is iterating over. The
         window-owned single-shot timer lets that delivery finish first.
+
+        While a fit is running, preview updates repaint the plot at high
+        frequency; triggering ``restoreState`` in that window can segfault the
+        C++ paint pipeline, so layout capture is deferred until the fit ends.
         """
         if self._restoring_docks or not self._docks_settled:
+            return
+        if self._operation_is_running():
             return
         if self._capture_scheduled:
             return
@@ -243,7 +249,8 @@ class MainWindow(QMainWindow):
 
     def _restore_workspace(self, project: api.XrrProject) -> None:
         restore_project(self.workspace_view, project)
-        self.restore_dock_layout(project)
+        if not self._operation_is_running():
+            self.restore_dock_layout(project)
 
     def set_guidance_visible(self, visible: bool) -> None:
         """Swap between the guided flow and the full dock workspace.
