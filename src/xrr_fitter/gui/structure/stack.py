@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 import xrr_fitter.api as api
@@ -225,26 +225,33 @@ class StackView(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         del event
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         tokens = theme.palette_tokens(self.palette())
         font = QFont(self.font())
         font.setPointSize(theme.FONT_PT_SM)
         painter.setFont(font)
         width = self.width()
+        margin = 2
+        radius = 4.0
         for band in self._bands:
-            rect = QRect(0, band.top, width, band.height)
+            rect = QRect(margin, band.top, width - 2 * margin, band.height)
             fill = QColor(band.fill)
             is_selected = band.index == self._selected
             is_hovered = band.index == self._hovered and not is_selected
-            fill.setAlpha(255 if is_selected else 190)
-            painter.fillRect(rect, fill)
+            fill.setAlpha(230 if is_selected else 160)
+            path = QPainterPath()
+            path.addRoundedRect(rect.adjusted(0, 1, 0, -1), radius, radius)
+            painter.fillPath(path, fill)
             if is_hovered:
-                overlay = QColor(255, 255, 255, 30) if tokens is theme.DARK_TOKENS else QColor(0, 0, 0, 18)
-                painter.fillRect(rect, overlay)
-            border_color = QColor(tokens.accent if is_selected else tokens.surface_border)
-            border_width = 2 if is_selected else 1
-            painter.setPen(QPen(border_color, border_width))
-            painter.drawRect(rect.adjusted(0, 0, -1, -1))
+                overlay = QColor(255, 255, 255, 40) if tokens is theme.DARK_TOKENS else QColor(0, 0, 0, 22)
+                painter.fillPath(path, overlay)
+            if is_selected:
+                accent = QColor(tokens.accent)
+                accent.setAlpha(180)
+                painter.setPen(QPen(accent, 2.0))
+                painter.drawPath(path)
+            else:
+                painter.setPen(Qt.PenStyle.NoPen)
             self._draw_caption(painter, band, rect)
         painter.end()
 

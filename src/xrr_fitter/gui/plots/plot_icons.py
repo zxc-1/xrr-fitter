@@ -44,7 +44,7 @@ def _text_color() -> QColor:
     return application.palette().windowText().color()
 
 
-def _pen(color: QColor, width: float = 1.6) -> QPen:
+def _pen(color: QColor, width: float = 1.8) -> QPen:
     pen = QPen(color, width)
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
@@ -64,59 +64,76 @@ def _arrow_head(painter: QPainter, tip: QPointF, dx: float, dy: float, color: QC
 def _paint_view(p: QPainter, c: QColor) -> None:
     # An eye: the "查看" mode is for reading the plot rather than acting on it.
     path = QPainterPath()
-    path.moveTo(2.5, 8.0)
-    path.quadTo(8.0, 3.0, 13.5, 8.0)
-    path.quadTo(8.0, 13.0, 2.5, 8.0)
+    path.moveTo(1.5, 8.0)
+    path.cubicTo(4.0, 3.5, 12.0, 3.5, 14.5, 8.0)
+    path.cubicTo(12.0, 12.5, 4.0, 12.5, 1.5, 8.0)
+    fill = QColor(c)
+    fill.setAlpha(25)
+    p.fillPath(path, fill)
     p.drawPath(path)
     p.setBrush(c)
-    p.drawEllipse(QPointF(8.0, 8.0), 1.9, 1.9)
+    p.drawEllipse(QPointF(8.0, 8.0), 2.2, 2.2)
     p.setBrush(Qt.BrushStyle.NoBrush)
 
 
 def _paint_range(p: QPainter, c: QColor) -> None:
     # Two uprights with a translucent band between: a selected angle window.
     fill = QColor(c)
-    fill.setAlpha(60)
-    p.fillRect(QRectF(4.5, 3.0, 7.0, 10.0), fill)
-    p.drawLine(QPointF(4.5, 2.5), QPointF(4.5, 13.5))
-    p.drawLine(QPointF(11.5, 2.5), QPointF(11.5, 13.5))
+    fill.setAlpha(40)
+    p.fillRect(QRectF(5.0, 2.5, 6.0, 11.0), fill)
+    p.setPen(_pen(c, 2.2))
+    p.drawLine(QPointF(5.0, 2.0), QPointF(5.0, 14.0))
+    p.drawLine(QPointF(11.0, 2.0), QPointF(11.0, 14.0))
+    p.setPen(_pen(c))
 
 
 def _paint_mask(p: QPainter, c: QColor) -> None:
     # A single point struck through: toggling one point in or out of the fit.
     p.setBrush(c)
-    p.drawEllipse(QPointF(8.0, 8.0), 2.6, 2.6)
+    p.drawEllipse(QPointF(8.0, 8.0), 3.0, 3.0)
     p.setBrush(Qt.BrushStyle.NoBrush)
-    p.drawLine(QPointF(2.8, 13.2), QPointF(13.2, 2.8))
+    p.setPen(_pen(c, 2.2))
+    p.drawLine(QPointF(3.0, 13.0), QPointF(13.0, 3.0))
+    p.setPen(_pen(c))
 
 
 def _paint_pan(p: QPainter, c: QColor) -> None:
     # A four-way cross: drag the plot around under the cursor.
-    p.drawLine(QPointF(8.0, 3.0), QPointF(8.0, 13.0))
-    p.drawLine(QPointF(3.0, 8.0), QPointF(13.0, 8.0))
-    _arrow_head(p, QPointF(8.0, 2.2), 0.0, -1.0, c)
-    _arrow_head(p, QPointF(8.0, 13.8), 0.0, 1.0, c)
-    _arrow_head(p, QPointF(2.2, 8.0), -1.0, 0.0, c)
-    _arrow_head(p, QPointF(13.8, 8.0), 1.0, 0.0, c)
+    p.setPen(_pen(c, 1.6))
+    p.drawLine(QPointF(8.0, 3.5), QPointF(8.0, 12.5))
+    p.drawLine(QPointF(3.5, 8.0), QPointF(12.5, 8.0))
+    _arrow_head(p, QPointF(8.0, 2.5), 0.0, -1.0, c)
+    _arrow_head(p, QPointF(8.0, 13.5), 0.0, 1.0, c)
+    _arrow_head(p, QPointF(2.5, 8.0), -1.0, 0.0, c)
+    _arrow_head(p, QPointF(13.5, 8.0), 1.0, 0.0, c)
+    p.setPen(_pen(c))
 
 
 def _paint_zoom(p: QPainter, c: QColor) -> None:
-    # A magnifier over a "+": drag a rectangle to magnify it.
-    p.drawEllipse(QPointF(6.5, 6.5), 4.0, 4.0)
-    p.drawLine(QPointF(9.4, 9.4), QPointF(14.0, 14.0))
-    p.drawLine(QPointF(6.5, 4.6), QPointF(6.5, 8.4))
-    p.drawLine(QPointF(4.6, 6.5), QPointF(8.4, 6.5))
+    # A magnifier with a "+" lens.
+    p.drawEllipse(QPointF(7.0, 7.0), 4.5, 4.5)
+    p.setPen(_pen(c, 2.2))
+    p.drawLine(QPointF(10.2, 10.2), QPointF(14.0, 14.0))
+    p.setPen(_pen(c, 1.6))
+    p.drawLine(QPointF(7.0, 5.0), QPointF(7.0, 9.0))
+    p.drawLine(QPointF(5.0, 7.0), QPointF(9.0, 7.0))
+    p.setPen(_pen(c))
 
 
 def _paint_home(p: QPainter, c: QColor) -> None:
     # A house: return the view to the limits the plot was drawn with.
     roof = QPainterPath()
-    roof.moveTo(2.5, 8.2)
-    roof.lineTo(8.0, 2.8)
-    roof.lineTo(13.5, 8.2)
+    roof.moveTo(2.0, 8.5)
+    roof.lineTo(8.0, 3.0)
+    roof.lineTo(14.0, 8.5)
+    fill = QColor(c)
+    fill.setAlpha(25)
+    body = QPainterPath()
+    body.addRect(QRectF(4.5, 8.5, 7.0, 5.0))
+    p.fillPath(body, fill)
     p.drawPath(roof)
-    p.drawRect(QRectF(4.5, 8.2, 7.0, 5.3))
-    p.drawRect(QRectF(7.0, 10.5, 2.0, 3.0))
+    p.drawRect(QRectF(4.5, 8.5, 7.0, 5.0))
+    p.drawRect(QRectF(6.8, 10.5, 2.4, 3.0))
 
 
 def _paint_zoom_to_range(p: QPainter, c: QColor) -> None:
@@ -345,7 +362,7 @@ PAINTERS: dict[str, Callable[[QPainter, QColor], None]] = {
 }
 
 
-def plot_icon(name: str, *, size: int = 16) -> QIcon:
+def plot_icon(name: str, *, size: int = 20) -> QIcon:
     """The glyph for one plot control, painted in the active theme's text colour.
 
     Painting on demand -- rather than caching -- means the next toolbar built
