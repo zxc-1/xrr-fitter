@@ -93,6 +93,7 @@ ALLOWED = {
 PACKAGE_EDGE_EXCEPTIONS = {
     "io.examples": {"physics.reflectivity", "physics.stack"},
     "io.orso": {"version"},
+    "gui.data.import_dialog": {"io.xy"},
 }
 # Package exceptions are exact directed module edges, never owner-wide grants.
 # The mapping key names the only source module that receives an exception.
@@ -173,12 +174,12 @@ THIRD_PARTY_OWNER_ALLOWLIST = {
     "PySide6": {"gui"},
 }
 THIRD_PARTY_MODULE_ALLOWLIST = {
-    "numpy": {"services.datasets", "gui.plots"},
+    "numpy": {"services.datasets", "gui.plots", "gui.data.import_dialog"},
     "periodictable": {"physics.materials"},
     "pandas": {"io.export_tables"},
     "xlsxwriter": {"io.export_tables"},
     "matplotlib": {"io.export_plots", "gui.plots"},
-    "pyqtgraph": {"gui.plots.live"},
+    "pyqtgraph": {"gui.plots.live", "gui.data.import_dialog"},
     "jsonschema": {"io.orso"},
     "orsopy": {"io.orso"},
 }
