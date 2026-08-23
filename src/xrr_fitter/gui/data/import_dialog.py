@@ -31,7 +31,7 @@ import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.io.xy import read_xy
 
-_log = logging.getLogger(__name__)
+LOG = logging.getLogger(__name__)
 
 VALIDATION_TEXT = "请选择光路类型：单色 / 混合 Kα"
 RESOLUTION_KINDS = (
@@ -256,7 +256,7 @@ class ImportDialog(QDialog):
             self._preview_curve.setData(x[valid], y[valid])
             self._preview_error.hide()
         except Exception as exc:
-            _log.debug("preview parse failed: %s", exc)
+            LOG.debug("preview parse failed: %s", exc)
             self._preview_curve.setData([], [])
             self._preview_error.setText(f"预览不可用：{exc}")
             self._preview_error.show()

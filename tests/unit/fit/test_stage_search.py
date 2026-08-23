@@ -563,7 +563,7 @@ def test_stage_b_publishes_candidates_in_coarse_input_order(
     monkeypatch.setattr(
         api,
         "_stage_b_candidate",
-        lambda _problem, _start, index, _seed, _cancelled: by_index[index],
+        lambda _problem, _start, index, _seed, _cancelled, **_kwargs: by_index[index],
     )
 
     outcome = api.run_stage_b(

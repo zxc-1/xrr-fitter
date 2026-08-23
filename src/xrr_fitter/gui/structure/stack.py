@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 import xrr_fitter.api as api
@@ -22,6 +22,10 @@ from xrr_fitter.gui import theme
 # Air and the substrate are semi-infinite, so they have no thickness to be
 # proportional to and instead get a constant strip that reads as a boundary.
 MEDIUM_BAND_H = 18
+
+# 3D pseudo-perspective parameters: the side/top faces that give depth.
+DEPTH_X = 14  # horizontal extent of the side face
+DEPTH_Y = 5  # vertical extent of the top face
 
 # A native oxide beside a micron film earns a fraction of a pixel.  Rounding it
 # away would erase the layer the diagram exists to show, so every component keeps
@@ -230,30 +234,101 @@ class StackView(QWidget):
         font = QFont(self.font())
         font.setPointSize(theme.FONT_PT_SM)
         painter.setFont(font)
-        width = self.width()
+        w = self.width()
         margin = 2
-        radius = 4.0
-        for band in self._bands:
-            rect = QRect(margin, band.top, width - 2 * margin, band.height)
+        front_left = float(margin)
+        front_right = float(w - margin - DEPTH_X)
+        front_width = front_right - front_left
+        edge_pen = QPen(QColor(0, 0, 0, 90), 1.0)
+        for idx, band in enumerate(self._bands):
             fill = QColor(band.fill)
             is_selected = band.index == self._selected
             is_hovered = band.index == self._hovered and not is_selected
-            fill.setAlpha(230 if is_selected else 160)
-            path = QPainterPath()
-            path.addRoundedRect(rect.adjusted(0, 1, 0, -1), radius, radius)
-            painter.fillPath(path, fill)
-            if is_hovered:
-                overlay = QColor(255, 255, 255, 40) if tokens is theme.DARK_TOKENS else QColor(0, 0, 0, 22)
-                painter.fillPath(path, overlay)
-            if is_selected:
-                accent = QColor(tokens.accent)
-                accent.setAlpha(180)
-                painter.setPen(QPen(accent, 2.0))
-                painter.drawPath(path)
-            else:
-                painter.setPen(Qt.PenStyle.NoPen)
-            self._draw_caption(painter, band, rect)
+            fill.setAlpha(240 if is_selected else 210)
+            ft = float(band.top + DEPTH_Y)
+            fh = float(band.height)
+            front_rect = QRectF(front_left, ft, front_width, fh)
+            self._paint_band_3d(painter, fill, front_left, front_right, ft, fh, band.index is not None, idx == 0)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(fill)
+            painter.drawRect(front_rect)
+            self._paint_band_overlay(painter, tokens, front_rect, is_hovered, is_selected)
+            self._paint_band_edges(painter, edge_pen, front_left, front_right, ft, fh, band.index is not None)
+            self._draw_caption(painter, band, QRect(int(front_left), int(ft), int(front_width), int(fh)))
         painter.end()
+
+    def _paint_band_3d(
+        self,
+        painter: QPainter,
+        fill: QColor,
+        front_left: float,
+        front_right: float,
+        ft: float,
+        fh: float,
+        is_component: bool,
+        is_first: bool,
+    ) -> None:
+        """Draw the 3D side face and optional top cap."""
+        if is_component and fh >= MIN_BAND_H:
+            side = fill.darker(170)
+            side_poly = QPolygonF(
+                [
+                    QPointF(front_right, ft),
+                    QPointF(front_right + DEPTH_X, ft - DEPTH_Y),
+                    QPointF(front_right + DEPTH_X, ft + fh - DEPTH_Y),
+                    QPointF(front_right, ft + fh),
+                ]
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(side)
+            painter.drawPolygon(side_poly)
+        if is_first:
+            top_face = fill.lighter(145)
+            top_poly = QPolygonF(
+                [
+                    QPointF(front_left, ft),
+                    QPointF(front_left + DEPTH_X, ft - DEPTH_Y),
+                    QPointF(front_right + DEPTH_X, ft - DEPTH_Y),
+                    QPointF(front_right, ft),
+                ]
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(top_face)
+            painter.drawPolygon(top_poly)
+
+    @staticmethod
+    def _paint_band_overlay(
+        painter: QPainter, tokens: object, front_rect: QRectF, is_hovered: bool, is_selected: bool
+    ) -> None:
+        """Draw hover highlight or selection accent border."""
+        if is_hovered:
+            overlay = QColor(255, 255, 255, 40) if tokens is theme.DARK_TOKENS else QColor(0, 0, 0, 22)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(overlay)
+            painter.drawRect(front_rect)
+        if is_selected:
+            accent = QColor(tokens.accent)
+            accent.setAlpha(200)
+            painter.setPen(QPen(accent, 2.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(front_rect.adjusted(1, 1, -1, -1))
+
+    @staticmethod
+    def _paint_band_edges(
+        painter: QPainter,
+        edge_pen: QPen,
+        front_left: float,
+        front_right: float,
+        ft: float,
+        fh: float,
+        is_component: bool,
+    ) -> None:
+        """Draw inter-layer separation lines."""
+        painter.setPen(edge_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawLine(QPointF(front_left, ft + fh), QPointF(front_right, ft + fh))
+        if is_component and fh >= MIN_BAND_H:
+            painter.drawLine(QPointF(front_right, ft + fh), QPointF(front_right + DEPTH_X, ft + fh - DEPTH_Y))
 
     def _draw_caption(self, painter: QPainter, band: Band, rect: QRect) -> None:
         """Label a band only when its own height leaves room to read one."""
