@@ -449,7 +449,7 @@ class LiveReflectivityPlot(pg.PlotWidget):
         x = np.asarray(angles, dtype=float)
         y = np.asarray(values, dtype=float)
         if self.preview_item is None:
-            self.preview_item = self.plot(x, y, pen=pg.mkPen(theme.DATA_PREVIEW, width=1.4), name="搜索中模型")
+            self.preview_item = self.plot(x, y, pen=pg.mkPen(theme.DATA_PREVIEW, width=2.5), name="搜索中模型")
         else:
             self.preview_item.setData(x, y)
         return True

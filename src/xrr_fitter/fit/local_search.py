@@ -85,6 +85,8 @@ def solve_local(
     *,
     max_nfev: int,
     cancelled: Callable[[], bool] | None = None,
+    iteration_callback: Callable[[np.ndarray], None] | None = None,
+    callback_interval: int = 10,
 ) -> LocalSearchResult:
     """Optimize one compiled start using its exact analytic Jacobian."""
     unit = _validated_unit(problem, start, "start")
@@ -96,9 +98,13 @@ def solve_local(
         return LocalSearchResult(unit, evaluation, "no_free_parameters", 1)
     start_evaluation = evaluate_vector(problem, unit)
     system_residual, system_jacobian = cached_least_squares_callbacks(partial(least_squares_system, problem))
+    nfev_counter = [0]
 
     def residual(value: np.ndarray) -> np.ndarray:
         _poll(cancelled)
+        nfev_counter[0] += 1
+        if iteration_callback is not None and nfev_counter[0] % callback_interval == 0:
+            iteration_callback(value)
         return system_residual(value)
 
     def jacobian(value: np.ndarray) -> np.ndarray:

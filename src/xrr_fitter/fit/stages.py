@@ -453,6 +453,9 @@ def _stage_b_candidate(
     index: int,
     seed: int,
     cancelled: Callable[[], bool] | None,
+    progress: Callable[[FitProgress], None] | None = None,
+    dataset_id: str | None = None,
+    total_launches: int = 1,
 ) -> FitCandidate:
     values = _complete_values(problem, dict(start.values))
     coarse_problem, full_problem = _stage_problems(problem, "B", values)
@@ -465,6 +468,20 @@ def _stage_b_candidate(
             seed=seed,
             population_size=max(32, 6 * unit.size),
         )
+
+        def _b_gen_callback(xk: np.ndarray, best_obj: float) -> None:
+            preview = _published_candidate(problem, coarse_problem, xk, f"B-{index}", index, "running", 0)
+            _emit(
+                progress,
+                dataset_id,
+                "B",
+                index + 1,
+                total_launches,
+                best_obj,
+                f"DE generation (launch {index + 1})",
+                preview,
+            )
+
         solved = solve_global(
             coarse_problem,
             unit,
@@ -472,6 +489,7 @@ def _stage_b_candidate(
             seed=seed,
             maxiter=problem.config.budget.short_de_maxiter,
             cancelled=cancelled,
+            generation_callback=_b_gen_callback if progress else None,
         )
     return _published_candidate(
         problem,
@@ -611,7 +629,16 @@ def run_stage_b(
     """
     candidates: list[FitCandidate] = []
     for index, (start, seed) in enumerate(zip(starts, seeds, strict=True)):
-        optimized = _stage_b_candidate(problem, start, index, seed, cancelled)
+        optimized = _stage_b_candidate(
+            problem,
+            start,
+            index,
+            seed,
+            cancelled,
+            progress=progress,
+            dataset_id=dataset_id,
+            total_launches=len(starts),
+        )
         candidates.extend(_stage_b_launch_evidence(problem, start, optimized, index))
         current = tuple(candidates)
         _emit(
@@ -642,12 +669,19 @@ def _local_stage_candidate(
     candidate_id: str,
     seed_index: int,
     cancelled: Callable[[], bool] | None,
+    iteration_callback: Callable[[np.ndarray], None] | None = None,
 ) -> FitCandidate:
     maximum = max(
         problem.config.budget.local_min_nfev,
         problem.config.budget.local_nfev_per_parameter * (start.size + 1),
     )
-    solved = solve_local(stage_problem, start, max_nfev=maximum, cancelled=cancelled)
+    solved = solve_local(
+        stage_problem,
+        start,
+        max_nfev=maximum,
+        cancelled=cancelled,
+        iteration_callback=iteration_callback,
+    )
     return _published_candidate(
         problem,
         stage_problem,
@@ -710,6 +744,31 @@ def run_local_stage(
         values = _candidate_values(parent)
         stage_problem = compile_stage_problem(problem, stage, values)
         starts = _local_stage_starts(problem, stage_problem, parent, stage, index, count)
+
+        def _make_local_cb(stg_problem, cid, sidx, _completed=completed):
+            def _cb(unit_vector: np.ndarray) -> None:
+                preview = _published_candidate(
+                    problem,
+                    stg_problem,
+                    unit_vector,
+                    cid,
+                    sidx,
+                    "running",
+                    0,
+                )
+                _emit(
+                    progress,
+                    dataset_id,
+                    stage,
+                    _completed + 1,
+                    total,
+                    preview.objective,
+                    message,
+                    preview,
+                )
+
+            return _cb
+
         tasks = tuple(
             partial(
                 _local_stage_candidate,
@@ -719,6 +778,7 @@ def run_local_stage(
                 f"{stage}-{index}-{restart}",
                 index,
                 cancelled,
+                _make_local_cb(stage_problem, f"{stage}-{index}-{restart}", index) if progress else None,
             )
             for restart, start in enumerate(starts)
         )
@@ -880,12 +940,19 @@ def _stage_e_local_candidate(
     candidate_id: str,
     seed_index: int,
     cancelled: Callable[[], bool] | None,
+    iteration_callback: Callable[[np.ndarray], None] | None = None,
 ) -> FitCandidate:
     maximum = max(
         problem.config.budget.local_min_nfev,
         problem.config.budget.local_nfev_per_parameter * (start.size + 1),
     )
-    solved = solve_local(setup.full_problem, start, max_nfev=maximum, cancelled=cancelled)
+    solved = solve_local(
+        setup.full_problem,
+        start,
+        max_nfev=maximum,
+        cancelled=cancelled,
+        iteration_callback=iteration_callback,
+    )
     return _published_candidate(
         problem,
         setup.full_problem,
@@ -905,9 +972,37 @@ def _run_stage_e_locals(
     kind: str,
     cancelled: Callable[[], bool] | None,
     task_runner: TaskRunner | None,
+    progress: Callable[[FitProgress], None] | None = None,
+    dataset_id: str | None = None,
+    total_seeds: int = 1,
 ) -> list[FitCandidate]:
     # Result positions retain start order so winner selection and nfev totals
     # are independent of worker completion timing.
+
+    def _make_e_local_cb(cid, sidx):
+        def _cb(unit_vector: np.ndarray) -> None:
+            preview = _published_candidate(
+                problem,
+                setup.full_problem,
+                unit_vector,
+                cid,
+                sidx,
+                "running",
+                0,
+            )
+            _emit(
+                progress,
+                dataset_id,
+                "E",
+                seed_index + 1,
+                total_seeds,
+                preview.objective,
+                f"local refinement (seed {seed_index + 1})",
+                preview,
+            )
+
+        return _cb
+
     tasks = tuple(
         partial(
             _stage_e_local_candidate,
@@ -917,6 +1012,7 @@ def _run_stage_e_locals(
             f"E-{seed_index}-{kind}-{index}",
             seed_index,
             cancelled,
+            _make_e_local_cb(f"E-{seed_index}-{kind}-{index}", seed_index) if progress else None,
         )
         for index, start in enumerate(starts)
     )
@@ -931,6 +1027,9 @@ def _stage_e_seed(
     elite: np.ndarray | None,
     cancelled: Callable[[], bool] | None,
     task_runner: TaskRunner | None,
+    progress: Callable[[FitProgress], None] | None = None,
+    dataset_id: str | None = None,
+    total_seeds: int = 1,
 ) -> FitCandidate:
     """Run one complete Stage-E global, local, and restart path.
 
@@ -954,6 +1053,28 @@ def _stage_e_seed(
         population_size=setup.population_size,
         perturbations_per_center=2,
     )
+
+    def _e_gen_callback(xk: np.ndarray, best_obj: float) -> None:
+        preview = _published_candidate(
+            problem,
+            setup.coarse_problem,
+            xk,
+            f"E-{seed_index}",
+            seed_index,
+            "running",
+            0,
+        )
+        _emit(
+            progress,
+            dataset_id,
+            "E",
+            seed_index + 1,
+            total_seeds,
+            best_obj,
+            f"DE generation (seed {seed_index + 1})",
+            preview,
+        )
+
     solved = solve_global(
         setup.coarse_problem,
         setup.centers[0],
@@ -961,6 +1082,7 @@ def _stage_e_seed(
         seed=child_seed,
         maxiter=problem.config.budget.full_de_maxiter,
         cancelled=cancelled,
+        generation_callback=_e_gen_callback if progress else None,
     )
     starts = _incumbent_starts(setup, seed_index, child_seed, elite)
     starts += _population_starts(setup, solved)
@@ -972,6 +1094,9 @@ def _stage_e_seed(
         "local",
         cancelled,
         task_runner,
+        progress=progress,
+        dataset_id=dataset_id,
+        total_seeds=total_seeds,
     )
     winner_index = best_candidate_index(tuple(attempts))
     if winner_index is None:
@@ -1006,6 +1131,9 @@ def _stage_e_seed(
             "restart",
             cancelled,
             task_runner,
+            progress=progress,
+            dataset_id=dataset_id,
+            total_seeds=total_seeds,
         )
     )
     winner = best_candidate_index(tuple(attempts))
@@ -1233,6 +1361,9 @@ def run_stage_e(
             elite,
             cancelled,
             task_runner,
+            progress=progress,
+            dataset_id=dataset_id,
+            total_seeds=len(seeds),
         )
         candidates.append(candidate)
         winner = best_candidate_index(tuple(candidates))

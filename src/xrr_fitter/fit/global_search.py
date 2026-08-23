@@ -520,6 +520,7 @@ def solve_global(
     seed: int,
     maxiter: int,
     cancelled: Callable[[], bool] | None = None,
+    generation_callback: Callable[[np.ndarray, float], None] | None = None,
 ) -> GlobalSearchResult:
     """Run SciPy DE with a caller-supplied, replayable initial population."""
     unit, members = _validate_layout(problem, start, population)
@@ -534,6 +535,11 @@ def solve_global(
         trace.append(result.objective)
         return result.objective
 
+    def _de_callback(xk: np.ndarray, convergence: float = 0.0) -> None:
+        if generation_callback is not None:
+            best_obj = min(trace) if trace else float("inf")
+            generation_callback(xk, best_obj)
+
     optimized = differential_evolution(
         objective,
         tuple((0.0, 1.0) for _ in problem.variables),
@@ -544,6 +550,7 @@ def solve_global(
         updating="deferred",
         polish=False,
         workers=1,
+        callback=_de_callback,
     )
     result_unit = np.asarray(optimized.x, dtype=float)
     evaluation = evaluate_vector(problem, result_unit)
