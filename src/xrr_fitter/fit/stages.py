@@ -126,6 +126,9 @@ class _StageESetup:
     population_size: int
 
 
+#
+# Parameter settings
+#
 def _parameter_settings(problem: object) -> tuple[ParameterSetting, ...]:
     return tuple(
         ParameterSetting(
@@ -139,6 +142,9 @@ def _parameter_settings(problem: object) -> tuple[ParameterSetting, ...]:
     )
 
 
+#
+# Compile coarse problem
+#
 def compile_coarse_problem(problem: object) -> object:
     """Compile the immutable feature-grid context used by coarse stages.
 
@@ -159,6 +165,9 @@ def compile_coarse_problem(problem: object) -> object:
     )
 
 
+#
+# Stage problems
+#
 def _stage_problems(
     problem: object,
     stage: str,
@@ -169,6 +178,9 @@ def _stage_problems(
     return compile_stage_problem(coarse, stage, current_values), full
 
 
+#
+# Stream order
+#
 def _stream_order(stream_id: str) -> tuple[int, int, str]:
     prefix, separator, suffix = stream_id.partition("-")
     if not separator or not suffix.isdigit():
@@ -177,6 +189,9 @@ def _stream_order(stream_id: str) -> tuple[int, int, str]:
     return priority, int(suffix), stream_id
 
 
+#
+# Reserve child seeds
+#
 def reserve_child_seeds(
     master_seed: int,
     stream_ids: tuple[str, ...],
@@ -199,6 +214,9 @@ def reserve_child_seeds(
     return tuple(ChildSeed(stream_id, by_stream[stream_id]) for stream_id in requested)
 
 
+#
+# Remaining stages
+#
 def remaining_stages(completed_stage: str | None) -> tuple[str, ...]:
     """Return the strict suffix after a completed checkpoint stage.
 
@@ -211,21 +229,33 @@ def remaining_stages(completed_stage: str | None) -> tuple[str, ...]:
     return STAGE_ORDER[STAGE_ORDER.index(completed_stage) + 1 :]
 
 
+#
+# Poll
+#
 def _poll(cancelled: Callable[[], bool] | None) -> None:
     if cancelled is not None and cancelled():
         raise SearchCancelled("search cancelled")
 
 
+#
+# Candidate values
+#
 def _candidate_values(candidate: FitCandidate) -> dict[str, float]:
     return {value.name: value.value for value in candidate.parameters}
 
 
+#
+# Complete values
+#
 def _complete_values(problem: object, values: dict[str, float]) -> dict[str, float]:
     return {
         definition.name: values.get(definition.name, definition.initial) for definition in problem.parameter_definitions
     }
 
 
+#
+# Published candidate
+#
 def _published_candidate(
     problem: object,
     stage_problem: object,
@@ -256,6 +286,9 @@ def _published_candidate(
     )
 
 
+#
+# Summary
+#
 def _summary(stage: str, candidates: tuple[FitCandidate, ...]) -> FitStageSummary:
     selectable = rank_candidate_indices(candidates)
     best = candidates[selectable[0]].objective if selectable else float("inf")
@@ -268,11 +301,17 @@ def _summary(stage: str, candidates: tuple[FitCandidate, ...]) -> FitStageSummar
     )
 
 
+#
+# Coarse log curve
+#
 def _coarse_log_curve(problem: object, candidate: FitCandidate) -> np.ndarray:
     modeled = candidate.model_normalized[problem.data.fit_mask]
     return np.log10(np.maximum(modeled, problem.data.r_floor))
 
 
+#
+# Unique feature ids
+#
 def _unique_feature_ids(starts: tuple[CandidateStart, ...]) -> tuple[str, ...]:
     counts: dict[str, int] = {}
     result: list[str] = []
@@ -283,6 +322,9 @@ def _unique_feature_ids(starts: tuple[CandidateStart, ...]) -> tuple[str, ...]:
     return tuple(result)
 
 
+#
+# Ensure two starts
+#
 def _ensure_two_starts(starts: tuple[CandidateStart, ...]) -> tuple[CandidateStart, ...]:
     if len(starts) >= 2:
         return starts[:2]
@@ -291,6 +333,9 @@ def _ensure_two_starts(starts: tuple[CandidateStart, ...]) -> tuple[CandidateSta
     return starts + (replace(starts[0], feature_key=f"{starts[0].feature_key}:alternate"),)
 
 
+#
+# Stage a candidate
+#
 def _stage_a_candidate(problem: object, start: CandidateStart, index: int) -> FitCandidate | None:
     try:
         unit = encode_physical_vector(problem, dict(start.values))
@@ -308,6 +353,9 @@ def _stage_a_candidate(problem: object, start: CandidateStart, index: int) -> Fi
     )
 
 
+#
+# Evaluate stage a pool
+#
 def _evaluate_stage_a_pool(
     problem: object,
     dataset_id: str | None,
@@ -353,6 +401,9 @@ def _evaluate_stage_a_pool(
     return tuple(evaluated), rejected_count, invalid_count
 
 
+#
+# Stage a warnings
+#
 def _stage_a_warnings(
     screen_warnings: tuple[str, ...],
     evaluated_count: int,
@@ -371,6 +422,9 @@ def _stage_a_warnings(
     return warnings
 
 
+#
+# Stage a stop reasons
+#
 def _stage_a_stop_reasons(
     accepted: tuple[tuple[CandidateStart, FitCandidate], ...],
     rejected_count: int,
@@ -387,6 +441,9 @@ def _stage_a_stop_reasons(
     return tuple(reasons)
 
 
+#
+# Run stage a
+#
 def run_stage_a(
     problem: object,
     dataset_id: str | None,
@@ -447,6 +504,9 @@ def run_stage_a(
     return selected, summary, warnings
 
 
+#
+# Stage b candidate
+#
 def _stage_b_candidate(
     problem: object,
     start: CandidateStart,
@@ -469,6 +529,9 @@ def _stage_b_candidate(
             population_size=max(32, 6 * unit.size),
         )
 
+        #
+        # B gen callback
+        #
         def _b_gen_callback(xk: np.ndarray, best_obj: float) -> None:
             preview = _published_candidate(problem, coarse_problem, xk, f"B-{index}", index, "running", 0)
             _emit(
@@ -502,6 +565,9 @@ def _stage_b_candidate(
     )
 
 
+#
+# Stage b launch evidence
+#
 def _stage_b_launch_evidence(
     problem: object,
     start: CandidateStart,
@@ -523,6 +589,9 @@ def _stage_b_launch_evidence(
     return baseline, optimized
 
 
+#
+# Stage b geometry indices
+#
 def _stage_b_geometry_indices(problem: object) -> tuple[int, ...]:
     return tuple(
         index
@@ -531,6 +600,9 @@ def _stage_b_geometry_indices(problem: object) -> tuple[int, ...]:
     )
 
 
+#
+# Stage b geometry distance
+#
 def _stage_b_geometry_distance(
     first: FitCandidate,
     second: FitCandidate,
@@ -543,6 +615,9 @@ def _stage_b_geometry_distance(
     return float(np.sqrt(np.mean(difference**2)))
 
 
+#
+# Stage b geometry group
+#
 def _stage_b_geometry_group(
     problem: object,
     candidates: tuple[FitCandidate, ...],
@@ -565,6 +640,9 @@ def _stage_b_geometry_group(
     )
 
 
+#
+# Stage b representatives
+#
 def _stage_b_representatives(
     problem: object,
     candidates: tuple[FitCandidate, ...],
@@ -607,11 +685,17 @@ def _stage_b_representatives(
     return tuple(candidate for index, candidate in enumerate(candidates) if index in retained)
 
 
+#
+# Best objective
+#
 def _best_objective(candidates: tuple[FitCandidate, ...]) -> float:
     winner = best_candidate_index(candidates)
     return float("inf") if winner is None else candidates[winner].objective
 
 
+#
+# Run stage b
+#
 def run_stage_b(
     problem: object,
     dataset_id: str | None,
@@ -662,6 +746,9 @@ def run_stage_b(
     )
 
 
+#
+# Local stage candidate
+#
 def _local_stage_candidate(
     problem: object,
     stage_problem: object,
@@ -693,6 +780,9 @@ def _local_stage_candidate(
     )
 
 
+#
+# Local stage starts
+#
 def _local_stage_starts(
     problem: object,
     stage_problem: object,
@@ -710,6 +800,9 @@ def _local_stage_starts(
     return (center, *bounded_perturbations(center, perturbation_count, seed=seed))
 
 
+#
+# Run local stage
+#
 def run_local_stage(
     problem: object,
     dataset_id: str | None,
@@ -745,7 +838,13 @@ def run_local_stage(
         stage_problem = compile_stage_problem(problem, stage, values)
         starts = _local_stage_starts(problem, stage_problem, parent, stage, index, count)
 
+        #
+        # Make local cb
+        #
         def _make_local_cb(stg_problem, cid, sidx, _completed=completed):
+            #
+            # Cb
+            #
             def _cb(unit_vector: np.ndarray) -> None:
                 preview = _published_candidate(
                     problem,
@@ -800,6 +899,9 @@ def run_local_stage(
     return StageOutcome(values, _summary(stage, values), perturbation_counts=counts)
 
 
+#
+# Stage b continuation
+#
 def stage_b_continuation(
     candidates: tuple[FitCandidate, ...],
     perturbation_counts: tuple[int, ...] = (),
@@ -819,6 +921,9 @@ def stage_b_continuation(
     return archive.active, archive.perturbation_counts
 
 
+#
+# Local stage continuation
+#
 def local_stage_continuation(
     candidates: tuple[FitCandidate, ...],
     perturbation_counts: tuple[int, ...] = (),
@@ -844,6 +949,9 @@ def local_stage_continuation(
     return tuple(parents), retained
 
 
+#
+# Stage e setup
+#
 def _stage_e_setup(problem: object, parents: tuple[FitCandidate, ...]) -> _StageESetup:
     """Build Stage-E coarse centers and complete full-data incumbent starts.
 
@@ -874,6 +982,9 @@ def _stage_e_setup(problem: object, parents: tuple[FitCandidate, ...]) -> _Stage
     )
 
 
+#
+# Population energies
+#
 def _population_energies(problem: object, solved: object) -> tuple[np.ndarray, np.ndarray]:
     """Validate and normalize one solver population trace.
 
@@ -894,6 +1005,9 @@ def _population_energies(problem: object, solved: object) -> tuple[np.ndarray, n
     return population, energies
 
 
+#
+# Population starts
+#
 def _population_starts(setup: _StageESetup, solved: object) -> tuple[np.ndarray, ...]:
     population, energies = _population_energies(setup.coarse_problem, solved)
     ranked = np.where(np.isfinite(energies), energies, np.inf)
@@ -907,6 +1021,9 @@ def _population_starts(setup: _StageESetup, solved: object) -> tuple[np.ndarray,
     )
 
 
+#
+# Incumbent starts
+#
 def _incumbent_starts(
     setup: _StageESetup,
     seed_index: int,
@@ -933,6 +1050,9 @@ def _incumbent_starts(
     return tuple(starts)
 
 
+#
+# Stage e local candidate
+#
 def _stage_e_local_candidate(
     problem: object,
     setup: _StageESetup,
@@ -964,6 +1084,9 @@ def _stage_e_local_candidate(
     )
 
 
+#
+# Run stage e locals
+#
 def _run_stage_e_locals(
     problem: object,
     setup: _StageESetup,
@@ -980,6 +1103,9 @@ def _run_stage_e_locals(
     # are independent of worker completion timing.
 
     def _make_e_local_cb(cid, sidx):
+        #
+        # Cb
+        #
         def _cb(unit_vector: np.ndarray) -> None:
             preview = _published_candidate(
                 problem,
@@ -1019,6 +1145,9 @@ def _run_stage_e_locals(
     return list(_run_tasks(tasks, task_runner))
 
 
+#
+# Stage e seed
+#
 def _stage_e_seed(
     problem: object,
     setup: _StageESetup,
@@ -1054,6 +1183,9 @@ def _stage_e_seed(
         perturbations_per_center=2,
     )
 
+    #
+    # E gen callback
+    #
     def _e_gen_callback(xk: np.ndarray, best_obj: float) -> None:
         preview = _published_candidate(
             problem,
@@ -1146,6 +1278,9 @@ def _stage_e_seed(
     )
 
 
+#
+# Materially improves
+#
 def _materially_improves(problem: object, incumbent: FitCandidate, candidate: FitCandidate) -> bool:
     thresholds = problem.config.confidence
     required = max(
@@ -1155,6 +1290,9 @@ def _materially_improves(problem: object, incumbent: FitCandidate, candidate: Fi
     return candidate.valid and candidate.objective + required < incumbent.objective
 
 
+#
+# Profile rescue start
+#
 def _profile_rescue_start(
     problem: object,
     center: np.ndarray,
@@ -1184,6 +1322,9 @@ def _profile_rescue_start(
     return np.array(start, copy=True) if valid else None
 
 
+#
+# Profile rescue paths
+#
 def _profile_rescue_paths(
     problem: object,
     center: np.ndarray,
@@ -1225,6 +1366,9 @@ def _profile_rescue_paths(
     return refined
 
 
+#
+# Solve profile rescue path
+#
 def _solve_profile_rescue_path(
     problem: object,
     start: np.ndarray,
@@ -1235,6 +1379,9 @@ def _solve_profile_rescue_path(
     return solve_local(problem, start, max_nfev=maximum, cancelled=cancelled)
 
 
+#
+# Valid profile rescue result
+#
 def _valid_profile_rescue_result(problem: object, result: object) -> bool:
     """Check one local result's coordinate layout and finite evaluation."""
     unit = np.asarray(result.unit_vector, dtype=float)
@@ -1248,6 +1395,9 @@ def _valid_profile_rescue_result(problem: object, result: object) -> bool:
     )
 
 
+#
+# Publish profile rescue
+#
 def _publish_profile_rescue(
     problem: object,
     originals: tuple[FitCandidate, ...],
@@ -1288,6 +1438,9 @@ def _publish_profile_rescue(
     )
 
 
+#
+# Reconverge profile basin
+#
 def reconverge_profile_basin(
     problem: object,
     stage_candidates: tuple[FitCandidate, ...],
@@ -1329,6 +1482,9 @@ def reconverge_profile_basin(
     )
 
 
+#
+# Run stage e
+#
 def run_stage_e(
     problem: object,
     dataset_id: str | None,

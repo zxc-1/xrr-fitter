@@ -90,6 +90,9 @@ from xrr_fitter.gui.plots.sld_state import (
 )
 
 
+#
+# Empty state widget
+#
 def _empty_state_widget(panel: PlotPanel) -> QWidget:
     widget = QWidget(panel)
     widget.setObjectName("plotEmptyState")
@@ -140,6 +143,9 @@ class PlotPanel(QWidget):
     # readout never reads as a broken control.
     CURSOR_IDLE_HINT = "将指针移到曲线上可读取坐标"
 
+    #
+    # Init
+    #
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("plotPanel")
@@ -198,6 +204,9 @@ class PlotPanel(QWidget):
         self._install_view_shortcuts()
         self.toolbar.overlay_toggled.connect(self._on_overlay_toggled)
 
+    #
+    # Float toolbar over plot
+    #
     def _float_toolbar_over_plot(self) -> None:
         """Lift the interaction bar out of the layout and onto the plot itself.
 
@@ -212,6 +221,9 @@ class PlotPanel(QWidget):
         self.tabs.currentChanged.connect(self._raise_toolbar_overlay)
         self._position_toolbar_overlay()
 
+    #
+    # Position toolbar overlay
+    #
     def _position_toolbar_overlay(self) -> None:
         """Pin the bar inside the plot's top-right corner, clear of the tab bar.
 
@@ -229,10 +241,16 @@ class PlotPanel(QWidget):
         self.toolbar.setGeometry(left, top + margin, hint.width(), hint.height())
         self.toolbar.raise_()
 
+    #
+    # Raise toolbar overlay
+    #
     def _raise_toolbar_overlay(self, *_args: object) -> None:
         """Re-assert the bar's place after a view switch restacks the children."""
         self._position_toolbar_overlay()
 
+    #
+    # Eventfilter
+    #
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         """Hold the floating bar in the corner as the plot stack is resized.
 
@@ -248,6 +266,9 @@ class PlotPanel(QWidget):
             self._position_toolbar_overlay()
         return super().eventFilter(watched, event)
 
+    #
+    # Install view shortcuts
+    #
     def _install_view_shortcuts(self) -> None:
         """Bind Alt+1..Alt+8 to the diagnostic tabs by visible position.
 
@@ -267,11 +288,17 @@ class PlotPanel(QWidget):
             shortcut.activated.connect(self._view_shortcut_activated)
             self.view_shortcuts.append(shortcut)
 
+    #
+    # View shortcut activated
+    #
     def _view_shortcut_activated(self) -> None:
         shortcut = self.sender()
         if shortcut is not None:
             self.select_visible_view(int(shortcut.property("viewPosition")))
 
+    #
+    # Select visible view
+    #
     def select_visible_view(self, position: int) -> bool:
         """Select the Nth (0-based) currently-visible diagnostic view."""
         visible: list[str] = []
@@ -286,77 +313,140 @@ class PlotPanel(QWidget):
         self.select_view(visible[position])
         return True
 
+    #
+    # Sync pages
+    #
     def _sync_pages(self) -> None:
         self._pages.setCurrentIndex(0 if self._dataset_id is None else 1)
         self._sync_analysis_visibility()
 
+    #
+    # Sync analysis visibility
+    #
     def _sync_analysis_visibility(self) -> None:
         """Hide the analysis pane when no fit result exists for the active dataset."""
         self.analysis_tabs.setVisible(self._result is not None)
 
+    #
+    # Tab titles
+    #
     def tab_titles(self) -> tuple[str, ...]:
         ref = tuple(self.reflectivity_tabs.tabText(i) for i in range(self.reflectivity_tabs.count()))
         ana = tuple(self.analysis_tabs.tabText(i) for i in range(self.analysis_tabs.count()))
         return ref + ana
 
+    #
+    # Tab keys
+    #
     def tab_keys(self) -> tuple[str, ...]:
         """The switchable diagnostic tabs, in tab-bar order (both groups)."""
         return tuple(key for key, _title, _description in TAB_SPECS)
 
+    #
+    # Reflectivity tab keys
+    #
     def reflectivity_tab_keys(self) -> tuple[str, ...]:
         """Tab keys belonging to the reflectivity group."""
         return REFLECTIVITY_KEYS
 
+    #
+    # Analysis tab keys
+    #
     def analysis_tab_keys(self) -> tuple[str, ...]:
         """Tab keys belonging to the analysis/diagnostic group."""
         return ANALYSIS_KEYS
 
+    #
+    # View keys
+    #
     def view_keys(self) -> tuple[str, ...]:
         """Every owned view, including the companion pane outside the tab bar."""
         return tuple(key for key, _title, _description in VIEW_SPECS)
 
+    #
+    # View
+    #
     def view(self, key: str) -> DiagnosticView | LiveReflectivityPlot:
         try:
             return self._views[key]
         except KeyError as error:
             raise KeyError(f"unknown diagnostic view: {key}") from error
 
+    #
+    # Selected dataset id
+    #
     def selected_dataset_id(self) -> str | None:
         return self._dataset_id
 
+    #
+    # Selected candidate id
+    #
     def selected_candidate_id(self) -> str | None:
         return self._candidate_id
 
+    #
+    # Current view key
+    #
     def current_view_key(self) -> str:
         return self._interactions.current_view_key()
 
+    #
+    # Select view
+    #
     def select_view(self, key: str) -> None:
         self._interactions.select_view(key)
 
+    #
+    # Set expert mode
+    #
     def set_expert_mode(self, enabled: bool) -> None:
         self._interactions.set_expert_mode(enabled)
 
+    #
+    # Apply workspace
+    #
     def apply_workspace(self, *, expert_mode: bool, tab_index: int, analysis_tab_index: int = 0) -> None:
         self._interactions.apply_workspace(expert_mode, tab_index, analysis_tab_index)
 
+    #
+    # Mode buttons
+    #
     def mode_buttons(self) -> dict[str, object]:
         return self.toolbar.buttons()
 
+    #
+    # Navigation buttons
+    #
     def navigation_buttons(self) -> dict[str, object]:
         return self.toolbar.navigation_buttons()
 
+    #
+    # Navigation mode
+    #
     def navigation_mode(self) -> str:
         return self._interactions.navigation_mode()
 
+    #
+    # Navigators
+    #
     def navigators(self) -> dict[str, object]:
         return self._interactions.navigators()
 
+    #
+    # Interaction mode
+    #
     def interaction_mode(self) -> str:
         return self.toolbar.mode()
 
+    #
+    # Set interaction mode
+    #
     def set_interaction_mode(self, mode: str) -> None:
         self.toolbar.set_mode(mode)
 
+    #
+    # Set dataset
+    #
     def set_dataset(self, dataset_id: str, data: api.PreparedData) -> None:
         if not isinstance(dataset_id, str) or not dataset_id.strip():
             raise ValueError("dataset id must be nonempty")
@@ -407,6 +497,9 @@ class PlotPanel(QWidget):
         self._structure = None
         self._sync_pages()
 
+    #
+    # Select dataset
+    #
     def select_dataset(self, dataset_id: str) -> None:
         if dataset_id not in self._datasets:
             raise KeyError(f"unknown dataset: {dataset_id}")
@@ -448,6 +541,9 @@ class PlotPanel(QWidget):
         self._structure = None
         self._sync_pages()
 
+    #
+    # Update mask
+    #
     def update_mask(self, dataset_id: str, mask: object) -> None:
         if dataset_id not in self._datasets:
             raise KeyError(f"unknown dataset: {dataset_id}")
@@ -468,6 +564,9 @@ class PlotPanel(QWidget):
         self._transact(projection)
         self._masks[dataset_id] = converted
 
+    #
+    # Set result
+    #
     def set_result(self, result: object, candidate_id: str | None) -> None:
         data = self._active_data()
         validate_result(data, result)
@@ -501,6 +600,9 @@ class PlotPanel(QWidget):
         self._candidate_id = candidate_id
         self._sync_analysis_visibility()
 
+    #
+    # Set batch trends
+    #
     def set_batch_trends(
         self,
         dataset_ids: tuple[str, ...],
@@ -513,21 +615,36 @@ class PlotPanel(QWidget):
         self._transact(projection)
         self._trends = trends
 
+    #
+    # Select fit range
+    #
     def select_fit_range(self, first: float, second: float) -> bool:
         return self._interactions.select_fit_range(first, second)
 
+    #
+    # Request point mask
+    #
     def request_point_mask(self, index: int) -> bool:
         return self._interactions.request_point_mask(index)
 
+    #
+    # Show range
+    #
     def show_range(self, lower: float, upper: float) -> None:
         visible = ordered_finite_range(lower, upper)
         projection = self._current_projection(visible_range=visible)
         self._transact(projection)
         self._visible_range = visible
 
+    #
+    # Visible range
+    #
     def visible_range(self) -> tuple[float, float] | None:
         return self._visible_range
 
+    #
+    # Zoom to range
+    #
     def zoom_to_range(self) -> bool:
         """Focus the angle-domain views on the active fit range.
 
@@ -546,6 +663,9 @@ class PlotPanel(QWidget):
                 view.set_view_xrange(*visible)
         return True
 
+    #
+    # Reset zoom
+    #
     def reset_zoom(self) -> bool:
         """Return the angle-domain views to their data-driven autoscale."""
         if self._released or self._dataset_id is None:
@@ -556,25 +676,43 @@ class PlotPanel(QWidget):
                 view.autoscale_view()
         return True
 
+    #
+    # Cancel interaction
+    #
     def cancel_interaction(self) -> None:
         self._interactions.cancel()
 
+    #
+    # Clear visible range
+    #
     def _clear_visible_range(self) -> None:
         projection = self._current_projection(visible_range=None)
         self._transact(projection)
         self._visible_range = None
 
+    #
+    # Displayed prepared indices
+    #
     def displayed_prepared_indices(self) -> tuple[int, ...]:
         data = self._active_data()
         finite = np.isfinite(data.two_theta_deg) & np.isfinite(data.intensity_raw)
         return tuple(int(index) for index in np.flatnonzero(finite))
 
+    #
+    # Callback counts
+    #
     def callback_counts(self) -> tuple[tuple[str, tuple[tuple[str, int], ...]], ...]:
         return self._interactions.callback_counts()
 
+    #
+    # Resources released
+    #
     def resources_released(self) -> bool:
         return self._released
 
+    #
+    # Set cursor readout
+    #
     def set_cursor_readout(self, message: str) -> None:
         """Show the pointer's coordinates, or the standing hint when it leaves.
 
@@ -586,6 +724,9 @@ class PlotPanel(QWidget):
             return
         self.cursor_readout.setText(message if message else self.CURSOR_IDLE_HINT)
 
+    #
+    # Project project
+    #
     def project_project(self, project: api.XrrProject) -> None:
         prepared = prepare_project_plots(project)
         candidate_for_result(prepared.result, prepared.candidate_id)
@@ -649,21 +790,33 @@ class PlotPanel(QWidget):
             tab_index=project.ui_state.plot_tab_index,
         )
 
+    #
+    # Active data
+    #
     def _active_data(self) -> api.PreparedData:
         if self._dataset_id is None:
             raise RuntimeError("no active plot dataset")
         return self._datasets[self._dataset_id]
 
+    #
+    # Active mask
+    #
     def _active_mask(self) -> np.ndarray:
         if self._dataset_id is None:
             raise RuntimeError("no active plot dataset")
         return self._masks[self._dataset_id]
 
+    #
+    # Reset sld band view
+    #
     def _reset_sld_band_view(self, projection: Projection) -> None:
         """Drop a view-only replay when its dataset or MCMC owner changes."""
         self._sld_band_cache = None
         reset_band_view(projection_bands(projection.result), self.sld_align_selector)
 
+    #
+    # On bands toggled
+    #
     def _on_bands_toggled(self) -> None:
         if self._released or self._dataset_id is None:
             return
@@ -672,6 +825,9 @@ class PlotPanel(QWidget):
             return
         self._transact(self._current_projection())
 
+    #
+    # On align changed
+    #
     def _on_align_changed(self, index: int) -> None:
         """Recompute the bands for the picked alignment as a view-only overlay."""
         if self._released or self._dataset_id is None or self._structure is None or not 0 <= index < len(ALIGN_KEYS):
@@ -715,6 +871,9 @@ class PlotPanel(QWidget):
                 self.sld_align_selector,
             )
 
+    #
+    # On overlay toggled
+    #
     def _on_overlay_toggled(self, checked: bool) -> None:
         """Show or hide all non-active dataset curves on the log pane."""
         view = self._views["log"]
@@ -734,6 +893,9 @@ class PlotPanel(QWidget):
             entries.append((label, data.two_theta_deg, data.intensity_normalized))
         view.set_overlay_datasets(tuple(entries))
 
+    #
+    # Current projection
+    #
     def _current_projection(self, **changes: object) -> Projection:
         return current_projection(
             self._datasets,
@@ -747,6 +909,9 @@ class PlotPanel(QWidget):
             changes,
         )
 
+    #
+    # Set preview curve
+    #
     def set_preview_curve(
         self,
         qz_a_inv: object,
@@ -771,6 +936,9 @@ class PlotPanel(QWidget):
             return False
         return view.set_preview(angles, values)
 
+    #
+    # Clear preview curve
+    #
     def clear_preview_curve(self) -> None:
         """Drop the live overlay so committed evidence renders on its own."""
         if self._released:
@@ -779,6 +947,9 @@ class PlotPanel(QWidget):
         if isinstance(view, LiveReflectivityPlot):
             view.clear_preview()
 
+    #
+    # Transact
+    #
     def _transact(
         self,
         projection: Projection,
@@ -814,6 +985,9 @@ class PlotPanel(QWidget):
             # one, is the view the reset button has to return to.
             self._interactions.refresh_navigation_baselines()
 
+    #
+    # Committed projection
+    #
     def _committed_projection(self) -> Projection:
         return committed_projection(
             self._datasets,
@@ -826,6 +1000,9 @@ class PlotPanel(QWidget):
             self._structure,
         )
 
+    #
+    # Draw
+    #
     def _draw(
         self,
         views: dict[str, DiagnosticView | LiveReflectivityPlot],
@@ -875,6 +1052,9 @@ class PlotPanel(QWidget):
         draw_uncertainty(views["uncertainty"], projection.result, projection.candidate_id)
         draw_batch_trends(views["trend"], projection.trends)
 
+    #
+    # Draw reflectivity panes
+    #
     def _draw_reflectivity_panes(
         self,
         views: dict[str, DiagnosticView | LiveReflectivityPlot],
@@ -920,6 +1100,9 @@ class PlotPanel(QWidget):
         else:
             residual.show_residual(*arrays.residual)
 
+    #
+    # Draw range
+    #
     def _draw_range(
         self,
         views: dict[str, DiagnosticView | LiveReflectivityPlot],
@@ -939,6 +1122,9 @@ class PlotPanel(QWidget):
                 view.axes.axvspan(*visible_range, color=theme.DATA_RANGE, alpha=0.16, label="拟合范围")
                 view.canvas.draw_idle()
 
+    #
+    # Release resources
+    #
     def release_resources(self) -> None:
         if self._released:
             return
@@ -963,10 +1149,16 @@ class PlotPanel(QWidget):
         self._structure = None
         self._sld_band_cache = None
 
+    #
+    # Closeevent
+    #
     def closeEvent(self, event: object) -> None:
         self.release_resources()
         super().closeEvent(event)
 
+    #
+    # Event
+    #
     def event(self, event: QEvent) -> bool:
         if event.type() in (QEvent.Type.DeferredDelete, QEvent.Type.Destroy):
             self.release_resources()
