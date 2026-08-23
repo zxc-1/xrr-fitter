@@ -141,26 +141,23 @@ def test_empty_dock_state_leaves_the_default_layout_untouched(qtbot) -> None:
         assert dock.isVisibleTo(window) is True, name
 
 
-def test_raising_a_tabbed_dock_does_not_restore_mid_notification(qtbot) -> None:
-    """Selecting a tabbed dock must not rebuild the layout being changed.
+def test_raising_a_tabbed_dock_does_not_restore_after_deferred_capture(qtbot) -> None:
+    """Selecting a tabbed dock must not replay the layout it just captured.
 
     The analysis docks are tabbed, so raising one is what a user does by
     clicking its tab. That emits ``visibilityChanged`` on both the raised and
     the displaced dock, and capturing there replaces the project, whose
-    ``project_changed`` handler calls ``restoreState``. Rebuilding every dock
-    while Qt is still delivering its own dock notification tears down the
-    widgets Qt is iterating, which crashes the process rather than raising.
+    ``project_changed`` handler used to call ``restoreState``. The zero-delay
+    timer only moved that destructive replay to a later event; it did not make
+    replaying the already-current native layout safe.
     """
     window = _window(qtbot)
     window.show()
     restores: list[object] = []
-    real_restore = window.restore_dock_layout
-    window.restore_dock_layout = lambda project: (
-        restores.append(project),
-        real_restore(project),
-    )[1]
+    window.restore_dock_layout = lambda project: restores.append(project) or True
 
     window.docks["resultsDock"].raise_()
+    qtbot.waitUntil(lambda: window.document.project.ui_state.dock_state != "")
 
     assert restores == []
 
@@ -175,6 +172,40 @@ def test_raising_a_tabbed_dock_still_persists_the_new_arrangement(qtbot) -> None
     qtbot.waitUntil(lambda: window.document.project.ui_state.dock_state != "")
 
     assert window.docks["resultsDock"].isVisible() is True
+
+
+def test_non_layout_project_change_does_not_replay_current_dock_state(qtbot) -> None:
+    """Editing project data must not repeatedly rebuild an unchanged layout."""
+    window = _window(qtbot)
+    window.show()
+    window.docks["resultsDock"].raise_()
+    qtbot.waitUntil(lambda: window.document.project.ui_state.dock_state != "")
+    restores: list[object] = []
+    window.restoreState = lambda state: restores.append(state) or True
+
+    updated = api.set_expert_mode(window.document.project, True)
+    window.document.replace_project(updated)
+
+    assert restores == []
+
+
+def test_opening_project_cancels_a_capture_scheduled_by_the_previous_layout(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    """A file-dialog transition must not write the old UI into the new project."""
+    target = tmp_path / "default-layout.xrrproj.json"
+    api.save_project(api.new_project(), target)
+    window = _window(qtbot)
+    window.show()
+    window.docks["resultsDock"].raise_()
+    assert window._capture_timer.isActive() is True
+
+    window.open_project(target, discard_unsaved=True)
+    qtbot.waitUntil(lambda: not window._capture_timer.isActive())
+
+    assert window.document.project.ui_state.dock_state == ""
+    assert window.document.is_dirty is False
 
 
 AIR = api.MaterialSpec("Air", None, None, 0.0j)

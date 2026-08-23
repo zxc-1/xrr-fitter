@@ -55,7 +55,9 @@ class MainWindow(QMainWindow):
         self._workspace_released = False
         self._restoring_docks = False
         self._docks_settled = False
+        self._last_dock_restore_attempt: tuple[str, str] | None = None
         self._capture_scheduled = False
+        self._capture_source_project: api.XrrProject | None = None
         # Owned by the window so a pending capture dies with it. A bare
         # QTimer.singleShot would still fire after the window is gone and touch a
         # deleted C++ object, which in a long test run disturbs whichever window
@@ -213,16 +215,28 @@ class MainWindow(QMainWindow):
         if self._capture_scheduled:
             return
         self._capture_scheduled = True
+        self._capture_source_project = self.document.project
         self._capture_timer.start()
 
     def _capture_scheduled_layout(self) -> None:
         """Capture the settled arrangement once the dock notification is done."""
         self._capture_scheduled = False
         if self._restoring_docks or not self._docks_settled:
+            self._capture_source_project = None
             return
         if self._workspace_released:
+            self._capture_source_project = None
             return
+        if self._capture_source_project is not self.document.project:
+            self._capture_source_project = None
+            return
+        self._capture_source_project = None
         self.capture_dock_layout()
+
+    def _cancel_scheduled_dock_capture(self) -> None:
+        self._capture_timer.stop()
+        self._capture_scheduled = False
+        self._capture_source_project = None
 
     def showEvent(self, event: object) -> None:
         """Adopt the shown geometry as the default the user is compared against.
@@ -249,8 +263,21 @@ class MainWindow(QMainWindow):
 
     def _restore_workspace(self, project: api.XrrProject) -> None:
         restore_project(self.workspace_view, project)
-        if not self._operation_is_running():
+        if not self._operation_is_running() and self._dock_state_needs_restore(project.ui_state.dock_state):
             self.restore_dock_layout(project)
+
+    def _current_dock_state(self) -> str:
+        current_state = self.saveState()
+        if current_state == self._default_dock_state:
+            return ""
+        return bytes(current_state.toBase64().data()).decode("ascii")
+
+    def _dock_state_needs_restore(self, state: str) -> bool:
+        """Avoid replaying a dock layout that Qt already has on screen."""
+        current = self._current_dock_state()
+        if state == current:
+            return False
+        return (state, current) != self._last_dock_restore_attempt
 
     def set_guidance_visible(self, visible: bool) -> None:
         """Swap between the guided flow and the full dock workspace.
@@ -281,10 +308,7 @@ class MainWindow(QMainWindow):
         rather than its byte encoding, so merely showing a window (which Qt
         reports as a dock visibility change) cannot dirty an untouched project.
         """
-        current_state = self.saveState()
-        state = (
-            "" if current_state == self._default_dock_state else bytes(current_state.toBase64().data()).decode("ascii")
-        )
+        state = self._current_dock_state()
         current = self.document.project
         updated = api.set_dock_state(current, state)
         if updated is current:
@@ -301,6 +325,7 @@ class MainWindow(QMainWindow):
         failure leaves the default arrangement in place.
         """
         state = project.ui_state.dock_state
+        self._cancel_scheduled_dock_capture()
         if not state:
             return False
         try:
@@ -311,9 +336,11 @@ class MainWindow(QMainWindow):
         try:
             if payload.isEmpty() or not self.restoreState(payload):
                 self._apply_default_dock_layout()
+                self._last_dock_restore_attempt = (state, self._current_dock_state())
                 return False
         finally:
             self._restoring_docks = False
+        self._last_dock_restore_attempt = (state, self._current_dock_state())
         return True
 
     def reset_dock_layout(self) -> None:
@@ -358,6 +385,7 @@ class MainWindow(QMainWindow):
         *,
         discard_unsaved: bool = False,
     ) -> None:
+        self._cancel_scheduled_dock_capture()
         self._require_idle("open a project")
         if self.document.is_dirty and not discard_unsaved:
             raise RuntimeError("unsaved project changes require explicit discard")

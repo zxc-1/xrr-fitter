@@ -131,7 +131,13 @@ def _layer_result(
 def _dataset_summary(dataset: DatasetProject) -> AutomaticDatasetSummary:
     structure = dataset.structure
     if structure is None:
-        raise ValueError(f"automatic result requires a structure: {dataset.dataset_id}")
+        return AutomaticDatasetSummary(
+            dataset_id=dataset.dataset_id,
+            status=dataset.automation.status,
+            statistics_member=dataset.automation.statistics_member,
+            reason=dataset.automation.reason,
+            layers=(),
+        )
     # Per-layer rows assume the flat filename-derived layers the automatic route
     # builds. Anything else still deserves a status row: this runs on every
     # results refresh, so raising here would tear down the panel from a Qt slot.

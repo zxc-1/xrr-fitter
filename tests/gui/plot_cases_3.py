@@ -159,9 +159,10 @@ def test_plot_panel_close_releases_agg_renderer_buffers(qtbot) -> None:
 
 
 def test_hidden_plot_canvas_defers_queued_draw_until_visible(qtbot) -> None:
-    panel = _panel(qtbot, data=prepared_data(size=4))
-    # The deferral contract belongs to the matplotlib canvases; the default tab is
-    # now a live pg pane, so a static view is selected and its canvas observed.
+    data = prepared_data(size=4)
+    panel = _panel(qtbot, data=data, result=_result(data))
+    # The deferral contract belongs to the matplotlib canvases; the live pg panes
+    # have no canvas attr, so an analysis view (matplotlib-backed) is selected.
     panel.select_view("candidates")
     canvas = panel.view("candidates").canvas
 
