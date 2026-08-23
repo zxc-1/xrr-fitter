@@ -248,59 +248,87 @@ class StackView(QWidget):
             ft = float(band.top + _DEPTH_Y)
             fh = float(band.height)
             front_rect = QRectF(front_left, ft, front_width, fh)
-            is_component = band.index is not None
-            # -- Right side face (only for real layers, not Air/substrate) --
-            if is_component and fh >= MIN_BAND_H:
-                side = fill.darker(170)
-                side_poly = QPolygonF(
-                    [
-                        QPointF(front_right, ft),
-                        QPointF(front_right + _DEPTH_X, ft - _DEPTH_Y),
-                        QPointF(front_right + _DEPTH_X, ft + fh - _DEPTH_Y),
-                        QPointF(front_right, ft + fh),
-                    ]
-                )
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(side)
-                painter.drawPolygon(side_poly)
-            # -- Top face (cap of the whole stack) --
-            if idx == 0:
-                top_face = fill.lighter(145)
-                top_poly = QPolygonF(
-                    [
-                        QPointF(front_left, ft),
-                        QPointF(front_left + _DEPTH_X, ft - _DEPTH_Y),
-                        QPointF(front_right + _DEPTH_X, ft - _DEPTH_Y),
-                        QPointF(front_right, ft),
-                    ]
-                )
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(top_face)
-                painter.drawPolygon(top_poly)
-            # -- Front face --
+            self._paint_band_3d(painter, fill, front_left, front_right, ft, fh, band.index is not None, idx == 0)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(fill)
             painter.drawRect(front_rect)
-            # -- Hover / selection overlays --
-            if is_hovered:
-                overlay = QColor(255, 255, 255, 40) if tokens is theme.DARK_TOKENS else QColor(0, 0, 0, 22)
-                painter.setBrush(overlay)
-                painter.drawRect(front_rect)
-            if is_selected:
-                accent = QColor(tokens.accent)
-                accent.setAlpha(200)
-                painter.setPen(QPen(accent, 2.5))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawRect(front_rect.adjusted(1, 1, -1, -1))
-            # -- Edge lines between layers for visual separation --
-            painter.setPen(edge_pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawLine(QPointF(front_left, ft + fh), QPointF(front_right, ft + fh))
-            if is_component and fh >= MIN_BAND_H:
-                painter.drawLine(QPointF(front_right, ft + fh), QPointF(front_right + _DEPTH_X, ft + fh - _DEPTH_Y))
-            # -- Label --
+            self._paint_band_overlay(painter, tokens, front_rect, is_hovered, is_selected)
+            self._paint_band_edges(painter, edge_pen, front_left, front_right, ft, fh, band.index is not None)
             self._draw_caption(painter, band, QRect(int(front_left), int(ft), int(front_width), int(fh)))
         painter.end()
+
+    def _paint_band_3d(
+        self,
+        painter: QPainter,
+        fill: QColor,
+        front_left: float,
+        front_right: float,
+        ft: float,
+        fh: float,
+        is_component: bool,
+        is_first: bool,
+    ) -> None:
+        """Draw the 3D side face and optional top cap."""
+        if is_component and fh >= MIN_BAND_H:
+            side = fill.darker(170)
+            side_poly = QPolygonF(
+                [
+                    QPointF(front_right, ft),
+                    QPointF(front_right + _DEPTH_X, ft - _DEPTH_Y),
+                    QPointF(front_right + _DEPTH_X, ft + fh - _DEPTH_Y),
+                    QPointF(front_right, ft + fh),
+                ]
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(side)
+            painter.drawPolygon(side_poly)
+        if is_first:
+            top_face = fill.lighter(145)
+            top_poly = QPolygonF(
+                [
+                    QPointF(front_left, ft),
+                    QPointF(front_left + _DEPTH_X, ft - _DEPTH_Y),
+                    QPointF(front_right + _DEPTH_X, ft - _DEPTH_Y),
+                    QPointF(front_right, ft),
+                ]
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(top_face)
+            painter.drawPolygon(top_poly)
+
+    @staticmethod
+    def _paint_band_overlay(
+        painter: QPainter, tokens: object, front_rect: QRectF, is_hovered: bool, is_selected: bool
+    ) -> None:
+        """Draw hover highlight or selection accent border."""
+        if is_hovered:
+            overlay = QColor(255, 255, 255, 40) if tokens is theme.DARK_TOKENS else QColor(0, 0, 0, 22)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(overlay)
+            painter.drawRect(front_rect)
+        if is_selected:
+            accent = QColor(tokens.accent)
+            accent.setAlpha(200)
+            painter.setPen(QPen(accent, 2.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(front_rect.adjusted(1, 1, -1, -1))
+
+    @staticmethod
+    def _paint_band_edges(
+        painter: QPainter,
+        edge_pen: QPen,
+        front_left: float,
+        front_right: float,
+        ft: float,
+        fh: float,
+        is_component: bool,
+    ) -> None:
+        """Draw inter-layer separation lines."""
+        painter.setPen(edge_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawLine(QPointF(front_left, ft + fh), QPointF(front_right, ft + fh))
+        if is_component and fh >= MIN_BAND_H:
+            painter.drawLine(QPointF(front_right, ft + fh), QPointF(front_right + _DEPTH_X, ft + fh - _DEPTH_Y))
 
     def _draw_caption(self, painter: QPainter, band: Band, rect: QRect) -> None:
         """Label a band only when its own height leaves room to read one."""
