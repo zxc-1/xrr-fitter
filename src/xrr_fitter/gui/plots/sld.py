@@ -180,7 +180,11 @@ def _draw_nominal_only(view: DiagnosticView, structure: object, wavelength_a: fl
     """
     axes = view.axes
     axes.clear()
-    depth_nm = _draw_nominal_structure(axes, structure, wavelength_a)
+    try:
+        depth_nm = _draw_nominal_structure(axes, structure, wavelength_a)
+    except np.linalg.LinAlgError:
+        finish_view(view)
+        return
     axes.set(title="SLD 深度剖面（结构标称）", xlabel="深度 (nm)", ylabel="SLD (Å⁻²)")
     _limit_depth_axis(axes, depth_nm)
     _draw_legend(axes, [])
@@ -244,7 +248,10 @@ def draw_sld(
     axes.plot(depth_nm, profile.imag, "--", label="SLD 虚部")
     axes.set(title="SLD 深度剖面", xlabel="深度 (nm)", ylabel="SLD (Å⁻²)")
     if has_nominal:
-        _draw_nominal_structure(axes, structure, wavelength_a)
+        try:
+            _draw_nominal_structure(axes, structure, wavelength_a)
+        except np.linalg.LinAlgError:
+            pass
     if bands is not None:
         _draw_bands(axes, bands)
         axes.set_title(f"SLD 深度剖面 — {bands.caption()}", fontsize=theme.FONT_PT_SM)

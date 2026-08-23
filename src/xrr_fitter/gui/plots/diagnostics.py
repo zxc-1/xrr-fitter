@@ -55,6 +55,13 @@ VIEW_SPECS = (*TAB_SPECS, COMPANION_SPEC)
 # draw_* path while the live dict takes the show_* path.
 LIVE_PANE_KEYS = ("log", "raw", "qz4", "residual")
 
+# The two semantic groups that split the nine diagnostic tabs into two stacked
+# QTabWidgets.  The reflectivity group holds the interactive pyqtgraph panes
+# showing curve agreement; the analysis group holds the static matplotlib views
+# answering comparative and statistical questions.
+REFLECTIVITY_KEYS = ("log", "raw", "qz4", "residual")
+ANALYSIS_KEYS = ("candidates", "residual_map", "parameter_map", "uncertainty", "trend")
+
 DIAGNOSTIC_LABELS = {
     "gauss_hermite_unconverged": "Gauss-Hermite 积分未收敛",
     "ideal_reflectivity_above_one": "理想反射率超过 1",
@@ -310,32 +317,37 @@ def _view(key: str, *, qt: bool) -> DiagnosticView:
     return view
 
 
-def build_tabs() -> tuple[QTabWidget, dict[str, DiagnosticView | LiveReflectivityPlot]]:
-    tabs = QTabWidget()
-    tabs.setObjectName("diagnosticTabs")
-    tabs.setAccessibleName("拟合诊断图标签")
-    tabs.setToolTip("切换原始曲线、残差、候选解和专家诊断视图")
-    # The nine labels want 784px; with both docks open the stack gets 568px, so
-    # Qt's default response is to hide the last three behind scroll arrows --
-    # three diagnostics a user cannot see are three they will not know exist.
-    # Eliding instead keeps every tab on screen and readable: the labels share
-    # the shortfall as trimmed characters rather than one of them absorbing it
-    # as total absence.  tabText() still returns the full label, so lookups and
-    # the documented titles are unaffected.
+def _configure_tab_bar(tabs: QTabWidget) -> None:
+    """Apply shared tab-bar policy: no scroll arrows, elide long labels."""
     tab_bar = tabs.tabBar()
     tab_bar.setUsesScrollButtons(False)
     tab_bar.setElideMode(Qt.TextElideMode.ElideRight)
+
+
+def build_tabs() -> tuple[QTabWidget, QTabWidget, dict[str, DiagnosticView | LiveReflectivityPlot]]:
+    """Build two stacked tab groups and the companion SLD view.
+
+    The reflectivity group holds the four interactive pyqtgraph panes that show
+    curve agreement; the analysis group holds the five static matplotlib views
+    answering comparative and statistical questions.  Each group is a separate
+    QTabWidget so both can be visible simultaneously.
+    """
+    reflectivity_tabs = QTabWidget()
+    reflectivity_tabs.setObjectName("reflectivityTabs")
+    reflectivity_tabs.setAccessibleName("反射率诊断")
+    reflectivity_tabs.setToolTip("切换对数反射率、原始数据、qz⁴R 和加权残差视图")
+    _configure_tab_bar(reflectivity_tabs)
+
+    analysis_tabs = QTabWidget()
+    analysis_tabs.setObjectName("analysisTabs")
+    analysis_tabs.setAccessibleName("分析诊断")
+    analysis_tabs.setToolTip("切换候选解比较、热图、相关性和批量趋势视图")
+    _configure_tab_bar(analysis_tabs)
+
     views: dict[str, DiagnosticView | LiveReflectivityPlot] = {}
     for key, title, description in VIEW_SPECS:
-        # The live reflectivity panes ARE their own QWidget; the matplotlib views
-        # expose their addable/queryable widget through .canvas. Both accept the
-        # same object-name and accessibility contract so lookups keep working.
         if key in LIVE_PANE_KEYS:
             view: DiagnosticView | LiveReflectivityPlot = LiveReflectivityPlot()
-            # A pg pane is not styled by the Qt stylesheet or by
-            # apply_figure_palette, so it needs the resolved palette handed to it
-            # explicitly -- otherwise it keeps pyqtgraph's default black canvas
-            # regardless of the desktop appearance.
             view.apply_palette(current_plot_palette())
             canvas: object = view
         else:
@@ -346,14 +358,12 @@ def build_tabs() -> tuple[QTabWidget, dict[str, DiagnosticView | LiveReflectivit
         canvas.setAccessibleDescription(description)
         canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         views[key] = view
-        if key != COMPANION_SPEC[0]:
-            index = tabs.addTab(canvas, title)
-            # Eliding trims characters off the label, so the full name has to be
-            # reachable some other way: the per-tab tip carries it plus what the
-            # view answers, which the bar-wide tip cannot do because it says the
-            # same sentence over all nine.
-            tabs.setTabToolTip(index, f"{title} — {description}")
-    return tabs, views
+        if key == COMPANION_SPEC[0]:
+            continue
+        target = reflectivity_tabs if key in REFLECTIVITY_KEYS else analysis_tabs
+        index = target.addTab(canvas, title)
+        target.setTabToolTip(index, f"{title} — {description}")
+    return reflectivity_tabs, analysis_tabs, views
 
 
 def build_scratch_views() -> dict[str, DiagnosticView]:

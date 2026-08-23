@@ -294,9 +294,10 @@ QTabBar::tab {{ padding: {SPACE_XS}px {SPACE_MD}px; }}
    docks are open.  At the general 12px side padding the chrome alone eats 216px
    and every label elides down to two characters, which is where 加权残差 /
    残差热图 / 参数热图 become indistinguishable.  Trimming just this bar's side
-   padding to 4px fits all nine names in full with no ellipsis, and leaves the
+   padding to 4px fits all names in full with no ellipsis, and leaves the
    roomier padding to the tab bars that hold two or three labels. */
-QTabWidget#diagnosticTabs QTabBar::tab {{ padding: {SPACE_XS}px {SPACE_XS}px; }}
+QTabWidget#reflectivityTabs QTabBar::tab {{ padding: {SPACE_XS}px {SPACE_XS}px; }}
+QTabWidget#analysisTabs QTabBar::tab {{ padding: {SPACE_XS}px {SPACE_XS}px; }}
 QGroupBox {{
     border: 1px solid {tokens.surface_border};
     border-radius: 8px;

@@ -186,8 +186,7 @@ class MainWindow(QMainWindow):
         self.data_panel.set_point_enabled(dataset_id, index, False)
 
     def _plot_tab_changed(self, index: int) -> None:
-        if index != self.document.project.ui_state.plot_tab_index:
-            self._capture_workspace()
+        self._capture_workspace()
 
     def _dock_layout_changed(self, *_args) -> None:
         """Persist a rearrangement the user actually made.

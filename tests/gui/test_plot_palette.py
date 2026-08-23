@@ -60,8 +60,8 @@ def test_diagnostic_views_paint_the_resolved_background(qtbot) -> None:
     from xrr_fitter.gui.plots.diagnostics import build_tabs
     from xrr_fitter.gui.plots.live import LiveReflectivityPlot
 
-    tabs, views = build_tabs()
-    qtbot.addWidget(tabs)
+    ref_tabs, _ana_tabs, views = build_tabs()
+    qtbot.addWidget(ref_tabs)
     application = QApplication.instance()
     assert application is not None
     expected = theme.plot_palette(theme.palette_tokens(application.palette())).background
@@ -98,8 +98,8 @@ def test_palette_survives_a_real_draw_that_clears_the_axes(qtbot, monkeypatch) -
         "current_plot_palette",
         lambda: theme.DARK_PLOT_PALETTE,
     )
-    tabs, views = diagnostics.build_tabs()
-    qtbot.addWidget(tabs)
+    ref_tabs, _ana_tabs, views = diagnostics.build_tabs()
+    qtbot.addWidget(ref_tabs)
     # The log pane now renders through pyqtgraph, so this exercises the
     # matplotlib clear-and-redraw path on the candidates view, a single-axes
     # figure that still owns the .axes/.figure draw_log clears and repaints.
@@ -117,8 +117,8 @@ def test_palette_survives_a_real_draw_that_clears_the_axes(qtbot, monkeypatch) -
 def test_empty_state_message_uses_the_palette_rather_than_a_fixed_grey(qtbot) -> None:
     from xrr_fitter.gui.plots.diagnostics import build_tabs, draw_empty
 
-    tabs, views = build_tabs()
-    qtbot.addWidget(tabs)
+    ref_tabs, _ana_tabs, views = build_tabs()
+    qtbot.addWidget(ref_tabs)
     # draw_empty writes its centred message onto a matplotlib axes; the log pane
     # is now pyqtgraph, so the candidates view is the single-axes mpl stand-in.
     view = views["candidates"]

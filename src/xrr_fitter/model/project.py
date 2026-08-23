@@ -153,6 +153,7 @@ class ProjectUiState:
     workspace_splitter_sizes: tuple[int, int, int] = (320, 680, 380)
     left_splitter_sizes: tuple[int, int] = (280, 480)
     plot_tab_index: int = 0
+    analysis_tab_index: int = 0
     # Base64 of ``QMainWindow.saveState()``. Opaque and Qt-version dependent, so
     # it is never interpreted here; an empty value means the default layout.
     dock_state: str = ""
@@ -166,6 +167,7 @@ class ProjectUiState:
             self.left_splitter_sizes,
         )
         _nonnegative_index(self.plot_tab_index, "plot_tab_index")
+        _nonnegative_index(self.analysis_tab_index, "analysis_tab_index")
         _bool_value(self.expert_mode, "expert_mode")
         if not isinstance(self.dock_state, str):
             raise TypeError("dock_state must be str")

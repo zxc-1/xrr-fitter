@@ -33,6 +33,8 @@ from PySide6.QtWidgets import (
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.plots.diagnostics import (
+    ANALYSIS_KEYS,
+    REFLECTIVITY_KEYS,
     TAB_SPECS,
     VIEW_SPECS,
     DiagnosticView,
@@ -153,26 +155,29 @@ class PlotPanel(QWidget):
         self._visible_range: tuple[float, float] | None = None
         self._released = False
         self.toolbar = PlotInteractionToolbar(self)
-        self.tabs, self._views = build_tabs()
+        self.reflectivity_tabs, self.analysis_tabs, self._views = build_tabs()
+        # Backward-compatible alias: external code that references panel.tabs
+        # (workspace findChild, some tests) gets the reflectivity group.
+        self.tabs = self.reflectivity_tabs
         self.sld_pane, self.sld_bands_toggle, self.sld_align_selector = build_sld_companion_pane(
             self,
             self._views,
             self._on_bands_toggled,
             self._on_align_changed,
         )
-        # Reflectivity above, depth profile below: a fit is judged on curve
-        # agreement and structural plausibility at once, so neither may hide
-        # the other behind a tab.
+        # Three-layer vertical layout: reflectivity tabs on top, analysis tabs
+        # in the middle, SLD depth profile at the bottom.  A fit is judged on
+        # curve agreement, comparative diagnostics and structural plausibility
+        # at once, so none may hide another behind a tab.
         self.plot_splitter = QSplitter(Qt.Orientation.Vertical, self)
         self.plot_splitter.setObjectName("plotSplitter")
         self.plot_splitter.setChildrenCollapsible(False)
-        self.plot_splitter.addWidget(self.tabs)
+        self.plot_splitter.addWidget(self.reflectivity_tabs)
+        self.plot_splitter.addWidget(self.analysis_tabs)
         self.plot_splitter.addWidget(self.sld_pane)
-        # The diagnostic tabs carry the axis labels, legends and tick text that
-        # a 3:2 split squeezed; the depth profile stays legible at a third of
-        # the height because it plots two smooth curves against one axis.
-        self.plot_splitter.setStretchFactor(0, 2)
-        self.plot_splitter.setStretchFactor(1, 1)
+        self.plot_splitter.setStretchFactor(0, 3)
+        self.plot_splitter.setStretchFactor(1, 2)
+        self.plot_splitter.setStretchFactor(2, 1)
         self._float_toolbar_over_plot()
         content = QWidget(self)
         content.setObjectName("plotContent")
@@ -180,9 +185,6 @@ class PlotPanel(QWidget):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(theme.SPACE_SM)
         content_layout.addWidget(self.plot_splitter, 1)
-        # A graphical plot should say where the pointer is, like every peer
-        # tool.  The controller feeds this label from the navigator's cursor
-        # read-out, so it has to exist before the controller is built below.
         self.cursor_readout = QLabel(self.CURSOR_IDLE_HINT, content)
         self.cursor_readout.setObjectName("plotCursorReadout")
         self.cursor_readout.setProperty("mutedText", True)
@@ -270,7 +272,13 @@ class PlotPanel(QWidget):
 
     def select_visible_view(self, position: int) -> bool:
         """Select the Nth (0-based) currently-visible diagnostic view."""
-        visible = [key for index, key in enumerate(self.tab_keys()) if self.tabs.isTabVisible(index)]
+        visible: list[str] = []
+        for i in range(self.reflectivity_tabs.count()):
+            if self.reflectivity_tabs.isTabVisible(i):
+                visible.append(REFLECTIVITY_KEYS[i])
+        for i in range(self.analysis_tabs.count()):
+            if self.analysis_tabs.isTabVisible(i):
+                visible.append(ANALYSIS_KEYS[i])
         if not 0 <= position < len(visible):
             return False
         self.select_view(visible[position])
@@ -280,11 +288,21 @@ class PlotPanel(QWidget):
         self._pages.setCurrentIndex(0 if self._dataset_id is None else 1)
 
     def tab_titles(self) -> tuple[str, ...]:
-        return tuple(self.tabs.tabText(index) for index in range(self.tabs.count()))
+        ref = tuple(self.reflectivity_tabs.tabText(i) for i in range(self.reflectivity_tabs.count()))
+        ana = tuple(self.analysis_tabs.tabText(i) for i in range(self.analysis_tabs.count()))
+        return ref + ana
 
     def tab_keys(self) -> tuple[str, ...]:
-        """The switchable diagnostic tabs, in tab-bar order."""
+        """The switchable diagnostic tabs, in tab-bar order (both groups)."""
         return tuple(key for key, _title, _description in TAB_SPECS)
+
+    def reflectivity_tab_keys(self) -> tuple[str, ...]:
+        """Tab keys belonging to the reflectivity group."""
+        return REFLECTIVITY_KEYS
+
+    def analysis_tab_keys(self) -> tuple[str, ...]:
+        """Tab keys belonging to the analysis/diagnostic group."""
+        return ANALYSIS_KEYS
 
     def view_keys(self) -> tuple[str, ...]:
         """Every owned view, including the companion pane outside the tab bar."""
@@ -311,8 +329,8 @@ class PlotPanel(QWidget):
     def set_expert_mode(self, enabled: bool) -> None:
         self._interactions.set_expert_mode(enabled)
 
-    def apply_workspace(self, *, expert_mode: bool, tab_index: int) -> None:
-        self._interactions.apply_workspace(expert_mode, tab_index)
+    def apply_workspace(self, *, expert_mode: bool, tab_index: int, analysis_tab_index: int = 0) -> None:
+        self._interactions.apply_workspace(expert_mode, tab_index, analysis_tab_index)
 
     def mode_buttons(self) -> dict[str, object]:
         return self.toolbar.buttons()

@@ -17,6 +17,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QButtonGroup, QGraphicsDropShadowEffect, QHBoxLayout, QToolButton, QWidget
 
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.plots.diagnostics import ANALYSIS_KEYS, REFLECTIVITY_KEYS
 from xrr_fitter.gui.plots.live import LiveReflectivityPlot
 from xrr_fitter.gui.plots.plot_icons import plot_icon
 from xrr_fitter.gui.plots.sld_drag import SldHandleDragMixin
@@ -292,10 +293,16 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         super().__init__(panel)
         self._panel = panel
         self._toolbar = toolbar
-        self._tabs = panel.tabs
+        self._reflectivity_tabs = panel.reflectivity_tabs
+        self._analysis_tabs = panel.analysis_tabs
+        # Backward-compat alias used by tests that reference self._tabs
+        self._tabs = self._reflectivity_tabs
         self._views = panel._views
         self._watched_parent = None
-        self._requested_tab_index = 0
+        self._requested_reflectivity_index = 0
+        self._requested_analysis_index = 0
+        # Which group the user last interacted with ("reflectivity" or "analysis")
+        self._active_group: str = "reflectivity"
         self._projecting_tabs = False
         # The reflectivity panes render through pyqtgraph and carry their own
         # gestures: a draggable region for range selection, a masking click,
@@ -349,7 +356,8 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         toolbar.zoom_to_range_requested.connect(self._zoom_to_range)
         toolbar.reset_zoom_requested.connect(self._reset_zoom)
         toolbar.navigation_requested.connect(self._navigation_requested)
-        self._tabs.currentChanged.connect(self._tab_changed)
+        self._reflectivity_tabs.currentChanged.connect(self._reflectivity_tab_changed)
+        self._analysis_tabs.currentChanged.connect(self._analysis_tab_changed)
         panel.installEventFilter(self)
         for child in panel.findChildren(QWidget):
             child.installEventFilter(self)
@@ -366,27 +374,47 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         return view if isinstance(view, LiveReflectivityPlot) else None
 
     def current_view_key(self) -> str:
-        return self._panel.tab_keys()[self._tabs.currentIndex()]
+        if self._active_group == "analysis":
+            idx = self._analysis_tabs.currentIndex()
+            if 0 <= idx < len(ANALYSIS_KEYS):
+                return ANALYSIS_KEYS[idx]
+        idx = self._reflectivity_tabs.currentIndex()
+        if 0 <= idx < len(REFLECTIVITY_KEYS):
+            return REFLECTIVITY_KEYS[idx]
+        return REFLECTIVITY_KEYS[0]
 
     def select_view(self, key: str) -> None:
-        keys = self._panel.tab_keys()
-        if key not in keys:
+        if key in REFLECTIVITY_KEYS:
+            index = REFLECTIVITY_KEYS.index(key)
+            if not self._reflectivity_tabs.isTabVisible(index):
+                raise ValueError(f"diagnostic view is hidden: {key}")
+            self._active_group = "reflectivity"
+            self._reflectivity_tabs.setCurrentIndex(index)
+            self._requested_reflectivity_index = index
+        elif key in ANALYSIS_KEYS:
+            index = ANALYSIS_KEYS.index(key)
+            if not self._analysis_tabs.isTabVisible(index):
+                raise ValueError(f"diagnostic view is hidden: {key}")
+            self._active_group = "analysis"
+            self._analysis_tabs.setCurrentIndex(index)
+            self._requested_analysis_index = index
+        else:
             raise KeyError(f"unknown diagnostic view: {key}")
-        index = keys.index(key)
-        if not self._tabs.isTabVisible(index):
-            raise ValueError(f"diagnostic view is hidden: {key}")
-        self._tabs.setCurrentIndex(index)
+        self._emit_view_changed()
 
     def set_expert_mode(self, enabled: bool) -> None:
         if not isinstance(enabled, bool):
             raise TypeError("expert mode must be bool")
-        self._apply_tabs(enabled, self._requested_tab_index)
+        self._apply_tabs(enabled, self._requested_reflectivity_index, self._requested_analysis_index)
 
-    def apply_workspace(self, expert_mode: bool, tab_index: int) -> None:
-        if not 0 <= tab_index < self._tabs.count():
+    def apply_workspace(self, expert_mode: bool, tab_index: int, analysis_tab_index: int = 0) -> None:
+        if not 0 <= tab_index < self._reflectivity_tabs.count():
             raise IndexError("plot tab index is out of range")
-        self._requested_tab_index = tab_index
-        self._apply_tabs(expert_mode, tab_index)
+        if not 0 <= analysis_tab_index < self._analysis_tabs.count():
+            analysis_tab_index = 0
+        self._requested_reflectivity_index = tab_index
+        self._requested_analysis_index = analysis_tab_index
+        self._apply_tabs(expert_mode, tab_index, analysis_tab_index)
 
     def select_fit_range(self, first: float, second: float) -> bool:
         if self._toolbar.mode() != "range":
@@ -649,13 +677,23 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         if panel is not None:
             panel.set_cursor_readout("")
 
-    def _tab_changed(self, index: int) -> None:
+    def _reflectivity_tab_changed(self, index: int) -> None:
         if self._projecting_tabs or index < 0:
             return
-        self._requested_tab_index = index
-        # Each view navigates independently, so the buttons have to follow the
-        # view now on screen.  Otherwise pan left latched on the previous tab
-        # would keep the button pressed over a view that is not panning.
+        self._requested_reflectivity_index = index
+        self._active_group = "reflectivity"
+        self._sync_navigation_after_tab_change()
+        self._emit_view_changed()
+
+    def _analysis_tab_changed(self, index: int) -> None:
+        if self._projecting_tabs or index < 0:
+            return
+        self._requested_analysis_index = index
+        self._active_group = "analysis"
+        self._sync_navigation_after_tab_change()
+        self._emit_view_changed()
+
+    def _sync_navigation_after_tab_change(self) -> None:
         pane = self._current_live_pane()
         if pane is not None:
             self._toolbar.show_navigation_mode(pane.navigation_mode())
@@ -663,9 +701,15 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
             navigator = self._navigators.get(self.current_view_key())
             if navigator is not None:
                 self._sync_navigation_buttons(navigator)
-        self._panel.view_changed.emit(index)
 
-    def _apply_tabs(self, expert_mode: bool, requested_index: int) -> None:
+    def _emit_view_changed(self) -> None:
+        """Emit a global index (0-8) for chrome sync compatibility."""
+        key = self.current_view_key()
+        all_keys = self._panel.tab_keys()
+        global_index = all_keys.index(key) if key in all_keys else 0
+        self._panel.view_changed.emit(global_index)
+
+    def _apply_tabs(self, expert_mode: bool, ref_index: int, ana_index: int = 0) -> None:
         """Project expert mode onto the companion pane, not the tab bar.
 
         The SLD profile left the tab bar for a permanent pane, so expert mode
@@ -675,7 +719,8 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         self._projecting_tabs = True
         try:
             self._panel.sld_pane.setVisible(expert_mode)
-            self._tabs.setCurrentIndex(requested_index)
+            self._reflectivity_tabs.setCurrentIndex(ref_index)
+            self._analysis_tabs.setCurrentIndex(ana_index)
         finally:
             self._projecting_tabs = False
 

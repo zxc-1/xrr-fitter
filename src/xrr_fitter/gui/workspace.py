@@ -15,6 +15,7 @@ class WorkspaceSnapshot:
     workspace_splitter_sizes: tuple[int, int, int] | None
     left_splitter_sizes: tuple[int, int] | None
     plot_tab_index: int | None
+    analysis_tab_index: int | None
     expert_mode: bool | None
 
 
@@ -24,6 +25,7 @@ class WorkspaceView:
     workspace_splitter: QSplitter | None
     left_splitter: QSplitter | None
     plot_tabs: QTabWidget | None
+    analysis_tabs: QTabWidget | None
     expert_toggle: QAbstractButton | None
 
     @classmethod
@@ -38,7 +40,8 @@ class WorkspaceView:
             root,
             root.findChild(QSplitter, "workspaceSplitter"),
             root.findChild(QSplitter, "leftSplitter"),
-            root.findChild(QTabWidget, "diagnosticTabs"),
+            root.findChild(QTabWidget, "reflectivityTabs"),
+            root.findChild(QTabWidget, "analysisTabs"),
             root.findChild(QAbstractButton, "expertModeToggle"),
         )
 
@@ -47,6 +50,7 @@ class WorkspaceView:
             None if self.workspace_splitter is None else tuple(self.workspace_splitter.sizes()),
             None if self.left_splitter is None else tuple(self.left_splitter.sizes()),
             None if self.plot_tabs is None else self.plot_tabs.currentIndex(),
+            None if self.analysis_tabs is None else self.analysis_tabs.currentIndex(),
             None if self.expert_toggle is None else self.expert_toggle.isChecked(),
         )
 
@@ -80,6 +84,11 @@ class WorkspaceView:
                 lambda widget, value: widget.setCurrentIndex(value),
             ),
             (
+                self.analysis_tabs,
+                snapshot.analysis_tab_index,
+                lambda widget, value: widget.setCurrentIndex(value),
+            ),
+            (
                 self.expert_toggle,
                 snapshot.expert_mode,
                 lambda widget, value: widget.setChecked(value),
@@ -103,6 +112,7 @@ def _snapshot_from_state(state: api.ProjectUiState) -> WorkspaceSnapshot:
         state.workspace_splitter_sizes,
         state.left_splitter_sizes,
         state.plot_tab_index,
+        state.analysis_tab_index,
         state.expert_mode,
     )
 
@@ -112,6 +122,7 @@ def workspace_values(state: api.ProjectUiState) -> tuple[object, ...]:
         state.workspace_splitter_sizes,
         state.left_splitter_sizes,
         state.plot_tab_index,
+        state.analysis_tab_index,
         state.expert_mode,
     )
 
@@ -130,6 +141,9 @@ def capture_project(project: api.XrrProject, view: WorkspaceView) -> api.XrrProj
             current.left_splitter_sizes if snapshot.left_splitter_sizes is None else snapshot.left_splitter_sizes
         ),
         plot_tab_index=(current.plot_tab_index if snapshot.plot_tab_index is None else snapshot.plot_tab_index),
+        analysis_tab_index=(
+            current.analysis_tab_index if snapshot.analysis_tab_index is None else snapshot.analysis_tab_index
+        ),
         expert_mode=(current.expert_mode if snapshot.expert_mode is None else snapshot.expert_mode),
     )
     return api.set_workspace_state(project, state)
