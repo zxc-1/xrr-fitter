@@ -19,11 +19,12 @@ from threading import Lock
 
 from xrr_fitter.model.analysis import ConfidenceClass, FitResult
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus, MeasurementPreset
-from xrr_fitter.model.fitting import FitProgress
+from xrr_fitter.model.fitting import FitCheckpoint, FitProgress
 from xrr_fitter.model.operations import DatasetFitResult, ProjectFitResult
 from xrr_fitter.model.parameters import ParameterSetting
-from xrr_fitter.model.project import ScalePriorState, XrrProject
+from xrr_fitter.model.project import DatasetProject, ScalePriorState, XrrProject
 from xrr_fitter.model.structure import GradientLayerSpec, LayerSpec, PeriodicBlock
+from xrr_fitter.services.fitting_phases.common import PreparedDatasetFit
 from xrr_fitter.services.parallel import OrderedTaskRunner
 from xrr_fitter.services.projects import inspect_sources
 
@@ -36,8 +37,8 @@ class _IndependentPreparation:
     """
 
     index: int
-    original: object
-    prepared: object | None = None
+    original: DatasetProject
+    prepared: PreparedDatasetFit | None = None
     error: Exception | None = None
 
 
@@ -48,9 +49,9 @@ class _BufferedFit:
     Checkpoints are buffered because they mutate the immutable project value.
     """
 
-    result: object | None
+    result: FitResult | None
     error: Exception | None
-    checkpoints: tuple[object, ...]
+    checkpoints: tuple[FitCheckpoint, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,10 +62,10 @@ class _AutomaticPreparation:
     """
 
     index: int
-    original: object
+    original: DatasetProject
     fit_group_id: str
     group_size: int
-    prepared: object | None = None
+    prepared: PreparedDatasetFit | None = None
     error: Exception | None = None
 
 
