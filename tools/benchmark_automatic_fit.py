@@ -53,6 +53,32 @@ def _validate_analysis_counts(bootstrap_count: int, profile_count: int) -> None:
         raise ValueError("analysis work counts must be nonnegative")
 
 
+def _rss_bytes(raw: int | float, platform: str) -> int:
+    if not isfinite(raw) or raw < 0.0:
+        raise ValueError("peak RSS must be finite and nonnegative")
+    if platform == "darwin":
+        multiplier = 1
+    elif platform == "linux":
+        multiplier = 1024
+    else:
+        raise ValueError(f"unsupported peak RSS platform: {platform}")
+    return int(raw) * multiplier
+
+
+def _process_peak_rss_bytes() -> int | None:
+    if sys.platform not in {"darwin", "linux"}:
+        return None
+    import resource
+
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    return _rss_bytes(usage.ru_maxrss, sys.platform)
+
+
+def _validate_peak_rss(value: int | None) -> None:
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+        raise ValueError("process_peak_rss_bytes must be a nonnegative integer or None")
+
+
 def _validated_dataset_metrics(
     statuses: tuple[tuple[str, str], ...],
     recovery_errors: tuple[tuple[str, float | None], ...],
@@ -97,6 +123,7 @@ class BenchmarkRun:
     profile_count: int
     statuses: tuple[tuple[str, str], ...]
     recovery_errors: tuple[tuple[str, float | None], ...]
+    process_peak_rss_bytes: int | None = None
 
     def __post_init__(self) -> None:
         _validate_run_identity(
@@ -106,6 +133,7 @@ class BenchmarkRun:
         )
         stages = _validated_stages(self.stage_nfev, self.total_nfev)
         _validate_analysis_counts(self.bootstrap_count, self.profile_count)
+        _validate_peak_rss(self.process_peak_rss_bytes)
         statuses, errors = _validated_dataset_metrics(
             self.statuses,
             self.recovery_errors,
@@ -135,12 +163,16 @@ def build_report(
         raise ValueError("benchmark report requires at least one run")
     elapsed = tuple(run.elapsed_seconds for run in runs)
     return {
-        "schema": "xrr-automatic-benchmark-v1",
+        "schema": "xrr-automatic-benchmark-v2",
         "mode": mode,
         "batch_size": batch_size,
         "repeat": repeat,
         "median_seconds": float(median(elapsed)),
         "maximum_seconds": float(max(elapsed)),
+        "maximum_process_peak_rss_bytes": max(
+            (run.process_peak_rss_bytes for run in runs if run.process_peak_rss_bytes is not None),
+            default=None,
+        ),
         "runs": [_run_dict(run) for run in runs],
     }
 
@@ -207,6 +239,7 @@ def _benchmark_recovery_case(
         checkpoint_callback=ledger.observe,
     )
     elapsed = monotonic() - started
+    process_peak_rss_bytes = _process_peak_rss_bytes()
     updated = result.updated_project
     ledger.observe(updated)
     statuses = tuple((dataset.dataset_id, dataset.automation.status.value) for dataset in updated.datasets)
@@ -229,6 +262,7 @@ def _benchmark_recovery_case(
         profiles,
         statuses,
         errors,
+        process_peak_rss_bytes,
     )
 
 
@@ -283,7 +317,7 @@ def _print_human(report: dict[str, object]) -> None:
         print(
             f"{run['case_id']}[{run['repeat_index']}]: "
             f"{run['elapsed_seconds']:.6f}s, nfev={run['total_nfev']}, "
-            f"profiles={run['profile_count']}, status={run['status']}"
+            f"profiles={run['profile_count']}, rss={run['process_peak_rss_bytes']}, status={run['status']}"
         )
 
 
