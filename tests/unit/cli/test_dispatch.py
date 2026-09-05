@@ -326,6 +326,85 @@ def test_mcmc_invalid_candidate_maps_to_input_error_without_traceback(monkeypatc
     assert "Traceback" not in output.err
 
 
+def test_fit_save_failure_maps_to_input_error_without_traceback(monkeypatch, tmp_path, capsys) -> None:
+    from types import SimpleNamespace
+
+    from xrr_fitter.cli import commands, exit_codes
+
+    project_path = tmp_path / "p.json"
+    project_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(commands.api, "load_project", lambda path: object())
+    monkeypatch.setattr(
+        commands.api,
+        "inspect_sources",
+        lambda project: commands.api.ProjectValidation(datasets=(), issues=()),
+    )
+    monkeypatch.setattr(
+        commands,
+        "_fit_result",
+        lambda project, arguments, sink: SimpleNamespace(
+            updated_project=object(),
+            warnings=(),
+            datasets=(),
+            cancelled=False,
+        ),
+    )
+    monkeypatch.setattr(
+        commands.api,
+        "save_project",
+        lambda project, path: (_ for _ in ()).throw(OSError("cannot write project")),
+    )
+
+    assert cli_main.main(["fit", str(project_path), "--output", str(tmp_path / "out.json")]) == exit_codes.INVALID_INPUT
+    output = capsys.readouterr()
+    assert "工程写回失败" in output.err
+    assert "cannot write project" in output.err
+    assert "Traceback" not in output.err
+
+
+def test_mcmc_save_failure_maps_to_input_error_without_traceback(monkeypatch, tmp_path, capsys) -> None:
+    from xrr_fitter.cli import commands, exit_codes
+
+    project_path = tmp_path / "p.json"
+    project_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(commands.api, "load_project", lambda path: object())
+    monkeypatch.setattr(
+        commands.api,
+        "inspect_sources",
+        lambda project: commands.api.ProjectValidation(datasets=(), issues=()),
+    )
+    monkeypatch.setattr(commands.api, "run_mcmc", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        commands.api,
+        "save_project",
+        lambda project, path: (_ for _ in ()).throw(OSError("cannot write MCMC project")),
+    )
+
+    assert (
+        cli_main.main(
+            [
+                "mcmc",
+                str(project_path),
+                "--dataset",
+                "d1",
+                "--candidate",
+                "c1",
+                "--walkers",
+                "4",
+                "--burn-in",
+                "0",
+                "--steps",
+                "10",
+            ]
+        )
+        == exit_codes.INVALID_INPUT
+    )
+    output = capsys.readouterr()
+    assert "工程写回失败" in output.err
+    assert "cannot write MCMC project" in output.err
+    assert "Traceback" not in output.err
+
+
 @pytest.mark.parametrize(
     "fit_error",
     [
