@@ -361,6 +361,22 @@ def test_export_directory_fsync_suppresses_only_unsupported_errors(
     export_run._sync_directory(tmp_path)
 
 
+@pytest.mark.parametrize("error_number", (errno.EACCES, errno.EPERM))
+def test_export_directory_fsync_suppresses_windows_permission_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_number: int,
+) -> None:
+    monkeypatch.setattr(export_run.os, "name", "nt")
+    monkeypatch.setattr(
+        export_run,
+        "_sync_file",
+        lambda _path: (_ for _ in ()).throw(OSError(error_number, "permission denied")),
+    )
+
+    export_run._sync_directory(tmp_path)
+
+
 def test_export_directory_fsync_propagates_io_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

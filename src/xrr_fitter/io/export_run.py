@@ -239,7 +239,8 @@ def _sync_directory(path: Path) -> None:
     try:
         _sync_file(path)
     except OSError as error:
-        if error.errno not in UNSUPPORTED_DIRECTORY_FSYNC:
+        windows_permission_error = os.name == "nt" and error.errno in {errno.EACCES, errno.EPERM}
+        if error.errno not in UNSUPPORTED_DIRECTORY_FSYNC and not windows_permission_error:
             raise
 
 
