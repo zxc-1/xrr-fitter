@@ -12,18 +12,18 @@ final quality decision is ``PASSED``.
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from threading import Lock
 
 from xrr_fitter.model.analysis import ConfidenceClass, FitResult
-from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus, MeasurementPreset
+from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
 from xrr_fitter.model.fitting import FitCheckpoint, FitProgress
 from xrr_fitter.model.operations import DatasetFitResult, ProjectFitResult
 from xrr_fitter.model.parameters import ParameterSetting
 from xrr_fitter.model.project import DatasetProject, ScalePriorState, XrrProject
-from xrr_fitter.model.structure import GradientLayerSpec, LayerSpec, PeriodicBlock
+from xrr_fitter.services.batch_routing import automatic_group_id as _automatic_group_id
+from xrr_fitter.services.batch_routing import automatic_physical_signature
 from xrr_fitter.services.fitting_phases.common import PreparedDatasetFit
 from xrr_fitter.services.parallel import OrderedTaskRunner
 from xrr_fitter.services.projects import inspect_sources
@@ -67,100 +67,6 @@ class _AutomaticPreparation:
     group_size: int
     prepared: PreparedDatasetFit | None = None
     error: Exception | None = None
-
-
-def _material_signature(material) -> tuple[object, ...]:
-    """Return the material identity relevant to automatic sharing.
-
-    Numerical density values remain fit parameters rather than group identity.
-    """
-
-    return (
-        material.name,
-        material.formula,
-        material.sld_override_a2 is not None,
-    )
-
-
-def _component_signature(component) -> tuple[object, ...]:
-    """Describe one structure component for physical-route hashing.
-
-    The signature records topology and material identity, not fitted values.
-    """
-
-    if isinstance(component, LayerSpec):
-        return (component.name, *_material_signature(component.material))
-    if isinstance(component, PeriodicBlock):
-        return (
-            component.name,
-            tuple((layer.name, *_material_signature(layer.material)) for layer in component.layers),
-            component.repeats,
-            component.top_roughness_a is not None,
-        )
-    if isinstance(component, GradientLayerSpec):
-        return (
-            component.name,
-            (component.upper_sld_a2.real, component.upper_sld_a2.imag),
-            (component.lower_sld_a2.real, component.lower_sld_a2.imag),
-            component.microslab_max_a,
-        )
-    raise TypeError(f"unsupported automatic structure component: {type(component).__name__}")
-
-
-def _dataclass_values(value) -> tuple[object, ...]:
-    """Read declared dataclass fields in their stable definition order.
-
-    This avoids representation-dependent hashes for beam and instrument state.
-    """
-
-    return tuple(getattr(value, field) for field in value.__dataclass_fields__)
-
-
-def _canonical_json(value: object) -> str:
-    """Serialize a signature payload with deterministic key ordering.
-
-    ASCII output makes the subsequent digest independent of locale settings.
-    """
-
-    return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
-
-
-def automatic_physical_signature(dataset, preset: MeasurementPreset) -> str:
-    """Hash the behavior-changing automatic grouping contract.
-
-    Only datasets with the same structure, backing, beam, and instrument route
-    into one joint automatic fit.
-    """
-    if dataset.structure is None:
-        raise ValueError(f"dataset {dataset.dataset_id} has no structure")
-    if not isinstance(preset, MeasurementPreset):
-        raise TypeError("preset must be MeasurementPreset")
-    structure = dataset.structure
-    payload = {
-        "layers": tuple(_component_signature(component) for component in structure.components),
-        "backing": _material_signature(structure.backing),
-        "beam": _dataclass_values(dataset.beam),
-        "import_angle_offset_deg": dataset.import_angle_offset_deg,
-        "instrument": _dataclass_values(dataset.instrument),
-        "preset": (
-            _dataclass_values(preset.beam),
-            _dataclass_values(preset.instrument),
-            preset.import_angle_offset_deg,
-        ),
-        "structure_modes": tuple(type(component).__name__ for component in structure.components),
-    }
-    return hashlib.sha256(_canonical_json(payload).encode("ascii")).hexdigest()
-
-
-def _automatic_group_id(import_batch_id: str, signature: str) -> str:
-    """Derive a stable group identifier from batch and physical identity.
-
-    Including the import batch prevents unrelated acquisitions from coalescing.
-    """
-
-    payload = {"import_batch_id": import_batch_id, "physical_signature": signature}
-    digest = hashlib.sha256(_canonical_json(payload).encode("ascii")).hexdigest()
-    return f"automatic-{digest[:24]}"
 
 
 def _clear_dataset(dataset):

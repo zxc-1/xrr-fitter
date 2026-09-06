@@ -21,14 +21,22 @@ def test_mcmc_helpers_use_concrete_domain_types() -> None:
     assert candidate_hints["candidate"] is FitCandidate
 
 
-def test_batch_transaction_records_use_concrete_domain_types() -> None:
+def test_independent_preparation_uses_concrete_domain_types() -> None:
     preparation_hints = get_type_hints(batch._IndependentPreparation)
-    buffered_hints = get_type_hints(batch._BufferedFit)
-    automatic_hints = get_type_hints(batch._AutomaticPreparation)
 
     assert preparation_hints["original"] is DatasetProject
     assert preparation_hints["prepared"] == PreparedDatasetFit | None
+
+
+def test_buffered_fit_uses_concrete_domain_types() -> None:
+    buffered_hints = get_type_hints(batch._BufferedFit)
+
     assert buffered_hints["result"] == FitResult | None
     assert buffered_hints["checkpoints"] == tuple[FitCheckpoint, ...]
+
+
+def test_automatic_preparation_uses_concrete_domain_types() -> None:
+    automatic_hints = get_type_hints(batch._AutomaticPreparation)
+
     assert automatic_hints["original"] is DatasetProject
     assert automatic_hints["prepared"] == PreparedDatasetFit | None
