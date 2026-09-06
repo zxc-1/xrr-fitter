@@ -82,7 +82,7 @@ ALLOWED = {
     "evaluation": {"model", "physics", "evaluation"},
     "fit": {"fit", "model", "physics", "evaluation"},
     "analysis": {"analysis", "model", "physics", "evaluation"},
-    "services": {"services", "model", "io", "physics", "fit", "analysis"},
+    "services": {"services", "model", "io", "physics", "fit", "analysis", "evaluation"},
     "api": {"model", "services"},
     "gui": {"gui", "api"},
     "cli": {"cli", "api"},
