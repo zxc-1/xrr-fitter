@@ -57,6 +57,11 @@ def test_pr_workflow_checks_out_full_history_without_credentials() -> None:
     }
 
 
+def test_pr_workflow_verifies_locked_environment_metadata() -> None:
+    commands = "\n".join(step.get("run", "") for step in _payload()["jobs"]["standard"]["steps"])
+    assert '"$PYTHON" -m pip check' in commands
+
+
 def test_pr_checkpoint_requires_matrix_success() -> None:
     checkpoint = _payload()["jobs"]["checkpoint"]
     assert checkpoint["needs"] == ["standard"]

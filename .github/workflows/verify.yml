@@ -32,6 +32,7 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install pip==26.1.2
           "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" -m pip check
           "$PYTHON" tools/check_hygiene.py --require-git-clean
           "$PYTHON" tools/verify.py quality
 
@@ -52,6 +53,7 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install pip==26.1.2
           "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" -m pip check
           "$PYTHON" tools/check_hygiene.py --require-git-clean
           "$PYTHON" tools/verify.py tools
 
@@ -72,6 +74,7 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install pip==26.1.2
           "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" -m pip check
           "$PYTHON" tools/check_hygiene.py --require-git-clean
           "$PYTHON" tools/verify.py unit
 
@@ -92,6 +95,7 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install pip==26.1.2
           "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" -m pip check
           "$PYTHON" tools/check_hygiene.py --require-git-clean
           QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py gui
 
@@ -112,6 +116,7 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install pip==26.1.2
           "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" -m pip check
           "$PYTHON" tools/check_hygiene.py --require-git-clean
           "$PYTHON" tools/verify.py integration
 
@@ -132,6 +137,7 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install pip==26.1.2
           "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" -m pip check
           "$PYTHON" tools/check_hygiene.py --require-git-clean
           "$PYTHON" tools/verify.py spawn
 
@@ -152,6 +158,7 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install pip==26.1.2
           "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" -m pip check
           "$PYTHON" tools/check_hygiene.py --require-git-clean
           "$PYTHON" tools/verify.py regression
 
@@ -173,6 +180,7 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install pip==26.1.2
           "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" -m pip check
           "$PYTHON" tools/check_hygiene.py --require-git-clean
           "$PYTHON" tools/verify.py statistical
 
@@ -193,6 +201,7 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install pip==26.1.2
           "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" -m pip check
           "$PYTHON" tools/check_hygiene.py --require-git-clean
           "$PYTHON" tools/verify.py distribution --report-dir "$RUNNER_TEMP/distribution-bundle" --artifact-dir "$RUNNER_TEMP/distribution-bundle/artifacts"
       - name: Upload distribution bundle
@@ -239,6 +248,7 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install pip==26.1.2
           "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" -m pip check
           "$PYTHON" tools/check_hygiene.py --require-git-clean
           TEST_SOURCE_COMMIT=$("$PYTHON" -c 'import json; print(json.load(open("verification/r23/tests.json", encoding="utf-8"))["source_commit"])')
           AUDIT_DIR="$RUNNER_TEMP/candidate-readiness"
@@ -274,6 +284,7 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install pip==26.1.2
           "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" -m pip check
           "$PYTHON" tools/check_hygiene.py --require-git-clean
           "$PYTHON" tools/verify.py identity --report-dir "$RUNNER_TEMP/identity" --artifact-dir "$RUNNER_TEMP/downloaded-distribution/artifacts" --artifact-manifest "$RUNNER_TEMP/downloaded-distribution/artifact-manifest.json"
 
@@ -296,6 +307,7 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install pip==26.1.2
           "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" -m pip check
           "$PYTHON" tools/check_hygiene.py --require-git-clean
           QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release --report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts"
       - name: Upload canonical release bundle

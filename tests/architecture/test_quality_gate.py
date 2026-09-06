@@ -44,6 +44,7 @@ def _standard_run(mode: str) -> str:
             'PYTHON="$RUNNER_TEMP/venv/bin/python"',
             '"$PYTHON" -m pip install pip==26.1.2',
             '"$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock',
+            '"$PYTHON" -m pip check',
             '"$PYTHON" tools/check_hygiene.py --require-git-clean',
             command,
             "",
@@ -114,6 +115,7 @@ def _readiness_run() -> str:
             'PYTHON="$RUNNER_TEMP/venv/bin/python"',
             '"$PYTHON" -m pip install pip==26.1.2',
             '"$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock',
+            '"$PYTHON" -m pip check',
             '"$PYTHON" tools/check_hygiene.py --require-git-clean',
             'TEST_SOURCE_COMMIT=$("$PYTHON" -c \'import json; print(json.load(open("verification/r23/tests.json", encoding="utf-8"))["source_commit"])\')',
             'AUDIT_DIR="$RUNNER_TEMP/candidate-readiness"',
@@ -508,6 +510,25 @@ def test_standard_jobs_use_required_runner_and_explicit_verifier_modes() -> None
         "release",
     ):
         _assert_standard_job(name, jobs[name])
+
+
+def test_standard_jobs_verify_locked_environment_metadata() -> None:
+    jobs = _payload()["jobs"]
+    for name in (
+        "quality",
+        "tools",
+        "unit",
+        "gui",
+        "integration",
+        "spawn",
+        "regression",
+        "statistical",
+        "distribution",
+        "identity",
+        "release",
+    ):
+        commands = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
+        assert '"$PYTHON" -m pip check' in commands
 
 
 def test_release_job_runs_nested_gui_gates_offscreen() -> None:

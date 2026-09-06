@@ -40,6 +40,7 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install pip==26.1.2
           "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+          "$PYTHON" -m pip check
           "$PYTHON" tools/check_hygiene.py --require-git-clean
           if test "${{ matrix.mode }}" = gui; then
             QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py gui
