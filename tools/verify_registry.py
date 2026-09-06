@@ -71,6 +71,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/unit/physics",
                 "tests/unit/test_constraint_evaluation.py",
                 "tests/unit/test_constraint_roughness_matrix.py",
+                "tests/unit/test_core_type_contracts.py",
                 "tests/unit/test_evaluation.py",
                 "tests/unit/test_evaluation_dynamic_roughness.py",
                 "tests/unit/test_evaluation_gradients.py",
