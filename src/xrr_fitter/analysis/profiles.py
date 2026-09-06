@@ -52,7 +52,12 @@ from math import isfinite
 import numpy as np
 from scipy.optimize import least_squares, minimize, minimize_scalar
 
-from xrr_fitter.analysis import profile_selection as _profile_selection
+from xrr_fitter.analysis.profile_selection import (
+    _degeneracy_profile_names,  # noqa: F401
+    _reported_profile_names,  # noqa: F401
+    select_profile_names,  # noqa: F401
+)
+from xrr_fitter.analysis.profile_selection import evidence_focused_layout as _evidence_focused_layout  # noqa: F401
 from xrr_fitter.analysis.profile_tasks import (
     build_problem_profiles as _build_problem_profiles,
 )
@@ -71,13 +76,6 @@ Scalar = Callable[[np.ndarray], float]
 Vector = Callable[[np.ndarray], np.ndarray]
 # Profile closure never resolves an objective delta below 1e-5.
 PROFILE_SOLVER_TOLERANCE = 1e-6
-
-# Keep the established internal module bindings while the selection logic has
-# a dedicated owner.  The implementation remains in ``profile_selection``.
-_degeneracy_profile_names = _profile_selection._degeneracy_profile_names
-_evidence_focused_layout = _profile_selection.evidence_focused_layout
-_reported_profile_names = _profile_selection._reported_profile_names
-select_profile_names = _profile_selection.select_profile_names
 
 
 @dataclass(frozen=True, slots=True)

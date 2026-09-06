@@ -53,7 +53,6 @@ from xrr_fitter.evaluation import (
     encode_physical_vector,
     values_by_name,
 )
-from xrr_fitter.fit import stage_schedule as _stage_schedule
 from xrr_fitter.fit.candidates import (
     CandidateStart,
     archive_stage_b_candidates,
@@ -82,15 +81,16 @@ from xrr_fitter.fit.progress import (
     emit_progress as _emit,
 )
 from xrr_fitter.fit.screening import fringe_count_screen
+from xrr_fitter.fit.stage_schedule import (
+    STAGE_ORDER,  # noqa: F401
+    ChildSeed,  # noqa: F401
+    remaining_stages,  # noqa: F401
+    reserve_child_seeds,  # noqa: F401
+)
 from xrr_fitter.fit.tasking import TaskRunner
 from xrr_fitter.fit.tasking import run_tasks as _run_tasks
 from xrr_fitter.model.fitting import FitCandidate, FitProgress, FitStageSummary
 from xrr_fitter.model.parameters import ParameterSetting
-
-STAGE_ORDER = _stage_schedule.STAGE_ORDER
-ChildSeed = _stage_schedule.ChildSeed
-remaining_stages = _stage_schedule.remaining_stages
-reserve_child_seeds = _stage_schedule.reserve_child_seeds
 
 
 @dataclass(frozen=True, slots=True)
