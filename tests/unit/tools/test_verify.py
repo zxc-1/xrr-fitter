@@ -56,6 +56,7 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
             "tests/architecture/test_pr_verify_workflow.py",
             "tests/architecture/test_windows_executable_workflow.py",
             "tests/architecture/test_quality_gate.py",
+            "tests/architecture/test_macos_setup_action.py",
             "tests/architecture/test_release_workflow.py",
             "tests/architecture/test_removed_legacy_modules.py",
             "-q",
@@ -374,6 +375,7 @@ def _write_verifier_fixture(root: Path, verifier: Path, outcome_gate: Path) -> N
         "test_pr_verify_workflow.py",
         "test_windows_executable_workflow.py",
         "test_quality_gate.py",
+        "test_macos_setup_action.py",
         "test_release_workflow.py",
         "test_removed_legacy_modules.py",
     ):
@@ -409,7 +411,7 @@ def test_copied_verifier_derives_each_repository_root_from_its_own_file(
             text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        assert len(execution_log.read_text(encoding="utf-8").splitlines()) == 11
+        assert len(execution_log.read_text(encoding="utf-8").splitlines()) == 12
         assert str(other) not in result.stdout + result.stderr
         assert not (root / "tools/__pycache__").exists()
 

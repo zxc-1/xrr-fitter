@@ -1,0 +1,21 @@
+name: Set up locked macOS Python
+description: Create and validate the macOS ARM64 Python 3.12 verification environment
+outputs:
+  python:
+    description: Validated Python executable
+    value: ${{ steps.environment.outputs.python }}
+runs:
+  using: composite
+  steps:
+    - id: environment
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
+        python3.12 -m venv "$RUNNER_TEMP/venv"
+        PYTHON="$RUNNER_TEMP/venv/bin/python"
+        "$PYTHON" -m pip install pip==26.1.2
+        "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
+        "$PYTHON" -m pip check
+        "$PYTHON" tools/check_hygiene.py --require-git-clean
+        printf 'python=%s\n' "$PYTHON" >> "$GITHUB_OUTPUT"

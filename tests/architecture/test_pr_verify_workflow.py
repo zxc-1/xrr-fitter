@@ -58,8 +58,14 @@ def test_pr_workflow_checks_out_full_history_without_credentials() -> None:
 
 
 def test_pr_workflow_verifies_locked_environment_metadata() -> None:
-    commands = "\n".join(step.get("run", "") for step in _payload()["jobs"]["standard"]["steps"])
-    assert '"$PYTHON" -m pip check' in commands
+    steps = _payload()["jobs"]["standard"]["steps"]
+    assert steps[1] == {
+        "name": "Set up locked macOS Python",
+        "id": "python",
+        "uses": "./.github/actions/setup-macos-python",
+    }
+    assert steps[2]["env"] == {"PYTHON": "${{ steps.python.outputs.python }}"}
+    assert "pip install" not in steps[2]["run"]
 
 
 def test_pr_checkpoint_requires_matrix_success() -> None:
@@ -68,3 +74,35 @@ def test_pr_checkpoint_requires_matrix_success() -> None:
     assert checkpoint["if"] == "${{ always() && !cancelled() }}"
     run = checkpoint["steps"][0]["run"]
     assert 'test "${{ needs.standard.result }}" = success' in run
+
+
+def test_pr_workflow_preserves_exact_gate_execution() -> None:
+    payload = _payload()
+    assert set(payload["jobs"]) == {"standard", "checkpoint"}
+    assert payload["jobs"]["standard"] == {
+        "name": "Verify ${{ matrix.mode }}",
+        "runs-on": "macos-15",
+        "timeout-minutes": 60,
+        "strategy": {"fail-fast": False, "matrix": {"mode": list(MODES)}},
+        "steps": [
+            {"uses": CHECKOUT, "with": {"persist-credentials": False, "fetch-depth": 0}},
+            {"name": "Set up locked macOS Python", "id": "python", "uses": "./.github/actions/setup-macos-python"},
+            {
+                "name": "Verify ${{ matrix.mode }}",
+                "env": {"PYTHON": "${{ steps.python.outputs.python }}"},
+                "shell": "bash",
+                "run": "\n".join(
+                    (
+                        "set -euo pipefail",
+                        'test "$PYTHON" = "${{ steps.python.outputs.python }}"',
+                        'if test "${{ matrix.mode }}" = gui; then',
+                        '  QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py gui',
+                        "else",
+                        '  "$PYTHON" tools/verify.py "${{ matrix.mode }}"',
+                        "fi",
+                        "",
+                    )
+                ),
+            },
+        ],
+    }

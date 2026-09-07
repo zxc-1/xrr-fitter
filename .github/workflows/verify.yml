@@ -23,17 +23,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
       - name: Verify quality
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
         shell: bash
         run: |
           set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" -m pip check
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
           "$PYTHON" tools/verify.py quality
 
   tools:
@@ -44,17 +43,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
       - name: Verify tools
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
         shell: bash
         run: |
           set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" -m pip check
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
           "$PYTHON" tools/verify.py tools
 
   unit:
@@ -65,17 +63,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
       - name: Verify unit
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
         shell: bash
         run: |
           set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" -m pip check
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
           "$PYTHON" tools/verify.py unit
 
   gui:
@@ -86,17 +83,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
       - name: Verify gui
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
         shell: bash
         run: |
           set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" -m pip check
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
           QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py gui
 
   integration:
@@ -107,17 +103,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
       - name: Verify integration
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
         shell: bash
         run: |
           set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" -m pip check
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
           "$PYTHON" tools/verify.py integration
 
   spawn:
@@ -128,17 +123,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
       - name: Verify spawn
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
         shell: bash
         run: |
           set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" -m pip check
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
           "$PYTHON" tools/verify.py spawn
 
   regression:
@@ -149,17 +143,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
       - name: Verify regression
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
         shell: bash
         run: |
           set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" -m pip check
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
           "$PYTHON" tools/verify.py regression
 
   statistical:
@@ -171,17 +164,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
       - name: Verify statistical
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
         shell: bash
         run: |
           set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" -m pip check
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
           "$PYTHON" tools/verify.py statistical
 
   distribution:
@@ -192,17 +184,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
       - name: Verify distribution
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
         shell: bash
         run: |
           set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" -m pip check
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
           "$PYTHON" tools/verify.py distribution --report-dir "$RUNNER_TEMP/distribution-bundle" --artifact-dir "$RUNNER_TEMP/distribution-bundle/artifacts"
       - name: Upload distribution bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -218,7 +209,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, xrr-ci]
     timeout-minutes: 60
     outputs:
-      ready: ${{ steps.readiness.outputs.ready }}
+      ready: ${{ steps.readiness.outputs.ready || steps.readiness_inputs.outputs.ready }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -233,8 +224,8 @@ jobs:
           python3.12 tools/release_version.py \
             --repo-root "$GITHUB_WORKSPACE" \
             --tag "$GITHUB_REF_NAME"
-      - name: Evaluate candidate readiness
-        id: readiness
+      - name: Check candidate readiness inputs
+        id: readiness_inputs
         shell: bash
         run: |
           set -euo pipefail
@@ -242,14 +233,23 @@ jobs:
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           if test ! -f verification/r23/tests.json; then
             printf 'ready=false\n' >> "$GITHUB_OUTPUT"
+            printf 'has_tests_manifest=false\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" -m pip check
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          printf 'has_tests_manifest=true\n' >> "$GITHUB_OUTPUT"
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
+        if: steps.readiness_inputs.outputs.has_tests_manifest == 'true'
+      - name: Evaluate candidate readiness
+        if: steps.readiness_inputs.outputs.has_tests_manifest == 'true'
+        id: readiness
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
           TEST_SOURCE_COMMIT=$("$PYTHON" -c 'import json; print(json.load(open("verification/r23/tests.json", encoding="utf-8"))["source_commit"])')
           AUDIT_DIR="$RUNNER_TEMP/candidate-readiness"
           test ! -e "$AUDIT_DIR"
@@ -275,17 +275,16 @@ jobs:
         with:
           name: xrr-distribution-${{ github.sha }}
           path: ${{ runner.temp }}/downloaded-distribution
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
       - name: Verify identity
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
         shell: bash
         run: |
           set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" -m pip check
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
           "$PYTHON" tools/verify.py identity --report-dir "$RUNNER_TEMP/identity" --artifact-dir "$RUNNER_TEMP/downloaded-distribution/artifacts" --artifact-manifest "$RUNNER_TEMP/downloaded-distribution/artifact-manifest.json"
 
   release:
@@ -298,17 +297,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
       - name: Verify release
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
         shell: bash
         run: |
           set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" -m pip check
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
           QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release --report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts"
       - name: Upload canonical release bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

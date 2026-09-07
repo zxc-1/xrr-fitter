@@ -8,17 +8,21 @@ from pathlib import Path
 import pytest
 import yaml
 from tests.support.release_workflow_contract import (
-    CHECKOUT,
     DOWNLOAD_ARTIFACT,
-    expected_draft_release_job,
-    expected_windows_job,
+)
+from tests.support.verify_workflow_contract import (
+    JOB_TIMEOUTS,
+    PYTHON_ENV,
+    RUNNER,
+    SETUP_MACOS_PYTHON,
+    UPLOAD_ARTIFACT,
+    expected_workflow,
+    setup_step,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "verify.yml"
-RUNNER = ["self-hosted", "macOS", "ARM64", "xrr-ci"]
-UPLOAD_ARTIFACT = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
-JOB_TIMEOUTS = {"statistical": 720, "release": 720}
+SETUP_ACTION = ROOT / ".github" / "actions" / "setup-macos-python" / "action.yml"
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -32,311 +36,19 @@ def _payload() -> dict[str, object]:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
 
-def _standard_run(mode: str) -> str:
-    command = f'"$PYTHON" tools/verify.py {mode}'
-    if mode == "gui":
-        command = f"QT_QPA_PLATFORM=offscreen {command}"
-    return "\n".join(
-        (
-            "set -euo pipefail",
-            'python3.12 -c \'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)\'',
-            'python3.12 -m venv "$RUNNER_TEMP/venv"',
-            'PYTHON="$RUNNER_TEMP/venv/bin/python"',
-            '"$PYTHON" -m pip install pip==26.1.2',
-            '"$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock',
-            '"$PYTHON" -m pip check',
-            '"$PYTHON" tools/check_hygiene.py --require-git-clean',
-            command,
-            "",
-        )
-    )
+def _named_step(job: dict[str, object], name: str) -> dict[str, object]:
+    steps = [step for step in job["steps"] if step.get("name") == name]
+    assert len(steps) == 1, f"expected one step named {name!r}"
+    return steps[0]
 
 
-def _standard_job(mode: str) -> dict[str, object]:
-    return {
-        "runs-on": RUNNER,
-        "timeout-minutes": JOB_TIMEOUTS.get(mode, 60),
-        "steps": [
-            {
-                "uses": CHECKOUT,
-                "with": {"persist-credentials": False, "fetch-depth": 0},
-            },
-            {
-                "name": f"Verify {mode}",
-                "shell": "bash",
-                "run": _standard_run(mode),
-            },
-        ],
-    }
-
-
-def _statistical_job() -> dict[str, object]:
-    return {
-        "if": "startsWith(github.ref, 'refs/tags/')",
-        **_standard_job("statistical"),
-    }
-
-
-def _distribution_job() -> dict[str, object]:
-    job = _standard_job("distribution")
-    job["steps"][1]["run"] = _standard_run("distribution").replace(
-        '"$PYTHON" tools/verify.py distribution',
-        '"$PYTHON" tools/verify.py distribution '
-        '--report-dir "$RUNNER_TEMP/distribution-bundle" '
-        '--artifact-dir "$RUNNER_TEMP/distribution-bundle/artifacts"',
-    )
-    job["steps"].append(
-        {
-            "name": "Upload distribution bundle",
-            "uses": UPLOAD_ARTIFACT,
-            "with": {
-                "name": "xrr-distribution-${{ github.sha }}",
-                "path": "${{ runner.temp }}/distribution-bundle",
-                "if-no-files-found": "error",
-                "retention-days": 1,
-                "compression-level": 0,
-            },
-        }
-    )
-    return job
-
-
-def _readiness_run() -> str:
-    return "\n".join(
-        (
-            "set -euo pipefail",
-            'python3.12 -c \'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)\'',
-            'test -z "$(git status --porcelain=v1 --untracked-files=all)"',
-            "if test ! -f verification/r23/tests.json; then",
-            "  printf 'ready=false\\n' >> \"$GITHUB_OUTPUT\"",
-            "  exit 0",
-            "fi",
-            'python3.12 -m venv "$RUNNER_TEMP/venv"',
-            'PYTHON="$RUNNER_TEMP/venv/bin/python"',
-            '"$PYTHON" -m pip install pip==26.1.2',
-            '"$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock',
-            '"$PYTHON" -m pip check',
-            '"$PYTHON" tools/check_hygiene.py --require-git-clean',
-            'TEST_SOURCE_COMMIT=$("$PYTHON" -c \'import json; print(json.load(open("verification/r23/tests.json", encoding="utf-8"))["source_commit"])\')',
-            'AUDIT_DIR="$RUNNER_TEMP/candidate-readiness"',
-            'test ! -e "$AUDIT_DIR"',
-            'mkdir "$AUDIT_DIR"',
-            '"$PYTHON" tools/collect_test_manifest.py --repo-root "$GITHUB_WORKSPACE" --source-commit "$TEST_SOURCE_COMMIT" --lock-file "$GITHUB_WORKSPACE/requirements-macos-arm64-py312.lock" --suite tests --output "$AUDIT_DIR/tests.json"',
-            'cmp verification/r23/tests.json "$AUDIT_DIR/tests.json"',
-            'git diff --quiet "$TEST_SOURCE_COMMIT" HEAD -- tests',
-            '"$PYTHON" tools/check_hygiene.py --require-git-clean',
-            "printf 'ready=true\\n' >> \"$GITHUB_OUTPUT\"",
-            "",
-        )
-    )
-
-
-def _readiness_job() -> dict[str, object]:
-    return {
-        "if": "startsWith(github.ref, 'refs/tags/')",
-        "runs-on": RUNNER,
-        "timeout-minutes": 60,
-        "outputs": {"ready": "${{ steps.readiness.outputs.ready }}"},
-        "steps": [
-            {
-                "uses": CHECKOUT,
-                "with": {"persist-credentials": False, "fetch-depth": 0},
-            },
-            {
-                "name": "Validate release version tag",
-                "if": "startsWith(github.ref, 'refs/tags/')",
-                "shell": "bash",
-                "run": "\n".join(
-                    (
-                        "set -euo pipefail",
-                        'git fetch --force --no-tags origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"',
-                        "python3.12 tools/release_version.py \\",
-                        '  --repo-root "$GITHUB_WORKSPACE" \\',
-                        '  --tag "$GITHUB_REF_NAME"',
-                        "",
-                    )
-                ),
-            },
-            {
-                "name": "Evaluate candidate readiness",
-                "id": "readiness",
-                "shell": "bash",
-                "run": _readiness_run(),
-            },
-        ],
-    }
-
-
-def _identity_job() -> dict[str, object]:
-    job = _standard_job("identity")
-    job["needs"] = ["candidate-readiness", "distribution"]
-    job["if"] = "startsWith(github.ref, 'refs/tags/') && needs.candidate-readiness.outputs.ready == 'true'"
-    job["steps"].insert(
-        1,
-        {
-            "name": "Download distribution bundle",
-            "uses": DOWNLOAD_ARTIFACT,
-            "with": {
-                "name": "xrr-distribution-${{ github.sha }}",
-                "path": "${{ runner.temp }}/downloaded-distribution",
-            },
-        },
-    )
-    job["steps"][2]["run"] = _standard_run("identity").replace(
-        '"$PYTHON" tools/verify.py identity',
-        '"$PYTHON" tools/verify.py identity '
-        '--report-dir "$RUNNER_TEMP/identity" '
-        '--artifact-dir "$RUNNER_TEMP/downloaded-distribution/artifacts" '
-        '--artifact-manifest "$RUNNER_TEMP/downloaded-distribution/artifact-manifest.json"',
-    )
-    return job
-
-
-def _release_job() -> dict[str, object]:
-    job = _standard_job("release")
-    job["timeout-minutes"] = 720
-    job["needs"] = ["candidate-readiness"]
-    job["if"] = "startsWith(github.ref, 'refs/tags/') && needs.candidate-readiness.outputs.ready == 'true'"
-    job["steps"][1]["run"] = _standard_run("release").replace(
-        '"$PYTHON" tools/verify.py release',
-        'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release '
-        '--report-dir "$RUNNER_TEMP/release" '
-        '--artifact-dir "$RUNNER_TEMP/release/artifacts"',
-    )
-    job["steps"].append(
-        {
-            "name": "Upload canonical release bundle",
-            "uses": UPLOAD_ARTIFACT,
-            "with": {
-                "name": "xrr-release-${{ github.ref_name }}-${{ github.sha }}",
-                "path": "${{ runner.temp }}/release",
-                "if-no-files-found": "error",
-                "retention-days": 1,
-                "compression-level": 0,
-            },
-        }
-    )
-    return job
-
-
-def _checkpoint_job() -> dict[str, object]:
-    return {
-        "needs": [
-            "quality",
-            "tools",
-            "unit",
-            "gui",
-            "integration",
-            "spawn",
-            "regression",
-            "statistical",
-            "distribution",
-            "candidate-readiness",
-            "identity",
-            "release",
-            "windows",
-            "draft-release",
-        ],
-        "if": "always()",
-        "runs-on": RUNNER,
-        "timeout-minutes": 10,
-        "steps": [
-            {
-                "name": "Require all gates",
-                "env": {
-                    "QUALITY_RESULT": "${{ needs.quality.result }}",
-                    "TOOLS_RESULT": "${{ needs.tools.result }}",
-                    "UNIT_RESULT": "${{ needs.unit.result }}",
-                    "GUI_RESULT": "${{ needs.gui.result }}",
-                    "INTEGRATION_RESULT": "${{ needs.integration.result }}",
-                    "SPAWN_RESULT": "${{ needs.spawn.result }}",
-                    "REGRESSION_RESULT": "${{ needs.regression.result }}",
-                    "STATISTICAL_RESULT": "${{ needs.statistical.result }}",
-                    "DISTRIBUTION_RESULT": "${{ needs.distribution.result }}",
-                    "READINESS_RESULT": "${{ needs.candidate-readiness.result }}",
-                    "READY": "${{ needs.candidate-readiness.outputs.ready }}",
-                    "IDENTITY_RESULT": "${{ needs.identity.result }}",
-                    "RELEASE_RESULT": "${{ needs.release.result }}",
-                    "WINDOWS_RESULT": "${{ needs.windows.result }}",
-                    "DRAFT_RELEASE_RESULT": "${{ needs.draft-release.result }}",
-                    "REF": "${{ github.ref }}",
-                },
-                "shell": "bash",
-                "run": (
-                    "set -euo pipefail\n"
-                    'test "$QUALITY_RESULT" = success\n'
-                    'test "$TOOLS_RESULT" = success\n'
-                    'test "$UNIT_RESULT" = success\n'
-                    'test "$GUI_RESULT" = success\n'
-                    'test "$INTEGRATION_RESULT" = success\n'
-                    'test "$SPAWN_RESULT" = success\n'
-                    'test "$REGRESSION_RESULT" = success\n'
-                    'case "$REF" in\n'
-                    '  refs/tags/*) test "$STATISTICAL_RESULT" = success ;;\n'
-                    '  *) test "$STATISTICAL_RESULT" = skipped ;;\n'
-                    "esac\n"
-                    'test "$DISTRIBUTION_RESULT" = success\n'
-                    'case "$REF" in\n'
-                    '  refs/tags/*) test "$READINESS_RESULT" = success ;;\n'
-                    '  *) test "$READINESS_RESULT" = skipped ;;\n'
-                    "esac\n"
-                    'case "$REF" in\n'
-                    "  refs/tags/*)\n"
-                    '    test "$READY" = true\n'
-                    '    test "$IDENTITY_RESULT" = success\n'
-                    '    test "$RELEASE_RESULT" = success\n'
-                    '    test "$WINDOWS_RESULT" = success\n'
-                    '    test "$DRAFT_RELEASE_RESULT" = success\n'
-                    "    ;;\n"
-                    "  *)\n"
-                    '    test "$IDENTITY_RESULT" = skipped\n'
-                    '    test "$RELEASE_RESULT" = skipped\n'
-                    '    test "$WINDOWS_RESULT" = skipped\n'
-                    '    test "$DRAFT_RELEASE_RESULT" = skipped\n'
-                    "    ;;\n"
-                    "esac\n"
-                ),
-            }
-        ],
-    }
-
-
-def _expected_workflow() -> dict[str, object]:
-    return {
-        "name": "verify",
-        "on": {
-            "push": {
-                "branches": ["main"],
-                "tags": ["v*"],
-            }
-        },
-        "permissions": {"contents": "read"},
-        "concurrency": {
-            "group": "verify-${{ github.ref }}-${{ github.sha }}",
-            "cancel-in-progress": False,
-        },
-        "jobs": {
-            "quality": _standard_job("quality"),
-            "tools": _standard_job("tools"),
-            "unit": _standard_job("unit"),
-            "gui": _standard_job("gui"),
-            "integration": _standard_job("integration"),
-            "spawn": _standard_job("spawn"),
-            "regression": _standard_job("regression"),
-            "statistical": _statistical_job(),
-            "distribution": _distribution_job(),
-            "candidate-readiness": _readiness_job(),
-            "identity": _identity_job(),
-            "release": _release_job(),
-            "windows": expected_windows_job(),
-            "draft-release": expected_draft_release_job(),
-            "checkpoint": _checkpoint_job(),
-        },
-    }
+def _setup_action() -> dict[str, object]:
+    assert SETUP_ACTION.is_file(), "missing shared macOS environment action"
+    return yaml.safe_load(SETUP_ACTION.read_text(encoding="utf-8"))
 
 
 def _assert_exact_workflow(payload: dict[str, object]) -> None:
-    assert payload == _expected_workflow()
+    assert payload == expected_workflow()
 
 
 def test_initial_workflow_has_exact_jobs_permissions_and_trigger() -> None:
@@ -465,7 +177,7 @@ def test_actions_are_commit_pinned_and_checkout_drops_credentials() -> None:
     steps = tuple(_action_steps(_payload()))
     assert steps
     for step in steps:
-        assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"])
+        assert step["uses"] == SETUP_MACOS_PYTHON or re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"])
 
 
 def test_release_tool_consumers_use_the_declared_public_owners() -> None:
@@ -491,7 +203,7 @@ def _assert_standard_job(name: str, job: dict[str, object]) -> None:
     assert checkout[0]["with"] == {"persist-credentials": False, "fetch-depth": 0}
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     assert f"tools/verify.py {name}" in commands
-    assert "tools/check_hygiene.py --require-git-clean" in commands
+    assert setup_step() in job["steps"]
 
 
 def test_standard_jobs_use_required_runner_and_explicit_verifier_modes() -> None:
@@ -510,6 +222,7 @@ def test_standard_jobs_use_required_runner_and_explicit_verifier_modes() -> None
         "release",
     ):
         _assert_standard_job(name, jobs[name])
+    assert "tools/check_hygiene.py --require-git-clean" in _setup_action()["runs"]["steps"][0]["run"]
 
 
 def test_standard_jobs_verify_locked_environment_metadata() -> None:
@@ -527,12 +240,16 @@ def test_standard_jobs_verify_locked_environment_metadata() -> None:
         "identity",
         "release",
     ):
-        commands = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
-        assert '"$PYTHON" -m pip check' in commands
+        assert setup_step() in jobs[name]["steps"]
+        command = next(step for step in jobs[name]["steps"] if step.get("name") == f"Verify {name}")
+        assert command["env"] == PYTHON_ENV
+    assert '"$PYTHON" -m pip check' in _setup_action()["runs"]["steps"][0]["run"]
 
 
 def test_release_job_runs_nested_gui_gates_offscreen() -> None:
-    commands = _payload()["jobs"]["release"]["steps"][1]["run"].splitlines()
+    commands = next(
+        step["run"] for step in _payload()["jobs"]["release"]["steps"] if step.get("name") == "Verify release"
+    ).splitlines()
     assert (
         'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release '
         '--report-dir "$RUNNER_TEMP/release" '
@@ -542,15 +259,14 @@ def test_release_job_runs_nested_gui_gates_offscreen() -> None:
 
 def test_candidate_readiness_is_static_and_owner_data_independent() -> None:
     job = _payload()["jobs"]["candidate-readiness"]
-    assert job["outputs"] == {"ready": "${{ steps.readiness.outputs.ready }}"}
-    validation = job["steps"][1]
-    assert validation["name"] == "Validate release version tag"
-    step = job["steps"][2]
+    assert job["outputs"] == {"ready": "${{ steps.readiness.outputs.ready || steps.readiness_inputs.outputs.ready }}"}
+    _named_step(job, "Validate release version tag")
+    step = _named_step(job, "Evaluate candidate readiness")
     assert step["id"] == "readiness"
     commands = step["run"]
     assert "verification/r23/tests.json" in commands
     assert "tools/collect_test_manifest.py" in commands
-    assert "ready=false" in commands
+    assert "ready=false" in _named_step(job, "Check candidate readiness inputs")["run"]
     assert "ready=true" in commands
     assert "approved-data" not in commands
     assert "XRR_APPROVED_DATA_ROOT" not in commands
@@ -607,8 +323,8 @@ def test_release_jobs_are_readiness_gated_and_use_exact_bundles() -> None:
         lambda payload: payload["jobs"]["checkpoint"]["steps"][0].__setitem__(
             "run", 'set -euo pipefail\nexit 0\ntest "$QUALITY_RESULT" = success\ntest "$TOOLS_RESULT" = success\n'
         ),
-        lambda payload: payload["jobs"]["quality"]["steps"][1].__setitem__(
-            "run", payload["jobs"]["quality"]["steps"][1]["run"] + " || true"
+        lambda payload: _named_step(payload["jobs"]["quality"], "Verify quality").__setitem__(
+            "run", _named_step(payload["jobs"]["quality"], "Verify quality")["run"] + " || true"
         ),
         lambda payload: payload["jobs"]["tools"].__setitem__("continue-on-error", True),
         lambda payload: payload["jobs"]["unit"].__setitem__("if", "false"),
@@ -620,7 +336,7 @@ def test_release_jobs_are_readiness_gated_and_use_exact_bundles() -> None:
         lambda payload: payload["jobs"]["quality"]["steps"].append({"uses": "actions/cache@" + "a" * 40}),
         lambda payload: payload["jobs"]["tools"].__setitem__("if", "false"),
         lambda payload: payload["jobs"]["distribution"].__setitem__("continue-on-error", True),
-        lambda payload: payload["jobs"]["candidate-readiness"]["steps"][2].__setitem__(
+        lambda payload: _named_step(payload["jobs"]["candidate-readiness"], "Evaluate candidate readiness").__setitem__(
             "run", "printf 'ready=true\\n' >> \"$GITHUB_OUTPUT\"\n"
         ),
         lambda payload: payload["jobs"]["identity"].__setitem__("if", "true"),
