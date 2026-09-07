@@ -84,6 +84,19 @@ xrr-fitter-cli = "xrr_fitter.cli.main:main"
     assert "xrr_fitter-0.2.2.dist-info/entry_points.txt" in module._wheel_metadata(tmp_path)
 
 
+def test_distribution_archive_uses_exact_license_layout(tmp_path: Path, load_tool_module) -> None:
+    load_tool_module("verify_distribution")
+    module = sys.modules["distribution_archive"]
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "xrr-fitter"\nversion = "0.2.2"\nlicense = {file = "LICENSE"}\n',
+        encoding="utf-8",
+    )
+    root = "xrr_fitter-0.2.2.dist-info"
+    assert module._wheel_metadata(tmp_path) == {
+        f"{root}/{name}" for name in ("METADATA", "RECORD", "WHEEL", "top_level.txt", "licenses/LICENSE")
+    }
+
+
 def _canonical(value: object) -> bytes:
     return (
         json.dumps(

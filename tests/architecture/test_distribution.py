@@ -214,7 +214,7 @@ def test_project_version_is_sourced_from_package_metadata_attribute() -> None:
 def _wheel_metadata() -> set[str]:
     name, version = _project_identity()
     root = f"{name}-{version}.dist-info"
-    members = {f"{root}/{name}" for name in ("METADATA", "RECORD", "WHEEL", "top_level.txt", "LICENSE")}
+    members = {f"{root}/{name}" for name in ("METADATA", "RECORD", "WHEEL", "top_level.txt", "licenses/LICENSE")}
     payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     if any(payload["project"].get(table) for table in build_release_spec.SCRIPT_TABLES):
         members.add(f"{root}/entry_points.txt")
@@ -255,6 +255,13 @@ def test_wheel_contains_only_package_and_exact_distribution_metadata(
     assert policy["package_root"] == "xrr_fitter"
     assert policy["include_distribution_metadata"] is True
     assert {PurePosixPath(path).parts[0] for path in observed}.isdisjoint(policy["forbidden_roots"])
+
+
+def test_wheel_license_matches_repository_bytes(built_distributions) -> None:
+    _spec, _inputs, wheel, _sdist, _second_wheel, _second_sdist = built_distributions
+    name, version = _project_identity()
+    with zipfile.ZipFile(wheel) as archive:
+        assert archive.read(f"{name}-{version}.dist-info/licenses/LICENSE") == (ROOT / "LICENSE").read_bytes()
 
 
 def test_wheel_contains_the_package_version_source_module(built_distributions) -> None:
