@@ -8,8 +8,7 @@ keeps every process entry point pickle-safe at module scope.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
-from types import SimpleNamespace
+from dataclasses import dataclass, replace
 
 from xrr_fitter.analysis import sld_bands as _bands
 from xrr_fitter.analysis.automatic import assess_automatic_quality
@@ -54,9 +53,16 @@ from xrr_fitter.fit.pipeline import (
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.analysis import FitResult, McmcConfig, StructureEvidence
 from xrr_fitter.model.fitting import FitCheckpoint
+from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.operations import FitReadiness, ProjectFitResult
-from xrr_fitter.model.parameters import ParameterCoordinate
-from xrr_fitter.model.project import XrrProject
+from xrr_fitter.model.parameters import (
+    ParameterCoordinate,
+    ParameterDefinition,
+    ParameterPrior,
+    ParameterSetting,
+    SharingRule,
+)
+from xrr_fitter.model.project import DatasetProject, XrrProject
 from xrr_fitter.model.provenance import fit_search_provenance_sha256
 from xrr_fitter.services.datasets import (
     SERVICE_SEED_TREE_VERSION,
@@ -79,7 +85,17 @@ from xrr_fitter.services.fitting_phases.common import (
 from xrr_fitter.services.fitting_phases.sharing import automatic_sharing_rules
 
 
-def _validate_parameter_priors(definitions, priors) -> None:
+@dataclass(frozen=True, slots=True)
+class _SharingProblemView:
+    parameter_definitions: tuple[ParameterDefinition, ...]
+    variables: tuple[ParameterCoordinate, ...]
+    instrument: InstrumentSpec
+
+
+def _validate_parameter_priors(
+    definitions: tuple[ParameterDefinition, ...],
+    priors: tuple[ParameterPrior, ...],
+) -> None:
     """Reject stale/duplicate prior sidecars during fit preflight."""
     if len({prior.name for prior in priors}) != len(priors):
         raise ValueError("parameter prior names must be unique")
@@ -116,8 +132,8 @@ def _project_without_parameter_sidecars(
 def _reconciled_settings(
     project: XrrProject,
     index: int,
-    settings,
-) -> tuple:
+    settings: tuple[ParameterSetting, ...],
+) -> tuple[ParameterSetting, ...]:
     dataset = project.datasets[index]
     retained = []
     seen: set[str] = set()
@@ -140,7 +156,10 @@ def _reconciled_settings(
     return tuple(retained)
 
 
-def _reconciled_priors(definitions, priors) -> tuple:
+def _reconciled_priors(
+    definitions: tuple[ParameterDefinition, ...],
+    priors: tuple[ParameterPrior, ...],
+) -> tuple[ParameterPrior, ...]:
     by_name = {definition.name: definition for definition in definitions}
     retained = []
     seen: set[str] = set()
@@ -194,7 +213,7 @@ def _reconcile_parameter_sidecars(project: XrrProject, dataset_id: str) -> XrrPr
     return replace(project, datasets=tuple(datasets))
 
 
-def _sharing_problem_view(project: XrrProject, dataset: object) -> object:
+def _sharing_problem_view(project: XrrProject, dataset: DatasetProject) -> _SharingProblemView:
     if dataset.structure is None:
         definitions = ()
     else:
@@ -210,14 +229,14 @@ def _sharing_problem_view(project: XrrProject, dataset: object) -> object:
         for index, definition in enumerate(definitions)
         if not (definition.locked or definition.constrained)
     )
-    return SimpleNamespace(
+    return _SharingProblemView(
         parameter_definitions=definitions,
         variables=variables,
         instrument=dataset.instrument,
     )
 
 
-def reconciled_sharing_rules(project: XrrProject) -> tuple:
+def reconciled_sharing_rules(project: XrrProject) -> tuple[SharingRule, ...]:
     """Retain only sharing rules valid for the current effective declarations."""
     if not project.sharing_rules:
         return ()
