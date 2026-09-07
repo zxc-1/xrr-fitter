@@ -123,6 +123,9 @@ The completed checklist covers the no-new-dependency audit slice, not a release
 approval or completion of the separately deferred rollouts below. Work remains
 isolated on `audit-improvements`; no merge, push, tag, or release was performed.
 
+**Overall status: incomplete.** Implemented audit changes are verified, but the
+open verification and approval-bound items below are not counted as completed.
+
 | Slice | Implementation commits | Outcome |
 | --- | --- | --- |
 | CLI persistence / Windows directory sync | `b3475dc`, `59a5324` | Narrow error adapters; regular-file I/O errors remain fatal. |
@@ -161,19 +164,25 @@ process high-watermark field. It is not per-case allocated memory.
   generated inventories and build artifacts remain outside the repository.
   Tool-owned temporary benchmark/build environments are automatically removed.
 
-### Remaining release risks and approval-bound work
+### Open verification and approval-bound work
 
-- **Distribution gate is not passing:** its existing Windows fresh-resolution
+- [ ] **Resolve the failing distribution gate:** its Windows fresh-resolution
   check detects `fonttools 4.63.0 -> 4.64.0`, `kiwisolver 1.5.0 -> 1.5.1` and
   `pyinstaller-hooks-contrib 2026.6 -> 2026.7`. The exact failure reproduced from
   baseline `c369ed0`; this branch changes neither lock, `pyproject.toml`, nor the
   resolver. Decide separately whether to refresh and validate those pins or
   revise the fresh-resolution policy; neither is silently changed here.
-- Shared cache, coverage/static typing/vulnerability-scanner dependencies or
-  gates, complete native/artifact SBOM, and extra release assets remain deferred
+- [ ] Run the complete 220-case statistical corpus at the audit implementation
+  revision and retain its result. Starting a run is not a passing result. The
+  previous release recorded about 2 hours 22 minutes for this gate; schedule
+  accordingly rather than treating it as a short smoke test.
+- [ ] Decide the additional tooling scope and implement it after approval.
+  Shared cache, coverage/static typing/vulnerability-scanner dependencies or
+  gates, complete native/artifact SBOM and extra release assets remain deferred
   pending approval. See `docs/architecture/dependency-evidence.md` for tradeoffs.
-- Actual GitHub Actions execution, Windows runtime/executable validation and
-  release identity acceptance remain unverified. Local YAML/bash tests do not
-  replace target-runner validation.
-- The GUI worktree includes overlapping core edits. Its files and Git state are
-  untouched; reconciliation requires a later integration review.
+- [ ] Complete target-platform verification. Actual GitHub Actions execution,
+  Windows runtime/executable validation and release identity acceptance remain
+  unverified. Local YAML/bash tests do not replace target-runner validation.
+- [ ] Review overlapping changes before integration. The GUI worktree includes
+  overlapping core edits. Its files and Git state are untouched; reconciliation
+  requires a later integration review.
