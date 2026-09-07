@@ -24,7 +24,7 @@ from tools.verify_distribution import canonicalize_sdist
 
 ROOT = Path(__file__).resolve().parents[2]
 RELEASE_SPEC = ROOT / "verification" / "release-spec.json"
-BUILD_VERSIONS = {"setuptools": "75.8.2", "wheel": "0.45.1"}
+BUILD_VERSIONS = {"setuptools": "83.0.0", "wheel": "0.46.2"}
 PINNED_VCS_URL = re.compile(r"@[0-9a-f]{40}$")
 
 
@@ -125,7 +125,7 @@ def _assert_pinned_builder(spec: dict[str, object]) -> None:
     build_system = spec["build_system"]
     assert build_system == {
         "build_backend": "setuptools.build_meta",
-        "requires": ["setuptools==75.8.2", "wheel==0.45.1"],
+        "requires": ["setuptools==83.0.0", "wheel==0.46.2"],
     }
     observed = {name: importlib.metadata.version(name) for name in BUILD_VERSIONS}
     assert observed == BUILD_VERSIONS
