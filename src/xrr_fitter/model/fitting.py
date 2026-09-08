@@ -235,7 +235,7 @@ class FitConfig:
         return cls(
             master_seed=master_seed,
             objective_name="robust_log_soft_l1",
-            objective_version="1",
+            objective_version="2",
             c_decades=0.05,
             final_seed_count=4,
             budget=SearchBudget(60, 200, 2000, 300, 100),
@@ -246,7 +246,7 @@ class FitConfig:
         return cls(
             master_seed=master_seed,
             objective_name="robust_log_soft_l1",
-            objective_version="1",
+            objective_version="2",
             c_decades=0.05,
             final_seed_count=4,
             budget=SearchBudget(4, 8, 200, 30, 8),
@@ -333,6 +333,24 @@ def _validate_context_prior(context: FitEvaluationContext) -> None:
         raise ValueError("scale_prior_reason must be nonempty or None")
 
 
+def _context_sampling(context: FitEvaluationContext) -> tuple[int, np.ndarray]:
+    """Freeze the full-data denominator and the grid's positive integration mass."""
+    count = context.objective_point_count
+    fitted = int(np.count_nonzero(context.data.fit_mask))
+    count = fitted if count is None else count
+    _positive_integer(count, "objective_point_count")
+    if count < fitted:
+        raise ValueError("objective_point_count cannot be smaller than the fitted grid")
+    values = context.sampling_multipliers
+    if values is None:
+        values = np.ones(context.data.fit_mask.shape, dtype=float)
+    sampling = _readonly(values, float, "sampling_multipliers")
+    valid = sampling.shape == context.data.fit_mask.shape and np.all(np.isfinite(sampling) & (sampling > 0))
+    if not valid:
+        raise ValueError("sampling_multipliers must be positive finite and match prepared data")
+    return count, sampling
+
+
 def _context_warnings(values: object) -> tuple[str, ...]:
     """Normalize warning evidence without accepting empty placeholders."""
     warnings = tuple(values)
@@ -368,6 +386,22 @@ class FitEvaluationContext:
     is also reconstructed because NumPy write flags are not preserved by an
     ordinary pickle round trip. Re-running this constructor during unpickling
     restores the read-only contract at the process boundary.
+
+    ``objective_point_count`` is the fitted count on the complete observation
+    grid, not necessarily the number of rows in ``data``. Coarse and fixed-
+    parameter compilations retain this denominator so J=Q/N and the scale prior
+    keep their meaning throughout search and analysis.
+
+    ``sampling_multipliers`` describes how much full-grid data each retained
+    row represents. It is separate from empirical region weights and never
+    rescales prior rows. A complete grid starts with unit mass; downsampling
+    owns the selection and mass redistribution, not this value constructor.
+    Both defaults are resolved during construction, so numerical consumers
+    always observe a concrete integer and an owned read-only array.
+
+    Resampled observations are a new statistical problem rather than a coarse
+    view of the old observations. Their compiler must recompute data-derived
+    prior evidence instead of copying the original sample's plateau estimate.
     """
 
     data: PreparedData
@@ -383,6 +417,8 @@ class FitEvaluationContext:
     scale_prior_reason: str | None = None
     warnings: tuple[str, ...] = ()
     constraint_rules: tuple[ConstraintRule, ...] = ()
+    objective_point_count: int | None = None
+    sampling_multipliers: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         _validate_context_components(self)
@@ -392,6 +428,9 @@ class FitEvaluationContext:
         )
         labels, weights = _context_arrays(self)
         _validate_context_prior(self)
+        point_count, sampling = _context_sampling(self)
+        object.__setattr__(self, "objective_point_count", point_count)
+        object.__setattr__(self, "sampling_multipliers", sampling)
         warnings = _context_warnings(self.warnings)
         constraint_rules = _context_constraint_rules(self.constraint_rules)
         # Reconstruct nested prepared data so a pickle round-trip cannot expose

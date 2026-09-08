@@ -55,8 +55,8 @@ from xrr_fitter.model.parameters import (
 from xrr_fitter.model.project_parameter_graph import validate_project_parameter_graph
 from xrr_fitter.model.structure import StructureSpec
 
-SCHEMA_VERSION = 2
-ALGORITHM_VERSION = "xrr-fit-v1"
+SCHEMA_VERSION = 3
+ALGORITHM_VERSION = "xrr-fit-v2"
 
 
 def _sha256(value: str, field_name: str) -> None:
@@ -506,6 +506,8 @@ def _validate_project_header(project: XrrProject) -> None:
         raise ValueError("unsupported batch_mode")
     if not isinstance(project.fit_config, FitConfig):
         raise TypeError("fit_config must be FitConfig")
+    if (project.fit_config.objective_name, project.fit_config.objective_version) != ("robust_log_soft_l1", "2"):
+        raise ValueError("unsupported objective configuration")
     if not isinstance(project.ui_state, ProjectUiState):
         raise TypeError("ui_state must be ProjectUiState")
     _optional_attachment(

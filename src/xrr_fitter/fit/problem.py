@@ -53,7 +53,7 @@ def _valid_scale_prior(config: FitConfig) -> bool:
 
 
 def _validate_config(config: FitConfig) -> None:
-    if (config.objective_name, config.objective_version) != ("robust_log_soft_l1", "1"):
+    if (config.objective_name, config.objective_version) != ("robust_log_soft_l1", "2"):
         raise ValueError("unsupported objective configuration")
     if config.final_seed_count != 4 or not isfinite(config.c_decades) or config.c_decades <= 0.0:
         raise ValueError("invalid standard fit configuration: c_decades")
@@ -338,13 +338,24 @@ def compile_stage_problem(
     current_values: dict[str, float],
 ) -> FitEvaluationContext:
     settings = stage_parameter_settings(problem.parameter_definitions, stage, current_values)
-    return compile_fit_problem(
+    compiled = compile_fit_problem(
         problem.data,
         problem.structure,
         problem.instrument,
         problem.config,
         settings,
         problem.constraint_rules,
+    )
+    return replace(
+        compiled,
+        region_labels=problem.region_labels,
+        weights=problem.weights,
+        scale_prior_center=problem.scale_prior_center,
+        scale_prior_tau_decades=problem.scale_prior_tau_decades,
+        scale_prior_reason=problem.scale_prior_reason,
+        warnings=problem.warnings,
+        objective_point_count=problem.objective_point_count,
+        sampling_multipliers=problem.sampling_multipliers,
     )
 
 
@@ -371,11 +382,22 @@ def compile_fixed_parameter_problem(
         )
         for definition in problem.parameter_definitions
     )
-    return compile_fit_problem(
+    compiled = compile_fit_problem(
         problem.data,
         problem.structure,
         problem.instrument,
         problem.config,
         settings,
         problem.constraint_rules,
+    )
+    return replace(
+        compiled,
+        region_labels=problem.region_labels,
+        weights=problem.weights,
+        scale_prior_center=problem.scale_prior_center,
+        scale_prior_tau_decades=problem.scale_prior_tau_decades,
+        scale_prior_reason=problem.scale_prior_reason,
+        warnings=problem.warnings,
+        objective_point_count=problem.objective_point_count,
+        sampling_multipliers=problem.sampling_multipliers,
     )

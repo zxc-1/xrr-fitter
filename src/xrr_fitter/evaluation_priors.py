@@ -73,7 +73,6 @@ from xrr_fitter.evaluation_geometry import (
 )
 from xrr_fitter.evaluation_model import evaluate_model
 from xrr_fitter.evaluation_parameters import EvaluationConstraintError, _unit_derivative, _validated_unit
-from xrr_fitter.evaluation_solver import _scale_prior_residual
 from xrr_fitter.model.fitting import FitEvaluationContext
 from xrr_fitter.model.parameters import (
     ParameterDefinition,
@@ -520,32 +519,8 @@ def _parameter_prior_log_density(
     return total
 
 
-def problem_log_probability(
-    problem: FitEvaluationContext,
-    unit_vector: np.ndarray,
-) -> float:
-    """Return the robust pseudo-posterior density used by uncertainty MCMC.
-
-    This is a deterministic analysis density, not a normalized probability
-    distribution. The data term is the same weighted soft-L1 loss used by fit,
-    converted from its mean form back to a sum and scaled by ``2*c**2``.
-
-    Invalid unit coordinates, expected physical constraints, and invalid model
-    evaluations have negative-infinite density. Unsupported layouts and other
-    programming errors are not swallowed. An active scale prior contributes
-    ``-0.5 * standardized**2`` independently of fitted-point count.
-
-    Returning ``-inf`` at declared domain boundaries gives ensemble samplers a
-    conventional rejection signal without inventing a finite penalty magnitude.
-    The accepted path uses the same weighted soft-L1 expression as deterministic
-    fitting while retaining the sampler's frozen pointwise summation order. That
-    explicit grouping is required for bitwise replay of stored log probabilities.
-
-    This density omits normalization constants because downstream analysis uses
-    only relative log probability. It also performs no mutation, caching, or
-    random work, making repeated evaluation deterministic for a fixed context
-    and unit vector.
-    """
+def problem_log_probability(problem: FitEvaluationContext, unit_vector: np.ndarray) -> float:
+    """Return -Q/2 plus explicitly declared MCMC-only parameter priors."""
     try:
         unit = _validated_unit(problem, unit_vector)
     except ValueError:
@@ -556,30 +531,6 @@ def problem_log_probability(
         return -np.inf
     if not all((observed.valid, isfinite(observed.objective))):
         return -np.inf
-    residual = np.asarray(observed.fit_log_residuals_decades, dtype=float)
-    weights = np.asarray(problem.weights[problem.data.fit_mask], dtype=float)
-    c_decades = problem.config.c_decades
-    # Preserve the frozen sampler grouping: sum point losses before dividing by
-    # the robust scale. Replacing this with mean * count changes retained log
-    # probabilities by a few ULPs even though the expressions are algebraically
-    # equivalent, which breaks deterministic checkpoint and reference replay.
-    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-        scaled_residual = residual / c_decades
-        point_loss = np.sqrt(1.0 + scaled_residual**2) - 1.0
-        data_loss = np.sum(weights**2 * 2.0 * c_decades**2 * point_loss)
-    repair = ~np.isfinite(point_loss) | ((residual != 0.0) & (np.abs(scaled_residual) < 1e-4))
-    if np.isfinite(data_loss) and c_decades**2 > 0.0 and not np.any(repair):
-        with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-            log_probability = -float(data_loss) / (2.0 * c_decades**2)
-    else:
-        with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-            magnitude = np.abs(residual[repair])
-            radius = np.hypot(c_decades, magnitude)
-            point_loss[repair] = (magnitude / c_decades) * (magnitude / (radius + c_decades))
-            log_probability = -float(np.sum(weights**2 * point_loss))
-    if problem.scale_prior_center is not None:
-        prior = _scale_prior_residual(problem, observed)
-        assert prior is not None
-        log_probability -= 0.5 * prior**2
-    log_probability += _parameter_prior_log_density(problem, unit)
-    return float(log_probability)
+    return float(
+        -0.5 * observed.objective * problem.objective_point_count + _parameter_prior_log_density(problem, unit)
+    )

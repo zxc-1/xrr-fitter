@@ -54,9 +54,9 @@ def test_least_squares_loss_handles_extreme_positive_robust_scale_without_underf
     radius = np.hypot(problem.config.c_decades, np.sqrt(squared))
     expected = np.vstack(
         (
-            4.0 * weights**2 * problem.config.c_decades * (radius - problem.config.c_decades),
-            2.0 * weights**2 * problem.config.c_decades / radius,
-            -(weights**2) * problem.config.c_decades / radius**3,
+            4.0 * weights**2 * (radius - problem.config.c_decades) / problem.config.c_decades,
+            (2.0 * weights**2 / radius) / problem.config.c_decades,
+            -(weights**2 / radius**3) / problem.config.c_decades,
         )
     )
     np.testing.assert_allclose(rho, expected, rtol=1e-15, atol=0.0)
@@ -64,7 +64,7 @@ def test_least_squares_loss_handles_extreme_positive_robust_scale_without_underf
     assert not any(item.category is RuntimeWarning for item in caught)
 
 
-def test_least_squares_loss_keeps_subnormal_residual_curvature_finite() -> None:
+def test_least_squares_loss_rejects_unrepresentable_dimensionless_curvature() -> None:
     problem = compile_fit_problem(
         prepared_data(size=48),
         simple_structure(),
@@ -73,17 +73,11 @@ def test_least_squares_loss_keeps_subnormal_residual_curvature_finite() -> None:
     )
     problem = replace(problem, config=replace(problem.config, c_decades=1e-200))
     squared = np.full(np.count_nonzero(problem.data.fit_mask), 1e-320)
-    weights = problem.weights[problem.data.fit_mask]
-
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        rho = evaluation.least_squares_loss(problem)(squared)
+        with pytest.raises(FloatingPointError, match="robust loss"):
+            evaluation.least_squares_loss(problem)(squared)
 
-    radius = np.hypot(problem.config.c_decades, np.sqrt(squared))
-    inverse_curvature_scale = ((problem.config.c_decades / radius) / radius) / radius
-    expected_curvature = -(weights**2) * inverse_curvature_scale
-    np.testing.assert_allclose(rho[2], expected_curvature, rtol=1e-15, atol=0.0)
-    assert np.all(np.isfinite(rho))
     assert not any(item.category is RuntimeWarning for item in caught)
 
 
@@ -101,7 +95,7 @@ def test_least_squares_loss_preserves_nonzero_quadratic_value_near_zero() -> Non
     assert np.all(rho[0] > 0.0)
     np.testing.assert_allclose(
         rho[0],
-        2.0 * problem.weights[problem.data.fit_mask] ** 2 * squared,
+        2.0 * problem.weights[problem.data.fit_mask] ** 2 * squared / problem.config.c_decades**2,
         rtol=1e-15,
         atol=0.0,
     )

@@ -60,7 +60,7 @@ def test_robust_cost_places_weights_outside_the_loss() -> None:
 
     actual = robust_log_cost(delta, weights, c)
 
-    pointwise = 2.0 * c**2 * (np.sqrt(1.0 + (delta / c) ** 2) - 1.0)
+    pointwise = 2.0 * (np.sqrt(1.0 + (delta / c) ** 2) - 1.0)
     assert actual == pytest.approx(np.mean(weights**2 * pointwise))
 
 
@@ -71,7 +71,7 @@ def test_robust_cost_equals_pointwise_threshold_scaling() -> None:
 
     actual = robust_log_cost(delta, weights, c)
 
-    expected = np.mean(2.0 * c**2 * (np.sqrt(1.0 + (delta / c) ** 2) - 1.0))
+    expected = np.mean(2.0 * (np.sqrt(1.0 + (delta / c) ** 2) - 1.0))
     assert actual == pytest.approx(expected)
 
 
@@ -82,7 +82,7 @@ def test_robust_cost_handles_extreme_positive_threshold_without_underflowing_its
         warnings.simplefilter("always")
         actual = robust_log_cost(np.array([1.0]), np.ones(1), c)
 
-    expected = 2.0 * c * (np.hypot(c, 1.0) - c)
+    expected = 2.0 * (np.hypot(c, 1.0) - c) / c
     assert actual == pytest.approx(expected, rel=1e-15, abs=0.0)
     assert not any(item.category is RuntimeWarning for item in caught)
 
@@ -94,7 +94,7 @@ def test_robust_cost_preserves_nonzero_quadratic_loss_near_zero() -> None:
     actual = robust_log_cost(delta, np.ones(1), c)
 
     radius = np.hypot(c, delta[0])
-    expected = 2.0 * c * abs(delta[0]) * (abs(delta[0]) / (radius + c))
+    expected = 2.0 * (abs(delta[0]) / c) * (abs(delta[0]) / (radius + c))
     assert actual == pytest.approx(expected, rel=1e-15, abs=0.0)
     assert actual > 0.0
 

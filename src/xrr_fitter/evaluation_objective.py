@@ -250,20 +250,17 @@ def robust_log_cost(
     )
     if not valid:
         return float("inf")
-    # This algebraic form is stable near zero and retains the frozen factor two.
-    # Region weights sit outside the robust loss and are squared exactly once.
     with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-        scaled = delta / c
-        loss = 2.0 * c**2 * (np.sqrt(1.0 + scaled**2) - 1.0)
-    repair = ~np.isfinite(loss) | ((delta != 0.0) & (np.abs(scaled) < 1e-4))
-    if np.any(repair):
-        with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-            magnitude = np.abs(delta[repair])
-            radius = np.hypot(c, magnitude)
-            loss[repair] = 2.0 * c * magnitude * (magnitude / (radius + c))
-    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-        result = np.mean(weights**2 * loss)
+        result = np.mean(weights**2 * _dimensionless_soft_l1(np.abs(delta), c))
     return float(result)
+
+
+def _dimensionless_soft_l1(magnitude: np.ndarray, c: float) -> np.ndarray:
+    """Rationalize near zero without forming c² or an overflowing radius+c."""
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        scaled = magnitude / c
+        values = 2.0 * scaled * (scaled / (np.hypot(1.0, scaled) + 1.0))
+    return np.where(np.isposinf(scaled), np.inf, values)
 
 
 def scale_prior_penalty(
@@ -296,3 +293,28 @@ def scale_prior_penalty(
         standardized = _log10_ratio(scale, scale_hat) / tau_s
         penalty = np.multiply(standardized, np.divide(standardized, n))
     return float(penalty)
+
+
+def robust_loss_rho(squared: np.ndarray, weights: np.ndarray, c: float) -> np.ndarray:
+    """SciPy loss rows whose half-sum is the dimensionless robust total Q."""
+    values = np.asarray(squared, dtype=float)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        magnitude = np.sqrt(values)
+        radius = np.hypot(c, magnitude)
+        weighted = weights**2
+        value = 2.0 * weighted * _dimensionless_soft_l1(magnitude, c)
+        first = (2.0 * weighted / radius) / c
+        second = -((weighted / radius / c) / radius) / radius
+    rho = np.vstack((value, first, second))
+    if not np.all(np.isfinite(rho)):
+        raise FloatingPointError("robust loss value or derivatives are not finite")
+    return rho
+
+
+def robust_score_information(residual: np.ndarray, weights: np.ndarray, c: float) -> tuple[np.ndarray, np.ndarray]:
+    """Return dQ/dr and the positive total-Q/2 curvature without cancellation."""
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        radius = np.hypot(c, residual)
+        score = (2.0 * weights**2 * (residual / radius)) / c
+        information = weights**2 * (((c / radius) / radius) / radius)
+    return score, information

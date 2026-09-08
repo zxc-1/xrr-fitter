@@ -1,5 +1,5 @@
 {
-  "algorithm_version": "xrr-fit-v1",
+  "algorithm_version": "xrr-fit-v2",
   "batch_mode": "independent",
   "datasets": [
     {
@@ -1315,7 +1315,7 @@
     "local_workers": 4,
     "master_seed": 1201,
     "objective_name": "robust_log_soft_l1",
-    "objective_version": "1",
+    "objective_version": "2",
     "scale_prior_enabled": true,
     "scale_prior_tau_decades": 0.1
   },
@@ -1340,7 +1340,7 @@
     },
     "preset_id": "example-lab-xrr"
   },
-  "schema_version": 2,
+  "schema_version": 3,
   "sharing_rules": [],
   "ui_state": {
     "active_dataset_id": null,

@@ -1,4 +1,4 @@
-"""The single R22-compatible JSON codec for immutable R23 projects."""
+"""The versioned JSON codec for immutable V2 fitting projects."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import errno
 import json
 import os
 import tempfile
-from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -530,6 +529,8 @@ def _validate_result_identity(value: object) -> None:
 
 
 def _validated_document(value: object) -> dict[str, Any]:
+    if isinstance(value, dict) and "schema_version" in value:
+        _validate_version(value["schema_version"])
     # constraint_rules rides an optional channel: the curated _project_fields()
     # set stays unchanged (修正 5) and the key is accepted only as an extra so a
     # document that never carried it still passes the exact field-set check.
@@ -543,36 +544,10 @@ def _validated_document(value: object) -> dict[str, Any]:
     return payload
 
 
-def _migrate_v1_document(value: object) -> object:
-    if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value.get("schema_version") != 1:
-        return value
-    payload = deepcopy(value)
-    payload["schema_version"] = 2
-    payload["measurement_preset"] = None
-    for dataset in payload.get("datasets", ()):
-        if not isinstance(dataset, dict):
-            continue
-        dataset["automation"] = {
-            "import_batch_id": None,
-            "fit_group_id": None,
-            "role": "manual",
-            "status": "not_run",
-            "statistics_member": False,
-            "reason": None,
-        }
-        result = dataset.get("last_valid_result")
-        if not isinstance(result, dict):
-            continue
-        uncertainty = result.get("uncertainty")
-        if isinstance(uncertainty, dict):
-            uncertainty["bootstrap_performed"] = True
-    return payload
-
-
 def project_from_dict(value: object) -> XrrProject:
-    """Decode a complete R22-compatible document with exact field sets."""
+    """Decode a V2 document with exact field sets and no legacy conversion."""
     try:
-        payload = _validated_document(_migrate_v1_document(value))
+        payload = _validated_document(value)
         return XrrProject(
             schema_version=payload["schema_version"],
             algorithm_version=payload["algorithm_version"],

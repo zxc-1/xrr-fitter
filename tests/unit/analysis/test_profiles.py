@@ -269,6 +269,8 @@ def test_direct_problem_profile_treats_physical_constraint_failures_as_invalid_p
         ),
         data=SimpleNamespace(fit_mask=np.ones(3, dtype=np.bool_)),
         weights=np.ones(3),
+        sampling_multipliers=np.ones(3),
+        objective_point_count=3,
         scale_prior_center=None,
     )
 

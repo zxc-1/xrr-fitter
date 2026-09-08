@@ -257,7 +257,7 @@ def test_result_without_sld_bands_key_still_decodes() -> None:
     assert restored.datasets[0].last_valid_result.uncertainty.sld_bands is None
 
 
-def test_schema_one_migrates_automation_preset_and_bootstrap_flag() -> None:
+def test_schema_one_is_rejected_without_mutating_the_document() -> None:
     value = _project_with_result()
     payload = project_to_dict(value)
     payload["schema_version"] = 1
@@ -268,16 +268,16 @@ def test_schema_one_migrates_automation_preset_and_bootstrap_flag() -> None:
         if result is not None and result["uncertainty"] is not None:
             result["uncertainty"].pop("bootstrap_performed")
 
-    migrated = project_from_dict(payload)
+    with pytest.raises(ProjectVersionError, match="unsupported project schema"):
+        project_from_dict(payload)
 
-    assert migrated.schema_version == 2
-    assert migrated.measurement_preset is None
-    assert migrated.datasets[0].automation.status.value == "not_run"
-    assert migrated.datasets[0].last_valid_result.uncertainty.bootstrap_performed is True
+    assert payload["schema_version"] == 1
+    assert "measurement_preset" not in payload
+    assert "automation" not in payload["datasets"][0]
 
 
-@pytest.mark.parametrize("version", (0, 3, 999))
-def test_only_schema_one_has_a_migration_path(version: int) -> None:
+@pytest.mark.parametrize("version", (0, 1, 2, 4, 999))
+def test_unsupported_schemas_have_no_migration_path(version: int) -> None:
     payload = project_to_dict(_project_with_result())
     payload["schema_version"] = version
     with pytest.raises(ProjectVersionError, match="unsupported project schema"):
@@ -393,8 +393,8 @@ def _rewrite(path: Path, mutation) -> None:
 def test_committed_example_projects_decode_and_round_trip_verbatim() -> None:
     """The published examples decode to exactly the bytes they ship.
 
-    Migration from schema 1 is covered synthetically above; these files are
-    written at schema 2 and carry the pending automation markers that keep the
+    Unsupported schemas are rejected above; these files are
+    written at schema 3 and carry the pending automation markers that keep the
     automatic fit action reachable, so re-encoding them must reproduce the
     committed bytes rather than merely an equal value.
     """
@@ -405,7 +405,7 @@ def test_committed_example_projects_decode_and_round_trip_verbatim() -> None:
         encoded = project_to_bytes(loaded)
         restored = project_from_bytes(encoded)
 
-        assert loaded.schema_version == 2
+        assert loaded.schema_version == 3
         assert all(dataset.automation.status.value == "pending" for dataset in loaded.datasets)
         assert restored == loaded
         assert encoded == content

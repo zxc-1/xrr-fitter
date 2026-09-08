@@ -73,7 +73,7 @@ from xrr_fitter.fit.global_search import (
 )
 from xrr_fitter.fit.local_search import SearchCancelled, solve_local
 from xrr_fitter.fit.objective import evaluate_vector
-from xrr_fitter.fit.problem import compile_fit_problem, compile_stage_problem
+from xrr_fitter.fit.problem import compile_stage_problem
 from xrr_fitter.fit.progress import (
     best_preview_candidate as _best_candidate,
 )
@@ -146,22 +146,20 @@ def _parameter_settings(problem: object) -> tuple[ParameterSetting, ...]:
 # Compile coarse problem
 #
 def compile_coarse_problem(problem: object) -> object:
-    """Compile the immutable feature-grid context used by coarse stages.
-
-    A problem already on the selected grid is reused exactly. Otherwise all
-    declarations and parameter settings are recompiled around downsampled
-    prepared data instead of mutating or replacing one field in the context.
-    """
+    """Subset the numerical grid without recompiling full-data evidence."""
     indices = feature_grid_indices(problem.data)
     if np.array_equal(indices, np.arange(problem.data.qz_a_inv.size)):
         return problem
-    return compile_fit_problem(
-        downsample_prepared_data(problem.data, indices),
-        problem.structure,
-        problem.instrument,
-        problem.config,
-        _parameter_settings(problem),
-        problem.constraint_rules,
+    data = downsample_prepared_data(problem.data, indices)
+    mass = problem.sampling_multipliers[indices].copy()
+    selected = data.fit_mask
+    mass[selected] *= np.sum(problem.sampling_multipliers[problem.data.fit_mask]) / np.sum(mass[selected])
+    return replace(
+        problem,
+        data=data,
+        region_labels=problem.region_labels[indices],
+        weights=problem.weights[indices],
+        sampling_multipliers=mass,
     )
 
 

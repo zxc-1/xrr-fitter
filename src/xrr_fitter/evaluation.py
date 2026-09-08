@@ -131,6 +131,8 @@ from xrr_fitter.evaluation_objective import (
 from xrr_fitter.evaluation_objective import (
     robust_log_cost as robust_log_cost,
 )
+from xrr_fitter.evaluation_objective import robust_loss_rho as robust_loss_rho
+from xrr_fitter.evaluation_objective import robust_score_information as robust_score_information
 from xrr_fitter.evaluation_objective import (
     scale_prior_penalty as scale_prior_penalty,
 )
@@ -420,3 +422,8 @@ def problem_log_probability(*args, **kwargs):
 def _parameter_prior_log_density(*args, **kwargs):
     _sync_compatibility_hooks()
     return _priors_impl._parameter_prior_log_density(*args, **kwargs)
+
+
+def problem_objective_total(problem, unit_vector) -> float:
+    """Return the complete-data total Q used by inference and search."""
+    return evaluate_model(problem, unit_vector).objective * problem.objective_point_count

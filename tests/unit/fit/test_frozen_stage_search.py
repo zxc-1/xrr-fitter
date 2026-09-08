@@ -1,7 +1,7 @@
-"""Frozen staged-search replay contracts.
+"""Frozen V2 staged-search replay contracts.
 
 These focused checks replay the committed single-layer input through the live
-R23 compiler and A-through-E search. Stage-A auditing, candidate order, work
+V2 compiler and A-through-E search. Stage-A auditing, candidate order, work
 counts, progress framing, and checkpoint identity remain frozen together.
 The fixtures read reference input bytes but never import R22 production code.
 """
@@ -71,7 +71,6 @@ def _frozen_single_layer_problem():
 def _assert_frozen_candidates(result) -> None:
     assert result.best_index == 6
     assert result.warnings == (
-        "全反射平台点不足，尺度弱先验已关闭",
         "stage_a_invalid_candidate_evaluation",
         "stage_a_fringe_candidate_rejected",
     )
@@ -181,7 +180,7 @@ def _assert_frozen_checkpoints(checkpoints) -> None:
             "85729258067ff1c953257f6e784b6ec5a5c9e175e92f449ae0bc04680c1e42ea",
             "1f0681cfcc77d487b345d3739394e100597601782f7ae45f900a1cefa564a84f",
             "2e006dff3a7e489619e37403d3e58c9afb50642a06acd3b1aff9c2f392cc9120",
-            "45a3c8b3fcabaa2eb54b5497a3ee45f02d2bb12ce0f216312ab3a499819c2828",
+            "8e61d277f41a4f84880fcc3840adb740b17fef574a3865a3dbb8b7650374ca17",
             "bab9ebdb6b2377582c6d3e5afddbec238d6b4c427be151500cbd19c18ff076f3",
         )
     }
@@ -204,7 +203,7 @@ def test_stage_a_replays_frozen_coarse_grid_selection_and_audit() -> None:
     )
     assert summary.candidate_ids == ("declared-baseline", "geometry-6")
     assert summary.best_objective == pytest.approx(
-        0.014555078379018142,
+        5.807945232222954,
         rel=0.0,
         abs=1e-15,
     )

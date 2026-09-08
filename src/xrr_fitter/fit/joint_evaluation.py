@@ -8,7 +8,7 @@ from math import isfinite
 
 import numpy as np
 
-from xrr_fitter.evaluation import EvaluationConstraintError
+from xrr_fitter.evaluation import EvaluationConstraintError, robust_loss_rho
 from xrr_fitter.fit.joint_roughness import SHARED_ROUGHNESS_TRANSFORM
 from xrr_fitter.fit.joint_scatter_jacobian import (
     joint_scatter_jacobians as _joint_scatter_jacobians,
@@ -116,6 +116,17 @@ def _evaluation_residual(problem: object, evaluation: ModelEvaluation) -> np.nda
     return values if prior is None else np.concatenate((values, np.asarray([prior])))
 
 
+def _joint_objective(problem: object, evaluations: tuple[ModelEvaluation, ...]) -> float:
+    """Balance dataset data terms while giving each prior one total-Q row."""
+    objective = _finite_objective_mean(tuple(value.objective for value in evaluations))
+    total_points = sum(member.objective_point_count for member in problem.problems)
+    for member, evaluation in zip(problem.problems, evaluations, strict=True):
+        prior = _prior_residual(member, evaluation)
+        if prior is not None:
+            objective += prior**2 * (1.0 / total_points - 1.0 / (len(evaluations) * member.objective_point_count))
+    return objective
+
+
 def evaluate_joint_vector(problem: object, global_unit: np.ndarray) -> JointEvaluation:
     """Evaluate every local projection and report their arithmetic mean cost."""
     try:
@@ -149,9 +160,7 @@ def evaluate_joint_vector(problem: object, global_unit: np.ndarray) -> JointEval
         evaluate_vector(local_problem, unit) for local_problem, unit in zip(problem.problems, local_units, strict=True)
     )
     valid = all(value.valid for value in evaluations)
-    objective = float("inf")
-    if valid:
-        objective = _finite_objective_mean(tuple(value.objective for value in evaluations))
+    objective = _joint_objective(problem, evaluations) if valid else float("inf")
     residuals = np.concatenate(
         tuple(
             _evaluation_residual(local_problem, evaluation)
@@ -161,39 +170,8 @@ def evaluate_joint_vector(problem: object, global_unit: np.ndarray) -> JointEval
     return JointEvaluation(valid, objective, local_units, evaluations, residuals)
 
 
-def _loss_block(
-    squared: np.ndarray,
-    weights: np.ndarray,
-    c_decades: float,
-    alpha: float,
-) -> np.ndarray:
-    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-        scaled_data = squared / c_decades**2
-        scaled = 1.0 + scaled_data
-        root = np.sqrt(scaled)
-        result = np.vstack(
-            (
-                4.0 * alpha * weights**2 * c_decades**2 * (root - 1.0),
-                2.0 * alpha * weights**2 / root,
-                -(alpha * weights**2 / c_decades**2) * scaled ** (-1.5),
-            )
-        )
-    invalid = np.any(~np.isfinite(result), axis=0)
-    near_zero = (squared > 0.0) & np.isfinite(scaled_data) & (scaled_data < 1e-8)
-    if np.any(invalid | near_zero):
-        with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-            root_squared = np.sqrt(squared)
-            radius = np.hypot(c_decades, root_squared)
-            stable = np.vstack(
-                (
-                    4.0 * alpha * weights**2 * c_decades * root_squared * (root_squared / (radius + c_decades)),
-                    2.0 * alpha * weights**2 * c_decades / radius,
-                    -alpha * weights**2 * (((c_decades / radius) / radius) / radius),
-                )
-            )
-        result[:, invalid] = stable[:, invalid]
-        result[0, near_zero] = stable[0, near_zero]
-    return result
+def _loss_block(squared: np.ndarray, weights: np.ndarray, c_decades: float, alpha: float) -> np.ndarray:
+    return alpha * robust_loss_rho(squared, weights, c_decades)
 
 
 def _loss_layout(local_problem: object) -> tuple[int, np.ndarray, float, bool]:
@@ -204,7 +182,9 @@ def _loss_layout(local_problem: object) -> tuple[int, np.ndarray, float, bool]:
     size = int(np.count_nonzero(fit_mask))
     if size == 0:
         raise ValueError("joint loss dataset layout must contain fitted rows")
-    fit_weights = np.array(weights[fit_mask], dtype=float, copy=True)
+    fit_weights = np.array(
+        weights[fit_mask] * np.sqrt(local_problem.sampling_multipliers[fit_mask]), dtype=float, copy=True
+    )
     if not np.all(np.isfinite(fit_weights)) or np.any(fit_weights <= 0.0):
         raise ValueError("joint loss weights must be finite and strictly positive")
     c_decades = local_problem.config.c_decades
@@ -227,21 +207,22 @@ def joint_least_squares_loss(problem: object) -> Callable[[np.ndarray], np.ndarr
         raise ValueError("joint loss requires a nonempty dataset layout")
     frozen_layouts = tuple(_loss_layout(local_problem) for local_problem in problems)
     sizes = tuple(layout[0] for layout in frozen_layouts)
-    total_data = sum(sizes)
+    full_sizes = tuple(member.objective_point_count for member in problems)
+    total_data = sum(full_sizes)
     row_count = sum(size + int(has_prior) for size, _weights, _c_decades, has_prior in frozen_layouts)
 
     def loss(squared: np.ndarray) -> np.ndarray:
         values = _validated_squared_residuals(squared, row_count)
         blocks: list[np.ndarray] = []
         offset = 0
-        for size, weights, c_decades, has_prior in frozen_layouts:
-            alpha = total_data / (len(sizes) * size)
+        for (size, weights, c_decades, has_prior), full_size in zip(frozen_layouts, full_sizes, strict=True):
+            alpha = total_data / (len(sizes) * full_size)
             data = values[offset : offset + size]
             blocks.append(_loss_block(data, weights, c_decades, alpha))
             offset += size
             if has_prior:
                 prior = values[offset]
-                blocks.append(np.asarray(((2.0 * alpha * prior,), (2.0 * alpha,), (0.0,))))
+                blocks.append(np.asarray(((2.0 * prior,), (2.0,), (0.0,))))
                 offset += 1
         if offset != values.size:
             raise ValueError("joint loss row layout mismatch")

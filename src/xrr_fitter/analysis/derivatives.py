@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-from math import log
-
 import numpy as np
 
-from xrr_fitter.evaluation import evaluate_model, evaluate_model_jacobian, values_by_name
+from xrr_fitter.evaluation import (
+    _scale_prior_jacobian,
+    _scale_prior_residual,
+    evaluate_model,
+    evaluate_model_jacobian,
+    robust_score_information,
+    values_by_name,
+)
 from xrr_fitter.model.fitting import FitEvaluationContext
-from xrr_fitter.model.parameters import _log10_ratio, _log_interval_width
 
 
-def _derivative_inputs(problem: object, unit_vector: np.ndarray):
+def _derivative_inputs(problem: FitEvaluationContext, unit_vector: np.ndarray):
     unit = np.asarray(unit_vector, dtype=float)
     if unit.shape != (len(problem.variables),):
         raise ValueError("objective derivative unit vector has the wrong shape")
@@ -22,150 +26,40 @@ def _derivative_inputs(problem: object, unit_vector: np.ndarray):
     residual = np.asarray(evaluation.fit_log_residuals_decades, dtype=float)
     if jacobian.shape != (residual.size, unit.size):
         raise ValueError("objective residual Jacobian has the wrong shape")
-    weights = np.asarray(problem.weights[problem.data.fit_mask], dtype=float)
+    weights = problem.weights[problem.data.fit_mask] * np.sqrt(problem.sampling_multipliers[problem.data.fit_mask])
     return evaluation, residual, jacobian, weights
 
 
-def _scale_prior(problem: object) -> tuple[int, object] | None:
-    if problem.scale_prior_center is None:
-        return None
-    for index, variable in enumerate(problem.variables):
-        if variable.name == "instrument.scale":
-            return index, problem.parameter_definitions[variable.parameter_index]
-    return None
-
-
-def _log_decades_per_unit(definition: object) -> float:
-    """Return the log-transform span without forming an overflowing ratio."""
-    return _log_interval_width(definition.lower, definition.upper) / log(10.0)
-
-
-def _scale_prior_unit_derivative(problem: object, definition: object) -> float:
-    """Return the standardized prior tangent or reject an unusable scale."""
-    try:
-        with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
-            derivative = np.divide(
-                _log_decades_per_unit(definition),
-                problem.scale_prior_tau_decades,
-            )
-    except FloatingPointError as error:
-        raise FloatingPointError("scale prior derivative is not finite") from error
-    if not np.isfinite(derivative):
-        raise FloatingPointError("scale prior derivative is not finite")
-    return float(derivative)
-
-
-def _robust_influence(residual: np.ndarray, weights: np.ndarray, c_decades: float) -> np.ndarray:
-    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-        scaled = residual / c_decades
-        denominator = np.sqrt(1.0 + scaled**2)
-        influence = 2.0 * weights**2 * residual / denominator / residual.size
-    unstable = ~np.isfinite(denominator) | ~np.isfinite(influence)
-    if np.any(unstable):
-        with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-            normalized = residual[unstable] / np.hypot(c_decades, residual[unstable])
-            influence[unstable] = 2.0 * weights[unstable] ** 2 * c_decades * normalized / residual.size
-    return influence
-
-
-def _scale_prior_gradient(
-    problem: object,
-    evaluation: object,
-    prior: tuple[int, object] | None,
-    residual_count: int,
-) -> tuple[int, float] | None:
-    if prior is None:
-        return None
-    index, definition = prior
-    scale = next(value.value for value in evaluation.parameters if value.name == "instrument.scale")
-    delta = _log10_ratio(scale, problem.scale_prior_center)
-    if delta == 0.0:
-        return None
-    derivative = _scale_prior_unit_derivative(problem, definition)
-    try:
-        with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
-            standardized = np.divide(delta, problem.scale_prior_tau_decades)
-            contribution = 2.0 * standardized * derivative / residual_count
-    except FloatingPointError as error:
-        raise FloatingPointError("scale prior gradient is not finite") from error
-    if not np.isfinite(contribution):
-        raise FloatingPointError("scale prior gradient is not finite")
-    return index, float(contribution)
-
-
-def objective_gradient(
-    problem: FitEvaluationContext,
-    unit_vector: np.ndarray,
-) -> np.ndarray:
+def objective_gradient(problem: FitEvaluationContext, unit_vector: np.ndarray) -> np.ndarray:
+    """Differentiate displayed J=Q/N through the complete physical graph."""
     evaluation, residual, jacobian, weights = _derivative_inputs(problem, unit_vector)
-    influence = _robust_influence(residual, weights, problem.config.c_decades)
-    gradient = jacobian.T @ influence
-    prior_gradient = _scale_prior_gradient(problem, evaluation, _scale_prior(problem), residual.size)
-    if prior_gradient is not None:
-        index, contribution = prior_gradient
-        gradient[index] += contribution
+    score, _information = robust_score_information(residual, weights, problem.config.c_decades)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        gradient = jacobian.T @ score / problem.objective_point_count
+    prior = _scale_prior_residual(problem, evaluation)
+    if prior:
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+            gradient += (2.0 * prior / problem.objective_point_count) * _scale_prior_jacobian(problem, unit_vector)
     if np.any(~np.isfinite(gradient)):
         raise FloatingPointError("objective gradient is not finite")
-    result = np.array(gradient, dtype=float, copy=True)
-    result.setflags(write=False)
-    return result
+    gradient.setflags(write=False)
+    return gradient
 
 
-def _robust_curvature(residual: np.ndarray, weights: np.ndarray, c_decades: float) -> np.ndarray:
-    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-        scaled = residual / c_decades
-        shape = (1.0 + scaled**2) ** 1.5
-        curvature = 2.0 * weights**2 / residual.size / shape
-    unstable = ~np.isfinite(shape) | ~np.isfinite(curvature)
-    if np.any(unstable):
-        with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-            ratio = c_decades / np.hypot(c_decades, residual[unstable])
-            curvature[unstable] = 2.0 * weights[unstable] ** 2 / residual.size * ratio**3
-    return curvature
-
-
-def _scale_prior_information(
-    problem: object,
-    prior: tuple[int, object] | None,
-    residual_count: int,
-) -> tuple[int, float] | None:
-    if prior is None:
-        return None
-    index, definition = prior
-    derivative = _scale_prior_unit_derivative(problem, definition)
-    try:
-        with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
-            increment = np.divide(2.0 * np.multiply(derivative, derivative), residual_count)
-    except (FloatingPointError, OverflowError) as error:
-        raise FloatingPointError("scale prior information is not finite") from error
-    if not np.isfinite(increment):
-        raise FloatingPointError("scale prior information is not finite")
-    return index, float(increment)
-
-
-def objective_information(
-    problem: FitEvaluationContext,
-    unit_vector: np.ndarray,
-) -> np.ndarray:
+def objective_information(problem: FitEvaluationContext, unit_vector: np.ndarray) -> np.ndarray:
+    """Return total Q/2 Gauss-Newton curvature, not covariance or mean curvature."""
     _evaluation, residual, jacobian, weights = _derivative_inputs(problem, unit_vector)
-    curvature = _robust_curvature(residual, weights, problem.config.c_decades)
-    information = jacobian.T @ (curvature[:, None] * jacobian)
-    prior_information = _scale_prior_information(problem, _scale_prior(problem), residual.size)
-    if prior_information is not None:
-        index, increment = prior_information
-        try:
-            with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
-                updated = np.add(information[index, index], increment)
-        except (FloatingPointError, OverflowError) as error:
-            raise FloatingPointError("scale prior information is not finite") from error
-        if not np.isfinite(updated):
-            raise FloatingPointError("scale prior information is not finite")
-        information[index, index] = updated
+    _score, curvature = robust_score_information(residual, weights, problem.config.c_decades)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+        information = jacobian.T @ (curvature[:, None] * jacobian)
+    if problem.scale_prior_center is not None:
+        prior_jacobian = _scale_prior_jacobian(problem, unit_vector)
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
+            information += np.outer(prior_jacobian, prior_jacobian)
     if np.any(~np.isfinite(information)):
         raise FloatingPointError("objective information is not finite")
-    result = np.array(information, dtype=float, copy=True)
-    result.setflags(write=False)
-    return result
+    information.setflags(write=False)
+    return information
 
 
 def physical_parameter_jacobian(

@@ -477,13 +477,13 @@ def _model_evaluation(
     weighted = problem.weights[fit_mask] * residual
     objective = robust_log_cost(
         residual,
-        problem.weights[fit_mask],
+        problem.weights[fit_mask] * np.sqrt(problem.sampling_multipliers[fit_mask]),
         problem.config.c_decades,
-    ) + scale_prior_penalty(
+    ) * (np.count_nonzero(fit_mask) / problem.objective_point_count) + scale_prior_penalty(
         values["instrument.scale"],
         problem.scale_prior_center,
         problem.scale_prior_tau_decades,
-        int(np.count_nonzero(fit_mask)),
+        problem.objective_point_count,
     )
     # All fitted and modeled values must be finite before immutable publication.
     # NaN outside the model mask is intentional and excluded from this check.

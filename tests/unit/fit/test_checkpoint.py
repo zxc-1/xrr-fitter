@@ -169,13 +169,13 @@ def test_checkpoint_parameter_fingerprint_binds_lock_and_bounds() -> None:
     )
 
 
-def test_prior_defaults_do_not_perturb_frozen_fingerprints() -> None:
+def test_v2_identity_is_stable_and_invalidates_v1_checkpoints() -> None:
     api = _api()
     identity = api.checkpoint_identity(_problem())
 
-    # 未启用先验、prior_conflict_sigmas 取默认时，config 与 parameter 指纹必须逐位
-    # 复原加入先验字段之前的冻结值，否则既有 checkpoint 无法 resume。
-    assert identity.config_fingerprint == "c01c649a4142356a1908180a212d96e933db9a87863abeb2df1abd7175bf4bee"
+    assert identity == api.checkpoint_identity(_problem())
+    assert identity.config_fingerprint == "c0bc6c229ae49928afc03df8d8c1eaf4dc755d9fa8f3b8562e8e882644496188"
+    assert identity.config_fingerprint != "c01c649a4142356a1908180a212d96e933db9a87863abeb2df1abd7175bf4bee"
     assert identity.parameter_settings_fingerprint == "ccfa57dcff3aa2ea9c07d35aba1b94f941f47fb0fd29cf44b618d7fabf3bf751"
 
 
