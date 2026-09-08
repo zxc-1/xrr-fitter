@@ -68,7 +68,7 @@ def _state(problem):
                 stop_reason="original stage E",
                 nfev=1,
             ),
-            objective=evaluation.objective + 0.10 + 0.01 * index,
+            objective=evaluation.objective + max(0.10, abs(evaluation.objective) * (0.10 + 0.01 * index)),
         )
         for index in range(4)
     )

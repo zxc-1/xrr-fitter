@@ -33,6 +33,11 @@ def test_fit_config_standard_is_versioned_finite_and_immutable() -> None:
         FitConfig.standard(True)
 
 
+def test_default_cost_tolerance_uses_dimensionless_v2_units() -> None:
+    for config in (FitConfig.fast(1201), FitConfig.standard(1201)):
+        assert config.confidence.equivalent_cost_floor == pytest.approx(0.004)
+
+
 def test_fit_candidate_copies_and_freezes_every_array() -> None:
     candidate = fit_candidate()
 

@@ -169,7 +169,8 @@ class ConfidenceThresholds:
     cluster_join_distance: float = 0.05
     distinct_cluster_distance: float = 0.10
     equivalent_cost_fraction: float = 0.02
-    equivalent_cost_floor: float = 1e-5
+    # V2 dimensionless units, calibrated at the default robust scale of 0.05.
+    equivalent_cost_floor: float = 0.004
     boundary_fraction: float = 0.005
     strong_correlation: float = 0.95
     prior_conflict_sigmas: float = 3.0

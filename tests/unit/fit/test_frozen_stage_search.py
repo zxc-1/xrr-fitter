@@ -180,7 +180,7 @@ def _assert_frozen_checkpoints(checkpoints) -> None:
             "85729258067ff1c953257f6e784b6ec5a5c9e175e92f449ae0bc04680c1e42ea",
             "1f0681cfcc77d487b345d3739394e100597601782f7ae45f900a1cefa564a84f",
             "2e006dff3a7e489619e37403d3e58c9afb50642a06acd3b1aff9c2f392cc9120",
-            "8e61d277f41a4f84880fcc3840adb740b17fef574a3865a3dbb8b7650374ca17",
+            "1287a2a70fadb1dbc84c46078020295fa9b21f9d45f53b2b76f02c5678ce43ab",
             "bab9ebdb6b2377582c6d3e5afddbec238d6b4c427be151500cbd19c18ff076f3",
         )
     }
