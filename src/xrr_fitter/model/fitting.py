@@ -207,12 +207,16 @@ class FitConfig:
     downsample_rule_version: str = "feature-grid-v1"
     jacobian_version: str = "analytic-v1"
     noise_model: str = "robust_log"
+    profile_steps: int = 41
 
     def __post_init__(self) -> None:
         validate_noise_model(self.noise_model)
         _positive_integer(self.master_seed, "master_seed", allow_zero=True)
         _positive_integer(self.final_seed_count, "final_seed_count")
         _positive_integer(self.local_workers, "local_workers")
+        _positive_integer(self.profile_steps, "profile_steps")
+        if self.profile_steps < 5:
+            raise ValueError("profile_steps must be at least five")
         for field in (
             "objective_name",
             "objective_version",
@@ -241,7 +245,7 @@ class FitConfig:
             objective_version="2",
             c_decades=0.05,
             final_seed_count=4,
-            budget=SearchBudget(60, 200, 2000, 300, 100),
+            budget=SearchBudget(60, 200, 2000, 300, 200),
         )
 
     @classmethod
@@ -253,6 +257,7 @@ class FitConfig:
             c_decades=0.05,
             final_seed_count=4,
             budget=SearchBudget(4, 8, 200, 30, 8),
+            profile_steps=11,
         )
 
 

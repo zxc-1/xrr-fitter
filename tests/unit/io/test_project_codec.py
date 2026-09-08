@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from tests.support.bootstrap_cases import bootstrap_evidence
 from tests.support.model_cases import dataset_project, project, simple_structure
 
 from xrr_fitter.io.project_codec import (
@@ -155,6 +156,8 @@ def _manual_result_graph() -> tuple[FitResult, FitCheckpoint]:
         profiles=(profile,),
         bootstrap_intervals=(("layer.0.thickness_a", 9.5, 10.8),),
         bootstrap_failure_rate=0.1,
+        bootstrap_performed=True,
+        bootstrap_evidence=bootstrap_evidence((("layer.0.thickness_a", 9.5, 10.8),), failure_rate=0.1),
         boundary_hits=("layer.0.thickness_a",),
         strong_correlations=(("a", "b", 0.97),),
         systematic_residual=True,

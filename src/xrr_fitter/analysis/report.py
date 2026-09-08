@@ -25,6 +25,7 @@ from math import isfinite
 import numpy as np
 
 from xrr_fitter.analysis.bootstrap import TaskRunner, bootstrap_problem_local
+from xrr_fitter.analysis.bootstrap_generation import Recompile
 from xrr_fitter.analysis.classification import classify_result_with_evidence
 from xrr_fitter.analysis.covariance import covariance_summary, problem_covariance
 from xrr_fitter.analysis.derivatives import (
@@ -264,7 +265,7 @@ def build_uncertainty_report(
         (residual_evidence,),
     )
     profiles = _profiles(
-        problem,
+        with_parameter_priors(problem, parameter_priors),
         unit,
         profile_names,
         cancelled,
@@ -290,6 +291,7 @@ def build_uncertainty_report(
         residual_autocorrelation=residual_evidence.autocorrelation,
         candidate_id=_candidate_id(values, best),
         bootstrap_performed=bootstrap is not None,
+        bootstrap_evidence=bootstrap,
         prior_conflicts=prior_conflicts(
             with_parameter_priors(problem, parameter_priors),
             unit,
@@ -470,6 +472,7 @@ def analyze_search_result(
     progress: Callable[[FitProgress], None] | None = None,
     task_runner: TaskRunner | None = None,
     parameter_priors: tuple[ParameterPrior, ...] = (),
+    recompile: Recompile | None = None,
 ) -> FitResult:
     """Finalize a fitting-only search with deterministic uncertainty evidence."""
     _validate_analysis_members(problem, search_result, bootstrap)
@@ -494,7 +497,9 @@ def analyze_search_result(
                 )
             )
 
-    if bootstrap is None and bootstrap_enabled:
+    if bootstrap is None and bootstrap_enabled and problem.variables:
+        if recompile is None:
+            raise ValueError("bootstrap requires a resampled-problem compiler")
         bootstrap_total = problem.config.budget.bootstrap_samples
         publish("bootstrap", 0, bootstrap_total, f"bootstrap 0/{bootstrap_total}")
 
@@ -514,6 +519,7 @@ def analyze_search_result(
             cancelled=cancelled,
             progress=bootstrap_progress,
             task_runner=task_runner,
+            recompile=recompile,
         )
         _validate_bootstrap_ownership(problem, search_result, bootstrap)
     selected_profiles = _selected_profile_names(
@@ -569,6 +575,7 @@ def run_analysis(
     cancelled: Callable[[], bool] | None = None,
     progress: Callable[[FitProgress], None] | None = None,
     task_runner: TaskRunner | None = None,
+    recompile: Recompile | None = None,
 ) -> FitResult:
     """Execute one validated worker request without storing runtime callbacks."""
     if not isinstance(request, AnalysisRequest):
@@ -584,4 +591,5 @@ def run_analysis(
         progress=progress,
         task_runner=task_runner,
         parameter_priors=request.parameter_priors,
+        recompile=recompile,
     )

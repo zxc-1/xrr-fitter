@@ -162,3 +162,20 @@ def test_joint_gaussian_80_and_800_observation_information_adds() -> None:
     assert report.covariance_evidence.matrix is not None
     local = build_uncertainty_report(problem.problems[0], (searches[0].best_candidate,))
     assert report.parameter_sigma[0] == pytest.approx(local.parameter_sigma[0] / np.sqrt(11), rel=1e-9)
+
+
+def test_single_derivative_failure_keeps_executed_diagnostics(monkeypatch) -> None:
+    from xrr_fitter.evaluation import EvaluationConstraintError
+
+    problem = scale_problem("gaussian")
+    candidate = scale_candidate(problem)
+
+    def unavailable(*_args):
+        raise EvaluationConstraintError("derivative unavailable")
+
+    module = import_module("xrr_fitter.analysis.covariance")
+    monkeypatch.setattr(module, "statistical_information", unavailable)
+    report = build_uncertainty_report(problem, (candidate,))
+    assert report.member_residuals[0].executed
+    assert report.covariance is None
+    assert "EvaluationConstraintError" in report.covariance_evidence.unavailable_reason

@@ -25,6 +25,7 @@ from matplotlib.backend_bases import MouseButton, MouseEvent
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtWidgets import QApplication, QLineEdit, QToolButton, QTreeWidget, QVBoxLayout, QWidget
 from shiboken6 import isValid
+from tests.support.bootstrap_cases import bootstrap_evidence
 from tests.support.model_cases import (
     final_fit_result,
     fit_candidate,
@@ -71,8 +72,12 @@ def _uncertainty(candidate_id="candidate-a", *, profiles=()):
         correlation_names=("component.0.thickness_a", "instrument.scale"),
         correlation_matrix=np.array([[1.0, -0.65], [-0.65, 1.0]]),
         profiles=profiles,
-        bootstrap_intervals=(("component.0.thickness_a", 35.0, 48.0),),
+        bootstrap_intervals=(("component.0.thickness_a", 35.0, 48.0), ("instrument.scale", 0.8, 1.2)),
         bootstrap_failure_rate=0.0,
+        bootstrap_performed=True,
+        bootstrap_evidence=bootstrap_evidence(
+            (("component.0.thickness_a", 35.0, 48.0), ("instrument.scale", 0.8, 1.2))
+        ),
         boundary_hits=(),
         strong_correlations=(),
         systematic_residual=False,

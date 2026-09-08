@@ -114,6 +114,19 @@ def _joint_prior_conflicts(
     return tuple(variable.name for variable in problem.global_variables if variable.name in conflicts)
 
 
+def _with_bootstrap(report, vectors, candidate_ids, bootstrap):
+    if bootstrap is None or report.candidate_id is None or not report.correlation_names:
+        return report
+    sampling = bootstrap(vectors[candidate_ids.index(report.candidate_id)])
+    return replace(
+        report,
+        bootstrap_evidence=sampling,
+        bootstrap_intervals=sampling.intervals,
+        bootstrap_failure_rate=sampling.failure_rate,
+        bootstrap_performed=True,
+    )
+
+
 def _analyze_joint_searches(
     problem: object,
     searches: tuple[object, ...],
@@ -124,6 +137,7 @@ def _analyze_joint_searches(
     joint_point_evidence: Callable,
     with_parameter_priors: Callable,
     prior_conflicts: Callable,
+    bootstrap: Callable | None = None,
 ) -> tuple[FitResult, ...]:
     candidate_ids = _joint_final_ids(searches)
     candidate_maps = _joint_candidate_maps(searches)
@@ -155,6 +169,7 @@ def _analyze_joint_searches(
             prior_conflicts=prior_conflicts,
         ),
     )
+    report = _with_bootstrap(report, vectors, candidate_ids, bootstrap)
     return tuple(
         FitResult.from_search(
             search,

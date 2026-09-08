@@ -14,6 +14,7 @@ from xrr_fitter.fit.joint_evaluation import (
     evaluate_joint_vector,
     joint_least_squares_loss,
 )
+from xrr_fitter.fit.joint_problem import compile_joint_problem
 from xrr_fitter.fit.local_search import SearchCancelled
 
 
@@ -24,6 +25,7 @@ class SolvedJoint:
     stop_reason: str
     nfev: int
     objective_increased: bool = False
+    converged: bool = True
 
 
 def poll(cancelled: Callable[[], bool] | None) -> None:
@@ -90,6 +92,28 @@ def solve_joint(
         evaluation,
         str(solved.message),
         int(solved.nfev),
+        converged=bool(solved.success),
+    )
+
+
+def refit_resampled_joint(problem, start, members, *, cancelled=None) -> np.ndarray | str:
+    """Refit one complete generated shared problem and return global physical values."""
+    generated = compile_joint_problem(problem.dataset_ids, members, problem.sharing_rules, problem.constraint_rules)
+    budget = members[0].config.budget
+    maximum = max(budget.local_min_nfev, budget.local_nfev_per_parameter * max(1, len(problem.global_variables)))
+    solved = solve_joint(generated, start, maximum, cancelled)
+    if not solved.evaluation.valid or solved.objective_increased or not solved.converged:
+        return f"joint_fit_failed:{solved.stop_reason}"
+    values = {
+        (dataset_id, parameter.name): parameter.value
+        for dataset_id, evaluation in zip(generated.dataset_ids, solved.evaluation.local_evaluations, strict=True)
+        for parameter in evaluation.parameters
+    }
+    return np.asarray(
+        [
+            values[(variable.members[0].dataset_id, variable.members[0].parameter_name)]
+            for variable in generated.global_variables
+        ]
     )
 
 

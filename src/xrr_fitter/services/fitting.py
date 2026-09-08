@@ -9,18 +9,21 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from functools import partial
 from types import SimpleNamespace
 
 from xrr_fitter.analysis import sld_bands as _bands
 from xrr_fitter.analysis.automatic import assess_automatic_quality
 from xrr_fitter.analysis.joint import analyze_joint_ensemble, analyze_joint_point
+from xrr_fitter.analysis.joint_bootstrap import bootstrap_joint_local
 from xrr_fitter.analysis.mcmc import (
     prior_conflicts,
     run_problem_mcmc,
     with_parameter_priors,
 )
 from xrr_fitter.analysis.profiles import recover_profile_basin
-from xrr_fitter.analysis.report import AnalysisRequest, run_analysis
+from xrr_fitter.analysis.report import AnalysisRequest, uncertainty_seed
+from xrr_fitter.analysis.report import run_analysis as _run_analysis
 from xrr_fitter.fit.automatic import (
     candidate_from_physical_values,
     refit_from_physical_values,
@@ -40,6 +43,7 @@ from xrr_fitter.fit.joint_sharing import (
 from xrr_fitter.fit.joint_sharing import (
     validate_sharing_rules as validate_compiled_sharing_rules,
 )
+from xrr_fitter.fit.joint_solvers import refit_resampled_joint
 from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.fit.objective import evaluate_declared_initial, evaluate_vector
 from xrr_fitter.fit.parameters import (
@@ -51,9 +55,9 @@ from xrr_fitter.fit.pipeline import (
     continue_profile_basin,
     run_fit_search,
 )
-from xrr_fitter.fit.problem import compile_fit_problem
+from xrr_fitter.fit.problem import compile_fit_problem, recompile_resampled_problem
 from xrr_fitter.model.analysis import FitResult, McmcConfig, StructureEvidence
-from xrr_fitter.model.fitting import FitCheckpoint
+from xrr_fitter.model.fitting import FitCheckpoint, FitProgress
 from xrr_fitter.model.operations import FitReadiness, ProjectFitResult
 from xrr_fitter.model.parameters import ParameterCoordinate
 from xrr_fitter.model.project import XrrProject
@@ -77,6 +81,12 @@ from xrr_fitter.services.fitting_phases.common import (
     ProgressCallback,
 )
 from xrr_fitter.services.fitting_phases.sharing import automatic_sharing_rules
+
+
+def run_analysis(request, *, cancelled=None, progress=None, task_runner=None):
+    return _run_analysis(
+        request, cancelled=cancelled, progress=progress, task_runner=task_runner, recompile=recompile_resampled_problem
+    )
 
 
 def _validate_parameter_priors(definitions, priors) -> None:
@@ -423,7 +433,36 @@ def _joint_point_evidence(problem, vector):
     )
 
 
-def _analyze_joint_searches(problem, searches, priors) -> tuple[FitResult, ...]:
+def _joint_bootstrap(problem, vector, *, cancelled=None, progress=None, task_runner=None):
+    evaluation = evaluate_joint_vector(problem, vector)
+    config = problem.problems[0].config
+
+    def publish(completed, total):
+        if progress is not None:
+            progress(
+                FitProgress(
+                    None, "bootstrap", completed, total, evaluation.objective, f"joint bootstrap {completed}/{total}"
+                )
+            )
+
+    publish(0, config.budget.bootstrap_samples)
+    return bootstrap_joint_local(
+        problem.problems,
+        evaluation.local_evaluations,
+        tuple(variable.name for variable in problem.global_variables),
+        sample_count=config.budget.bootstrap_samples,
+        child_seed=uncertainty_seed(config),
+        recompile=recompile_resampled_problem,
+        refit=partial(refit_resampled_joint, problem, vector, cancelled=cancelled),
+        cancelled=cancelled,
+        progress=publish,
+        task_runner=task_runner,
+    )
+
+
+def _analyze_joint_searches(
+    problem, searches, priors, *, bootstrap_enabled=False, cancelled=None, progress=None
+) -> tuple[FitResult, ...]:
     return _joint_analysis._analyze_joint_searches(
         problem,
         searches,
@@ -433,6 +472,9 @@ def _analyze_joint_searches(problem, searches, priors) -> tuple[FitResult, ...]:
         joint_point_evidence=_joint_point_evidence,
         with_parameter_priors=with_parameter_priors,
         prior_conflicts=prior_conflicts,
+        bootstrap=partial(_joint_bootstrap, problem, cancelled=cancelled, progress=progress)
+        if bootstrap_enabled
+        else None,
     )
 
 

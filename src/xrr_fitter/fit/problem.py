@@ -335,6 +335,24 @@ def compile_fit_problem(
     return problem
 
 
+def recompile_resampled_problem(problem: FitEvaluationContext, data: PreparedData) -> FitEvaluationContext:
+    """Reestimate data-derived evidence without changing the declared parameter layout."""
+    if not np.array_equal(problem.data.fit_mask, data.fit_mask) or not np.array_equal(
+        problem.data.qz_a_inv, data.qz_a_inv
+    ):
+        raise ValueError("resampling must preserve the observation grid and mask")
+    validate_noise_data(data, problem.config.noise_model)
+    center, reason = _scale_prior_state(data, problem.instrument, problem.config)
+    warnings = tuple(value for value in problem.warnings if value != problem.scale_prior_reason)
+    return replace(
+        problem,
+        data=data,
+        scale_prior_center=center,
+        scale_prior_reason=reason,
+        warnings=warnings + (() if reason is None else (reason,)),
+    )
+
+
 def compile_stage_problem(
     problem: FitEvaluationContext,
     stage: str,

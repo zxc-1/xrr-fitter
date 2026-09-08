@@ -174,7 +174,7 @@ def test_v2_identity_is_stable_and_invalidates_v1_checkpoints() -> None:
     identity = api.checkpoint_identity(_problem())
 
     assert identity == api.checkpoint_identity(_problem())
-    assert identity.config_fingerprint == "b5b144122c017838146a8adbed68ce688314622ce051d9b4d1a9029e5a1ed9b7"
+    assert identity.config_fingerprint == "ec5180245e5f62a66aa074b60d042a7df2cbe6a2dc79c5a9b347b06876d7cd9d"
     assert identity.config_fingerprint != "c01c649a4142356a1908180a212d96e933db9a87863abeb2df1abd7175bf4bee"
     assert identity.parameter_settings_fingerprint == "ccfa57dcff3aa2ea9c07d35aba1b94f941f47fb0fd29cf44b618d7fabf3bf751"
 

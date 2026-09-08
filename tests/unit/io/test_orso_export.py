@@ -22,6 +22,7 @@ import pytest
 from jsonschema import ValidationError
 from orsopy import fileio
 from orsopy.fileio.base import _read_header_data, _validate_header_data
+from tests.support.bootstrap_cases import bootstrap_evidence
 from tests.support.model_cases import (
     dataset_project,
     final_fit_result,
@@ -141,6 +142,8 @@ def _orso_context(
         profiles=(),
         bootstrap_intervals=(("scale", 0.9, 1.1), ("instrument.background", 2.0e-7, 3.0e-7)),
         bootstrap_failure_rate=0.0,
+        bootstrap_performed=True,
+        bootstrap_evidence=bootstrap_evidence((("scale", 0.9, 1.1), ("instrument.background", 2.0e-7, 3.0e-7))),
         boundary_hits=(),
         strong_correlations=(),
         systematic_residual=False,
@@ -414,23 +417,11 @@ def test_orso_bytes_omits_covariance_when_none() -> None:
 
 def test_orso_bytes_rejects_nonfinite_bootstrap_interval() -> None:
     context = _orso_context()
-    uncertainty = replace(
-        context.result.uncertainty,
-        bootstrap_intervals=(
-            ("scale", float("nan"), 1.1),
-            ("instrument.background", 2.0e-7, 3.0e-7),
-        ),
-    )
-    result = replace(context.result, uncertainty=uncertainty)
-    dataset = replace(context.dataset, last_valid_result=result)
-    invalid = replace(
-        context,
-        project=replace(context.project, datasets=(dataset,)),
-        dataset=dataset,
-    )
-
-    with pytest.raises(ValueError, match="bootstrap intervals"):
-        orso_bytes(invalid, covariance=uncertainty.covariance)
+    with pytest.raises(ValueError, match="bootstrap"):
+        replace(
+            context.result.uncertainty,
+            bootstrap_intervals=(("scale", float("nan"), 1.1), ("instrument.background", 2.0e-7, 3.0e-7)),
+        )
 
 
 @pytest.mark.parametrize(

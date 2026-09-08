@@ -21,6 +21,7 @@ from functools import partial
 
 import numpy as np
 
+from xrr_fitter.analysis.profile_calibration import problem_profile_options
 from xrr_fitter.evaluation import (
     EvaluationConstraintError,
 )
@@ -38,6 +39,7 @@ def _problem_profile_plan(
     least_squares_system: Callable[..., tuple[np.ndarray, np.ndarray]],
     least_squares_loss: Callable[..., object],
     values_by_name: Callable[..., dict[str, float]],
+    interval_options: dict[str, object],
     cancelled: Callable[[], bool] | None = None,
 ) -> object:
     """Bind one declared parameter to a prepared generic profile plan."""
@@ -54,6 +56,7 @@ def _problem_profile_plan(
             name,
             profile_builder=prepare_plan,
             cancelled=cancelled,
+            interval_options=interval_options,
         )
     names = tuple(variable.name for variable in problem.variables)
     if name not in names:
@@ -71,7 +74,7 @@ def _problem_profile_plan(
         problem.config.budget.local_min_nfev,
         problem.config.budget.local_nfev_per_parameter * max(1, len(problem.variables)),
     )
-    steps = 11 if problem.config.budget.bootstrap_samples < 100 else 41
+    steps = problem.config.profile_steps
     residual, jacobian = cache_callbacks(partial(least_squares_system, problem))
     return prepare_plan(
         objective,
@@ -85,6 +88,7 @@ def _problem_profile_plan(
         least_squares_max_nfev=maximum,
         steps=steps,
         cancelled=cancelled,
+        **interval_options,
     )
 
 
@@ -121,6 +125,7 @@ def build_problem_profiles(
     two declares exactly one finalization task per profile. Both runner results
     are indexed rather than observed by completion time.
     """
+    interval_options = problem_profile_options(problem, unit_vector) if names else {}
     plans = tuple(
         _problem_profile_plan(
             problem,
@@ -132,6 +137,7 @@ def build_problem_profiles(
             least_squares_system,
             least_squares_loss,
             values_by_name,
+            interval_options,
             cancelled,
         )
         for name in names

@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from xrr_fitter.analysis.derivatives import correlation_from_covariance, physical_parameter_jacobian
-from xrr_fitter.evaluation import StatisticalUnavailableError, statistical_information
+from xrr_fitter.evaluation import EvaluationConstraintError, StatisticalUnavailableError, statistical_information
 from xrr_fitter.model.analysis import CovarianceEvidence, ResidualEvidence
 from xrr_fitter.model.fitting import FitEvaluationContext
 
@@ -101,7 +101,7 @@ def problem_covariance(
         data, prior, meat = statistical_information(problem, unit_vector)
         physical = physical_parameter_jacobian(problem, unit_vector)
         return covariance_from_matrices(names, data, prior, meat, physical, method=method, unavailable_reason=reason)
-    except (StatisticalUnavailableError, FloatingPointError, np.linalg.LinAlgError) as error:
+    except (EvaluationConstraintError, StatisticalUnavailableError, FloatingPointError, np.linalg.LinAlgError) as error:
         return CovarianceEvidence(names, None, method, 0, (), f"{type(error).__name__}:{error}")
 
 

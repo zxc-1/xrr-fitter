@@ -26,7 +26,7 @@ def test_fit_config_standard_is_versioned_finite_and_immutable() -> None:
 
     assert config.objective_name == "xrr_noise_model"
     assert config.jacobian_version == "analytic-v1"
-    assert config.budget == SearchBudget(60, 200, 2000, 300, 100)
+    assert config.budget == SearchBudget(60, 200, 2000, 300, 200)
     with pytest.raises(FrozenInstanceError):
         config.master_seed = 3
     with pytest.raises(ValueError, match="master_seed"):

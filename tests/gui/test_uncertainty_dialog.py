@@ -14,6 +14,7 @@ from math import log
 import numpy as np
 import pytest
 from PySide6.QtCore import Qt
+from tests.support.bootstrap_cases import bootstrap_evidence
 from tests.support.model_cases import dataset_project, final_fit_result, fit_candidate, project
 
 import xrr_fitter.api as api
@@ -26,6 +27,8 @@ def _uncertainty(candidate_id: str = "candidate-a") -> api.UncertaintyReport:
         profiles=(),
         bootstrap_intervals=(("scale", 0.8, 1.2),),
         bootstrap_failure_rate=0.125,
+        bootstrap_performed=True,
+        bootstrap_evidence=bootstrap_evidence((("scale", 0.8, 1.2),), failure_rate=0.125),
         boundary_hits=("scale",),
         strong_correlations=(),
         systematic_residual=False,

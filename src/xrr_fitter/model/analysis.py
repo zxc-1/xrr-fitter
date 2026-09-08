@@ -55,6 +55,8 @@ from math import isfinite
 
 import numpy as np
 
+from xrr_fitter.model.bootstrap import MIN_BOOTSTRAP_SUCCESS as MIN_BOOTSTRAP_SUCCESS
+from xrr_fitter.model.bootstrap import BootstrapResult as BootstrapResult
 from xrr_fitter.model.fitting import (
     FitCandidate,
     FitSearchResult,
@@ -67,6 +69,7 @@ from xrr_fitter.model.mcmc_samples import McmcReport as McmcReport
 from xrr_fitter.model.mcmc_sampling import EnsembleSamples as EnsembleSamples
 from xrr_fitter.model.mcmc_sampling import McmcConfig as McmcConfig
 from xrr_fitter.model.parameters import ParameterDefinition
+from xrr_fitter.model.profile import ParameterProfile as ParameterProfile
 
 # Re-exported so analysis values keep one import entry point; the band lives in
 # its own module only to keep both files inside the maintainability gate.
@@ -95,78 +98,6 @@ def _positive_values(values: object, field: str) -> tuple[float, ...]:
     if any(not isfinite(value) or value <= 0.0 for value in result):
         raise ValueError(f"{field} must contain positive finite values")
     return result
-
-
-def _bootstrap_names(values: object) -> tuple[str, ...]:
-    names = tuple(values)
-    if any(not isinstance(value, str) or not value.strip() for value in names):
-        raise ValueError("bootstrap parameter names must contain nonempty strings")
-    if len(names) != len(set(names)):
-        raise ValueError("bootstrap parameter names must be unique")
-    return names
-
-
-def _bootstrap_intervals(
-    names: tuple[str, ...],
-    values: object,
-) -> tuple[tuple[str, float, float], ...]:
-    """Normalize optional bounds without erasing a gated empty result."""
-    intervals = tuple(values)
-    if not intervals:
-        return ()
-    valid_rows = all(isinstance(value, (tuple, list)) and len(value) == 3 for value in intervals)
-    if not valid_rows:
-        raise ValueError("bootstrap intervals must contain name, lower, and upper")
-    interval_names = tuple(value[0] for value in intervals)
-    if interval_names != names:
-        raise ValueError("bootstrap interval names must match parameter names in order")
-    bounds = _bootstrap_interval_bounds(intervals)
-    return tuple((name, lower, upper) for name, (lower, upper) in zip(interval_names, bounds, strict=True))
-
-
-def _bootstrap_interval_bounds(
-    intervals: tuple[object, ...],
-) -> tuple[tuple[float, float], ...]:
-    try:
-        bounds = tuple((float(value[1]), float(value[2])) for value in intervals)
-    except (TypeError, ValueError, OverflowError) as error:
-        raise ValueError("bootstrap interval bounds must be finite numbers") from error
-    invalid = any(not isfinite(lower) or not isfinite(upper) or lower > upper for lower, upper in bounds)
-    if invalid:
-        raise ValueError("bootstrap interval bounds must be finite and ordered")
-    return bounds
-
-
-def _bootstrap_samples(names: tuple[str, ...], values: object) -> np.ndarray:
-    samples = _readonly(values, float, "bootstrap samples", 2)
-    if samples.shape[1] != len(names):
-        raise ValueError("bootstrap samples do not match parameter names")
-    if np.any(~np.isfinite(samples)):
-        raise ValueError("bootstrap samples must be finite")
-    return samples
-
-
-def _validate_bootstrap_failure_rate(value: float) -> None:
-    if not isfinite(value) or not 0.0 <= value <= 1.0:
-        raise ValueError("failure_rate must be in [0, 1]")
-
-
-def _validate_bootstrap_owner(
-    candidate_id: str | None,
-    provenance_sha256: str | None,
-) -> None:
-    """Require a complete candidate/provenance pair when ownership is sealed."""
-    if (candidate_id is None) != (provenance_sha256 is None):
-        raise ValueError("bootstrap candidate_id and provenance_sha256 must be paired")
-    if candidate_id is None:
-        return
-    if not isinstance(candidate_id, str) or not candidate_id.strip():
-        raise ValueError("bootstrap candidate_id must be nonempty or None")
-    if not isinstance(provenance_sha256, str):
-        raise ValueError("bootstrap provenance_sha256 must be a lowercase SHA-256")
-    valid = len(provenance_sha256) == 64 and all(value in "0123456789abcdef" for value in provenance_sha256)
-    if not valid:
-        raise ValueError("bootstrap provenance_sha256 must be a lowercase SHA-256")
 
 
 def _validate_optional_sld_bands(value: SldUncertaintyBands | None) -> None:
@@ -221,57 +152,6 @@ class ProfileBasinDecision:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class ParameterProfile:
-    """Profile coordinates, objective evidence, and closure flags."""
-
-    name: str
-    values: np.ndarray
-    objectives: np.ndarray
-    lower_closed: bool
-    upper_closed: bool
-
-    def __post_init__(self) -> None:
-        if not self.name.strip():
-            raise ValueError("profile name must not be empty")
-        values = _readonly(self.values, float, "profile values", 1)
-        objectives = _readonly(self.objectives, float, "profile objectives", 1)
-        if values.shape != objectives.shape:
-            raise ValueError("profile values and objectives must have the same shape")
-        if values.size == 0 or np.any(~np.isfinite(values)):
-            raise ValueError("profile arrays contain invalid values")
-        object.__setattr__(self, "values", values)
-        object.__setattr__(self, "objectives", objectives)
-
-    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
-        return type(self), _pickle_values(self)
-
-
-@dataclass(frozen=True, slots=True)
-class BootstrapResult:
-    """Successful physical bootstrap samples and interval summary."""
-
-    parameter_names: tuple[str, ...]
-    samples: np.ndarray
-    intervals: tuple[tuple[str, float, float], ...]
-    failure_rate: float
-    candidate_id: str | None = None
-    provenance_sha256: str | None = None
-
-    def __post_init__(self) -> None:
-        names = _bootstrap_names(self.parameter_names)
-        samples = _bootstrap_samples(names, self.samples)
-        _validate_bootstrap_failure_rate(self.failure_rate)
-        intervals = _bootstrap_intervals(names, self.intervals)
-        _validate_bootstrap_owner(self.candidate_id, self.provenance_sha256)
-        object.__setattr__(self, "parameter_names", names)
-        object.__setattr__(self, "samples", samples)
-        object.__setattr__(self, "intervals", intervals)
-
-    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
-        return type(self), _pickle_values(self)
-
-
 def _parameter_sigma(
     value: np.ndarray | None,
     dimension: int,
@@ -302,13 +182,14 @@ class UncertaintyReport:
     residual_autocorrelation: bool | None = None
     mcmc: McmcReport | None = None
     candidate_id: str | None = None
-    bootstrap_performed: bool = True
+    bootstrap_performed: bool = False
     sld_bands: SldUncertaintyBands | None = None
     prior_conflicts: tuple[str, ...] = ()
     parameter_sigma: np.ndarray | None = None
     covariance_evidence: CovarianceEvidence | None = None
     member_residuals: tuple[ResidualEvidence, ...] = ()
     search_parameter_spread: np.ndarray | None = None
+    bootstrap_evidence: BootstrapResult | None = None
 
     def __post_init__(self) -> None:
         names = tuple(self.correlation_names)
@@ -337,6 +218,22 @@ class UncertaintyReport:
         if sigma is not None:
             object.__setattr__(self, "parameter_sigma", sigma)
         self._validate_inference(names)
+        self._validate_bootstrap_summary()
+
+    def _validate_bootstrap_summary(self) -> None:
+        evidence = self.bootstrap_evidence
+        if evidence is None:
+            if self.bootstrap_performed or self.bootstrap_intervals:
+                raise ValueError("performed bootstrap requires sampling evidence")
+            return
+        if not isinstance(evidence, BootstrapResult) or evidence.parameter_names != self.correlation_names:
+            raise ValueError("bootstrap evidence must match the report parameter axis")
+        if (
+            not self.bootstrap_performed
+            or self.bootstrap_intervals != evidence.intervals
+            or self.bootstrap_failure_rate != evidence.failure_rate
+        ):
+            raise ValueError("bootstrap summary must agree with sampling evidence")
 
     def _validate_inference(self, names: tuple[str, ...]) -> None:
         evidence = self.covariance_evidence

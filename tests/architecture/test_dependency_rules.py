@@ -136,9 +136,13 @@ MODEL_ALLOWED = {
     "fitting": {"data", "instrument", "structure", "parameters", "progress", "slab_stack"},
     "evaluation": {"data", "fitting", "instrument", "parameters", "slab_stack"},
     "inference": {"instrument"},
+    "bootstrap": {"fitting"},
+    "profile": {"fitting"},
     "provenance": {"fitting"},
     "analysis": {
         "inference",
+        "bootstrap",
+        "profile",
         "data",
         "parameters",
         "fitting",

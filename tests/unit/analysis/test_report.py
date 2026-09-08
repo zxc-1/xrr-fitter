@@ -42,7 +42,7 @@ from tests.support.model_cases import prepared_data, simple_structure
 from xrr_fitter.evaluation import encode_physical_vector, evaluate_model
 from xrr_fitter.fit.candidates import candidate_from_evaluation
 from xrr_fitter.fit.objective import evaluate_vector
-from xrr_fitter.fit.problem import compile_fit_problem
+from xrr_fitter.fit.problem import compile_fit_problem, recompile_resampled_problem
 from xrr_fitter.model.analysis import BootstrapResult, ConfidenceClass, UncertaintyReport
 from xrr_fitter.model.fitting import (
     FitConfig,
@@ -378,6 +378,8 @@ def test_analysis_request_rejects_bootstrap_parameter_ownership_drift() -> None:
         np.ones((2, len(names))),
         (),
         0.0,
+        2,
+        unavailable_reason="insufficient_successful_samples",
     )
 
     with pytest.raises(ValueError, match="bootstrap.*parameter|parameter.*bootstrap"):
@@ -464,13 +466,14 @@ def test_analysis_request_rejects_tampered_bootstrap_payload() -> None:
     candidate = search.best_candidate
     assert candidate is not None
     names = tuple(variable.name for variable in problem.variables)
-    samples = np.ones((2, len(names)))
+    samples = np.ones((200, len(names)))
     intervals = tuple((name, 0.5, 1.5) for name in names)
     unsealed = BootstrapResult(
         names,
         samples,
         intervals,
         0.0,
+        200,
     )
     bootstrap = replace(
         unsealed,
@@ -504,7 +507,7 @@ def test_analysis_accepts_expected_invalid_stage_e_evidence() -> None:
     search = _search_result(problem, candidates)
 
     request = api.AnalysisRequest("curve", problem, search, profile_names=())
-    result = api.run_analysis(request)
+    result = api.run_analysis(request, recompile=recompile_resampled_problem)
 
     assert result.best_candidate.candidate_id == "E-0"
     assert result.candidates[1].stop_reason == "nonpositive_fitted_incident_angle"
@@ -537,7 +540,10 @@ def _empty_owned_bootstrap(problem, search) -> BootstrapResult:
         names,
         np.empty((0, len(names))),
         (),
-        0.0,
+        1.0,
+        1,
+        ((0, "fit_failed"),),
+        unavailable_reason="excessive_fit_failures",
     )
     return replace(
         unsealed,
@@ -640,7 +646,7 @@ def test_fit_dataset_real_uncertainty_report_is_attached() -> None:
     candidates = _analysis_candidates(problem)
     search = _search_result(problem, candidates)
 
-    result = _api().analyze_search_result(problem, search, profile_names=())
+    result = _api().analyze_search_result(problem, search, profile_names=(), recompile=recompile_resampled_problem)
 
     assert result.uncertainty is not None
     assert result.uncertainty.candidate_id == search.best_candidate.candidate_id
@@ -673,6 +679,7 @@ def _assert_bootstrap_invocation(
         "sample_count": problem.config.budget.bootstrap_samples,
         "child_seed": module.uncertainty_seed(problem.config),
         "cancelled": None,
+        "recompile": recompile_resampled_problem,
     }
 
 
@@ -733,6 +740,7 @@ def test_fit_dataset_runs_uncertainty_before_classifying_result(monkeypatch) -> 
         search,
         profile_names=("component.0.thickness_a",),
         dataset_id="curve",
+        recompile=recompile_resampled_problem,
         progress=progress.append,
         task_runner=task_runner,
     )

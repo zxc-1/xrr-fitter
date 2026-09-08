@@ -222,6 +222,7 @@ def test_profile_basin_recovery_treats_physical_constraint_failures_as_invalid_p
     problem = SimpleNamespace(
         variables=(SimpleNamespace(name="component.0.thickness_a"),),
         config=SimpleNamespace(
+            profile_steps=11,
             budget=SimpleNamespace(
                 bootstrap_samples=8,
                 local_min_nfev=5,
@@ -260,6 +261,8 @@ def test_direct_problem_profile_treats_physical_constraint_failures_as_invalid_p
     problem = SimpleNamespace(
         variables=(SimpleNamespace(name="component.0.thickness_a"),),
         config=SimpleNamespace(
+            profile_steps=11,
+            noise_model="robust_log",
             budget=SimpleNamespace(
                 bootstrap_samples=8,
                 local_min_nfev=5,

@@ -7,9 +7,10 @@ from typing import Protocol
 
 import numpy as np
 
-from xrr_fitter.model.analysis import BootstrapResult
+from xrr_fitter.model.analysis import MIN_BOOTSTRAP_SUCCESS, BootstrapResult
+from xrr_fitter.model.bootstrap import bootstrap_calibration_reason
 
-BootstrapFit = Callable[[np.random.Generator, int], np.ndarray | None]
+BootstrapFit = Callable[[np.random.Generator, int], np.ndarray | str | None]
 BootstrapProgress = Callable[[int, int], None]
 
 
@@ -49,30 +50,34 @@ def validated_sample_count(sample_count: int) -> int:
 
 def _collect_bootstrap_samples(
     names: tuple[str, ...],
-    fitted_values: Iterable[np.ndarray | None],
+    fitted_values: Iterable[np.ndarray | str | None],
     count: int,
     progress: BootstrapProgress | None,
-) -> tuple[np.ndarray, int]:
+) -> tuple[np.ndarray, tuple[tuple[int, str], ...]]:
     samples: list[np.ndarray] = []
-    failures = 0
+    failures = []
     observed = 0
     for sample_index, fitted in enumerate(fitted_values):
         if sample_index >= count:
             raise RuntimeError("bootstrap produced too many fitted samples")
         observed += 1
-        if fitted is None:
-            failures += 1
+        if fitted is None or isinstance(fitted, str):
+            failures.append((sample_index, "fit_failed" if fitted is None else fitted))
         else:
-            vector = np.asarray(fitted, dtype=float)
-            if vector.shape != (len(names),) or np.any(~np.isfinite(vector)):
-                raise ValueError("bootstrap fit returned an invalid parameter vector")
-            samples.append(vector)
+            samples.append(_validated_sample(fitted, len(names)))
         if progress is not None:
             progress(sample_index + 1, count)
     if observed != count:
         raise RuntimeError("bootstrap produced an unexpected fitted sample count")
     matrix = np.vstack(samples) if samples else np.empty((0, len(names)), dtype=float)
-    return matrix, failures
+    return matrix, tuple(failures)
+
+
+def _validated_sample(fitted: object, width: int) -> np.ndarray:
+    vector = np.asarray(fitted, dtype=float)
+    if vector.shape != (width,) or np.any(~np.isfinite(vector)):
+        raise ValueError("bootstrap fit returned an invalid parameter vector")
+    return vector
 
 
 def _stable_percentiles(matrix: np.ndarray) -> np.ndarray:
@@ -120,7 +125,7 @@ def _bootstrap_intervals(
     matrix: np.ndarray,
     failure_rate: float,
 ) -> tuple[tuple[str, float, float], ...]:
-    if failure_rate > 0.20 or matrix.shape[0] == 0:
+    if failure_rate > 0.20 or matrix.shape[0] < MIN_BOOTSTRAP_SUCCESS:
         return ()
     lower, upper = _stable_percentiles(matrix)
     return tuple((name, float(lower[index]), float(upper[index])) for index, name in enumerate(names))
@@ -128,9 +133,11 @@ def _bootstrap_intervals(
 
 def bootstrap_result_from_fits(
     names: tuple[str, ...],
-    fitted_values: Iterable[np.ndarray | None],
+    fitted_values: Iterable[np.ndarray | str | None],
     count: int,
     progress: BootstrapProgress | None,
+    *,
+    method: str = "custom_resampling",
 ) -> BootstrapResult:
     matrix, failures = _collect_bootstrap_samples(
         names,
@@ -138,9 +145,10 @@ def bootstrap_result_from_fits(
         count,
         progress,
     )
-    failure_rate = failures / count
+    failure_rate = len(failures) / count
     intervals = _bootstrap_intervals(names, matrix, failure_rate)
-    return BootstrapResult(names, matrix, intervals, float(failure_rate))
+    reason = bootstrap_calibration_reason(matrix.shape[0], failure_rate)
+    return BootstrapResult(names, matrix, intervals, float(failure_rate), count, failures, method, reason)
 
 
 def bootstrap_local(

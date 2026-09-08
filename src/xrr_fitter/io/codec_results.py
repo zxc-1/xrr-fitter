@@ -22,7 +22,14 @@ from xrr_fitter.io.codec_common import (
     _sequence,
     _square_array_from_list,
 )
-from xrr_fitter.io.codec_inference import covariance_from_dict, covariance_to_dict, residual_from_dict, residual_to_dict
+from xrr_fitter.io.codec_inference import (
+    bootstrap_from_dict,
+    bootstrap_to_dict,
+    covariance_from_dict,
+    covariance_to_dict,
+    residual_from_dict,
+    residual_to_dict,
+)
 from xrr_fitter.model.analysis import (
     ConfidenceClass,
     FitResult,
@@ -42,13 +49,19 @@ def _profile_to_dict(value: ParameterProfile) -> dict[str, object]:
         "objectives": _real_array_to_list(value.objectives),
         "lower_closed": value.lower_closed,
         "upper_closed": value.upper_closed,
+        "interval_kind": value.interval_kind,
+        "confidence_level": value.confidence_level,
+        "method": value.method,
+        "unavailable_reason": value.unavailable_reason,
+        "delta_total": value.delta_total,
+        "objective_point_count": value.objective_point_count,
     }
 
 
 def _profile_from_dict(value: object) -> ParameterProfile:
     payload = _mapping(
         value,
-        {"name", "values", "objectives", "lower_closed", "upper_closed"},
+        set(ParameterProfile.__dataclass_fields__),
         "parameter profile",
     )
     return ParameterProfile(
@@ -57,6 +70,12 @@ def _profile_from_dict(value: object) -> ParameterProfile:
         objectives=_real_array_from_list(payload["objectives"]),
         lower_closed=payload["lower_closed"],
         upper_closed=payload["upper_closed"],
+        interval_kind=payload["interval_kind"],
+        confidence_level=payload["confidence_level"],
+        method=payload["method"],
+        unavailable_reason=payload["unavailable_reason"],
+        delta_total=payload["delta_total"],
+        objective_point_count=payload["objective_point_count"],
     )
 
 
@@ -240,6 +259,7 @@ def _uncertainty_to_dict(
         "mcmc": _mcmc_to_dict(value.mcmc),
         "candidate_id": value.candidate_id,
         "bootstrap_performed": value.bootstrap_performed,
+        "bootstrap_evidence": bootstrap_to_dict(value.bootstrap_evidence),
         "sld_bands": _sld_bands_to_dict(value.sld_bands),
         "covariance_evidence": covariance_to_dict(value.covariance_evidence),
         "member_residuals": [residual_to_dict(item) for item in value.member_residuals],
@@ -276,6 +296,7 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         "member_residuals",
         "search_parameter_spread",
         "parameter_sigma",
+        "bootstrap_evidence",
     }
     payload = _mapping(
         value,
@@ -303,6 +324,7 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         mcmc=_mcmc_from_dict(payload["mcmc"]),
         candidate_id=payload.get("candidate_id"),
         bootstrap_performed=payload["bootstrap_performed"],
+        bootstrap_evidence=bootstrap_from_dict(payload["bootstrap_evidence"]),
         sld_bands=_sld_bands_from_dict(payload.get("sld_bands")),
         prior_conflicts=tuple(_sequence(payload.get("prior_conflicts", []), "uncertainty prior conflicts")),
         parameter_sigma=(

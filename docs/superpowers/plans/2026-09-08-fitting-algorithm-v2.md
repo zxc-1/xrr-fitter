@@ -176,8 +176,16 @@ assert singular_evidence.unavailable_reason
 - Consumes: Task 3 covariance availability/diagnostic evidence；共享完整重新编译与求解 callable。
 - Produces: `FitConfig.profile_steps: int` 独立于 bootstrap_samples；profile 和 bootstrap 均记录 interval_kind、confidence_level（可 None）、method、unavailable_reason、成功样本数。
 - 正式 percentile CI 的 `MIN_BOOTSTRAP_SUCCESS = 200`；fast 的8次为探索性数据，不产生正式95%区间。
+- 最终模型分别位于 `model/profile.py` 和 `model/bootstrap.py`，由 `model.analysis` 暴露；
+  profile 保存总阈值与完整 N，bootstrap 保存 `attempted_count/failure_reasons`，成功数派生。
+  `UncertaintyReport.bootstrap_evidence` 保存完整采样证据，performed 默认 False。
+- `analysis/bootstrap_generation.py` 共用模式生成；`bootstrap_problem_local(..., recompile=...)`
+  与 `bootstrap_joint_local(..., recompile=..., refit=...)` 消费服务注入的 compiler/refit。
+  服务 `run_analysis` 注入 `fit.problem.recompile_resampled_problem`；请求不保存 callable。
+- profile 校准位于 `analysis/profile_calibration.py`，路径与阈值消费位于
+  `analysis/profile_paths.py`；正规 likelihood 使用总量 chi-square 阈值，其余显式 support。
 
-- [ ] **1. RED：正式区间边界。**
+- [x] **1. RED：正式区间边界。**
 
 ```python
 assert result_199.confidence_level is None
@@ -190,9 +198,9 @@ assert likelihood_profile.delta_total == pytest.approx(3.841458820694124)
 
 固定 profile_steps 后改变 bootstrap_samples 不改变 profile 网格。无 prior、无经验权重、满秩、内点且诊断通过的 Gaussian/Poisson 才能标 `likelihood_ratio` 95%；其他情形标 support 或 unavailable。
 
-- [ ] **2. RED 命令。** `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/dala/Desktop/XRR-Fitter/venvs/repo/bin/python -m pytest -p no:cacheprovider -q tests/unit/analysis/test_interval_semantics.py`。
-- [ ] **3. GREEN：阈值和重采样。** 使用 `scipy.stats.chi2.ppf(.95,1)/N` 转换到 J profile；robust 阈值保持经验语义。Gaussian 参数 bootstrap 按 sigma，Poisson 从 μ 抽整数，robust 用有序移动块 log residual；每次按对应生成目标重新估计平台。联合每个 replicate 先生成全部成员，再拟合整个 shared problem，不能拼各自单独的 sigma。成功计数与失败原因精确保存。
-- [ ] **4. 回归。** 跑 analysis/profile/bootstrap、joint services、项目 round-trip。块抽样保持用户排除点、identity、normalization 和 counts；快速自动拟合 bootstrap 未请求时不加昂贵阶段，不假报 performed。
+- [x] **2. RED 命令。** `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/dala/Desktop/XRR-Fitter/venvs/repo/bin/python -m pytest -p no:cacheprovider -q tests/unit/analysis/test_interval_semantics.py`。
+- [x] **3. GREEN：阈值和重采样。** 使用 `scipy.stats.chi2.ppf(.95,1)/N` 转换到 J profile；robust 阈值保持经验语义。Gaussian 参数 bootstrap 按 sigma，Poisson 从 μ 抽整数，robust 用有序移动块 log residual；每次按对应生成目标重新估计平台。联合每个 replicate 先生成全部成员，再拟合整个 shared problem，不能拼各自单独的 sigma。成功计数与失败原因精确保存。
+- [x] **4. 回归。** 跑 analysis/profile/bootstrap、joint services、项目 round-trip。块抽样保持用户排除点、identity、normalization 和 counts；快速自动拟合 bootstrap 未请求时不加昂贵阶段，不假报 performed。
 - [ ] **5. 提交/审查。** `fix: distinguish support intervals and calibrated uncertainty`。
 
 ### Task 5: 拟合点内环和线程隔离的联合系统缓存

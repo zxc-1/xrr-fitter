@@ -148,3 +148,61 @@ sandwich。采用总量而非展示均值；数据产生的尺度 prior 只进�
 
 Task 4–8 仍待实施：区间语义与重采样、内环/缓存、搜索调度、入口/导出和最终统计验收。
 本批独立审查尚不可用，不能称独立审查通过。工作树外保留验收日志，未产生仓库内临时产物。
+
+### Task 3 官方门禁
+
+- 固定提交 `25c90fc` 的普通 clone：unit **1777 passed**、quality **188 passed**、
+  integration **14 passed**、regression **50 passed**、GUI **647 passed**。
+- GUI 仅保留已有隐藏画布 `constrained_layout` 警告。
+- 外部报告 `/tmp/xrr-v2-25c90fc-4psplh8d/`，临时 clone 已自动清理。
+- Task 4 开始前追加单曲线导数故障自审测试，验证诊断不会因协方差不可用而整体丢失。
+
+## Task 4：区间分类、profile 精度与模式/联合 bootstrap
+
+实现与自审已完成，固定提交的官方 clone 门禁待运行。正式 percentile CI 要求至少
+200 个成功样本且失败率不超过 20%；fast 的 8 次只保存探索性样本，不能标 95%。
+
+### RED → GREEN
+
+- 初始 RED 覆盖 199/200 成功数边界、失败索引、独立 profile 网格、likelihood 阈值和
+  robust support 标签，以及模式生成、共享问题整体 refit 和逐次平台先验重估。
+- Gaussian 保留负观测，Poisson 保留整数原始 counts、零值及非整数 normalization；
+  robust 按 q 排序、中心化 log residual 后做移动块抽样，以 log 反变换生成观测，
+  不截断数学上有效的 subfloor 样本。用户 mask、原始行身份和未选点保持不变。
+- 非收敛、目标增大、不可表示的生成值分别记录失败；最后一次 refit 内取消也不能发布结果。
+- 自审追加 **2 项 RED**：空参数轴被模型接受；联合采样未拒绝噪声模式错配的 residual。
+  修复后连同全部失败证据 round-trip、有效平台重估和末次联合取消，专项 **41 passed**。
+- 真实 **200 次联合 Gaussian refit** 通过，经验 spread 与总信息 sigma 的核对通过。
+  这不代替 Task 8 的 200 个独立数据集覆盖率实验。
+- 本轮完整直接 `tests/unit tests/regression`：**2309 passed，327.57 s**。
+  先前相关 GUI **247 passed**；正式 GUI 门禁仍须固定提交后运行。
+- Ruff lint、Radon、`git diff --check HEAD` 通过；Ruff format 规范化了测试排版，
+  需在提交前复验。Radon 报告 `/tmp/xrr-v2-task4-radon.json`。
+
+### 最终接口与语义
+
+- `model/profile.py:ParameterProfile` 和 `model/bootstrap.py:BootstrapResult` 由
+  `model.analysis` 暴露。不保留中间的 `model/intervals.py`。
+- `FitConfig.profile_steps` 独立于 bootstrap 数量，standard 为 41、fast 为 11；
+  standard bootstrap 为 200、fast 为 8。
+- profile 保存 `interval_kind/confidence_level/method/unavailable_reason/delta_total/`
+  `objective_point_count`；成功求值数和展示目标阈值由证据派生。正规 Gaussian/Poisson
+  使用 `chi2.ppf(.95, 1)/N`，有 prior、秩亏、边界、诊断失败或 robust 模式只标 support。
+- `BootstrapResult.attempted_count` 必需，保存逐失败 `(index, reason)`、方法及不可用原因；
+  成功数取 samples 行数。模型与入口均拒绝空参数轴。
+- `UncertaintyReport.bootstrap_evidence` 保留完整样本，汇总必须一致；
+  `bootstrap_performed` 默认 False，无证据不能宣称已执行。
+- `analysis/bootstrap_generation.py` 是单/联合共用生成边界；
+  `fit.problem.recompile_resampled_problem(problem, data)` 由服务以 callable 注入分析。
+  `bootstrap_problem_local(..., recompile=...)` 必需 compiler；`run_analysis` 请求
+  bootstrap 时同样必需。`services.fitting.run_analysis` 负责组合，不在请求里存 callable。
+- `analysis/joint_bootstrap.bootstrap_joint_local` 先生成全部成员，再整体 refit；
+  `fit.joint_solvers.refit_resampled_joint` 检查真实 SciPy success。普通联合拟合启用，
+  快速自动联合默认关闭。服务 `_analyze_joint_searches` 接收 bootstrap 开关、取消与进度。
+- `analysis/profile_calibration.py` 生成阈值元数据，`analysis/profile_paths.py` 消费保存的
+  profile 阈值。codec 严格保存新字段，全部失败的 `(0, n)` 样本轴能 JSON 往返。
+- 单曲线协方差导数失败仍保留已执行诊断，补齐 Task 3 的对应边界。
+
+未改变物理参照容差、生产依赖、CI mode 或其他工作树。临时产物在工作树外。
+独立审查服务此前返回 429 / unsupported model，尚无独立审查结论。
+Task 5–8 仍未实施完成，不把本批统计接口视为整个 V2 已完成。

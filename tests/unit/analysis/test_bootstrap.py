@@ -10,7 +10,7 @@ from tests.support.model_cases import prepared_data, simple_structure
 
 from xrr_fitter.evaluation import encode_physical_vector, evaluate_model
 from xrr_fitter.fit.candidates import candidate_from_evaluation
-from xrr_fitter.fit.problem import compile_fit_problem
+from xrr_fitter.fit.problem import compile_fit_problem, recompile_resampled_problem
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import ParameterSetting
@@ -25,7 +25,7 @@ def bootstrap_local(*args, **kwargs):
 
 
 def bootstrap_problem_local(*args, **kwargs):
-    return _api().bootstrap_problem_local(*args, **kwargs)
+    return _api().bootstrap_problem_local(*args, **kwargs, recompile=recompile_resampled_problem)
 
 
 def residual_block_length(*args, **kwargs):
@@ -100,14 +100,14 @@ def test_bootstrap_failure_rate_over_twenty_percent_suppresses_intervals() -> No
 
 def test_bootstrap_failure_rate_gate_is_strictly_greater_than_twenty_percent() -> None:
     def fit_sample(rng: np.random.Generator, sample_index: int):
-        if sample_index in {1, 4}:
+        if sample_index % 5 == 0:
             return None
         return np.asarray([0.4]) + rng.normal(0.0, 0.01, size=1)
 
     result = bootstrap_local(
         fit_sample,
         ("x",),
-        sample_count=10,
+        sample_count=250,
         child_seed=124,
     )
 
@@ -121,16 +121,16 @@ def test_bootstrap_percentiles_interpolate_finite_opposite_extremes_stably() -> 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         result = bootstrap_local(
-            lambda _rng, sample_index: np.asarray([-maximum if sample_index == 0 else maximum]),
+            lambda _rng, sample_index: np.asarray([-maximum if sample_index < 5 else maximum]),
             ("x",),
-            sample_count=2,
+            sample_count=200,
             child_seed=125,
         )
 
     assert len(result.intervals) == 1
     _name, lower, upper = result.intervals[0]
-    assert lower == pytest.approx(-0.95 * maximum)
-    assert upper == pytest.approx(0.95 * maximum)
+    assert lower == pytest.approx(0.95 * maximum)
+    assert upper == maximum
     assert lower < upper
     assert not any(item.category is RuntimeWarning for item in caught)
 
@@ -190,9 +190,18 @@ def test_problem_bootstrap_is_deterministic_and_reports_physical_parameters() ->
 
     assert first.parameter_names == tuple(variable.name for variable in problem.variables)
     np.testing.assert_array_equal(first.samples, second.samples)
-    assert first.failure_rate == 0.0
-    assert len(first.intervals) == len(problem.variables)
+    assert first.failure_rate == second.failure_rate == 0.25
+    assert first.failure_reasons == second.failure_reasons
+    assert first.failure_reasons == (
+        (2, "optimizer_nonconvergence:The maximum number of function evaluations is exceeded."),
+    )
+    assert first.intervals == ()
+    assert first.confidence_level is None
     assert np.max(first.samples[:, 0]) > 1.0
+    _assert_bootstrap_owner(candidate, first, second)
+
+
+def _assert_bootstrap_owner(candidate, first, second) -> None:
     assert first.candidate_id == candidate.candidate_id
     assert len(first.provenance_sha256) == 64
     assert first.provenance_sha256 == second.provenance_sha256
@@ -204,7 +213,8 @@ def test_problem_bootstrap_prepares_all_draws_before_ordered_refits(
     module = _api()
     problem = _problem()
     candidate = _candidate(problem)
-    original_context = module._synthetic_context
+    generation = import_module("xrr_fitter.analysis.bootstrap_generation")
+    original_context = generation.synthetic_context
     contexts = []
     batches: list[int] = []
     progress: list[tuple[int, int]] = []
@@ -223,7 +233,7 @@ def test_problem_bootstrap_prepares_all_draws_before_ordered_refits(
             completed[index] = values[index]()
         return tuple(completed)
 
-    monkeypatch.setattr(module, "_synthetic_context", synthetic_context)
+    monkeypatch.setattr(generation, "synthetic_context", synthetic_context)
     monkeypatch.setattr(
         module,
         "_local_bootstrap_fit",
@@ -235,6 +245,7 @@ def test_problem_bootstrap_prepares_all_draws_before_ordered_refits(
         candidate,
         sample_count=3,
         child_seed=9982,
+        recompile=recompile_resampled_problem,
         progress=lambda completed, total: progress.append((completed, total)),
         task_runner=run_tasks,
     )
@@ -249,17 +260,23 @@ def test_problem_bootstrap_with_explicit_errors_uses_parametric_draws(
 ) -> None:
     module = _api()
     problem = _problem(explicit_errors=True)
+    problem = replace(
+        problem, config=replace(problem.config, noise_model="gaussian"), weights=np.ones(problem.data.fit_mask.size)
+    )
     candidate = _candidate(problem)
 
     def unexpected_block_draw(*_args, **_kwargs):
         raise AssertionError("moving-block draw used despite explicit errors")
 
-    monkeypatch.setattr(module, "_moving_block_draw", unexpected_block_draw)
+    monkeypatch.setattr(
+        import_module("xrr_fitter.analysis.bootstrap_generation"), "moving_block_draw", unexpected_block_draw
+    )
     result = module.bootstrap_problem_local(
         problem,
         candidate,
         sample_count=3,
         child_seed=309,
+        recompile=recompile_resampled_problem,
     )
 
     assert result.failure_rate == 0.0

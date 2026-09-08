@@ -780,7 +780,7 @@ def test_joint_fit_reports_finalizing_after_stage_e() -> None:
         compile_joint_problem=lambda *_args: object(),
         joint_fit_request=lambda problem, checkpoints: (problem, checkpoints),
         run_joint_fit=lambda *_args, **_kwargs: searches,
-        analyze_joint_searches=lambda _problem, _searches, _priors: analyzed,
+        analyze_joint_searches=lambda _problem, _searches, _priors, **_options: analyzed,
     )
 
     assert result is analyzed

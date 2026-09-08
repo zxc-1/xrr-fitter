@@ -6,6 +6,7 @@ from importlib import import_module
 
 import numpy as np
 import pytest
+from tests.support.bootstrap_cases import bootstrap_evidence
 from tests.support.model_cases import fit_result
 
 from xrr_fitter.model.analysis import (
@@ -44,6 +45,8 @@ def test_analysis_arrays_are_copied_read_only_and_shape_checked() -> None:
         profiles=(profile,),
         bootstrap_intervals=(("thickness", 1.0, 3.0),),
         bootstrap_failure_rate=0.0,
+        bootstrap_performed=True,
+        bootstrap_evidence=bootstrap_evidence((("thickness", 1.0, 3.0),)),
         boundary_hits=(),
         strong_correlations=(),
         systematic_residual=False,
@@ -76,7 +79,7 @@ def test_uncertainty_report_rejects_empty_candidate_owner() -> None:
     with pytest.raises(ValueError, match="candidate_id"):
         replace(report, candidate_id="")
 
-    assert report.bootstrap_performed is True
+    assert report.bootstrap_performed is False
     with pytest.raises(TypeError, match="bootstrap_performed"):
         replace(report, bootstrap_performed=1)
 
@@ -94,12 +97,13 @@ def test_parameter_profile_preserves_nan_objective_evidence() -> None:
 
 
 def test_bootstrap_and_ensemble_results_copy_aligned_arrays() -> None:
-    bootstrap_source = np.ones((2, 2))
+    bootstrap_source = np.ones((200, 2))
     bootstrap = BootstrapResult(
         parameter_names=("a", "b"),
         samples=bootstrap_source,
         intervals=(("a", 0.5, 1.5), ("b", 0.5, 1.5)),
         failure_rate=0.0,
+        attempted_count=200,
     )
     ensemble_source = np.ones((2, 4, 2))
     ensemble = EnsembleSamples(
@@ -134,7 +138,7 @@ def test_bootstrap_result_rejects_invalid_parameter_intervals(
     intervals: tuple[tuple[str, float, float], ...],
 ) -> None:
     with pytest.raises(ValueError, match="parameter|interval"):
-        BootstrapResult(names, np.ones((2, 2)), intervals, 0.0)
+        BootstrapResult(names, np.ones((200, 2)), intervals, 0.0, 200)
 
 
 def test_mcmc_config_and_report_validate_sampling_geometry() -> None:
@@ -203,7 +207,7 @@ def test_mcmc_config_accepts_zero_burn_in() -> None:
 def test_published_analysis_arrays_remain_read_only_after_pickle() -> None:
     config = McmcConfig(walkers=4, burn_in=0, production_steps=2)
     profile = ParameterProfile("a", np.array([0.0, 1.0]), np.array([1.0, 2.0]), True, False)
-    bootstrap = BootstrapResult(("a",), np.ones((2, 1)), (("a", 0.5, 1.5),), 0.0)
+    bootstrap = BootstrapResult(("a",), np.ones((200, 1)), (("a", 0.5, 1.5),), 0.0, 200)
     ensemble = EnsembleSamples(
         np.ones((2, 4, 1)),
         np.ones((2, 4)),
@@ -233,6 +237,8 @@ def test_published_analysis_arrays_remain_read_only_after_pickle() -> None:
         False,
         (),
         mcmc=mcmc,
+        bootstrap_performed=True,
+        bootstrap_evidence=bootstrap,
     )
     result = FitResult.from_search(
         fit_result(),
