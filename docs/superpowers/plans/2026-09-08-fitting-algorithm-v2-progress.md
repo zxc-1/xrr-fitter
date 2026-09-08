@@ -176,8 +176,8 @@ Task 4–8 仍待实施：区间语义与重采样、内环/缓存、搜索调�
   这不代替 Task 8 的 200 个独立数据集覆盖率实验。
 - 本轮完整直接 `tests/unit tests/regression`：**2309 passed，327.57 s**。
   先前相关 GUI **247 passed**；正式 GUI 门禁仍须固定提交后运行。
-- Ruff lint、Radon、`git diff --check HEAD` 通过；Ruff format 规范化了测试排版，
-  需在提交前复验。Radon 报告 `/tmp/xrr-v2-task4-radon.json`。
+- Ruff lint/format、Radon、`git diff --check HEAD` 通过；提交钩子再次通过。
+  Radon 报告 `/tmp/xrr-v2-task4-radon.json`。
 
 ### 最终接口与语义
 
@@ -206,3 +206,12 @@ Task 4–8 仍待实施：区间语义与重采样、内环/缓存、搜索调�
 未改变物理参照容差、生产依赖、CI mode 或其他工作树。临时产物在工作树外。
 独立审查服务此前返回 429 / unsupported model，尚无独立审查结论。
 Task 5–8 仍未实施完成，不把本批统计接口视为整个 V2 已完成。
+
+### Task 4 官方门禁及快照补充
+
+- 实现提交 `3a28f53` 普通 clone：unit **1819 passed**、quality **188 passed**、
+  regression **50 passed**；integration **13 passed / 1 failed**，GUI 仍在运行。
+- 集成失败来自普通联合拟合旧进度快照未包含新增的 bootstrap 起止事件；生产路径和
+  共享结果均一致。更新完整进度快照，并断言真实 attempted_count=1、无正式置信区间，
+  聚焦联合集成测试 **2 passed，18.43 s**。未修改生产代码或物理容差。
+- 原始日志 `/tmp/xrr-v2-3a28f53-nymtapo1/`；补充提交后重跑官方 integration。
