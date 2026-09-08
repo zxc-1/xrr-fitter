@@ -77,3 +77,8 @@ The following are deliberately not enabled by this audit:
   database/network policy, bind reports to downloaded/bundled bytes, and decide
   how findings affect releases before adding a CI gate or changing release
   assets. Existing exact release asset sets and schemas stay unchanged.
+
+An external reporting-only baseline and the subsequent build/test-tool security
+migration are recorded in `audit-reporting-baseline.md`. Those measurements did
+not introduce a coverage/type/advisory CI gate or add reporting tools to the
+project's dependency sets.

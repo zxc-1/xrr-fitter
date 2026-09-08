@@ -145,7 +145,7 @@ process high-watermark field. It is not per-case allocated memory.
 - Clean-checkout implementation `76e4606`: quality **199**, unit **1704**,
   integration **14**, spawn **4**, regression **50** tests passed; quality also
   passed the unchanged Radon policy. GUI and the full 220-case statistical
-  release corpus were not run in this non-GUI audit.
+  release corpus were not run in that initial verification slice.
 - The tools gate exposed an omitted second exact-registry expectation:
   **1 failed / 467 passed**. `2ea1552` fixes that test expectation without changing
   production code; focused verifier tests passed **25**, and the full clean
@@ -164,25 +164,73 @@ process high-watermark field. It is not per-case allocated memory.
   generated inventories and build artifacts remain outside the repository.
   Tool-owned temporary benchmark/build environments are automatically removed.
 
+### Toolchain follow-up — 2026-09-08
+
+`c5b3ea0` upgrades the existing pytest/setuptools/wheel tools after the advisory
+baseline. `276135a` tracks the new wheel license path with exact member and byte
+checks; `a6f74a0` rebinds the test collection to that source (3095 nodes). The
+application source, numerical inputs and verification gate count are unchanged.
+
+At `a6f74a0`, quality **200**, tools **472**, unit **1704**, integration **14**,
+spawn **4** and regression **50** passed (**2444 tests**). Full `distribution`
+and local `identity` gates passed for the same artifact bundle. These records
+bind that exact commit, not subsequent documentation-only commits. The
+continuation revalidated installed lock versions, `pip check`, artifact identity
+and clean delivery-checkout hygiene. A fresh `quality` rerun passed all 200 tests
+and Radon at `a6f74a0`.
+
+The complete statistical gate passed on fixed `c626d62`: **2 tests, 220 cases**,
+**9472.87 seconds (2:37:52)**, verifier exit code **0**. Its application source,
+corpus/support code, verifier/outcome code and macOS lock match `a6f74a0` exactly.
+The previous run's incomplete supervisor record is retained separately and is
+not used as evidence of a successful verifier exit.
+
+Coverage, static-type and advisory measurements are recorded in
+`docs/architecture/audit-reporting-baseline.md`. They are reporting-only evidence,
+not permanent tooling dependencies or additional CI gates. See
+`2026-09-08-audit-toolchain-security.md` for the migration and statistical status.
+
 ### Open verification and approval-bound work
 
-- [ ] **Resolve the failing distribution gate:** its Windows fresh-resolution
-  check detects `fonttools 4.63.0 -> 4.64.0`, `kiwisolver 1.5.0 -> 1.5.1` and
-  `pyinstaller-hooks-contrib 2026.6 -> 2026.7`. The exact failure reproduced from
-  baseline `c369ed0`; this branch changes neither lock, `pyproject.toml`, nor the
-  resolver. Decide separately whether to refresh and validate those pins or
-  revise the fresh-resolution policy; neither is silently changed here.
-- [ ] Run the complete 220-case statistical corpus at the audit implementation
-  revision and retain its result. Starting a run is not a passing result. The
-  previous release recorded about 2 hours 22 minutes for this gate; schedule
-  accordingly rather than treating it as a short smoke test.
+- [x] **Resolve the failing distribution gate:** `a6a3e26` refreshes the existing
+  `fonttools 4.63.0 -> 4.64.0`, `kiwisolver 1.5.0 -> 1.5.1` and Windows-only
+  `pyinstaller-hooks-contrib 2026.6 -> 2026.7` pins. The shared-package contract
+  requires the first two updates in both platform locks. Package sets,
+  `pyproject.toml`, resolver policy and gates remain unchanged. The complete
+  `distribution` gate passed on `5a47af1`, including fresh Windows resolution,
+  reproducible wheel/sdist builds and installed-artifact smoke.
+- [x] Rebind and verify local release identity. `5a47af1` refreshes the collected
+  test manifest (3090 nodes, source `a6a3e26`) and lock binding; the existing
+  release-spec generator changes only `lock_sha256`. Test collection reproduced
+  identical bytes from two checkouts. The `identity` gate built and validated
+  the same `5a47af1` distribution bundle. This is not tag/release approval and
+  test collection does not establish test execution success.
+- [x] Run the complete 220-case statistical corpus at the audit implementation
+  revision and retain its result. The fixed `c626d62` rerun passed both tests in
+  9472.87 seconds, with verifier exit code 0. Its source/lock binding and actual
+  tool exit result are retained in the continuation evidence directory below.
 - [ ] Decide the additional tooling scope and implement it after approval.
   Shared cache, coverage/static typing/vulnerability-scanner dependencies or
   gates, complete native/artifact SBOM and extra release assets remain deferred
-  pending approval. See `docs/architecture/dependency-evidence.md` for tradeoffs.
+  pending approval. External reporting baselines and the three existing tool
+  security upgrades are complete; this does not enable permanent gates or fix
+  the remaining type/coverage debt. See `docs/architecture/dependency-evidence.md`
+  for tradeoffs.
 - [ ] Complete target-platform verification. Actual GitHub Actions execution,
-  Windows runtime/executable validation and release identity acceptance remain
-  unverified. Local YAML/bash tests do not replace target-runner validation.
-- [ ] Review overlapping changes before integration. The GUI worktree includes
-  overlapping core edits. Its files and Git state are untouched; reconciliation
-  requires a later integration review.
+  Windows runtime/executable validation and annotated-tag release acceptance
+  remain unverified. Local YAML/bash tests do not replace target-runner validation.
+- [x] Review overlapping changes before integration. Read-only comparison against
+  GUI HEAD `6e44db4` and its active changes found 13 shared non-GUI paths. The
+  relevant contracts are MCMC/progress callback arity, stage skip/resume behavior,
+  `ParameterFreedom` constructors, profile metadata and export format selection.
+  Keep these GUI-side contracts together with the audit's type annotations,
+  error boundaries and extracted owners; selecting either entire file is unsafe.
+  No merge or GUI edit was performed. The combined tree still needs a separate
+  integration run after reconciliation.
+
+Continuation evidence is retained at
+`/private/tmp/xrr-audit-resume-20260908.5ZafEx`: `statistical-result.json`,
+`statistical-invocation.json`, `statistical-exec-results.jsonl`,
+`fresh-validation.json`, `quality-result.json` and `quality.log`.
+The old incomplete statistical evidence remains at
+`/private/tmp/xrr-audit-secure-statistical-20260908`; neither record was overwritten.
