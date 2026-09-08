@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import xrr_fitter.evaluation as evaluation
-from xrr_fitter.model.fitting import ModelEvaluation
+from xrr_fitter.model.evaluation import ModelEvaluation
 from xrr_fitter.model.parameters import PhysicalValueError
 from xrr_fitter.model.structure import ExpandedSlabLimitError
 
@@ -33,11 +33,12 @@ def _invalid_evaluation(
         parameters=(),
         qz_a_inv=qz,
         model_normalized=model,
-        fit_log_residuals_decades=residual,
+        fit_residuals=residual,
         fit_weighted_residuals=weighted,
         objective=float("inf"),
         expanded_stack=None,
         diagnostics=error.diagnostics,
+        noise_model=problem.config.noise_model,
     )
 
 

@@ -32,7 +32,7 @@ def _residual_case(
             background_kind=background_kind,
         ),
     )
-    return problem, SimpleNamespace(log_residuals_decades=values)
+    return problem, SimpleNamespace(residuals=values)
 
 
 def test_residual_patterns_emit_actionable_model_diagnostics() -> None:
@@ -134,7 +134,7 @@ def test_report_computes_residual_acf_in_q_sorted_order() -> None:
     )
     residual = np.empty_like(sorted_residual)
     residual[np.argsort(problem.data.qz_a_inv, kind="stable")] = sorted_residual
-    candidate = SimpleNamespace(log_residuals_decades=residual)
+    candidate = SimpleNamespace(residuals=residual)
 
     ordered = module.ordered_fit_residuals(problem, candidate)
 

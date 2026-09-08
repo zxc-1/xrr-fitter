@@ -107,6 +107,8 @@ log_probability = -0.5 * Q + explicit_parameter_prior_log_density
 - Consumes: Task 1 的总 Q、N、sampling_multipliers 及完整约束导数。
 - Produces: `FitConfig.noise_model` 值域 `robust_log`, `gaussian`, `poisson`；内部残差明确叫 `fit_residuals` 并有单位字段，log 绘图残差不能冒充模式残差。
 - `evaluation_statistics` 输出模式残差、d residual/d model、数据信息与 score 所需数组；`evaluation` 是 fit/analysis 的共享入口。
+- 最终身份为 `xrr_noise_model` / `2`，具体模式由 `noise_model` 声明；内部 `ModelEvaluation`
+  归入 `model/evaluation.py`，公开候选保留单独的 `residuals` 与 log 绘图字段。
 - Poisson 选择是用户原始整数计数语义的显式声明；无自动探测或降级。
 
 - [ ] **1. RED：真实模型已知 sigma、Poisson 零计数及非法输入。**

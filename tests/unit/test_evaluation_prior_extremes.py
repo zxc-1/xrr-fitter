@@ -82,7 +82,7 @@ def test_problem_log_probability_preserves_tiny_nonzero_residual_likelihood(
     observed = SimpleNamespace(
         valid=True,
         objective=evaluation.robust_log_cost(np.asarray([residual]), np.ones(1), c_decades),
-        fit_log_residuals_decades=np.array([residual]),
+        fit_residuals=np.array([residual]),
         parameters=(),
     )
     monkeypatch.setattr(evaluation, "evaluate_model", lambda *_args, **_kwargs: observed)

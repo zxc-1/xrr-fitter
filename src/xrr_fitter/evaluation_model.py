@@ -70,9 +70,11 @@ from xrr_fitter.evaluation_geometry import (
 from xrr_fitter.evaluation_geometry import (
     _zero_roughness_values as _zero_roughness_values,
 )
-from xrr_fitter.evaluation_objective import log_residuals, robust_log_cost, scale_prior_penalty
+from xrr_fitter.evaluation_objective import scale_prior_penalty
 from xrr_fitter.evaluation_parameters import EvaluationConstraintError, values_and_jacobians, values_by_name
-from xrr_fitter.model.fitting import FitEvaluationContext, ModelEvaluation
+from xrr_fitter.evaluation_statistics import data_objective, data_residuals
+from xrr_fitter.model.evaluation import ModelEvaluation
+from xrr_fitter.model.fitting import FitEvaluationContext
 from xrr_fitter.model.instrument import PhysicsDiagnostic, resolution_to_sigma_q
 from xrr_fitter.model.parameters import (
     ParameterDefinition,
@@ -469,17 +471,9 @@ def _model_evaluation(
     fit_mask = problem.data.fit_mask
     # Residuals remain unweighted; weights participate only in search objective
     # and in the separately published weighted residual vector.
-    residual = log_residuals(
-        model[fit_mask],
-        problem.data.intensity_normalized[fit_mask],
-        problem.data.r_floor,
-    )
+    residual = data_residuals(problem, model[fit_mask])
     weighted = problem.weights[fit_mask] * residual
-    objective = robust_log_cost(
-        residual,
-        problem.weights[fit_mask] * np.sqrt(problem.sampling_multipliers[fit_mask]),
-        problem.config.c_decades,
-    ) * (np.count_nonzero(fit_mask) / problem.objective_point_count) + scale_prior_penalty(
+    objective = data_objective(problem, residual) + scale_prior_penalty(
         values["instrument.scale"],
         problem.scale_prior_center,
         problem.scale_prior_tau_decades,
@@ -496,11 +490,12 @@ def _model_evaluation(
         parameters=parameters,
         qz_a_inv=qz,
         model_normalized=model,
-        fit_log_residuals_decades=residual,
+        fit_residuals=residual,
         fit_weighted_residuals=weighted,
         objective=objective,
         expanded_stack=primary_stack,
         diagnostics=tuple(diagnostics),
+        noise_model=problem.config.noise_model,
     )
 
 

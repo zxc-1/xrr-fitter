@@ -56,7 +56,7 @@ def _numpy_scalar_fit_config() -> FitConfig:
     )
     config = FitConfig(
         master_seed=1201,
-        objective_name="robust_log_soft_l1",
+        objective_name="xrr_noise_model",
         objective_version="2",
         c_decades=np.float32(0.125),
         final_seed_count=4,

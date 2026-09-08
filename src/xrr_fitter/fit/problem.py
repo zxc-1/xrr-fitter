@@ -7,7 +7,7 @@ from math import isfinite
 
 import numpy as np
 
-from xrr_fitter.evaluation import assign_fit_regions, region_weights
+from xrr_fitter.evaluation import assign_fit_regions, region_weights, validate_noise_data
 from xrr_fitter.fit.drift import DRIFT_DATASET, drift_constraint_rules, rebind_drift_rules
 from xrr_fitter.fit.gradient_bounds import validate_gradient_modes
 from xrr_fitter.fit.parameters import (
@@ -53,7 +53,7 @@ def _valid_scale_prior(config: FitConfig) -> bool:
 
 
 def _validate_config(config: FitConfig) -> None:
-    if (config.objective_name, config.objective_version) != ("robust_log_soft_l1", "2"):
+    if (config.objective_name, config.objective_version) != ("xrr_noise_model", "2"):
         raise ValueError("unsupported objective configuration")
     if config.final_seed_count != 4 or not isfinite(config.c_decades) or config.c_decades <= 0.0:
         raise ValueError("invalid standard fit configuration: c_decades")
@@ -299,6 +299,7 @@ def compile_fit_problem(
 ) -> FitEvaluationContext:
     _validate_config(config)
     _validate_data_mode(data, instrument)
+    validate_noise_data(data, config.noise_model)
     _require_explicit_expert_density(structure, tuple(parameter_settings))
     rules = _compiled_constraint_rules(structure, tuple(constraint_rules))
     namespace = _validate_local_constraints(rules)
@@ -313,6 +314,8 @@ def compile_fit_problem(
     validate_transition_modes(definitions, structure)
     validate_gradient_modes(definitions, structure)
     labels, weights = _region_layout(data)
+    if config.noise_model != "robust_log":
+        weights = _readonly(data.fit_mask.astype(float))
     center, reason = _scale_prior_state(data, instrument, config)
     problem = FitEvaluationContext(
         data=data,

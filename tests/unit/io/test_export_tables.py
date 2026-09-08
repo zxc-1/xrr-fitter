@@ -73,6 +73,7 @@ def _context(dataset_id: str = "curve") -> DatasetExportData:
         qz_a_inv=data.qz_a_inv,
         model_normalized=model,
         log_residuals_decades=residual,
+        residuals=residual,
         weighted_residuals=residual / 0.05,
         sld_depth_a=np.array([0.0, 20.0, 40.0]),
         sld_profile_a2=np.array([0.0, 2.0e-5, 1.0e-5], dtype=complex),
@@ -308,6 +309,7 @@ def _context_from_prepared_data(data: PreparedData) -> DatasetExportData:
         qz_a_inv=data.qz_a_inv,
         model_normalized=np.maximum(data.intensity_normalized, data.r_floor),
         log_residuals_decades=np.zeros(data.qz_a_inv.size),
+        residuals=np.zeros(data.qz_a_inv.size),
         weighted_residuals=np.zeros(data.qz_a_inv.size),
     )
     result = replace(original.result, candidates=(selected,))

@@ -56,7 +56,7 @@ from math import isfinite
 
 import numpy as np
 
-from xrr_fitter.model.data import PreparedData
+from xrr_fitter.model.data import PreparedData, ResidualMetadata, validate_noise_model
 from xrr_fitter.model.instrument import InstrumentSpec, PhysicsDiagnostic
 from xrr_fitter.model.parameters import (
     ConstraintRule,
@@ -206,8 +206,10 @@ class FitConfig:
     budget_reclaim_threshold_version: str = "stage-b-reclaim-v1"
     downsample_rule_version: str = "feature-grid-v1"
     jacobian_version: str = "analytic-v1"
+    noise_model: str = "robust_log"
 
     def __post_init__(self) -> None:
+        validate_noise_model(self.noise_model)
         _positive_integer(self.master_seed, "master_seed", allow_zero=True)
         _positive_integer(self.final_seed_count, "final_seed_count")
         _positive_integer(self.local_workers, "local_workers")
@@ -235,7 +237,7 @@ class FitConfig:
     def standard(cls, master_seed: int) -> FitConfig:
         return cls(
             master_seed=master_seed,
-            objective_name="robust_log_soft_l1",
+            objective_name="xrr_noise_model",
             objective_version="2",
             c_decades=0.05,
             final_seed_count=4,
@@ -246,7 +248,7 @@ class FitConfig:
     def fast(cls, master_seed: int) -> FitConfig:
         return cls(
             master_seed=master_seed,
-            objective_name="robust_log_soft_l1",
+            objective_name="xrr_noise_model",
             objective_version="2",
             c_decades=0.05,
             final_seed_count=4,
@@ -450,7 +452,7 @@ class FitEvaluationContext:
 
 
 @dataclass(frozen=True, slots=True)
-class FitCandidate:
+class FitCandidate(ResidualMetadata):
     """Published candidate with physical values and owned reporting arrays."""
 
     candidate_id: str
@@ -464,14 +466,17 @@ class FitCandidate:
     qz_a_inv: np.ndarray
     model_normalized: np.ndarray
     log_residuals_decades: np.ndarray
+    residuals: np.ndarray
     weighted_residuals: np.ndarray
     expanded_stack: SlabStack | None
     sld_depth_a: np.ndarray
     sld_profile_a2: np.ndarray
     diagnostics: tuple[PhysicsDiagnostic, ...]
     ranking_objective: float | None = None
+    noise_model: str = "robust_log"
 
     def __post_init__(self) -> None:
+        validate_noise_model(self.noise_model)
         _nonempty(self.candidate_id, "candidate_id")
         _archived_seed(self.seed_index)
         _positive_integer(self.nfev, "nfev", allow_zero=True)
@@ -495,66 +500,18 @@ class FitCandidate:
                 "log_residuals_decades",
             ),
             "weighted_residuals": _readonly(self.weighted_residuals, float, "weighted_residuals"),
+            "residuals": _readonly(self.residuals, float, "residuals"),
             "sld_depth_a": _readonly(self.sld_depth_a, float, "sld_depth_a"),
             "sld_profile_a2": _readonly(self.sld_profile_a2, complex, "sld_profile_a2"),
         }
         q_size = arrays["qz_a_inv"].size
-        q_fields = ("model_normalized", "log_residuals_decades", "weighted_residuals")
+        q_fields = ("model_normalized", "log_residuals_decades", "residuals", "weighted_residuals")
         if any(arrays[field].size != q_size for field in q_fields):
             raise ValueError("candidate q-grid arrays must have equal length")
         if arrays["sld_depth_a"].shape != arrays["sld_profile_a2"].shape:
             raise ValueError("candidate SLD arrays must have equal length")
         for field, value in arrays.items():
             object.__setattr__(self, field, value)
-
-    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
-        return type(self), _pickle_values(self)
-
-
-@dataclass(frozen=True, slots=True)
-class ModelEvaluation:
-    """Internal model evaluation before candidate identity is assigned."""
-
-    valid: bool
-    reason: str
-    parameters: tuple[ParameterValue, ...]
-    qz_a_inv: np.ndarray
-    model_normalized: np.ndarray
-    fit_log_residuals_decades: np.ndarray
-    fit_weighted_residuals: np.ndarray
-    objective: float
-    expanded_stack: SlabStack | None
-    diagnostics: tuple[PhysicsDiagnostic, ...]
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.valid, bool):
-            raise TypeError("valid must be bool")
-        _nonempty(self.reason, "reason")
-        if self.valid and not isfinite(self.objective):
-            raise ValueError("valid evaluation objective must be finite")
-        parameters = tuple(self.parameters)
-        diagnostics = tuple(self.diagnostics)
-        if any(not isinstance(value, ParameterValue) for value in parameters):
-            raise TypeError("evaluation parameters must be ParameterValue values")
-        if any(not isinstance(value, PhysicsDiagnostic) for value in diagnostics):
-            raise TypeError("evaluation diagnostics must be PhysicsDiagnostic values")
-        arrays = self._freeze_arrays()
-        if arrays[0].shape != arrays[1].shape or arrays[2].shape != arrays[3].shape:
-            raise ValueError("evaluation array axes are inconsistent")
-        object.__setattr__(self, "parameters", parameters)
-        object.__setattr__(self, "diagnostics", diagnostics)
-
-    def _freeze_arrays(self) -> tuple[np.ndarray, ...]:
-        fields = (
-            ("qz_a_inv", self.qz_a_inv),
-            ("model_normalized", self.model_normalized),
-            ("fit_log_residuals_decades", self.fit_log_residuals_decades),
-            ("fit_weighted_residuals", self.fit_weighted_residuals),
-        )
-        arrays = tuple(_readonly(value, float, name) for name, value in fields)
-        for (name, _value), array in zip(fields, arrays, strict=True):
-            object.__setattr__(self, name, array)
-        return arrays
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)

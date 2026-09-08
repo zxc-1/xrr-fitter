@@ -70,8 +70,8 @@ from xrr_fitter.evaluation_geometry import (
     _zero_roughness_values as _zero_roughness_values,
 )
 from xrr_fitter.evaluation_model import _masked_optional, _point_resolution_for_wavelength, _primary_wavelength
-from xrr_fitter.evaluation_objective import log_residuals
 from xrr_fitter.evaluation_parameters import EvaluationConstraintError, values_and_jacobians
+from xrr_fitter.evaluation_statistics import data_residual_model_derivative, data_residuals
 from xrr_fitter.model.fitting import FitEvaluationContext
 from xrr_fitter.model.parameters import (
     PhysicalValueError,
@@ -783,17 +783,10 @@ def _model_residual_jacobian(
     )
     full_jacobian[model_mask] = model_jacobian
     fit_model = full_model[problem.data.fit_mask]
-    residual = log_residuals(
-        fit_model,
-        problem.data.intensity_normalized[problem.data.fit_mask],
-        problem.data.r_floor,
-    )
-    # d(log10(model + floor)) = d(model) / ((model + floor) * ln(10)).
-    # Observations are constant, so they contribute no residual tangent.
+    residual = data_residuals(problem, fit_model)
     with np.errstate(divide="ignore", invalid="ignore"):
-        residual_jacobian = full_jacobian[problem.data.fit_mask] / (
-            (fit_model + problem.data.r_floor)[:, None] * np.log(10.0)
-        )
+        derivative = data_residual_model_derivative(problem, fit_model, residual)
+        residual_jacobian = full_jacobian[problem.data.fit_mask] * derivative[:, None]
     finite_values = np.concatenate(
         (
             model.ravel(),
@@ -816,7 +809,7 @@ def evaluate_model_jacobian(
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
 ) -> np.ndarray:
-    """Return the analytic Jacobian of unweighted fitted log residuals."""
+    """Return the analytic Jacobian of unweighted fitted mode residuals."""
     _residual, jacobian, _scale = _model_residual_jacobian(problem, unit_vector)
     # Defensive copying prevents solver or analysis code from mutating a
     # derivative snapshot that may be shared with candidate publication.

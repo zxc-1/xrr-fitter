@@ -73,7 +73,7 @@ def test_compiled_and_evaluated_arrays_are_read_only() -> None:
         unit,
         evaluation.qz_a_inv,
         evaluation.model_normalized,
-        evaluation.fit_log_residuals_decades,
+        evaluation.fit_residuals,
         evaluation.fit_weighted_residuals,
     )
     assert all(not array.flags.writeable for array in arrays)

@@ -74,9 +74,10 @@ from xrr_fitter.evaluation_geometry import (
 )
 from xrr_fitter.evaluation_instrument_jacobian import _model_residual_jacobian, evaluate_model_jacobian
 from xrr_fitter.evaluation_model import evaluate_model
-from xrr_fitter.evaluation_objective import robust_loss_rho
 from xrr_fitter.evaluation_parameters import EvaluationConstraintError, _validated_unit, values_and_jacobians
-from xrr_fitter.model.fitting import FitEvaluationContext, ModelEvaluation
+from xrr_fitter.evaluation_statistics import data_loss_rho
+from xrr_fitter.model.evaluation import ModelEvaluation
+from xrr_fitter.model.fitting import FitEvaluationContext
 from xrr_fitter.model.parameters import (
     _log10_ratio,
 )
@@ -140,7 +141,7 @@ def _least_squares_residual_parts(
             None,
             False,
         )
-    residual = np.array(observed.fit_log_residuals_decades, dtype=float, copy=True)
+    residual = np.array(observed.fit_residuals, dtype=float, copy=True)
     return residual, _scale_prior_residual(problem, observed), True
 
 
@@ -391,13 +392,11 @@ def least_squares_residual_jacobian(
 def least_squares_loss(problem: FitEvaluationContext) -> Callable[[np.ndarray], np.ndarray]:
     """Return rho with half-sum Q; prior mass is independent of data sampling."""
     mask = problem.data.fit_mask
-    weights = problem.weights[mask] * np.sqrt(problem.sampling_multipliers[mask])
-    count = weights.size
-    c = problem.config.c_decades
+    count = np.count_nonzero(mask)
 
     def loss(squared: np.ndarray) -> np.ndarray:
         values = np.asarray(squared, dtype=float)
-        data = robust_loss_rho(values[:count], weights, c)
+        data = data_loss_rho(problem, values[:count])
         prior = values[count:]
         return np.hstack((data, np.vstack((2 * prior, np.full(prior.size, 2.0), np.zeros(prior.size)))))
 

@@ -132,6 +132,7 @@ def _orso_context(
         qz_a_inv=data.qz_a_inv,
         model_normalized=model,
         log_residuals_decades=residual,
+        residuals=residual,
         weighted_residuals=residual / 0.05,
     )
     uncertainty = UncertaintyReport(

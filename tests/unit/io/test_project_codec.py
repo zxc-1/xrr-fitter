@@ -115,6 +115,7 @@ def _manual_result_graph() -> tuple[FitResult, FitCheckpoint]:
         qz_a_inv=np.array([0.01, 0.02, 0.03]),
         model_normalized=np.array([1.0, 0.5, 0.25]),
         log_residuals_decades=np.array([0.0, 0.01, -0.02]),
+        residuals=np.array([0.0, 0.01, -0.02]),
         weighted_residuals=np.array([0.0, 0.5, -1.0]),
         expanded_stack=stack,
         sld_depth_a=np.array([0.0, 5.0, 10.0]),

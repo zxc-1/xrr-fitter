@@ -7,9 +7,9 @@ import numpy as np
 from xrr_fitter.evaluation import (
     _scale_prior_jacobian,
     _scale_prior_residual,
+    data_score_information,
     evaluate_model,
     evaluate_model_jacobian,
-    robust_score_information,
     values_by_name,
 )
 from xrr_fitter.model.fitting import FitEvaluationContext
@@ -23,17 +23,16 @@ def _derivative_inputs(problem: FitEvaluationContext, unit_vector: np.ndarray):
     if not evaluation.valid or not np.isfinite(evaluation.objective):
         raise ValueError("cannot differentiate an invalid objective evaluation")
     jacobian = np.asarray(evaluate_model_jacobian(problem, unit), dtype=float)
-    residual = np.asarray(evaluation.fit_log_residuals_decades, dtype=float)
+    residual = np.asarray(evaluation.fit_residuals, dtype=float)
     if jacobian.shape != (residual.size, unit.size):
         raise ValueError("objective residual Jacobian has the wrong shape")
-    weights = problem.weights[problem.data.fit_mask] * np.sqrt(problem.sampling_multipliers[problem.data.fit_mask])
-    return evaluation, residual, jacobian, weights
+    return evaluation, residual, jacobian
 
 
 def objective_gradient(problem: FitEvaluationContext, unit_vector: np.ndarray) -> np.ndarray:
     """Differentiate displayed J=Q/N through the complete physical graph."""
-    evaluation, residual, jacobian, weights = _derivative_inputs(problem, unit_vector)
-    score, _information = robust_score_information(residual, weights, problem.config.c_decades)
+    evaluation, residual, jacobian = _derivative_inputs(problem, unit_vector)
+    score, _information = data_score_information(problem, residual)
     with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
         gradient = jacobian.T @ score / problem.objective_point_count
     prior = _scale_prior_residual(problem, evaluation)
@@ -48,8 +47,8 @@ def objective_gradient(problem: FitEvaluationContext, unit_vector: np.ndarray) -
 
 def objective_information(problem: FitEvaluationContext, unit_vector: np.ndarray) -> np.ndarray:
     """Return total Q/2 Gauss-Newton curvature, not covariance or mean curvature."""
-    _evaluation, residual, jacobian, weights = _derivative_inputs(problem, unit_vector)
-    _score, curvature = robust_score_information(residual, weights, problem.config.c_decades)
+    _evaluation, residual, jacobian = _derivative_inputs(problem, unit_vector)
+    _score, curvature = data_score_information(problem, residual)
     with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
         information = jacobian.T @ (curvature[:, None] * jacobian)
     if problem.scale_prior_center is not None:

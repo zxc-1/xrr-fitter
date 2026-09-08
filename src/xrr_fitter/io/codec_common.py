@@ -61,6 +61,7 @@ NULLABLE_ARRAY_FIELDS = frozenset(
         "imaginary",
         "log_probability",
         "log_residuals_decades",
+        "residuals",
         "model_normalized",
         "objectives",
         "parameter_sigma",

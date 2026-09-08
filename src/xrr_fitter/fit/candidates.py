@@ -33,7 +33,8 @@ import numpy as np
 from xrr_fitter.fit.global_search import bounded_index_product, geometry_variants
 from xrr_fitter.fit.initialization import estimate_initial_candidates
 from xrr_fitter.model.data import PreparedData
-from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext, ModelEvaluation
+from xrr_fitter.model.evaluation import ModelEvaluation
+from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
@@ -700,6 +701,21 @@ def select_full_search_candidates(
     return (baseline, *remaining[: limit - 1])
 
 
+def _published_residual_arrays(problem: FitEvaluationContext, evaluation: ModelEvaluation):
+    from xrr_fitter.evaluation import log_residuals
+
+    full_log, residuals, weighted = (np.full(problem.data.qz_a_inv.shape, np.nan, dtype=float) for _ in range(3))
+    mask = problem.data.fit_mask
+    residuals[mask] = evaluation.fit_residuals
+    weighted[mask] = evaluation.fit_weighted_residuals
+    positive = mask & (evaluation.model_normalized > 0.0) & (problem.data.intensity_normalized > 0.0)
+    if evaluation.valid and np.any(positive):
+        full_log[positive] = log_residuals(
+            evaluation.model_normalized[positive], problem.data.intensity_normalized[positive], problem.data.r_floor
+        )
+    return full_log, residuals, weighted
+
+
 def candidate_from_evaluation(
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
@@ -709,10 +725,7 @@ def candidate_from_evaluation(
     stop_reason: str,
     nfev: int,
 ) -> FitCandidate:
-    full_log = np.full(problem.data.qz_a_inv.shape, np.nan, dtype=float)
-    full_weighted = np.full(problem.data.qz_a_inv.shape, np.nan, dtype=float)
-    full_log[problem.data.fit_mask] = evaluation.fit_log_residuals_decades
-    full_weighted[problem.data.fit_mask] = evaluation.fit_weighted_residuals
+    full_log, full_residual, full_weighted = _published_residual_arrays(problem, evaluation)
     if evaluation.expanded_stack is None:
         depth = np.empty(0, dtype=float)
         profile = np.empty(0, dtype=np.complex128)
@@ -734,11 +747,13 @@ def candidate_from_evaluation(
         qz_a_inv=evaluation.qz_a_inv,
         model_normalized=evaluation.model_normalized,
         log_residuals_decades=_readonly(full_log, float),
+        residuals=_readonly(full_residual, float),
         weighted_residuals=_readonly(full_weighted, float),
         expanded_stack=evaluation.expanded_stack,
         sld_depth_a=_readonly(depth, float),
         sld_profile_a2=_readonly(profile, complex),
         diagnostics=evaluation.diagnostics,
+        noise_model=evaluation.noise_model,
     )
 
 

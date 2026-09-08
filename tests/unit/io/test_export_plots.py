@@ -56,6 +56,7 @@ def _context(
         qz_a_inv=data.qz_a_inv,
         model_normalized=model,
         log_residuals_decades=residual,
+        residuals=residual,
         weighted_residuals=residual / 0.05,
         sld_depth_a=np.array([0.0, 20.0, 40.0]),
         sld_profile_a2=np.array([0.0, 2.0e-5 + 1.0e-7j, 1.0e-5], dtype=complex),

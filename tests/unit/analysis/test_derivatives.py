@@ -260,14 +260,14 @@ def test_objective_derivatives_reject_unrepresentable_matrix_products(
         sampling_multipliers=np.ones(1),
         objective_point_count=1,
         data=SimpleNamespace(fit_mask=np.array([True])),
-        config=SimpleNamespace(c_decades=1.0),
+        config=SimpleNamespace(c_decades=1.0, noise_model="robust_log"),
         scale_prior_center=None,
         parameter_definitions=(SimpleNamespace(),),
     )
     observed = SimpleNamespace(
         valid=True,
         objective=1.0,
-        fit_log_residuals_decades=np.ones(1),
+        fit_residuals=np.ones(1),
         parameters=(),
     )
     monkeypatch.setattr(module, "evaluate_model", lambda *_args: observed)

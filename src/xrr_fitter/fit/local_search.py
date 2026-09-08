@@ -17,7 +17,7 @@ from xrr_fitter.evaluation import (
     least_squares_system,
 )
 from xrr_fitter.fit.objective import evaluate_jacobian, evaluate_vector
-from xrr_fitter.model.fitting import ModelEvaluation
+from xrr_fitter.model.evaluation import ModelEvaluation
 
 
 class SearchCancelled(RuntimeError):

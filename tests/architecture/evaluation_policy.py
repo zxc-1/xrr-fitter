@@ -9,6 +9,7 @@ EVALUATION_IMPLEMENTATION_MODULES = {
     "evaluation_parameters",
     "evaluation_priors",
     "evaluation_solver",
+    "evaluation_statistics",
 }
 EVALUATION_BOUNDARY_MODULES = EVALUATION_IMPLEMENTATION_MODULES | {EVALUATION_FACADE_MODULE}
 

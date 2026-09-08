@@ -88,7 +88,7 @@ def _richardson(problem, unit: np.ndarray) -> np.ndarray:
     def residual(value: np.ndarray) -> np.ndarray:
         result = evaluate_vector(problem, value)
         assert result.valid
-        return result.fit_log_residuals_decades
+        return result.fit_residuals
 
     output = np.empty((np.count_nonzero(problem.data.fit_mask), unit.size))
     step = 5e-5

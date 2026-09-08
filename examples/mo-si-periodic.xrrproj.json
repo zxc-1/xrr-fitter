@@ -1935,7 +1935,8 @@
     "jacobian_version": "analytic-v1",
     "local_workers": 4,
     "master_seed": 2301,
-    "objective_name": "robust_log_soft_l1",
+    "noise_model": "robust_log",
+    "objective_name": "xrr_noise_model",
     "objective_version": "2",
     "scale_prior_enabled": true,
     "scale_prior_tau_decades": 0.1

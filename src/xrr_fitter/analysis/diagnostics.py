@@ -23,7 +23,7 @@ class _OrderedResiduals:
 def _ordered_data(problem: object, candidate: object) -> _OrderedResiduals:
     qz = np.asarray(problem.data.qz_a_inv, dtype=float)
     fit_mask = np.asarray(problem.data.fit_mask, dtype=bool)
-    residual = np.asarray(candidate.log_residuals_decades, dtype=float)
+    residual = np.asarray(candidate.residuals, dtype=float)
     two_theta_value = getattr(problem.data, "two_theta_deg", None)
     two_theta = qz if two_theta_value is None else np.asarray(two_theta_value, dtype=float)
     if not (qz.shape == two_theta.shape == fit_mask.shape == residual.shape and qz.ndim == 1):

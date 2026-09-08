@@ -93,6 +93,7 @@ def _candidate_metadata(candidate: FitCandidate) -> tuple[object, ...]:
         candidate.objective,
         candidate.valid,
         candidate.stop_reason,
+        candidate.noise_model,
     )
 
 
@@ -101,6 +102,7 @@ def _candidate_arrays(candidate: FitCandidate) -> tuple[np.ndarray, ...]:
         candidate.qz_a_inv,
         candidate.model_normalized,
         candidate.log_residuals_decades,
+        candidate.residuals,
         candidate.weighted_residuals,
         candidate.sld_depth_a,
         candidate.sld_profile_a2,

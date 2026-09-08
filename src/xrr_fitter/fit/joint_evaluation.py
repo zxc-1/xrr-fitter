@@ -8,7 +8,7 @@ from math import isfinite
 
 import numpy as np
 
-from xrr_fitter.evaluation import EvaluationConstraintError, robust_loss_rho
+from xrr_fitter.evaluation import EvaluationConstraintError, data_loss_rho
 from xrr_fitter.fit.joint_roughness import SHARED_ROUGHNESS_TRANSFORM
 from xrr_fitter.fit.joint_scatter_jacobian import (
     joint_scatter_jacobians as _joint_scatter_jacobians,
@@ -16,7 +16,7 @@ from xrr_fitter.fit.joint_scatter_jacobian import (
 from xrr_fitter.fit.joint_sharing import _raw_scatter, scatter_joint_vector
 from xrr_fitter.fit.local_search import local_jacobian
 from xrr_fitter.fit.objective import _invalid_evaluation, evaluate_vector
-from xrr_fitter.model.fitting import ModelEvaluation
+from xrr_fitter.model.evaluation import ModelEvaluation
 from xrr_fitter.model.parameters import _log10_ratio
 
 
@@ -111,20 +111,33 @@ def _prior_residual(problem: object, evaluation: ModelEvaluation) -> float | Non
 
 
 def _evaluation_residual(problem: object, evaluation: ModelEvaluation) -> np.ndarray:
-    values = np.asarray(evaluation.fit_log_residuals_decades, dtype=float)
+    values = np.asarray(evaluation.fit_residuals, dtype=float)
     prior = _prior_residual(problem, evaluation)
     return values if prior is None else np.concatenate((values, np.asarray([prior])))
 
 
 def _joint_objective(problem: object, evaluations: tuple[ModelEvaluation, ...]) -> float:
-    """Balance dataset data terms while giving each prior one total-Q row."""
-    objective = _finite_objective_mean(tuple(value.objective for value in evaluations))
+    """Add likelihood information; only robust data terms receive dataset balancing."""
     total_points = sum(member.objective_point_count for member in problem.problems)
+    if all(member.config.noise_model == "robust_log" for member in problem.problems):
+        objective = _finite_objective_mean(tuple(value.objective for value in evaluations))
+    else:
+        objective = sum(
+            evaluation.objective * (member.objective_point_count / total_points) * _data_multiplier(problem, member)
+            for member, evaluation in zip(problem.problems, evaluations, strict=True)
+        )
     for member, evaluation in zip(problem.problems, evaluations, strict=True):
         prior = _prior_residual(member, evaluation)
-        if prior is not None:
+        if prior is not None and member.config.noise_model == "robust_log":
             objective += prior**2 * (1.0 / total_points - 1.0 / (len(evaluations) * member.objective_point_count))
     return objective
+
+
+def _data_multiplier(problem: object, member: object) -> float:
+    if member.config.noise_model != "robust_log":
+        return 1.0
+    total_points = sum(value.objective_point_count for value in problem.problems)
+    return total_points / (len(problem.problems) * member.objective_point_count)
 
 
 def evaluate_joint_vector(problem: object, global_unit: np.ndarray) -> JointEvaluation:
@@ -170,10 +183,6 @@ def evaluate_joint_vector(problem: object, global_unit: np.ndarray) -> JointEval
     return JointEvaluation(valid, objective, local_units, evaluations, residuals)
 
 
-def _loss_block(squared: np.ndarray, weights: np.ndarray, c_decades: float, alpha: float) -> np.ndarray:
-    return alpha * robust_loss_rho(squared, weights, c_decades)
-
-
 def _loss_layout(local_problem: object) -> tuple[int, np.ndarray, float, bool]:
     fit_mask = np.asarray(local_problem.data.fit_mask)
     weights = np.asarray(local_problem.weights, dtype=float)
@@ -206,19 +215,16 @@ def joint_least_squares_loss(problem: object) -> Callable[[np.ndarray], np.ndarr
     if not problems:
         raise ValueError("joint loss requires a nonempty dataset layout")
     frozen_layouts = tuple(_loss_layout(local_problem) for local_problem in problems)
-    sizes = tuple(layout[0] for layout in frozen_layouts)
-    full_sizes = tuple(member.objective_point_count for member in problems)
-    total_data = sum(full_sizes)
     row_count = sum(size + int(has_prior) for size, _weights, _c_decades, has_prior in frozen_layouts)
 
     def loss(squared: np.ndarray) -> np.ndarray:
         values = _validated_squared_residuals(squared, row_count)
         blocks: list[np.ndarray] = []
         offset = 0
-        for (size, weights, c_decades, has_prior), full_size in zip(frozen_layouts, full_sizes, strict=True):
-            alpha = total_data / (len(sizes) * full_size)
+        for (size, _weights, _c_decades, has_prior), member in zip(frozen_layouts, problems, strict=True):
+            alpha = _data_multiplier(problem, member)
             data = values[offset : offset + size]
-            blocks.append(_loss_block(data, weights, c_decades, alpha))
+            blocks.append(alpha * data_loss_rho(member, data))
             offset += size
             if has_prior:
                 prior = values[offset]

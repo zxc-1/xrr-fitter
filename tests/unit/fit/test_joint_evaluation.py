@@ -50,8 +50,7 @@ def test_joint_candidate_alignment_accepts_a_finite_rank_with_overflowing_local_
     ranking = objectives[0] / len(objectives) + objectives[1] / len(objectives)
     candidates = tuple((SimpleNamespace(objective=objective, ranking_objective=ranking),) for objective in objectives)
 
-    # The validator only consumes the aligned objective/ranking fields.
-    candidates_api._validate_candidate_rankings(candidates, ("shared",))
+    candidates_api._validate_candidate_rankings(_joint(), candidates, ("shared",))
 
 
 def test_joint_residual_gives_each_dataset_equal_mass(
@@ -66,7 +65,7 @@ def test_joint_residual_gives_each_dataset_equal_mass(
 
     result = api.evaluate_joint_vector(joint, np.asarray([0.5]))
 
-    first_size = len(by_identity[id(joint.problems[0])].fit_log_residuals_decades)
+    first_size = len(by_identity[id(joint.problems[0])].fit_residuals)
     first = result.residuals[:first_size]
     second = result.residuals[first_size:]
     np.testing.assert_array_equal(first, np.ones(first.size))

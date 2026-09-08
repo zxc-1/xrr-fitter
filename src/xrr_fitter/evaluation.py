@@ -265,6 +265,18 @@ from xrr_fitter.evaluation_solver import (
 from xrr_fitter.evaluation_solver import (
     cached_least_squares_callbacks as cached_least_squares_callbacks,
 )
+from xrr_fitter.evaluation_statistics import (
+    data_loss_rho as data_loss_rho,
+)
+from xrr_fitter.evaluation_statistics import (
+    data_score_information as data_score_information,
+)
+from xrr_fitter.evaluation_statistics import (
+    poisson_deviance as poisson_deviance,
+)
+from xrr_fitter.evaluation_statistics import (
+    validate_noise_data as validate_noise_data,
+)
 from xrr_fitter.model.parameters import PhysicalValueError as PhysicalValueError
 from xrr_fitter.model.parameters import physical_to_unit as physical_to_unit
 from xrr_fitter.model.parameters import unit_to_physical as unit_to_physical

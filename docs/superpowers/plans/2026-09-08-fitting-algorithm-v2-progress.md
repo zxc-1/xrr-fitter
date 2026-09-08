@@ -29,8 +29,6 @@
   不再产生粗网格关闭先验的错误警告；冻结候选参数、顺序和 nfev 未改变。
 - 未改物理参照、未放宽物理容差、未新增生产依赖或 CI mode。
 
-### 后续
-
 ### Task 1 官方门禁及补充修复
 
 - `0ce68cb` 普通 clone：unit **1703 passed**，quality **188 passed**，
@@ -45,9 +43,45 @@
   余下 2 项为预期配置指纹变化，已更新。候选物理参数及精度容差未动。
 - 官方原始日志：`/tmp/xrr-v2-0ce68cb-v8tisd7z/`；普通 clone 已自动清理。
   原因复现：`/tmp/xrr-v2-task1-followup/probe.log`；合成源文件自动清理。
-  补充提交的官方验证待执行。
+  补充提交 `08aab7f` 官方普通 clone：unit **1704 passed**、quality **188 passed**、
+  integration **14 passed**、regression **50 passed**，全部通过。
+  报告 `/tmp/xrr-v2-08aab7f-ot6gn8er/`，临时 clone 已清理。
 
-Task 2–8 尚未实施完成。当前注册表没有 `r22-reference` mode；物理参照按现有
+## Task 2：显式噪声模式与共享统计边界
+
+已实现 `FitConfig.noise_model` 三种模式，目标身份为 `xrr_noise_model` / `2`。
+模式及数据语义无自动探测或兼容回退。Gaussian/Poisson 不施加经验区域权重或成员等权。
+
+### RED → GREEN
+
+- 新增 26 项初始 RED：缺少模式、Gaussian 仍调用 log、缺失 sigma/非法 counts 未拒绝、
+  Poisson 零计数及稳定 deviance 未实现、联合成本仍按成员等权。
+- 追加 RED：候选缺少真实模式残差；真实 API 导入排除负观测；联合恢复校验使用旧成员均值；
+  Gaussian 诊断丢掉 16 个不可取 log 的点；导入单行 counts 被加权运算舍入成非整数。
+- 修复后单元/回归/漂移验收组合 **2240 passed**（含严格 outcome 插件，111.08 s）。
+  本轮新增的粗网格与边界 4 项、单/联合真实搜索与恢复 4 项均通过。
+- 全仓库 Ruff 与 `tools/check_radon.py` 通过，Radon 报告 `/tmp/xrr-v2-task2-radon.json`。
+- 本批官方普通 clone 门禁和独立审查待提交后执行。Task 3–8 未完成，不能把当前
+  Gaussian/Poisson 数值目标当作全部不确定度与导出语义已经完成。
+
+### 最终接口
+
+- `model/evaluation.py:ModelEvaluation`：`fit_residuals`、`fit_weighted_residuals`、`noise_model`，
+  `residual_name` / `residual_unit` 从模式派生；删除旧 `fit_log_residuals_decades` 字段。
+- `model/fitting.py:FitCandidate`：新增全轴 `residuals` 与 `noise_model`，完整 codec/pickle；
+  `log_residuals_decades` 只保存正观测与正预测的 log 绘图残差，其他点 NaN。
+- `evaluation_statistics.py`：模式预检、残差及模型导数、总 Q 的 rho、score/曲率。
+  当前曲率是 Q/2 Gauss-Newton，不冒充 Task 3 的统计协方差。
+- `evaluation` 暴露 `validate_noise_data`、`poisson_deviance`、`data_loss_rho`、
+  `data_score_information`。新增模块已登记精确 evaluation boundary。
+- `read_xy` / `read_xy_bytes` / `api.import_data` 消费显式 `noise_model`；项目导入、
+  重载和源更新传播项目配置。编译时保留 fit_mask，不重新启用排除点。
+- 联合恢复使用实际联合目标复核排名，沿用 Task 1 的先验独立计数。
+- 两个示例仅改目标名和噪声字段；原始数据、物理容差、输出图像基准不变。
+
+### 后续
+
+Task 3–8 尚未实施完成。当前注册表没有 `r22-reference` mode；物理参照按现有
 `regression` 中的数值/ORSO 测试执行，不另建 CI mode。
 子代理服务重复返回 HTTP 429，本轮改由主代理继续实施和审查，未取得独立子代理审查结论。
 

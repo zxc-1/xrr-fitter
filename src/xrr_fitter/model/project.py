@@ -506,7 +506,7 @@ def _validate_project_header(project: XrrProject) -> None:
         raise ValueError("unsupported batch_mode")
     if not isinstance(project.fit_config, FitConfig):
         raise TypeError("fit_config must be FitConfig")
-    if (project.fit_config.objective_name, project.fit_config.objective_version) != ("robust_log_soft_l1", "2"):
+    if (project.fit_config.objective_name, project.fit_config.objective_version) != ("xrr_noise_model", "2"):
         raise ValueError("unsupported objective configuration")
     if not isinstance(project.ui_state, ProjectUiState):
         raise TypeError("ui_state must be ProjectUiState")

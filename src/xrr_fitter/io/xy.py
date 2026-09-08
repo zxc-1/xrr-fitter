@@ -20,6 +20,7 @@ from xrr_fitter.model.data import (
     fit_ready,
     log_domain_mask,
     qz_from_two_theta,
+    validate_noise_model,
 )
 from xrr_fitter.model.instrument import resolution_to_sigma_q
 
@@ -248,6 +249,8 @@ def _merged_intensity(
     group: list[DataRecord],
     has_sigma: bool,
 ) -> tuple[float, float]:
+    if len(group) == 1:
+        return float(group[0][1]), float(group[0][2])
     intensities = np.asarray([item[1] for item in group])
     sigmas = np.asarray([item[2] for item in group])
     if has_sigma and np.all(np.isfinite(sigmas) & (sigmas > 0.0)):
@@ -343,6 +346,7 @@ def _derived_state(
     wavelength_a: float,
     angle_offset_deg: float,
     statuses: tuple[str, ...],
+    noise_model: str,
 ) -> tuple[np.ndarray, np.ndarray, float, float, np.ndarray, bool, list[str]]:
     qz, theta_positive = qz_from_two_theta(
         merged.two_theta,
@@ -360,11 +364,10 @@ def _derived_state(
     with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
         normalized = merged.intensity / normalization
     validation = (
-        np.isfinite(merged.two_theta)
-        & np.isfinite(merged.intensity)
-        & theta_positive
-        & log_domain_mask(normalized, r_floor)
+        np.isfinite(merged.two_theta) & np.isfinite(merged.intensity) & theta_positive & np.isfinite(normalized)
     )
+    if noise_model == "robust_log":
+        validation &= log_domain_mask(normalized, r_floor)
     ready = fit_ready(merged.two_theta, qz, validation)
     invalid_count = int(np.count_nonzero(~validation))
     if invalid_count:
@@ -427,7 +430,9 @@ def _prepare_xy(
     beam: BeamSpec,
     import_angle_offset_deg: float,
     mapping: DataColumnMapping,
+    noise_model: str,
 ) -> PreparedData:
+    validate_noise_model(noise_model)
     raw_rows = tuple(source_bytes.decode("utf-8-sig").splitlines())
     parsed = tuple(_numeric_columns(row) for row in raw_rows)
     parseable, numeric = _row_flags(parsed, mapping)
@@ -439,6 +444,7 @@ def _prepare_xy(
         beam.effective_wavelength_a,
         import_angle_offset_deg,
         statuses,
+        noise_model,
     )
     intensity_sigma, normalized_sigma, resolution, sigma_q = _optional_arrays(
         merged,
@@ -480,6 +486,7 @@ def read_xy_bytes(
     beam: BeamSpec,
     import_angle_offset_deg: float = 0.0,
     column_mapping: DataColumnMapping | None = None,
+    noise_model: str = "robust_log",
 ) -> PreparedData:
     """Parse already-bound source bytes through the authoritative importer."""
     if not isinstance(content, bytes):
@@ -491,6 +498,7 @@ def read_xy_bytes(
         beam,
         import_angle_offset_deg,
         mapping,
+        noise_model,
     )
 
 
@@ -499,6 +507,7 @@ def read_xy(
     beam: BeamSpec,
     import_angle_offset_deg: float = 0.0,
     column_mapping: DataColumnMapping | None = None,
+    noise_model: str = "robust_log",
 ) -> PreparedData:
     """Read one UTF-8 XRR curve and preserve every raw row and source byte hash."""
     source_path = Path(path)
@@ -509,4 +518,5 @@ def read_xy(
         beam,
         import_angle_offset_deg,
         mapping,
+        noise_model,
     )

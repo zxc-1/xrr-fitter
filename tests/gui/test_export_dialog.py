@@ -45,6 +45,7 @@ def _fitted_project(tmp_path: Path, *, datasets: int = 1) -> api.XrrProject:
         qz_a_inv=data.qz_a_inv,
         model_normalized=data.intensity_normalized,
         log_residuals_decades=np.zeros(data.qz_a_inv.size),
+        residuals=np.zeros(data.qz_a_inv.size),
         weighted_residuals=np.zeros(data.qz_a_inv.size),
     )
     result = replace(

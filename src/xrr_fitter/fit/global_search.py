@@ -40,7 +40,7 @@ from xrr_fitter.fit.initialization import InitialCandidates
 from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.model.data import fit_ready
-from xrr_fitter.model.fitting import ModelEvaluation
+from xrr_fitter.model.evaluation import ModelEvaluation
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
     LayerSpec,

@@ -76,6 +76,7 @@ def test_plot_panel_rejects_misaligned_candidate_diagnostics_without_redraw(
         qz_a_inv=np.array([0.1, 0.2, 0.3]),
         model_normalized=np.array([0.8, 0.4, 0.2]),
         log_residuals_decades=np.zeros(3),
+        residuals=np.zeros(3),
         weighted_residuals=np.zeros(3),
     )
 

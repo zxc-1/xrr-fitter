@@ -6,7 +6,7 @@ import numpy as np
 
 from xrr_fitter.evaluation import EvaluationConstraintError, encode_physical_vector
 from xrr_fitter.fit.joint_constraints import apply_joint_constraints
-from xrr_fitter.fit.joint_evaluation import _finite_objective_mean
+from xrr_fitter.fit.joint_evaluation import _joint_objective
 from xrr_fitter.fit.joint_roughness import (
     SHARED_ROUGHNESS_TRANSFORM,
     apply_consensus_roughness,
@@ -190,12 +190,13 @@ def _validate_candidate_order(
 
 
 def _validate_candidate_rankings(
+    problem: object,
     candidates_by_dataset: tuple[tuple[object, ...], ...],
     candidate_ids: tuple[str, ...],
 ) -> None:
     for candidate_index in range(len(candidate_ids)):
         aligned = tuple(candidates[candidate_index] for candidates in candidates_by_dataset)
-        ranking = _finite_objective_mean(tuple(candidate.objective for candidate in aligned))
+        ranking = _joint_objective(problem, aligned)
         if any(candidate.ranking_objective != ranking for candidate in aligned):
             raise ValueError("joint resume candidate ranking objective mismatch")
 
@@ -207,7 +208,7 @@ def validate_joint_candidate_alignment(
 ) -> None:
     """Reject cross-dataset checkpoint drift before a resumed stage runs."""
     candidate_ids = _validate_candidate_order(candidates_by_dataset)
-    _validate_candidate_rankings(candidates_by_dataset, candidate_ids)
+    _validate_candidate_rankings(problem, candidates_by_dataset, candidate_ids)
     for summary in stage_summaries:
         if summary.stage != "A":
             joint_candidate_vectors(

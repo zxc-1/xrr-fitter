@@ -13,6 +13,33 @@ from typing import Any
 
 import numpy as np
 
+NOISE_MODELS = frozenset({"robust_log", "gaussian", "poisson"})
+
+
+def validate_noise_model(value: str) -> None:
+    if value not in NOISE_MODELS:
+        raise ValueError(f"unsupported noise_model: {value}")
+
+
+class ResidualMetadata:
+    """Shared labels derived from an evidence snapshot's declared noise mode."""
+
+    __slots__ = ()
+    noise_model: str
+
+    @property
+    def residual_name(self) -> str:
+        return {
+            "robust_log": "log_reflectivity",
+            "gaussian": "standardized_intensity",
+            "poisson": "signed_poisson_deviance",
+        }[self.noise_model]
+
+    @property
+    def residual_unit(self) -> str:
+        return "decade" if self.noise_model == "robust_log" else "1"
+
+
 RESOLUTION_KINDS = frozenset(
     {
         "sigma_q_a_inv",
