@@ -123,7 +123,7 @@ SIGNATURES = {
     "clear_fit_results": "(project: 'XrrProject', dataset_ids: 'Sequence[str]') -> 'XrrProject'",
     "describe_joint_layout": "(project: 'XrrProject') -> 'JointFitLayout'",
     "describe_parameters": "(project: 'XrrProject', dataset_id: 'str') -> 'tuple[ParameterDefinition, ...]'",
-    "import_data": "(path: 'str | Path', beam: 'BeamSpec', import_angle_offset_deg: 'float' = 0.0, column_mapping: 'DataColumnMapping | None' = None) -> 'PreparedData'",
+    "import_data": "(path: 'str | Path', beam: 'BeamSpec', import_angle_offset_deg: 'float' = 0.0, column_mapping: 'DataColumnMapping | None' = None, noise_model: 'str' = 'robust_log') -> 'PreparedData'",
     "import_dataset_batch": "(project: 'XrrProject', preview: 'ImportBatchPreview', substrate_choices: 'Mapping[str, str] | None' = None, column_mappings: 'Mapping[str, DataColumnMapping] | None' = None) -> 'ProjectImportResult'",
     "inspect_sources": "(project: 'XrrProject') -> 'ProjectValidation'",
     "load_project": "(path: 'str | Path') -> 'XrrProject'",

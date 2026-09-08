@@ -86,3 +86,15 @@ Task 3–8 尚未实施完成。当前注册表没有 `r22-reference` mode；物
 子代理服务重复返回 HTTP 429，本轮改由主代理继续实施和审查，未取得独立子代理审查结论。
 
 本轮外部日志：`/tmp/xrr-v2-resume.O7yj3A/`。临时文件没有写入生产目录。
+
+### Task 2 官方门禁补充
+
+- `533f382` 普通 clone：unit **1750 passed**、integration **14 passed**、
+  regression **50 passed**；quality **186 passed / 2 failed**、GUI **646 passed / 1 failed**。
+- quality 两项为 Task 2 接口声明未同步：新增 `model.evaluation` 未登记精确模型依赖，
+  `import_data` 签名断言缺少 `noise_model`。按实际 DAG 与已批准接口更新，未扩大层级权限。
+  聚焦架构及 API 检验 **98 passed**。
+- GUI 两点曲线夹具未同步新增的全轴 `residuals`，触发正确的模型轴长拒绝；
+  更新夹具数组，保持绘图生产逻辑及所有物理容差不变。
+- 原始日志 `/tmp/xrr-v2-533f382-2kpmt2n9/`，临时 clone 已清理。
+  本次独立审查服务返回 `Model "gpt-5.5" is not supported`，未获得独立审查结论。

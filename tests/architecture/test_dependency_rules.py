@@ -134,6 +134,7 @@ MODEL_ALLOWED = {
     "sld_bands": set(),
     "slab_stack": set(),
     "fitting": {"data", "instrument", "structure", "parameters", "progress", "slab_stack"},
+    "evaluation": {"data", "fitting", "instrument", "parameters", "slab_stack"},
     "provenance": {"fitting"},
     "analysis": {
         "data",

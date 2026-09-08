@@ -56,6 +56,7 @@ def _candidate(data, candidate_id="candidate-a", *, objective=0.2, **changes):
         "qz_a_inv": np.linspace(0.015, 0.25, size),
         "model_normalized": np.geomspace(0.9, 2e-5, size),
         "log_residuals_decades": np.linspace(-0.2, 0.2, size),
+        "residuals": np.linspace(-0.2, 0.2, size),
         "weighted_residuals": np.linspace(-1.0, 1.0, size),
         "sld_depth_a": np.array([0.0, 20.0, 50.0]),
         "sld_profile_a2": np.array([0.0 + 0.0j, 2e-5 + 1e-7j, 4e-6 + 0.0j]),
