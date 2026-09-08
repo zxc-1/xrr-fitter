@@ -121,6 +121,7 @@ def _analyze_joint_searches(
     *,
     joint_candidate_vectors: Callable,
     analyze_joint_ensemble: Callable,
+    joint_point_evidence: Callable,
     with_parameter_priors: Callable,
     prior_conflicts: Callable,
 ) -> tuple[FitResult, ...]:
@@ -141,6 +142,7 @@ def _analyze_joint_searches(
         valid=_joint_validity(aligned),
         diagnostics=_joint_diagnostics(aligned),
         thresholds=problem.problems[0].config.confidence,
+        point_evidence=lambda vector: joint_point_evidence(problem, vector),
     )
     report = replace(
         report,

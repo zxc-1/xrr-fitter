@@ -20,7 +20,9 @@ from xrr_fitter.io.codec_common import (
     _real_array_from_list,
     _real_array_to_list,
     _sequence,
+    _square_array_from_list,
 )
+from xrr_fitter.io.codec_inference import covariance_from_dict, covariance_to_dict, residual_from_dict, residual_to_dict
 from xrr_fitter.model.analysis import (
     ConfidenceClass,
     FitResult,
@@ -239,15 +241,15 @@ def _uncertainty_to_dict(
         "candidate_id": value.candidate_id,
         "bootstrap_performed": value.bootstrap_performed,
         "sld_bands": _sld_bands_to_dict(value.sld_bands),
+        "covariance_evidence": covariance_to_dict(value.covariance_evidence),
+        "member_residuals": [residual_to_dict(item) for item in value.member_residuals],
+        "search_parameter_spread": None
+        if value.search_parameter_spread is None
+        else _real_array_to_list(value.search_parameter_spread),
+        "parameter_sigma": None if value.parameter_sigma is None else _real_array_to_list(value.parameter_sigma),
     }
-    # Emitted only when nonempty so reports written before prior conflicts
-    # existed re-encode byte-identically and older readers keep loading them.
     if value.prior_conflicts:
         payload["prior_conflicts"] = list(value.prior_conflicts)
-    # Emitted only when calibrated so reports written before parameter sigmas
-    # existed re-encode byte-identically and older readers keep loading them.
-    if value.parameter_sigma is not None:
-        payload["parameter_sigma"] = _real_array_to_list(value.parameter_sigma)
     return payload
 
 
@@ -270,16 +272,20 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         "diagnostics",
         "residual_autocorrelation",
         "mcmc",
+        "covariance_evidence",
+        "member_residuals",
+        "search_parameter_spread",
+        "parameter_sigma",
     }
     payload = _mapping(
         value,
         required | {"bootstrap_performed"},
         "uncertainty report",
-        {"candidate_id", "sld_bands", "prior_conflicts", "parameter_sigma"},
+        {"candidate_id", "sld_bands", "prior_conflicts"},
     )
     return UncertaintyReport(
         correlation_names=tuple(_sequence(payload["correlation_names"], "correlation names")),
-        correlation_matrix=_real_array_from_list(payload["correlation_matrix"]),
+        correlation_matrix=_square_array_from_list(payload["correlation_matrix"]),
         profiles=tuple(_profile_from_dict(item) for item in _sequence(payload["profiles"], "parameter profiles")),
         bootstrap_intervals=_rows(payload["bootstrap_intervals"], "bootstrap intervals"),
         bootstrap_failure_rate=payload["bootstrap_failure_rate"],
@@ -300,8 +306,15 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         sld_bands=_sld_bands_from_dict(payload.get("sld_bands")),
         prior_conflicts=tuple(_sequence(payload.get("prior_conflicts", []), "uncertainty prior conflicts")),
         parameter_sigma=(
-            None if payload.get("parameter_sigma") is None else _real_array_from_list(payload["parameter_sigma"])
+            None if payload["parameter_sigma"] is None else _real_array_from_list(payload["parameter_sigma"])
         ),
+        covariance_evidence=covariance_from_dict(payload["covariance_evidence"]),
+        member_residuals=tuple(
+            residual_from_dict(item) for item in _sequence(payload["member_residuals"], "member residuals")
+        ),
+        search_parameter_spread=None
+        if payload["search_parameter_spread"] is None
+        else _real_array_from_list(payload["search_parameter_spread"]),
     )
 
 

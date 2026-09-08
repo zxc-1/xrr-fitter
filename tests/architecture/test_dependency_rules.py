@@ -135,8 +135,10 @@ MODEL_ALLOWED = {
     "slab_stack": set(),
     "fitting": {"data", "instrument", "structure", "parameters", "progress", "slab_stack"},
     "evaluation": {"data", "fitting", "instrument", "parameters", "slab_stack"},
+    "inference": {"instrument"},
     "provenance": {"fitting"},
     "analysis": {
+        "inference",
         "data",
         "parameters",
         "fitting",

@@ -10,7 +10,7 @@ from xrr_fitter.evaluation import (
     data_score_information,
     evaluate_model,
     evaluate_model_jacobian,
-    values_by_name,
+    values_and_jacobians,
 )
 from xrr_fitter.model.fitting import FitEvaluationContext
 
@@ -72,21 +72,8 @@ def physical_parameter_jacobian(
     names = tuple(variable.name for variable in problem.variables)
     if not names:
         return np.empty((0, 0), dtype=float)
-    columns = []
-    for index in range(count):
-        lower_step = min(1e-5, unit[index])
-        upper_step = min(1e-5, 1.0 - unit[index])
-        span = lower_step + upper_step
-        if span <= 0.0:
-            columns.append(np.zeros(count, dtype=float))
-            continue
-        lower, upper = unit.copy(), unit.copy()
-        lower[index] -= lower_step
-        upper[index] += upper_step
-        lower_values = values_by_name(problem, lower)
-        upper_values = values_by_name(problem, upper)
-        columns.append(np.asarray([upper_values[name] - lower_values[name] for name in names]) / span)
-    result = np.column_stack(columns)
+    _values, jacobians = values_and_jacobians(problem, unit)
+    result = np.vstack([jacobians[name] for name in names])
     result.setflags(write=False)
     return result
 

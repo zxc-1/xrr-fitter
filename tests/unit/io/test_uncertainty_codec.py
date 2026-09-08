@@ -1,10 +1,11 @@
-"""Backward-compatible codec coverage for ORSO parameter uncertainty."""
+"""Explicit V2 codec coverage for available and unavailable uncertainty."""
 
 from __future__ import annotations
 
 from dataclasses import replace
 
 import numpy as np
+import pytest
 from tests.support.model_cases import dataset_project, final_fit_result, fit_candidate, project
 
 from xrr_fitter.io.project_codec import project_from_dict, project_to_dict
@@ -43,17 +44,15 @@ def test_project_roundtrip_preserves_parameter_sigma() -> None:
     np.testing.assert_array_equal(after, before)
 
 
-def test_result_without_parameter_sigma_omits_key() -> None:
+def test_result_without_parameter_sigma_emits_explicit_unavailable_value() -> None:
     uncertainty = _uncertainty_payload(_project_with_parameter_sigma(None))
 
-    assert "parameter_sigma" not in uncertainty
+    assert uncertainty["parameter_sigma"] is None
 
 
-def test_result_without_parameter_sigma_key_still_decodes() -> None:
+def test_result_without_parameter_sigma_key_is_incomplete_v2_evidence() -> None:
     payload = project_to_dict(_project_with_parameter_sigma(np.array([2.0])))
     payload["datasets"][0]["last_valid_result"]["uncertainty"].pop("parameter_sigma")
 
-    restored = project_from_dict(payload)
-    report = restored.datasets[0].last_valid_result.uncertainty
-
-    assert report.parameter_sigma is None
+    with pytest.raises(ValueError, match="parameter_sigma"):
+        project_from_dict(payload)

@@ -15,10 +15,13 @@ def _api():
 
 
 def classify_candidate_evidence(*args, **kwargs):
+    # These synthetic classifier cases explicitly assume completed diagnostics.
+    kwargs.setdefault("systematic_residual", False)
     return _api().classify_candidate_evidence(*args, **kwargs)
 
 
 def classify_candidate_evidence_with_reasons(*args, **kwargs):
+    kwargs.setdefault("systematic_residual", False)
     return _api().classify_candidate_evidence_with_reasons(*args, **kwargs)
 
 
@@ -258,6 +261,7 @@ def test_classify_result_with_evidence_forwards_explicit_profile_path_merge(
         profiles=(),
         systematic_residual=False,
         diagnostics=(),
+        covariance=np.eye(1),
     )
     calls: list[tuple[np.ndarray, np.ndarray, float]] = []
 
@@ -303,6 +307,7 @@ def test_classify_result_builds_default_profile_path_for_close_clusters(
         profiles=(),
         systematic_residual=False,
         diagnostics=(),
+        covariance=np.eye(1),
     )
 
     observed = classify_result_with_evidence(
@@ -345,6 +350,7 @@ def test_classify_result_with_evidence_uses_candidate_and_report_state() -> None
         profiles=(),
         systematic_residual=False,
         diagnostics=(),
+        covariance=np.eye(1),
     )
 
     assert classify_result_with_evidence(SimpleNamespace(config=None), candidates, report) == (
@@ -372,6 +378,7 @@ def test_classify_result_uses_persisted_global_ranking_costs(monkeypatch) -> Non
         profiles=(),
         systematic_residual=False,
         diagnostics=(),
+        covariance=np.eye(1),
     )
     observed: dict[str, np.ndarray] = {}
 

@@ -26,16 +26,12 @@ import numpy as np
 
 from xrr_fitter.analysis.bootstrap import TaskRunner, bootstrap_problem_local
 from xrr_fitter.analysis.classification import classify_result_with_evidence
+from xrr_fitter.analysis.covariance import covariance_summary, problem_covariance
 from xrr_fitter.analysis.derivatives import (
-    correlation_from_covariance,
-    objective_information,
-    physical_parameter_jacobian,
     strong_parameter_correlations,
 )
 from xrr_fitter.analysis.diagnostics import (
-    diagnose_residual_patterns,
-    ordered_fit_residuals,
-    residual_autocorrelation_flag,
+    build_residual_evidence,
 )
 from xrr_fitter.analysis.mcmc import prior_conflicts, with_parameter_priors
 from xrr_fitter.analysis.profiles import (
@@ -43,7 +39,13 @@ from xrr_fitter.analysis.profiles import (
     build_problem_profiles,
     select_profile_names,
 )
-from xrr_fitter.model.analysis import BootstrapResult, FitResult, UncertaintyReport
+from xrr_fitter.model.analysis import (
+    BootstrapResult,
+    CovarianceEvidence,
+    FitResult,
+    ResidualEvidence,
+    UncertaintyReport,
+)
 from xrr_fitter.model.fitting import (
     FitEvaluationContext,
     FitProgress,
@@ -177,15 +179,10 @@ def _correlation_evidence(
     problem: object,
     unit_vector: np.ndarray,
     names: tuple[str, ...],
-) -> tuple[np.ndarray, tuple[str, ...], tuple[tuple[str, str, float], ...], np.ndarray]:
-    unit_covariance = np.linalg.pinv(
-        objective_information(problem, unit_vector),
-        rcond=1e-12,
-    )
-    physical_jacobian = physical_parameter_jacobian(problem, unit_vector)
-    physical_covariance = physical_jacobian @ unit_covariance @ physical_jacobian.T
-    correlation = correlation_from_covariance(physical_covariance)
-    sigma = np.sqrt(np.clip(np.diag(physical_covariance), 0.0, np.inf))
+    residuals: tuple[ResidualEvidence, ...],
+) -> tuple[np.ndarray, tuple[str, ...], tuple[tuple[str, str, float], ...], np.ndarray | None, CovarianceEvidence]:
+    evidence = problem_covariance(problem, unit_vector, residuals)
+    correlation, sigma = covariance_summary(evidence)
     fraction = problem.config.confidence.boundary_fraction
     boundary_hits = tuple(
         name for name, value in zip(names, unit_vector, strict=True) if value <= fraction or value >= 1.0 - fraction
@@ -195,7 +192,7 @@ def _correlation_evidence(
         correlation,
         threshold=problem.config.confidence.strong_correlation,
     )
-    return correlation, boundary_hits, strong, sigma
+    return correlation, boundary_hits, strong, sigma, evidence
 
 
 def _profiles(
@@ -235,14 +232,9 @@ def _validate_derived_profile(problem: object, name: str) -> bool:
 def _residual_evidence(
     problem: object,
     candidate: object,
-) -> tuple[bool, tuple[object, ...], bool]:
-    derived = diagnose_residual_patterns(problem, candidate)
-    diagnostics = {
-        (diagnostic.code, diagnostic.point_indices): diagnostic for diagnostic in (*candidate.diagnostics, *derived)
-    }
-    residuals = ordered_fit_residuals(problem, candidate)
-    autocorrelation = bool(residuals.size >= 4 and residual_autocorrelation_flag(residuals))
-    return bool(derived) or autocorrelation, tuple(diagnostics.values()), autocorrelation
+    dataset_id: str | None = None,
+) -> ResidualEvidence:
+    return build_residual_evidence(problem, candidate.residuals, candidate.diagnostics, dataset_id=dataset_id)
 
 
 def build_uncertainty_report(
@@ -255,6 +247,7 @@ def build_uncertainty_report(
     progress: Callable[[int, int, str], None] | None = None,
     task_runner: TaskRunner | None = None,
     parameter_priors: tuple[ParameterPrior, ...] = (),
+    dataset_id: str | None = None,
 ) -> UncertaintyReport:
     """Build covariance, profile, bootstrap, and residual evidence."""
     parameter_priors = _analysis_parameter_priors(parameter_priors)
@@ -263,10 +256,12 @@ def build_uncertainty_report(
     best = _select_candidate(problem, values)
     unit = np.asarray(best.unit_vector, dtype=float)
     names = tuple(variable.name for variable in problem.variables)
-    correlation, boundary_hits, strong_correlations, sigma = _correlation_evidence(
+    residual_evidence = _residual_evidence(problem, best, dataset_id)
+    correlation, boundary_hits, strong_correlations, sigma, covariance_evidence = _correlation_evidence(
         problem,
         unit,
         names,
+        (residual_evidence,),
     )
     profiles = _profiles(
         problem,
@@ -277,21 +272,22 @@ def build_uncertainty_report(
         task_runner,
     )
     _check_cancelled(cancelled)
-    systematic, diagnostics, autocorrelation = _residual_evidence(problem, best)
     intervals = () if bootstrap is None else bootstrap.intervals
     failure_rate = 0.0 if bootstrap is None else bootstrap.failure_rate
     return UncertaintyReport(
         correlation_names=names,
         correlation_matrix=correlation,
         parameter_sigma=sigma,
+        covariance_evidence=covariance_evidence,
+        member_residuals=(residual_evidence,),
         profiles=profiles,
         bootstrap_intervals=intervals,
         bootstrap_failure_rate=failure_rate,
         boundary_hits=boundary_hits,
         strong_correlations=strong_correlations,
-        systematic_residual=systematic,
-        diagnostics=diagnostics,
-        residual_autocorrelation=autocorrelation,
+        systematic_residual=residual_evidence.systematic,
+        diagnostics=residual_evidence.diagnostics,
+        residual_autocorrelation=residual_evidence.autocorrelation,
         candidate_id=_candidate_id(values, best),
         bootstrap_performed=bootstrap is not None,
         prior_conflicts=prior_conflicts(
@@ -543,6 +539,7 @@ def analyze_search_result(
         progress=profile_progress,
         task_runner=task_runner,
         parameter_priors=parameter_priors,
+        dataset_id=dataset_id,
     )
     publish("finalizing", 0, 1, "finalizing")
     enriched = _enrich_search_result(problem, search_result, report)

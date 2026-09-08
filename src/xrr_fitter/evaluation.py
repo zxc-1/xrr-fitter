@@ -11,6 +11,7 @@ import xrr_fitter.evaluation_priors as _priors_impl
 import xrr_fitter.evaluation_solver as _solver_impl
 from xrr_fitter.evaluation_geometry import _fill_missing_roughness_caps as _fill_missing_roughness_caps
 from xrr_fitter.evaluation_geometry import _gradient_slab_counts as _gradient_slab_counts
+from xrr_fitter.evaluation_inference import statistical_information as statistical_information
 from xrr_fitter.evaluation_instrument_jacobian import (
     _background_jacobian as _background_jacobian,
 )
@@ -264,6 +265,9 @@ from xrr_fitter.evaluation_solver import (
 )
 from xrr_fitter.evaluation_solver import (
     cached_least_squares_callbacks as cached_least_squares_callbacks,
+)
+from xrr_fitter.evaluation_statistics import (
+    StatisticalUnavailableError as StatisticalUnavailableError,
 )
 from xrr_fitter.evaluation_statistics import (
     data_loss_rho as data_loss_rho,

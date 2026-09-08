@@ -10,6 +10,10 @@ from xrr_fitter.model.data import PreparedData, log_domain_mask, validate_noise_
 from xrr_fitter.model.fitting import FitEvaluationContext
 
 
+class StatisticalUnavailableError(ValueError):
+    """A valid fitting point does not admit the declared local inference."""
+
+
 def _gaussian_sigma(data: PreparedData) -> np.ndarray:
     if data.intensity_sigma_normalized is None:
         raise ValueError("Gaussian fitting requires known intensity sigma at every selected point")
@@ -144,3 +148,30 @@ def data_score_information(problem: FitEvaluationContext, residual: np.ndarray) 
         return robust_score_information(residual, _data_weights(problem), problem.config.c_decades)
     mass = problem.sampling_multipliers[problem.data.fit_mask]
     return 2 * mass * residual, mass
+
+
+def data_statistical_information(
+    problem: FitEvaluationContext,
+    fit_model: np.ndarray,
+    residual: np.ndarray,
+    jacobian: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return total data bread and independent-score meat in unit coordinates.
+
+    Likelihood modes use expected information, not deviance-residual curvature.
+    Robust weights enter the estimating equation once and its variance twice.
+    Only full observations support this independent-observation calibration.
+    """
+    if problem.config.noise_model == "robust_log":
+        score, curvature = data_score_information(problem, residual)
+        bread = jacobian.T @ (curvature[:, None] * jacobian)
+        influence = (score / 2)[:, None] * jacobian
+        return bread, influence.T @ influence
+    if problem.config.noise_model == "poisson":
+        mu = problem.data.normalization * fit_model
+        if np.any(mu <= 0.0):
+            raise StatisticalUnavailableError("poisson_nonregular_zero_mean")
+        derivative = data_residual_model_derivative(problem, fit_model, residual)
+        jacobian = jacobian * (problem.data.normalization / np.sqrt(mu) / derivative)[:, None]
+    information = jacobian.T @ jacobian
+    return information, information.copy()

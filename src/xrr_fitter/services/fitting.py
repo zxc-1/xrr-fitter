@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 from xrr_fitter.analysis import sld_bands as _bands
 from xrr_fitter.analysis.automatic import assess_automatic_quality
-from xrr_fitter.analysis.joint import analyze_joint_ensemble
+from xrr_fitter.analysis.joint import analyze_joint_ensemble, analyze_joint_point
 from xrr_fitter.analysis.mcmc import (
     prior_conflicts,
     run_problem_mcmc,
@@ -31,7 +31,7 @@ from xrr_fitter.fit.joint_candidates import (
     consensus_joint_vector,
     joint_candidate_vectors,
 )
-from xrr_fitter.fit.joint_evaluation import evaluate_joint_vector
+from xrr_fitter.fit.joint_evaluation import evaluate_joint_vector, joint_inference_layout
 from xrr_fitter.fit.joint_pipeline import JointFitRequest, run_joint_fit
 from xrr_fitter.fit.joint_problem import compile_joint_problem
 from xrr_fitter.fit.joint_sharing import (
@@ -411,6 +411,18 @@ def fit_automatic_prepared_dataset(
     )
 
 
+def _joint_point_evidence(problem, vector):
+    evaluation = evaluate_joint_vector(problem, vector)
+    return analyze_joint_point(
+        tuple(variable.name for variable in problem.global_variables),
+        problem.dataset_ids,
+        problem.problems,
+        vector,
+        evaluation.local_evaluations,
+        lambda: joint_inference_layout(problem, vector),
+    )
+
+
 def _analyze_joint_searches(problem, searches, priors) -> tuple[FitResult, ...]:
     return _joint_analysis._analyze_joint_searches(
         problem,
@@ -418,6 +430,7 @@ def _analyze_joint_searches(problem, searches, priors) -> tuple[FitResult, ...]:
         priors,
         joint_candidate_vectors=joint_candidate_vectors,
         analyze_joint_ensemble=analyze_joint_ensemble,
+        joint_point_evidence=_joint_point_evidence,
         with_parameter_priors=with_parameter_priors,
         prior_conflicts=prior_conflicts,
     )

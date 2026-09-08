@@ -25,6 +25,16 @@ OPTIONAL_FIELDS = frozenset(
         "bulk_density_g_cm3",
         "candidate_id",
         "checkpoint",
+        "covariance_evidence",
+        "matrix",
+        "search_parameter_spread",
+        "parameter_sigma",
+        "systematic_residual",
+        "residual_autocorrelation",
+        "dataset_id",
+        "systematic",
+        "autocorrelation",
+        "unavailable_reason",
         "expanded_stack",
         "formula",
         "fit_group_id",
@@ -186,6 +196,12 @@ def _real_array_to_list(value: np.ndarray) -> list[Any]:
 
 def _real_array_from_list(value: object, dtype: type = float) -> np.ndarray:
     return np.asarray(_sequence(value, "numeric array"), dtype=dtype)
+
+
+def _square_array_from_list(value: object) -> np.ndarray:
+    """Restore the unambiguous empty matrix axis lost by JSON list encoding."""
+    result = _real_array_from_list(value)
+    return result.reshape((0, 0)) if result.shape == (0,) else result
 
 
 def _complex_to_dict(value: complex | None) -> dict[str, float] | None:

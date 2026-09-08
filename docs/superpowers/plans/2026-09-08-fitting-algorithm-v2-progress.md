@@ -98,3 +98,53 @@ Task 3–8 尚未实施完成。当前注册表没有 `r22-reference` mode；物
   更新夹具数组，保持绘图生产逻辑及所有物理容差不变。
 - 原始日志 `/tmp/xrr-v2-533f382-2kpmt2n9/`，临时 clone 已清理。
   本次独立审查服务返回 `Model "gpt-5.5" is not supported`，未获得独立审查结论。
+
+- 补充提交 `29d87f5` 官方普通 clone 重验：quality **188 passed**、GUI **647 passed**。
+  报告 `/tmp/xrr-v2-29d87f5-pznr4qvn/`，临时 clone 已清理。
+  GUI 保留已有的隐藏画布 `constrained_layout` 警告，未改绘图布局。
+
+## Task 3：统计协方差、秩与成员诊断
+
+已实现单/联合 Gaussian 已知 sigma 信息、Poisson 期望计数信息、robust 独立 score
+sandwich。采用总量而非展示均值；数据产生的尺度 prior 只进入 bread，不作为独立 score
+进入 meat。联合 robust 成员权重在 bread 中计一次、meat 中计两次。
+
+### RED → GREEN
+
+- 首批 **8 项 RED**：缺少统计方法/秩证据；Poisson 使用 deviance 曲率；robust
+  直接逆曲率；强自相关和边界仍返回 sigma；联合 spread 被当作 sigma；缺失诊断被当成 False；
+  没有严格的零均值 Poisson 推断边界。Gaussian 同时暴露物理参数有限差分映射的数值偏差。
+- robust seed 17 的旧 sigma `0.008262241914726945`，score sandwich 应为
+  `0.005875513133346553`。改用解析物理参数 Jacobian 与对应统计矩阵后通过。
+- 新增 **3 项真实联合 RED**：四起点 `.46/.49/.51/.54` 实际求解后的全局统计 sigma、
+  两个含 `.18*sin(0..5*pi)` 成员诊断，以及 80+800 个 Gaussian 观测信息相加。
+- 新增 **5 项证据 RED**：项目 codec 丢失协方差与成员身份、允许 sigma 与矩阵矛盾、
+  允许成员诊断与汇总矛盾、缺少 V2 字段仍解码。现均通过。
+- 追加 RED：全锁定问题的 `0x0` 矩阵经 JSON `[]` 解码后形状错误；
+  联合导数不可用时整份报告失败。现分别恢复正确空轴、保留真实诊断并标注协方差不可用。
+- 当前专项 **27 passed**；此前完整 `tests/unit tests/regression` **2265 passed**，
+  相关 analysis/model/services/io 回归 **1015 passed**。本批提交后仍须官方普通 clone 验证。
+- 全仓库 Ruff lint/format 与 Radon 通过；Radon 报告 `/tmp/xrr-v2-task3-radon.json`。
+  不改变物理内核、物理参照容差、生产依赖或 CI mode。
+
+### 最终接口与语义
+
+- `model/inference.py` 的不可变 `CovarianceEvidence`、`ResidualEvidence` 由
+  `model.analysis` 暴露。前者含 names/matrix/method/rank/unidentifiable_names/unavailable_reason；
+  后者保留 dataset_id/executed/systematic/autocorrelation/point_count/diagnostics/reason。
+- `UncertaintyReport` 保存 `covariance_evidence`、`member_residuals`、
+  `search_parameter_spread`。`parameter_sigma` 仅来自统计矩阵，搜索 spread 单独保留。
+  `covariance` 只返回带方法证据的矩阵；未知相关矩阵为 NaN，未知诊断为 None。
+- `evaluation_inference.py:statistical_information(problem, unit)` 经 `evaluation` 暴露，返回
+  `(data_bread, prior_bread, meat)`。推断要求完整拟合观测，不消费优化器的零 Jacobian 哨兵。
+  `evaluation_statistics.py` 只做模式 score/信息数学，避免与物理/Jacobian 导入成环。
+- `analysis/covariance.py` 用列尺度归一化后的 SVD 检查数据秩，秩亏时不给伪逆矩阵。
+  边界解、非正 Poisson 均值及强相关 robust 残差不发布局部统计 sigma，保存原因。
+- `fit.joint_evaluation.joint_inference_layout` 提供真实全局 scatter 与物理参数映射。
+  `services.fitting` 通过 callable 组合到 `analysis.joint.analyze_joint_point`，没有
+  `fit <-> analysis` 导入。每个成员先完成实际残差诊断，导数故障不抹掉已执行证据。
+- codec 同批严格保存新增字段，不为缺失 V2 协方差字段建立兼容回退。
+  旧测试中把起点 spread 当 sigma、对未执行诊断默认可信的断言已按 V2 含义更新。
+
+Task 4–8 仍待实施：区间语义与重采样、内环/缓存、搜索调度、入口/导出和最终统计验收。
+本批独立审查尚不可用，不能称独立审查通过。工作树外保留验收日志，未产生仓库内临时产物。

@@ -61,6 +61,8 @@ from xrr_fitter.model.fitting import (
     FitStageSummary,
     PhysicsDiagnostic,
 )
+from xrr_fitter.model.inference import CovarianceEvidence as CovarianceEvidence
+from xrr_fitter.model.inference import ResidualEvidence as ResidualEvidence
 from xrr_fitter.model.mcmc_samples import McmcReport as McmcReport
 from xrr_fitter.model.mcmc_sampling import EnsembleSamples as EnsembleSamples
 from xrr_fitter.model.mcmc_sampling import McmcConfig as McmcConfig
@@ -295,16 +297,18 @@ class UncertaintyReport:
     bootstrap_failure_rate: float
     boundary_hits: tuple[str, ...]
     strong_correlations: tuple[tuple[str, str, float], ...]
-    systematic_residual: bool
+    systematic_residual: bool | None
     diagnostics: tuple[PhysicsDiagnostic, ...]
-    residual_autocorrelation: bool = False
+    residual_autocorrelation: bool | None = None
     mcmc: McmcReport | None = None
     candidate_id: str | None = None
     bootstrap_performed: bool = True
     sld_bands: SldUncertaintyBands | None = None
     prior_conflicts: tuple[str, ...] = ()
-    # Optional calibration metadata is validated without changing legacy reports.
     parameter_sigma: np.ndarray | None = None
+    covariance_evidence: CovarianceEvidence | None = None
+    member_residuals: tuple[ResidualEvidence, ...] = ()
+    search_parameter_spread: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         names = tuple(self.correlation_names)
@@ -332,25 +336,55 @@ class UncertaintyReport:
         sigma = _parameter_sigma(self.parameter_sigma, len(names))
         if sigma is not None:
             object.__setattr__(self, "parameter_sigma", sigma)
+        self._validate_inference(names)
+
+    def _validate_inference(self, names: tuple[str, ...]) -> None:
+        evidence = self.covariance_evidence
+        if evidence is not None:
+            if not isinstance(evidence, CovarianceEvidence) or evidence.names != names:
+                raise ValueError("covariance evidence names must match correlation names")
+            if evidence.matrix is None and self.parameter_sigma is not None:
+                raise ValueError("unavailable covariance cannot publish parameter sigma")
+            if evidence.matrix is not None:
+                self._validate_covariance_summary(evidence.matrix)
+        residuals = tuple(self.member_residuals)
+        if any(not isinstance(value, ResidualEvidence) for value in residuals):
+            raise TypeError("member_residuals must contain ResidualEvidence values")
+        object.__setattr__(self, "member_residuals", residuals)
+        self._validate_residual_summary(residuals)
+        spread = _parameter_sigma(self.search_parameter_spread, len(names))
+        object.__setattr__(self, "search_parameter_spread", spread)
+
+    def _validate_covariance_summary(self, covariance: np.ndarray) -> None:
+        sigma = self.parameter_sigma
+        expected = np.sqrt(np.diag(covariance))
+        if sigma is None or not np.allclose(sigma, expected, rtol=1e-10, atol=0.0):
+            raise ValueError("parameter sigma must agree with covariance evidence")
+        correlation = covariance / sigma[:, None] / sigma[None, :]
+        if not np.allclose(self.correlation_matrix, correlation, rtol=1e-10, atol=1e-14):
+            raise ValueError("correlation matrix must agree with covariance evidence")
+
+    def _validate_residual_summary(self, residuals: tuple[ResidualEvidence, ...]) -> None:
+        for summary, field in (
+            (self.systematic_residual, "systematic"),
+            (self.residual_autocorrelation, "autocorrelation"),
+        ):
+            if summary is not None and not isinstance(summary, bool):
+                raise TypeError("residual summary must be boolean or unknown")
+            if not residuals:
+                continue
+            values = tuple(getattr(item, field) for item in residuals)
+            expected = True if True in values else (False if all(value is False for value in values) else None)
+            if summary is not expected:
+                raise ValueError("residual summary must agree with member evidence")
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)
 
     @property
     def covariance(self) -> np.ndarray | None:
-        """协方差 ``sigma ⊗ correlation``（只读），缺逐参数 sigma 时为 ``None``。
-
-        公式与 ``analysis.derivatives.covariance_from_correlation`` 逐字一致，放在
-        model 层是因为架构门禁禁止 ``services.exports`` 依赖 ``analysis`` 或 numpy；
-        ``io.orso`` 由此拿到矩阵而无需服务层做数组运算。``parameter_sigma`` 与
-        ``correlation_matrix`` 已在 ``__post_init__`` 校验为只读、且维度对齐。
-        """
-        if self.parameter_sigma is None:
-            return None
-        sigma = self.parameter_sigma
-        covariance = sigma[:, None] * self.correlation_matrix * sigma[None, :]
-        covariance.setflags(write=False)
-        return covariance
+        """Return only the matrix with an explicit statistical provenance."""
+        return None if self.covariance_evidence is None else self.covariance_evidence.matrix
 
 
 def _search_result_fields() -> tuple[str, ...]:

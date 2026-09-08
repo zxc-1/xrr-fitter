@@ -8,7 +8,7 @@ from math import isfinite
 
 import numpy as np
 
-from xrr_fitter.evaluation import EvaluationConstraintError, data_loss_rho
+from xrr_fitter.evaluation import EvaluationConstraintError, data_loss_rho, values_and_jacobians
 from xrr_fitter.fit.joint_roughness import SHARED_ROUGHNESS_TRANSFORM
 from xrr_fitter.fit.joint_scatter_jacobian import (
     joint_scatter_jacobians as _joint_scatter_jacobians,
@@ -255,3 +255,20 @@ def evaluate_joint_jacobian(problem: object, global_unit: np.ndarray) -> np.ndar
     if np.any(~np.isfinite(result)):
         return _empty_joint_jacobian(problem)
     return _readonly(result)
+
+
+def joint_inference_layout(problem: object, global_unit: np.ndarray) -> tuple:
+    """Project the common point and physical tangents without solver sentinels."""
+    units = scatter_joint_vector(problem, global_unit)
+    scatters = _joint_scatter_jacobians(problem, global_unit)
+    local_jacobians = tuple(
+        values_and_jacobians(member, unit)[1] for member, unit in zip(problem.problems, units, strict=True)
+    )
+    physical_rows = []
+    for variable in problem.global_variables:
+        member = variable.members[0]
+        index = problem.dataset_ids.index(member.dataset_id)
+        physical_rows.append(local_jacobians[index][member.parameter_name] @ scatters[index])
+    physical = np.vstack(physical_rows) if physical_rows else np.empty((0, 0))
+    multipliers = tuple(_data_multiplier(problem, member) for member in problem.problems)
+    return units, scatters, _readonly(physical), multipliers

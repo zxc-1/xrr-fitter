@@ -628,17 +628,7 @@ def test_build_report_selects_the_persisted_global_ranking_winner(
         replace(_candidate(problem, "E-2"), objective=0.30, ranking_objective=20.0),
         replace(_candidate(problem, "E-3"), objective=0.40, ranking_objective=30.0),
     )
-    monkeypatch.setattr(
-        module,
-        "_correlation_evidence",
-        lambda _problem, _unit, names: (np.eye(len(names)), (), (), np.ones(len(names))),
-    )
     monkeypatch.setattr(module, "_profiles", lambda *_args: ())
-    monkeypatch.setattr(
-        module,
-        "_residual_evidence",
-        lambda _problem, _candidate: (False, (), False),
-    )
 
     report = module.build_uncertainty_report(problem, candidates, profile_names=())
 

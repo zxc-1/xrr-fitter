@@ -170,15 +170,18 @@ def _correlated_reasons(
     boundary_hits: tuple[str, ...],
     strong_correlations: tuple[tuple[str, str, float], ...],
     profiles_closed: bool,
-    systematic_residual: bool,
+    systematic_residual: bool | None,
     diagnostics: tuple[PhysicsDiagnostic, ...],
+    covariance_available: bool,
 ) -> tuple[str, ...]:
     conditions = (
         (len(best_cluster) == 2, "two_seed_cluster_support"),
         (bool(boundary_hits), "boundary_hit"),
         (bool(strong_correlations), "strong_correlation"),
         (not profiles_closed, "profile_interval_open"),
-        (systematic_residual, "systematic_residual"),
+        (systematic_residual is True, "systematic_residual"),
+        (systematic_residual is None, "residual_diagnostics_not_executed"),
+        (not covariance_available, "covariance_unavailable"),
         (
             any(value.code == "nevot_croce_applicability_exceeded" for value in diagnostics),
             "nevot_croce_applicability_exceeded",
@@ -198,7 +201,8 @@ def classify_candidate_evidence_with_reasons(
     strong_correlations: tuple[tuple[str, str, float], ...] = (),
     profiles_closed: bool = True,
     fully_open_primary_profile: bool = False,
-    systematic_residual: bool = False,
+    systematic_residual: bool | None = None,
+    covariance_available: bool = True,
     diagnostics: tuple[PhysicsDiagnostic, ...] = (),
     distinct_cluster_distance: float = 0.10,
     equivalent_cost_fraction: float = 0.02,
@@ -247,6 +251,7 @@ def classify_candidate_evidence_with_reasons(
         profiles_closed,
         systematic_residual,
         tuple(diagnostics),
+        covariance_available,
     )
     confidence = ConfidenceClass.CORRELATED if reasons else ConfidenceClass.TRUSTED
     return confidence, reasons
@@ -314,7 +319,8 @@ def classify_result_with_evidence(
         strong_correlations=tuple(report.strong_correlations),
         profiles_closed=_profiles_closed(profiles),
         fully_open_primary_profile=_fully_open_primary(profiles),
-        systematic_residual=bool(report.systematic_residual),
+        systematic_residual=report.systematic_residual,
+        covariance_available=report.covariance is not None,
         diagnostics=tuple(report.diagnostics),
         distinct_cluster_distance=thresholds.distinct_cluster_distance,
         equivalent_cost_fraction=thresholds.equivalent_cost_fraction,

@@ -142,6 +142,11 @@ np.testing.assert_allclose(poisson_deviance(np.zeros_like(mu), mu), expected_zer
 - Produces: 不可变 `CovarianceEvidence`（model.analysis），含 names、matrix 或 None、method、rank、不可辨识 names、unavailable_reason；逐成员 residual evidence 含 dataset_id、executed、systematic/autocorrelation。
 - 组合根提供联合数值 evidence/callable，分析层不接触 `fit` 的实现类型。
 - `UncertaintyReport` 持有相同证据；优化起点 spread 另叫搜索稳定性，不能填 parameter_sigma。
+- 最终实现：不可变值在 `model/inference.py`，由 `model.analysis` 暴露；严格的
+  `statistical_information(problem, unit)` 组合在 `evaluation_inference.py`，经 `evaluation`
+  暴露 `(data_bread, prior_bread, meat)`，模式数学仍在 `evaluation_statistics.py`，避免导入环。
+  `UncertaintyReport.covariance_evidence/member_residuals/search_parameter_spread` 为持久化证据；
+  `joint_inference_layout` 经服务 callable 接入 `analysis.joint.analyze_joint_point`。
 
 - [ ] **1. RED：统计比例与虚假可信度。** 对已知 Gaussian sigma 且只自由 scale 的模型，80 和 800 个相同独立观测应满足：
 
