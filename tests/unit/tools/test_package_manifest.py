@@ -142,6 +142,14 @@ def test_downloaded_bytes_are_verified_without_importing_packages(load_tool_modu
     assert records[0]["size"] == len(b"recorded package bytes")
 
 
+def test_windows_identity_accepts_missing_path_file_ids(load_tool_module, monkeypatch):
+    module = _module(load_tool_module)
+    monkeypatch.setattr(module.os, "name", "nt")
+    path_stat = (0, 0, 12, 34, 56)
+    handle_stat = (17, 29, 12, 34, 56)
+    assert module._same_file_identity(path_stat, handle_stat)
+
+
 @pytest.mark.parametrize("mutation", ["modified", "missing", "extra", "symlink"])
 def test_wheel_cache_rejects_corruption_missing_extra_and_symlink_bytes(load_tool_module, tmp_path, mutation):
     module = _module(load_tool_module)

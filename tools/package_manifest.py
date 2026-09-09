@@ -160,17 +160,26 @@ def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
     return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
 
 
+def _same_file_identity(left: tuple[int, int, int, int, int], right: tuple[int, int, int, int, int]) -> bool:
+    if left[2:] != right[2:]:
+        return False
+    if os.name == "nt" and (left[:2] == (0, 0) or right[:2] == (0, 0)):
+        # Windows path stats can omit file IDs while handle stats still expose them.
+        return True
+    return left[:2] == right[:2]
+
+
 def _verified_file(path: Path, expected: str) -> dict:
     before = _file_identity(path.lstat())
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
     descriptor = os.open(path, flags)
     with os.fdopen(descriptor, "rb") as handle:
-        if _file_identity(os.fstat(handle.fileno())) != before:
+        if not _same_file_identity(_file_identity(os.fstat(handle.fileno())), before):
             raise ValueError("package wheel changed before reading")
         digest = hashlib.file_digest(handle, "sha256").hexdigest()
-        if _file_identity(os.fstat(handle.fileno())) != before:
+        if not _same_file_identity(_file_identity(os.fstat(handle.fileno())), before):
             raise ValueError("package wheel changed during reading")
-    if digest != expected or _file_identity(path.lstat()) != before:
+    if digest != expected or not _same_file_identity(_file_identity(path.lstat()), before):
         raise ValueError("package wheel bytes do not match the manifest")
     return {"filename": path.name, "sha256": digest, "size": before[2]}
 
