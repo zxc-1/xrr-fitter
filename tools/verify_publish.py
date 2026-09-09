@@ -259,7 +259,7 @@ def _publish_new_file_by_pathname(
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        if directory_fd is None:
+        if directory_fd is None and os.name != "nt":
             temporary_sync = os.open(temporary, os.O_RDONLY)
             try:
                 os.fsync(temporary_sync)
