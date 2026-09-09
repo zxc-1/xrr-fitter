@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 from multiprocessing import freeze_support
+
+# The CLI owns only non-GUI rendering; select the non-Qt Matplotlib backend before
+# importing the command facade, which transitively loads export serializers.
+os.environ.setdefault("MPLBACKEND", "Agg")
 
 from xrr_fitter.cli import commands, exit_codes
 
