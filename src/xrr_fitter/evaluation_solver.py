@@ -180,7 +180,7 @@ def least_squares_residual(
     cannot be misclassified as merely unfavorable candidates.
     """
     unit = _validated_unit(problem, unit_vector)
-    evaluate = evaluate_model if evaluator is None else evaluator
+    evaluate = partial(evaluate_model, fit_only=True) if evaluator is None else evaluator
     residual, prior, valid = _least_squares_residual_parts(problem, unit, evaluate)
     if not valid:
         return np.full(_least_squares_row_count(problem), 1e6, dtype=float)
@@ -241,7 +241,7 @@ def _solver_data_system(
         residual, prior, valid = _least_squares_residual_parts(
             problem,
             unit,
-            evaluate_model,
+            partial(evaluate_model, fit_only=True),
         )
         return residual, _empty_residual_jacobian(problem), prior, None, valid
 
@@ -379,7 +379,7 @@ def least_squares_residual_jacobian(
             _residual, _prior, valid = _least_squares_residual_parts(
                 problem,
                 unit,
-                evaluate_model,
+                partial(evaluate_model, fit_only=True),
             )
     if problem.scale_prior_center is not None:
         prior_jacobian = (

@@ -57,7 +57,7 @@ def local_residual(problem: object, unit_vector: np.ndarray) -> np.ndarray:
     return least_squares_residual(
         problem,
         _validated_unit(problem, unit_vector, "unit vector"),
-        evaluator=evaluate_vector,
+        evaluator=partial(evaluate_vector, fit_only=True),
     )
 
 

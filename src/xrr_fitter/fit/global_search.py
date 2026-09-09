@@ -531,7 +531,7 @@ def solve_global(
     def objective(value: np.ndarray) -> float:
         if cancelled is not None and cancelled():
             raise SearchCancelled("search cancelled")
-        result = evaluate_vector(problem, value)
+        result = evaluate_vector(problem, value, fit_only=True)
         trace.append(result.objective)
         return result.objective
 

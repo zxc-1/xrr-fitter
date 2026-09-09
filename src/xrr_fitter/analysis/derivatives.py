@@ -19,7 +19,7 @@ def _derivative_inputs(problem: FitEvaluationContext, unit_vector: np.ndarray):
     unit = np.asarray(unit_vector, dtype=float)
     if unit.shape != (len(problem.variables),):
         raise ValueError("objective derivative unit vector has the wrong shape")
-    evaluation = evaluate_model(problem, unit)
+    evaluation = evaluate_model(problem, unit, fit_only=True)
     if not evaluation.valid or not np.isfinite(evaluation.objective):
         raise ValueError("cannot differentiate an invalid objective evaluation")
     jacobian = np.asarray(evaluate_model_jacobian(problem, unit), dtype=float)

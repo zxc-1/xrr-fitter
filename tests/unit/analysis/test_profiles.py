@@ -241,7 +241,8 @@ def test_profile_basin_recovery_treats_physical_constraint_failures_as_invalid_p
         unit_vector=np.asarray([0.5]),
     )
 
-    def evaluate(_problem, unit):
+    def evaluate(_problem, unit, *, fit_only=False):
+        assert fit_only is True
         if unit[0] in {0.0, 1.0}:
             raise EvaluationConstraintError("constraint_violation:ValueError")
         return SimpleNamespace(valid=True, objective=float((unit[0] - 0.8) ** 2))
@@ -277,7 +278,8 @@ def test_direct_problem_profile_treats_physical_constraint_failures_as_invalid_p
         scale_prior_center=None,
     )
 
-    def evaluate(_problem, unit):
+    def evaluate(_problem, unit, *, fit_only=False):
+        assert fit_only is True
         if unit[0] in {0.0, 1.0}:
             raise EvaluationConstraintError("constraint_violation:ValueError")
         return SimpleNamespace(valid=True, objective=float((unit[0] - 0.5) ** 2))

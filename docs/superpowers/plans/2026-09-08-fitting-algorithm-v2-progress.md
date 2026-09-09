@@ -159,7 +159,7 @@ Task 4–8 仍待实施：区间语义与重采样、内环/缓存、搜索调�
 
 ## Task 4：区间分类、profile 精度与模式/联合 bootstrap
 
-实现与自审已完成，固定提交的官方 clone 门禁待运行。正式 percentile CI 要求至少
+实现、自审与官方 clone 门禁已完成。正式 percentile CI 要求至少
 200 个成功样本且失败率不超过 20%；fast 的 8 次只保存探索性样本，不能标 95%。
 
 ### RED → GREEN
@@ -210,8 +210,61 @@ Task 5–8 仍未实施完成，不把本批统计接口视为整个 V2 已完�
 ### Task 4 官方门禁及快照补充
 
 - 实现提交 `3a28f53` 普通 clone：unit **1819 passed**、quality **188 passed**、
-  regression **50 passed**；integration **13 passed / 1 failed**，GUI 仍在运行。
+  regression **50 passed**、GUI **647 passed**；integration **13 passed / 1 failed**。
 - 集成失败来自普通联合拟合旧进度快照未包含新增的 bootstrap 起止事件；生产路径和
   共享结果均一致。更新完整进度快照，并断言真实 attempted_count=1、无正式置信区间，
   聚焦联合集成测试 **2 passed，18.43 s**。未修改生产代码或物理容差。
-- 原始日志 `/tmp/xrr-v2-3a28f53-nymtapo1/`；补充提交后重跑官方 integration。
+- 补充提交 `691f609` 官方 integration **14 passed**。GUI 仅保留已有隐藏画布
+  `constrained_layout` 警告。
+- 原始日志 `/tmp/xrr-v2-3a28f53-nymtapo1/`、`/tmp/xrr-v2-691f609-28mzoc6d/`；
+  临时普通 clone 均已自动清理。
+
+## Task 5：拟合点内环与联合系统缓存
+
+实现与自审已完成，固定提交的官方 clone 门禁待运行。所有物理路径共用同一实现，
+最终发布默认计算完整曲线；内环仅选择 fit_mask，不改变目标、采样质量或物理容差。
+
+### RED → GREEN
+
+- 初始 RED：1200 点源数据每 10 点拟合 1 点，实际物理工作量仍为 1200；联合缓存缺失。
+- 补充 **2 项 RED**：每点角度分辨率仍计算完整轴；补充 **4 项 RED**：profile、
+  binary profile、目标导数和 profile path 标量求值仍计算未拟合点。
+- 真实先验导数溢出回归取得 **1 failed**：有效的 prior residual=0 被联合 system 的
+  Jacobian 溢出打断。仅捕获已知 FloatingPointError，重算 fit-only 真实残差并保留原有
+  求解器零 Jacobian 哨兵；意外 RuntimeError 继续抛出，统计推断不消费该哨兵。
+- 修复后专项 **41 passed**，覆盖三模式、角度/每点分辨率、混合波长、共享 roughness、
+  跨成员约束、线程隔离、缓存输入/返回数组所有权、缓存命中取消与无自由参数。
+- 正角度自审最初怀疑的 mask 检查短路并不存在；保留真实回归，未修改该生产判断。
+- 最终完整直接 `tests/unit tests/regression` **2355 passed，117.08 s**。
+  纳入新增测试后全仓库 Ruff lint/format、Radon 和 `git diff --check HEAD` 通过；
+  Radon 报告 `/tmp/xrr-v2-task5-final-radon.json`。
+
+### 最终接口
+
+- `evaluate_model(problem, unit, *, fit_only=False)`、`fit.objective.evaluate_vector` 和
+  `fit.joint_evaluation.evaluate_joint_vector` 默认保留完整发布轴；显式 fit_only 时未计算行 NaN。
+- scalar Q、MCMC、单/联合 DE、local residual、profile 与导数内环显式选择 fit_only。
+  `_model_residual_jacobian` 仅计算拟合物理行，移除 full-model/full-Jacobian 临时数组。
+- `_point_resolution_for_wavelength` 与 `_point_resolution_with_jacobian` 接收可选 row_mask，
+  在角度分辨率及其导数计算前选择同一行。
+- `joint_least_squares_system(problem, global_unit)` scatter 后每成员求一次联合 residual/Jacobian，
+  再按真实约束组装全局列；旧独立 Jacobian 入口复用同一组装逻辑。
+- `cached_joint_least_squares_callbacks(problem, cancelled=None)` 复用现有线程 local 缓存，
+  返回拥有的副本，每次调用（含缓存命中）前后检查取消。`solve_joint` 已接入。
+
+### 性能证据
+
+固定 baseline `691f609` 与未提交实现串行比较，每项 5 次中位数，1200 源点/120 拟合点，
+混合波长及每点角度分辨率；数值比较通过。
+
+- residual：0.12005 → 0.01658 s（7.24x）；Parratt 点数 1,224,000 → 122,400。
+- system：0.18582 → 0.02326 s（7.99x）；primal+tangent 点数 1,200,000 → 120,000。
+- joint callback pair：0.62171 → 0.04958 s（12.54x）；20 次独立回调变为 10 次联合 system。
+- joint local fit：0.54642 → 0.08955 s（6.10x）；前后 nfev=8，目标及参数一致。
+- 可重放脚本和原始报告 `/tmp/xrr-v2-task5-benchmark.cCgtbC/`。提交后另行复跑，绑定最终提交。
+- 该工作量夹具的观测为线性强度，拟合落在 scale 上边界；它证明数值等价及工作量减少，
+  不是统计覆盖率或通用速度保证。真实合成病例仍由 Task 8 验收。
+
+本批不改变生产依赖、CI mode 或其他工作树；临时产物保存在工作树外。
+独立审查服务此前持续不可用，只有主代理自审，不能声称独立审查通过。
+Task 6–8 尚未实施。

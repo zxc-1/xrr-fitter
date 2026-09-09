@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from math import isfinite
 
 import numpy as np
 
-from xrr_fitter.evaluation import EvaluationConstraintError, data_loss_rho, values_and_jacobians
+from xrr_fitter.evaluation import EvaluationConstraintError, data_loss_rho, least_squares_system, values_and_jacobians
 from xrr_fitter.fit.joint_roughness import SHARED_ROUGHNESS_TRANSFORM
 from xrr_fitter.fit.joint_scatter_jacobian import (
     joint_scatter_jacobians as _joint_scatter_jacobians,
@@ -50,20 +51,12 @@ def _constraint_scatter_jacobians(
 
 def _assemble_joint_jacobian(
     problem: object,
-    local_units: tuple[np.ndarray, ...],
+    local_jacobians: tuple[np.ndarray, ...],
     scatter_jacobians: tuple[np.ndarray, ...] | None,
 ) -> np.ndarray:
     rows: list[np.ndarray] = []
     width = len(problem.global_variables)
-    for dataset_index, (local_problem, unit, scatter) in enumerate(
-        zip(
-            problem.problems,
-            local_units,
-            problem.scatter_maps,
-            strict=True,
-        )
-    ):
-        local = local_jacobian(local_problem, unit)
+    for dataset_index, (local, scatter) in enumerate(zip(local_jacobians, problem.scatter_maps, strict=True)):
         if scatter_jacobians is not None:
             rows.append(local @ scatter_jacobians[dataset_index])
             continue
@@ -140,7 +133,7 @@ def _data_multiplier(problem: object, member: object) -> float:
     return total_points / (len(problem.problems) * member.objective_point_count)
 
 
-def evaluate_joint_vector(problem: object, global_unit: np.ndarray) -> JointEvaluation:
+def evaluate_joint_vector(problem: object, global_unit: np.ndarray, *, fit_only: bool = False) -> JointEvaluation:
     """Evaluate every local projection and report their arithmetic mean cost."""
     try:
         local_units = scatter_joint_vector(problem, global_unit)
@@ -169,9 +162,8 @@ def evaluate_joint_vector(problem: object, global_unit: np.ndarray) -> JointEval
             evaluations,
             residuals,
         )
-    evaluations = tuple(
-        evaluate_vector(local_problem, unit) for local_problem, unit in zip(problem.problems, local_units, strict=True)
-    )
+    evaluator = partial(evaluate_vector, fit_only=True) if fit_only else evaluate_vector
+    evaluations = tuple(evaluator(member, unit) for member, unit in zip(problem.problems, local_units, strict=True))
     valid = all(value.valid for value in evaluations)
     objective = _joint_objective(problem, evaluations) if valid else float("inf")
     residuals = np.concatenate(
@@ -247,7 +239,7 @@ def evaluate_joint_jacobian(problem: object, global_unit: np.ndarray) -> np.ndar
         with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
             result = _assemble_joint_jacobian(
                 problem,
-                local_units,
+                tuple(local_jacobian(member, unit) for member, unit in zip(problem.problems, local_units, strict=True)),
                 _constraint_scatter_jacobians(problem, global_unit),
             )
     except (EvaluationConstraintError, FloatingPointError):
@@ -255,6 +247,34 @@ def evaluate_joint_jacobian(problem: object, global_unit: np.ndarray) -> np.ndar
     if np.any(~np.isfinite(result)):
         return _empty_joint_jacobian(problem)
     return _readonly(result)
+
+
+def joint_least_squares_system(problem: object, global_unit: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Scatter once and share each member's analytic residual/Jacobian traversal."""
+    try:
+        local_units = scatter_joint_vector(problem, global_unit)
+    except EvaluationConstraintError:
+        jacobian = _empty_joint_jacobian(problem)
+        return np.full(jacobian.shape[0], 1e6), np.array(jacobian, copy=True)
+    try:
+        systems = tuple(
+            least_squares_system(member, unit) for member, unit in zip(problem.problems, local_units, strict=True)
+        )
+    except FloatingPointError:
+        # Preserve the separate callbacks' derivative-failure contract.
+        residual = evaluate_joint_vector(problem, global_unit, fit_only=True).residuals
+        return np.array(residual, copy=True), np.array(_empty_joint_jacobian(problem), copy=True)
+    residual = np.concatenate(tuple(system[0] for system in systems))
+    try:
+        with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+            jacobian = _assemble_joint_jacobian(
+                problem, tuple(system[1] for system in systems), _constraint_scatter_jacobians(problem, global_unit)
+            )
+    except (EvaluationConstraintError, FloatingPointError):
+        jacobian = _empty_joint_jacobian(problem)
+    if np.any(~np.isfinite(jacobian)):
+        jacobian = _empty_joint_jacobian(problem)
+    return residual, np.array(jacobian, copy=True)
 
 
 def joint_inference_layout(problem: object, global_unit: np.ndarray) -> tuple:

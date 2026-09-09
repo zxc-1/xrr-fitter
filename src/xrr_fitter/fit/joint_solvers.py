@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 
 import numpy as np
 from scipy.optimize import differential_evolution, least_squares
 
+from xrr_fitter.evaluation import cached_least_squares_callbacks
 from xrr_fitter.fit.joint_evaluation import (
     JointEvaluation,
-    evaluate_joint_jacobian,
     evaluate_joint_vector,
     joint_least_squares_loss,
+    joint_least_squares_system,
 )
 from xrr_fitter.fit.joint_problem import compile_joint_problem
 from xrr_fitter.fit.local_search import SearchCancelled
@@ -33,6 +35,19 @@ def poll(cancelled: Callable[[], bool] | None) -> None:
         raise SearchCancelled("search cancelled")
 
 
+def cached_joint_least_squares_callbacks(problem: object, cancelled: Callable[[], bool] | None = None):
+    """Own one thread-local system cache for this optimizer and compiled problem."""
+    residual, jacobian = cached_least_squares_callbacks(partial(joint_least_squares_system, problem))
+
+    def evaluate(callback, value):
+        poll(cancelled)
+        result = callback(value)
+        poll(cancelled)
+        return result
+
+    return partial(evaluate, residual), partial(evaluate, jacobian)
+
+
 def solve_joint(
     problem: object,
     start: np.ndarray,
@@ -51,13 +66,7 @@ def solve_joint(
         )
     initial_evaluation = evaluate_joint_vector(problem, unit)
 
-    def residual(value: np.ndarray) -> np.ndarray:
-        poll(cancelled)
-        return evaluate_joint_vector(problem, value).residuals
-
-    def jacobian(value: np.ndarray) -> np.ndarray:
-        poll(cancelled)
-        return evaluate_joint_jacobian(problem, value)
+    residual, jacobian = cached_joint_least_squares_callbacks(problem, cancelled)
 
     solved = least_squares(
         residual,
@@ -139,7 +148,7 @@ def solve_joint_global(
 
     def objective(value: np.ndarray) -> float:
         poll(cancelled)
-        return evaluate_joint_vector(problem, value).objective
+        return evaluate_joint_vector(problem, value, fit_only=True).objective
 
     solved = differential_evolution(
         objective,

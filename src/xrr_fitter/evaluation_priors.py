@@ -526,7 +526,7 @@ def problem_log_probability(problem: FitEvaluationContext, unit_vector: np.ndarr
     except ValueError:
         return -np.inf
     try:
-        observed = evaluate_model(problem, unit)
+        observed = evaluate_model(problem, unit, fit_only=True)
     except EvaluationConstraintError:
         return -np.inf
     if not all((observed.valid, isfinite(observed.objective))):

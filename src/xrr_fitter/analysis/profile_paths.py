@@ -42,7 +42,7 @@ def _path_objective(problem_or_objective: object) -> Scalar:
         return problem_or_objective
 
     def objective(unit: np.ndarray) -> float:
-        evaluation = evaluate_model(problem_or_objective, unit)
+        evaluation = evaluate_model(problem_or_objective, unit, fit_only=True)
         return evaluation.objective if evaluation.valid else np.inf
 
     return objective

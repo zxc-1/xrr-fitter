@@ -270,7 +270,7 @@ def test_objective_derivatives_reject_unrepresentable_matrix_products(
         fit_residuals=np.ones(1),
         parameters=(),
     )
-    monkeypatch.setattr(module, "evaluate_model", lambda *_args: observed)
+    monkeypatch.setattr(module, "evaluate_model", lambda *_args, **_kwargs: observed)
     monkeypatch.setattr(
         module,
         "evaluate_model_jacobian",

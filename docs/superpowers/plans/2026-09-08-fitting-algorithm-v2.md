@@ -201,7 +201,8 @@ assert likelihood_profile.delta_total == pytest.approx(3.841458820694124)
 - [x] **2. RED 命令。** `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/dala/Desktop/XRR-Fitter/venvs/repo/bin/python -m pytest -p no:cacheprovider -q tests/unit/analysis/test_interval_semantics.py`。
 - [x] **3. GREEN：阈值和重采样。** 使用 `scipy.stats.chi2.ppf(.95,1)/N` 转换到 J profile；robust 阈值保持经验语义。Gaussian 参数 bootstrap 按 sigma，Poisson 从 μ 抽整数，robust 用有序移动块 log residual；每次按对应生成目标重新估计平台。联合每个 replicate 先生成全部成员，再拟合整个 shared problem，不能拼各自单独的 sigma。成功计数与失败原因精确保存。
 - [x] **4. 回归。** 跑 analysis/profile/bootstrap、joint services、项目 round-trip。块抽样保持用户排除点、identity、normalization 和 counts；快速自动拟合 bootstrap 未请求时不加昂贵阶段，不假报 performed。
-- [ ] **5. 提交/审查。** `fix: distinguish support intervals and calibrated uncertainty`。
+- [x] **5. 提交/自审及正式门禁。** `3a28f53` 和集成快照补充 `691f609`；详情见进度文档。
+  独立审查服务不可用，未取得独立审查结论。
 
 ### Task 5: 拟合点内环和线程隔离的联合系统缓存
 
@@ -212,8 +213,11 @@ assert likelihood_profile.delta_total == pytest.approx(3.841458820694124)
 **Interfaces:**
 - Consumes: 三模式统一 system 数值接口。
 - Produces: scalar/residual/Jacobian 内环只计算 fit_mask；`evaluate_model` 的最终发布默认保持完整轴。`cached_joint_least_squares_callbacks(problem, cancelled)` 返回线程隔离 residual/Jacobian callable，同一点只求一次系统。
+- 最终签名：`evaluate_model`、单/联合 `evaluate_vector` 使用 keyword-only `fit_only=False`；
+  联合 `joint_least_squares_system(problem, global_unit)` 组合成员 system；缓存 cancelled 默认 None。
+  profile、MCMC、标量导数内环同步选择 fit_only，分辨率 helper 在计算前选择 row_mask。
 
-- [ ] **1. RED：点数与调用次数。** 同一1200点模型 mask 每10点取1点，与仅存120点对照：
+- [x] **1. RED：点数与调用次数。** 同一1200点模型 mask 每10点取1点，与仅存120点对照：
 
 ```python
 np.testing.assert_allclose(masked_residual, compact_residual)
@@ -225,9 +229,9 @@ assert calls_after_residual_and_jacobian_at_same_point == 1
 
 真实系统点数通过窄 spy 记录，不能只mock数值。多线程交错不同 u，无串值；输入改变、返回数组被SciPy修改均不能污染缓存。
 
-- [ ] **2. RED 命令。** `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/dala/Desktop/XRR-Fitter/venvs/repo/bin/python -m pytest -p no:cacheprovider -q tests/unit/fit/test_evaluation_workload.py tests/unit/fit/test_joint_solver_cache.py`。
-- [ ] **3. GREEN：分离 publication 与 inner layout。** 角度、resolution、波长混合、约束导数使用同一选择；返回完整曲线的路径不复用稀疏数组。联合 scatter 后的每成员 system 同次求残差与 Jacobian，保存线程local拥有的数组，返回独立副本。
-- [ ] **4. 回归及性能。** 三模式、resolution、共享roughness、cross-dataset constraints、无自由参数都测试。物理Jacobian参照不放宽。记录5次墙钟中位数、物理点数与系统调用数，不承诺通用9倍。
+- [x] **2. RED 命令。** `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/dala/Desktop/XRR-Fitter/venvs/repo/bin/python -m pytest -p no:cacheprovider -q tests/unit/fit/test_evaluation_workload.py tests/unit/fit/test_joint_solver_cache.py`。
+- [x] **3. GREEN：分离 publication 与 inner layout。** 角度、resolution、波长混合、约束导数使用同一选择；返回完整曲线的路径不复用稀疏数组。联合 scatter 后的每成员 system 同次求残差与 Jacobian，保存线程local拥有的数组，返回独立副本。
+- [x] **4. 回归及性能。** 三模式、resolution、共享roughness、cross-dataset constraints、无自由参数都测试。物理Jacobian参照不放宽。记录5次墙钟中位数、物理点数与系统调用数，不承诺通用9倍。
 - [ ] **5. 提交/审查。** `perf: restrict inner evaluation and share joint solver systems`。
 
 ### Task 6: 渐进网格、完整目标复核与确定性预算

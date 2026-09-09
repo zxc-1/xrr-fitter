@@ -128,6 +128,8 @@ def _expanded_stacks(
 def _angle_layout(
     problem: object,
     values: dict[str, float],
+    *,
+    fit_only: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Recompute incident angle, model rows, source indices, and effective q.
 
@@ -138,6 +140,8 @@ def _angle_layout(
     """
     theta = problem.data.two_theta_deg / 2.0 + values["instrument.angle_offset_deg"]
     model_mask = np.isfinite(theta) & (theta > 0.0) & (theta <= 90.0)
+    if fit_only:
+        model_mask &= problem.data.fit_mask
     model_indices = np.flatnonzero(model_mask)
     # Full source layout is retained for result publication and diagnostic rows.
     # Only the compact positive-angle subset enters trigonometric physics.
@@ -153,6 +157,8 @@ def _point_resolution_for_wavelength(
     problem: object,
     angle_offset_deg: float,
     wavelength_a: float,
+    *,
+    row_mask: np.ndarray | None = None,
 ) -> np.ndarray | None:
     """Resolve an imported per-row width in the active wavelength's q domain.
 
@@ -171,12 +177,12 @@ def _point_resolution_for_wavelength(
     if kind in {"sigma_q_a_inv", "fwhm_q_a_inv"}:
         if data.sigma_q_a_inv is None:
             raise ValueError("q-domain point resolution was not prepared")
-        return data.sigma_q_a_inv
+        return _masked_optional(data.sigma_q_a_inv, row_mask)
     if kind not in {"sigma_two_theta_deg", "fwhm_two_theta_deg"}:
         raise ValueError("unsupported point-resolution mapping")
     return resolution_to_sigma_q(
-        data.two_theta_deg,
-        data.resolution_raw,
+        _masked_optional(data.two_theta_deg, row_mask),
+        _masked_optional(data.resolution_raw, row_mask),
         kind,
         wavelength_a,
         angle_offset_deg,
@@ -367,7 +373,7 @@ def _modeled_reflectivity(
 ) -> np.ndarray:
     """Evaluate compact positive-angle rows through the primal instrument model.
 
-    Point widths are sliced by the same mask as theta. The callback remaps any
+    Point widths already use the same selection as theta. The callback remaps any
     adaptive-resolution diagnostic before it joins the candidate evidence.
     """
     callback = partial(_record_physics_diagnostic, diagnostics, model_indices)
@@ -381,8 +387,8 @@ def _modeled_reflectivity(
         problem.data.beam,
         secondary_stack=secondary_stack,
         resolution_domain=problem.instrument.resolution_domain,
-        sigma_q_a_inv=_masked_optional(primary_sigma, model_mask),
-        secondary_sigma_q_a_inv=_masked_optional(secondary_sigma, model_mask),
+        sigma_q_a_inv=primary_sigma,
+        secondary_sigma_q_a_inv=secondary_sigma,
         diagnostic_callback=callback,
         emit_warning=False,
         **instrument,
@@ -392,6 +398,8 @@ def _modeled_reflectivity(
 def _model_evaluation(
     problem: object,
     unit_vector: np.ndarray,
+    *,
+    fit_only: bool = False,
 ) -> ModelEvaluation:
     """Assemble one complete immutable primal candidate evaluation.
 
@@ -411,18 +419,20 @@ def _model_evaluation(
     except (ValueError, FloatingPointError, OverflowError) as error:
         raise EvaluationConstraintError(f"constraint_violation:{type(error).__name__}") from error
     try:
-        theta, model_mask, model_indices, qz = _angle_layout(problem, values)
+        theta, model_mask, model_indices, qz = _angle_layout(problem, values, fit_only=fit_only)
         angle_offset = values["instrument.angle_offset_deg"]
         primary_sigma = _point_resolution_for_wavelength(
             problem,
             angle_offset,
             primary_wavelength,
+            row_mask=model_mask,
         )
         secondary_sigma = (
             _point_resolution_for_wavelength(
                 problem,
                 angle_offset,
                 problem.data.beam.wavelength_2_a,
+                row_mask=model_mask,
             )
             if problem.data.beam.kind == "mixed_kalpha"
             else None
@@ -502,13 +512,15 @@ def _model_evaluation(
 def evaluate_model(
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
+    *,
+    fit_only: bool = False,
 ) -> ModelEvaluation:
     """Evaluate one candidate through the single shared numerical chain.
 
-    This public pure function intentionally exposes no alternate engine or
-    injectable operation bundle; fit and analysis share this exact boundary.
+    Publication defaults to the full source axis. Inner callers select fitted
+    rows through the same engine; excluded rows then remain NaN in the snapshot.
     """
-    return _model_evaluation(problem, unit_vector)
+    return _model_evaluation(problem, unit_vector, fit_only=fit_only)
 
 
 def expanded_structure_jacobian(
@@ -531,11 +543,11 @@ def expanded_structure_jacobian(
 
 def _masked_optional(
     value: np.ndarray | None,
-    mask: np.ndarray,
+    mask: np.ndarray | None,
 ) -> np.ndarray | None:
     """Apply the model-row mask while preserving an absent optional array.
 
     The same helper slices primal widths and width tangents, preventing compact
     model rows from drifting relative to full source order.
     """
-    return None if value is None else value[mask]
+    return value if value is None or mask is None else value[mask]

@@ -42,10 +42,10 @@ def _invalid_evaluation(
     )
 
 
-def evaluate_vector(problem: object, unit_vector: np.ndarray) -> ModelEvaluation:
+def evaluate_vector(problem: object, unit_vector: np.ndarray, *, fit_only: bool = False) -> ModelEvaluation:
     """Evaluate a candidate and convert only declared physical failures."""
     try:
-        return evaluation.evaluate_model(problem, unit_vector)
+        return evaluation.evaluate_model(problem, unit_vector, fit_only=fit_only)
     except evaluation.EvaluationConstraintError as error:
         return _invalid_evaluation(problem, error)
 

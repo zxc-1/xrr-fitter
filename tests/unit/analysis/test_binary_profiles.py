@@ -164,10 +164,10 @@ def test_binary_profile_treats_physical_constraint_failures_as_unsupported_probe
     )
     original = module.evaluate_model
 
-    def constrained(problem_value, unit):
+    def constrained(problem_value, unit, *, fit_only=False):
         if np.asarray(unit, dtype=float)[first_index] < 0.05:
             raise EvaluationConstraintError("constraint_violation:ValueError")
-        return original(problem_value, unit)
+        return original(problem_value, unit, fit_only=fit_only)
 
     monkeypatch.setattr(module, "evaluate_model", constrained)
 

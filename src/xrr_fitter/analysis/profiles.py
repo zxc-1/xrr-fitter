@@ -47,6 +47,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from math import isfinite
 from types import MappingProxyType
 
@@ -966,7 +967,7 @@ def build_problem_profiles(
         prepare_plan=_prepare_profile_plan,
         scan_plan_direction=_scan_plan_direction,
         finish_plan=_finish_profile_plan,
-        evaluate=evaluate_model,
+        evaluate=partial(evaluate_model, fit_only=True),
         cache_callbacks=cached_least_squares_callbacks,
         least_squares_system=least_squares_system,
         least_squares_loss=least_squares_loss,
@@ -1068,7 +1069,7 @@ def recover_profile_basin(
 
         def objective(value: np.ndarray) -> float:
             try:
-                evaluation = evaluate_model(problem, value)
+                evaluation = evaluate_model(problem, value, fit_only=True)
             except EvaluationConstraintError:
                 return np.inf
             return evaluation.objective if evaluation.valid else np.inf

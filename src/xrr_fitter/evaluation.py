@@ -442,4 +442,4 @@ def _parameter_prior_log_density(*args, **kwargs):
 
 def problem_objective_total(problem, unit_vector) -> float:
     """Return the complete-data total Q used by inference and search."""
-    return evaluate_model(problem, unit_vector).objective * problem.objective_point_count
+    return evaluate_model(problem, unit_vector, fit_only=True).objective * problem.objective_point_count

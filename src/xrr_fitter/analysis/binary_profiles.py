@@ -100,7 +100,7 @@ def build_binary_profile[T](
 
     def objective(transformed: np.ndarray) -> float:
         try:
-            evaluation = evaluate_model(problem, observe(transformed))
+            evaluation = evaluate_model(problem, observe(transformed), fit_only=True)
         except EvaluationConstraintError:
             return np.inf
         return evaluation.objective if evaluation.valid else np.inf
