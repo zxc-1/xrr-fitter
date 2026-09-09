@@ -12,9 +12,12 @@ DirectoryIdentity = tuple[int, int]
 
 DIRECTORY_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 DIRECTORY_FD_SUPPORTED = os.name != "nt" and os.mkdir in os.supports_dir_fd and os.open in os.supports_dir_fd
-ANCHORED_FILE_FD_SUPPORTED = DIRECTORY_FD_SUPPORTED and all(
-    operation in os.supports_dir_fd for operation in (os.link, os.open, os.stat, os.unlink)
-)
+ANCHORED_FILE_FD_SUPPORTED = DIRECTORY_FD_SUPPORTED and {
+    os.link,
+    os.open,
+    os.stat,
+    os.unlink,
+}.issubset(os.supports_dir_fd)
 
 
 def _directory_identity(path: Path, label: str) -> DirectoryIdentity:

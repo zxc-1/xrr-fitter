@@ -22,6 +22,16 @@ HANDLERS = {
 }
 
 
+def _configure_stdio() -> None:
+    """Keep frozen Windows console output able to represent CLI messages."""
+    if os.name != "nt":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
 def _add_progress_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--json-progress",
@@ -71,6 +81,7 @@ def _dispatch(arguments: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     """Enable frozen workers, parse arguments, and run one subcommand."""
     freeze_support()
+    _configure_stdio()
     parser = build_parser()
     arguments = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     if arguments.command is None:
