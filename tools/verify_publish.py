@@ -191,23 +191,34 @@ def _stage_pathname_publish(
     *,
     directory_label: str,
     file_label: str,
-) -> tuple[int, Path, int]:
+) -> tuple[int | None, Path, int]:
     _require_same_directory(directory, identity, directory_label)
     target = directory / name
     if directory.is_symlink() or not directory.is_dir() or os.path.lexists(target):
         raise ValueError(f"{file_label} must be a new regular-file path")
-    directory_fd, observed = _open_directory(directory, directory_label)
-    try:
-        if observed != identity:
-            raise ValueError(f"{directory_label} changed during validation")
+    directory_fd: int | None = None
+    if DIRECTORY_FD_SUPPORTED:
+        directory_fd, observed = _open_directory(directory, directory_label)
+        try:
+            if observed != identity:
+                raise ValueError(f"{directory_label} changed during validation")
+            temporary_descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{name}.",
+                suffix=".tmp",
+                dir=directory,
+            )
+        except BaseException:
+            os.close(directory_fd)
+            raise
+    else:
+        # Windows cannot open a directory as a file. Keep the pathname
+        # fallback anchored by checking the directory identity before and
+        # after the hard-link publication.
         temporary_descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{name}.",
             suffix=".tmp",
             dir=directory,
         )
-    except BaseException:
-        os.close(directory_fd)
-        raise
     return directory_fd, Path(temporary_name), temporary_descriptor
 
 
@@ -234,6 +245,7 @@ def _publish_new_file_by_pathname(
     target = directory / name
     directory_fd: int | None = None
     temporary: Path | None = None
+    published_target = target
     published = False
     try:
         directory_fd, temporary, temporary_descriptor = _stage_pathname_publish(
@@ -243,22 +255,33 @@ def _publish_new_file_by_pathname(
             directory_label=directory_label,
             file_label=file_label,
         )
+        # The temporary file retains the original directory pathname if an
+        # ABA replacement swaps the report directory after publication.
+        published_target = temporary.parent / name
         with os.fdopen(temporary_descriptor, "wb") as handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
+        if directory_fd is None:
+            temporary_sync = os.open(temporary, os.O_RDONLY)
+            try:
+                os.fsync(temporary_sync)
+            finally:
+                os.close(temporary_sync)
         try:
             os.link(temporary, target, follow_symlinks=False)
         except FileExistsError as error:
             raise ValueError(f"{file_label} appeared during validation") from error
         except (AttributeError, NotImplementedError, OSError, TypeError) as error:
+            _require_same_directory(directory, identity, directory_label)
             raise ValueError(f"{file_label} cannot be published atomically on this platform") from error
         published = True
-        os.fsync(directory_fd)
+        if directory_fd is not None:
+            os.fsync(directory_fd)
         _require_same_directory(directory, identity, directory_label)
     except BaseException:
         if published:
-            _cleanup_pathname_publish(directory_fd, target, content)
+            _cleanup_pathname_publish(directory_fd, published_target, content)
         raise
     finally:
         if temporary is not None and temporary.exists():
