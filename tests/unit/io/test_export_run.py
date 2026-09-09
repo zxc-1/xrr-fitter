@@ -398,6 +398,9 @@ def test_export_directory_fsync_propagates_io_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Windows cannot open a directory as a file descriptor, so this assertion
+    # targets the POSIX directory-fsync path; Windows suppression is tested above.
+    monkeypatch.setattr(export_run.os, "name", "posix")
     monkeypatch.setattr(
         export_run.os,
         "fsync",
