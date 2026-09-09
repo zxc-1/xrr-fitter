@@ -108,7 +108,7 @@ verification helpers, platform manifests and their tests.
 
 - [ ] Focused tests and independent reviews for each completed slice.
 - [x] Clean-checkout quality/tools/unit/integration/spawn/regression and Radon.
-- [ ] Fresh coverage, selected types, both-platform advisories and package-byte
+- [x] Fresh coverage, selected types, both-platform advisories and package-byte
   checks; reproducible artifact/SBOM and distribution/identity verification.
 - [x] Repeat complete statistical validation when application source changes
   invalidate the previous exact-source binding.
@@ -123,7 +123,7 @@ are not additional completion requirements invented by this audit.
 
 Ordinary wheel identities, source archives and archive inventories are verified.
 The wheel SBOM explicitly remains incomplete; final artifact binding and native
-relationships, the refnx build closure and wheel, shared verified caching and
+relationships, the refnx build closure and wheel, hosted cache behavior and
 actual runner account isolation remain open. Disabling pip caching does not
 complete shared-cache acceptance. Read-only runner inspection found the same
 account as local development; no permission or account changes were authorized.
@@ -140,7 +140,7 @@ platform ordinary-pin advisory checks. Git push was authorized but failed becaus
 the local GitHub CLI token is invalid. Exact remote/Windows execution and a
 successful independent review remain pending.
 
-Follow-up candidates `c3d8f79`, `c23a252` and `a563857` re-bound the 3265-node
+Follow-up candidates `c3d8f79`, `c23a252`, `a563857` and `f0ce809` re-bound the 3265-node
 test manifest, added artifact-level SBOM inventory and fixed normalized wheel
 filename handling. Distribution and identity both passed on `c3d8f79`; the
 artifact SBOM over its real wheel/sdist pair reported 203 wheel files and 609
