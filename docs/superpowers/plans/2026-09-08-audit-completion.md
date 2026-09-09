@@ -95,9 +95,9 @@ verification helpers, platform manifests and their tests.
 
 ### 4. Cache and Runner Isolation
 
-- [ ] Separate PR and trusted build cache keys by trust domain, platform,
+- [x] Separate PR and trusted build cache keys by trust domain, platform,
   Python/pip and lock/package-manifest hashes; never cache a venv or credentials.
-- [ ] Verify cached package bytes before use, reject broad restore keys, and
+- [x] Verify cached package bytes before use, reject broad restore keys, and
   exercise cold/warm/mismatch/failure-cleanup paths.
 - [ ] Check unique job workspaces, external environments, process/permission
   boundaries and bounded cleanup against the active runner configuration.
@@ -139,6 +139,16 @@ integration (14), spawn (4), regression (50), coverage, selected types and both
 platform ordinary-pin advisory checks. Git push was authorized but failed because
 the local GitHub CLI token is invalid. Exact remote/Windows execution and a
 successful independent review remain pending.
+
+Follow-up candidates `c3d8f79`, `c23a252` and `a563857` re-bound the 3265-node
+test manifest, added artifact-level SBOM inventory and fixed normalized wheel
+filename handling. Distribution and identity both passed on `c3d8f79`; the
+artifact SBOM over its real wheel/sdist pair reported 203 wheel files and 609
+sdist files, bound to source `c3d8f79`, with explicit `incomplete` composition.
+The exact-key cache tool passed 71 focused tests and real Windows 38-wheel and
+macOS 44-wheel cold/warm reuse checks. The cache workflow uses pinned restore/save
+actions with no restore prefix. These local checks do not replace hosted cache,
+Windows, executable, runner-account or complete native-link evidence.
 
 ## Current Evidence
 
