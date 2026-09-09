@@ -229,6 +229,45 @@ def _cleanup_pathname_publish(
     _unlink_matching_regular_file(target, content)
 
 
+def _sync_pathname_temporary(directory_fd: int | None, temporary: Path) -> None:
+    if directory_fd is not None or os.name == "nt":
+        return
+    temporary_sync = os.open(temporary, os.O_RDONLY)
+    try:
+        os.fsync(temporary_sync)
+    finally:
+        os.close(temporary_sync)
+
+
+def _write_pathname_temporary(descriptor: int, temporary: Path, content: bytes, directory_fd: int | None) -> None:
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    _sync_pathname_temporary(directory_fd, temporary)
+
+
+def _publish_pathname_target(
+    temporary: Path,
+    target: Path,
+    directory: Path,
+    identity: DirectoryIdentity,
+    directory_fd: int | None,
+    directory_label: str,
+    file_label: str,
+) -> None:
+    try:
+        os.link(temporary, target, follow_symlinks=False)
+    except FileExistsError as error:
+        raise ValueError(f"{file_label} appeared during validation") from error
+    except (AttributeError, NotImplementedError, OSError, TypeError) as error:
+        _require_same_directory(directory, identity, directory_label)
+        raise ValueError(f"{file_label} cannot be published atomically on this platform") from error
+    if directory_fd is not None:
+        os.fsync(directory_fd)
+    _require_same_directory(directory, identity, directory_label)
+
+
 def _publish_new_file_by_pathname(
     directory: Path,
     identity: DirectoryIdentity,
@@ -255,27 +294,17 @@ def _publish_new_file_by_pathname(
         # The temporary file retains the original directory pathname if an
         # ABA replacement swaps the report directory after publication.
         published_target = temporary.parent / name
-        with os.fdopen(temporary_descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        if directory_fd is None and os.name != "nt":
-            temporary_sync = os.open(temporary, os.O_RDONLY)
-            try:
-                os.fsync(temporary_sync)
-            finally:
-                os.close(temporary_sync)
-        try:
-            os.link(temporary, target, follow_symlinks=False)
-        except FileExistsError as error:
-            raise ValueError(f"{file_label} appeared during validation") from error
-        except (AttributeError, NotImplementedError, OSError, TypeError) as error:
-            _require_same_directory(directory, identity, directory_label)
-            raise ValueError(f"{file_label} cannot be published atomically on this platform") from error
+        _write_pathname_temporary(temporary_descriptor, temporary, content, directory_fd)
+        _publish_pathname_target(
+            temporary,
+            target,
+            directory,
+            identity,
+            directory_fd,
+            directory_label,
+            file_label,
+        )
         published = True
-        if directory_fd is not None:
-            os.fsync(directory_fd)
-        _require_same_directory(directory, identity, directory_label)
     except BaseException:
         if published:
             _cleanup_pathname_publish(directory_fd, published_target, content)
