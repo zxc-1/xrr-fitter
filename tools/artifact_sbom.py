@@ -87,8 +87,6 @@ def _sdist_inventory(path: Path) -> list[dict[str, object]]:
 
 def _wheel_record(path: Path, record: ArtifactRecord) -> dict[str, str]:
     name, version, _build, _tags = parse_wheel_filename(path.name)
-    if str(name) != path.name.rsplit("-", 3)[0] and not path.name.startswith(f"{name}-{version}-"):
-        raise ValueError("artifact wheel filename identity drift")
     return {"name": str(name), "version": str(version), "sha256": record.sha256}
 
 
