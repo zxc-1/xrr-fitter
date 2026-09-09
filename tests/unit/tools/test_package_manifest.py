@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -148,6 +150,21 @@ def test_windows_identity_accepts_missing_path_file_ids(load_tool_module, monkey
     path_stat = (0, 0, 12, 34, 56)
     handle_stat = (17, 29, 12, 34, 56)
     assert module._same_file_identity(path_stat, handle_stat)
+
+
+def test_windows_file_identity_uses_creation_time(load_tool_module, monkeypatch):
+    module = _module(load_tool_module)
+    monkeypatch.setattr(module.os, "name", "nt")
+    value = SimpleNamespace(
+        st_mode=stat.S_IFREG,
+        st_dev=17,
+        st_ino=29,
+        st_size=12,
+        st_mtime_ns=34,
+        st_ctime_ns=56,
+        st_birthtime_ns=78,
+    )
+    assert module._file_identity(value) == (17, 29, 12, 34, 78)
 
 
 @pytest.mark.parametrize("mutation", ["modified", "missing", "extra", "symlink"])

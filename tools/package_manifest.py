@@ -157,7 +157,8 @@ def download_requirements(manifest: dict) -> bytes:
 def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
     if not stat.S_ISREG(value.st_mode):
         raise ValueError("package wheel must be a regular file")
-    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
+    created = getattr(value, "st_birthtime_ns", value.st_ctime_ns) if os.name == "nt" else value.st_ctime_ns
+    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, created
 
 
 def _same_file_identity(left: tuple[int, int, int, int, int], right: tuple[int, int, int, int, int]) -> bool:
