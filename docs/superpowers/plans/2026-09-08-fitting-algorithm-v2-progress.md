@@ -221,7 +221,7 @@ Task 5–8 仍未实施完成，不把本批统计接口视为整个 V2 已完�
 
 ## Task 5：拟合点内环与联合系统缓存
 
-实现与自审已完成，固定提交的官方 clone 门禁待运行。所有物理路径共用同一实现，
+实现、自审和固定提交的官方 clone 门禁已完成。所有物理路径共用同一实现，
 最终发布默认计算完整曲线；内环仅选择 fit_mask，不改变目标、采样质量或物理容差。
 
 ### RED → GREEN
@@ -268,3 +268,15 @@ Task 5–8 仍未实施完成，不把本批统计接口视为整个 V2 已完�
 本批不改变生产依赖、CI mode 或其他工作树；临时产物保存在工作树外。
 独立审查服务此前持续不可用，只有主代理自审，不能声称独立审查通过。
 Task 6–8 尚未实施。
+
+### Task 5 官方门禁与固定提交性能复验
+
+- 实现提交 `687f7cf` 普通 clone：unit **1860 passed**、quality **188 passed**、
+  integration **14 passed**、regression **50 passed**、GUI **647 passed**。
+  GUI 仅保留已有隐藏画布 `constrained_layout` 警告。
+- 官方报告 `/tmp/xrr-v2-687f7cf-axepg4tl/`，临时普通 clone 已清理。
+- 固定提交 `687f7cf` 对比 `691f609`，无并行验收负载，5 次中位数复测：residual
+  **7.67x**、system **7.95x**、joint callback pair **12.33x**、joint local fit **6.04x**。
+  数值等价检查全部通过，局部拟合仍为 nfev=8；点数/系统次数与初测一致。
+- 新脚本及报告 `/tmp/xrr-v2-task5-final-benchmark.Tzeqdc/`，保留初测记录不覆盖。
+  baseline clone 自动清理，无仓库内临时产物；夹具适用范围与上节限制不变。

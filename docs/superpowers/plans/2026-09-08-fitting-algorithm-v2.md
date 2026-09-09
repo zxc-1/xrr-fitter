@@ -232,7 +232,8 @@ assert calls_after_residual_and_jacobian_at_same_point == 1
 - [x] **2. RED 命令。** `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/dala/Desktop/XRR-Fitter/venvs/repo/bin/python -m pytest -p no:cacheprovider -q tests/unit/fit/test_evaluation_workload.py tests/unit/fit/test_joint_solver_cache.py`。
 - [x] **3. GREEN：分离 publication 与 inner layout。** 角度、resolution、波长混合、约束导数使用同一选择；返回完整曲线的路径不复用稀疏数组。联合 scatter 后的每成员 system 同次求残差与 Jacobian，保存线程local拥有的数组，返回独立副本。
 - [x] **4. 回归及性能。** 三模式、resolution、共享roughness、cross-dataset constraints、无自由参数都测试。物理Jacobian参照不放宽。记录5次墙钟中位数、物理点数与系统调用数，不承诺通用9倍。
-- [ ] **5. 提交/审查。** `perf: restrict inner evaluation and share joint solver systems`。
+- [x] **5. 提交/自审及正式门禁。** `687f7cf`：unit/quality/integration/regression/gui 全通过，
+  固定提交性能复验通过。独立审查服务不可用，详见进度文档。
 
 ### Task 6: 渐进网格、完整目标复核与确定性预算
 
