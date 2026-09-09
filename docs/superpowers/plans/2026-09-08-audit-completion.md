@@ -87,7 +87,7 @@ verification helpers, platform manifests and their tests.
   version or imply Git commit identity is a downloaded wheel hash.
 - [x] Inventory installed/archive components, dependency relationships,
   licenses and bundled native binaries with byte identities.
-- [x] Bind SBOM and scan evidence to the distribution/executable it describes;
+- [ ] Bind SBOM and scan evidence to the distribution/executable it describes;
   enforce declared completeness, explicitly fail or retain incomplete status
   when native composition cannot be established.
 - [x] Integrate reviewable evidence assets without weakening existing exact
@@ -95,11 +95,11 @@ verification helpers, platform manifests and their tests.
 
 ### 4. Cache and Runner Isolation
 
-- [x] Separate PR and trusted build cache keys by trust domain, platform,
+- [ ] Separate PR and trusted build cache keys by trust domain, platform,
   Python/pip and lock/package-manifest hashes; never cache a venv or credentials.
-- [x] Verify cached package bytes before use, reject broad restore keys, and
+- [ ] Verify cached package bytes before use, reject broad restore keys, and
   exercise cold/warm/mismatch/failure-cleanup paths.
-- [x] Check unique job workspaces, external environments, process/permission
+- [ ] Check unique job workspaces, external environments, process/permission
   boundaries and bounded cleanup against the active runner configuration.
 - [x] Retain read-only runner evidence; obtain explicit approval for any host
   permission/account/service changes before applying them.
@@ -107,19 +107,38 @@ verification helpers, platform manifests and their tests.
 ### 5. End-to-End Verification
 
 - [ ] Focused tests and independent reviews for each completed slice.
-- [ ] Clean-checkout quality/tools/unit/integration/spawn/regression and Radon.
+- [x] Clean-checkout quality/tools/unit/integration/spawn/regression and Radon.
 - [ ] Fresh coverage, selected types, both-platform advisories and package-byte
   checks; reproducible artifact/SBOM and distribution/identity verification.
 - [x] Repeat complete statistical validation when application source changes
   invalidate the previous exact-source binding.
 - [ ] Exact-candidate GitHub Actions and real Windows CLI/export/executable
   evidence, without substituting macOS simulations for Windows runtime.
-- [x] Compare original recommendations against results, preserve failed and
+- [ ] Compare original recommendations against results, preserve failed and
   superseded evidence, and keep overall status incomplete until every required
   implementation and target-platform validation is accounted for.
 
 GUI reconciliation, merging the branch, publishing a tag and public release
 are not additional completion requirements invented by this audit.
+
+Ordinary wheel identities, source archives and archive inventories are verified.
+The wheel SBOM explicitly remains incomplete; final artifact binding and native
+relationships, the refnx build closure and wheel, shared verified caching and
+actual runner account isolation remain open. Disabling pip caching does not
+complete shared-cache acceptance. Read-only runner inspection found the same
+account as local development; no permission or account changes were authorized.
+
+The wheel-cache tool now binds exact keys to trust domains, target, tool
+versions and input hashes; every restore verifies all bytes and rejects
+unrelated files. Both platform archives have real local cold/warm evidence.
+The Windows audit integrates exact-key restore/save, but hosted cache behavior
+and migration of existing macOS/refnx build caches remain unverified.
+
+Candidate `acf5769` passed clean-checkout quality (200), tools (595), unit (1732),
+integration (14), spawn (4), regression (50), coverage, selected types and both
+platform ordinary-pin advisory checks. Git push was authorized but failed because
+the local GitHub CLI token is invalid. Exact remote/Windows execution and a
+successful independent review remain pending.
 
 ## Current Evidence
 

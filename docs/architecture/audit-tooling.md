@@ -123,3 +123,35 @@ export tests, and builds a headless executable for help/validation/export
 checks. Reports bind the executable hash to the source commit and explicitly
 state that the GUI was not tested. The job-owned environment is cleaned after
 evidence upload; the release asset set is unchanged.
+
+## Verified Wheel Cache
+
+`tools/package_cache.py` provides a wheel-only cache for either manifest target.
+The exact key includes the trust domain (`trusted` or `pr-N`), target,
+Python/pip versions, lock SHA-256 and complete canonical manifest SHA-256.
+Each supplied external cache directory is dedicated to that key. Its on-disk
+entry uses the key's SHA-256 to avoid unnecessarily long Windows paths.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3.12 tools/package_cache.py key --manifest tools/package-manifests/windows-x64-py312.json --trust-domain trusted
+PYTHONDONTWRITEBYTECODE=1 python3.12 tools/package_cache.py fetch --manifest tools/package-manifests/windows-x64-py312.json --trust-domain trusted --cache-dir /tmp/xrr-windows-wheel-cache --report-dir /tmp/xrr-cached-download
+```
+
+A cold cache uses the existing hash-required, cache-disabled downloader. A warm
+cache verifies every wheel before and after copying it to the new report.
+Missing/extra files, symlinks, unrelated cache members and byte mismatches fail;
+they do not trigger a silent download fallback. Failed copies remove only their
+owned temporary output; old evidence and unrelated paths are preserved.
+`cache.json` records the exact key and whether the operation was a verified hit.
+Installation still independently verifies the copied bytes.
+
+The Windows audit uses pinned `actions/cache` restore/save actions with no
+restore prefixes. PR keys include the PR number; trusted events use a separate
+key domain. GitHub's branch/ref-scoped cache storage remains part of the trust
+boundary. Only the dedicated package cache is uploaded, never a venv, report,
+credential or pip HTTP cache. Cache saving requires successful validation.
+Actual hosted cold/warm runs remain a separate verification requirement.
+
+This does not migrate the existing shared macOS setup or lock-resolver caches,
+nor cache the refnx VCS build. It also does not establish isolation for a
+self-hosted runner sharing the developer's account.

@@ -43,12 +43,29 @@ jobs:
           & $python -m pip --isolated install --require-hashes --no-deps --no-cache-dir --only-binary=:all: -r tools/bootstrap-requirements.lock
           @("AUDIT_ROOT=$root", "PYTHON=$python", "PYTHONPATH=$env:GITHUB_WORKSPACE/src", "MPLCONFIGDIR=$root/mpl-cache", "PYTHONDONTWRITEBYTECODE=1", "PYTHONUTF8=1") | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
           @{ source_commit = $actual; source_tree = (git rev-parse 'HEAD^{tree}') } | ConvertTo-Json | Set-Content -Path "$root/reports/source-identity.json" -Encoding utf8
+      - name: Derive an exact trust-scoped wheel cache key
+        id: cache-key
+        env:
+          CACHE_TRUST_DOMAIN: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $key = & $env:PYTHON tools/package_cache.py key --manifest tools/package-manifests/windows-x64-py312.json --trust-domain "$env:CACHE_TRUST_DOMAIN"
+          "key=$key" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+          "CACHE_TRUST_DOMAIN=$env:CACHE_TRUST_DOMAIN" | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
+      - name: Restore only the exact wheel cache
+        id: wheel-cache
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          key: ${{ steps.cache-key.outputs.key }}
+          path: ${{ env.AUDIT_ROOT }}/package-cache/
       - name: Verify and install the exact Windows wheel bytes
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $PSNativeCommandUseErrorActionPreference = $true
-          & $env:PYTHON tools/package_downloads.py download --manifest tools/package-manifests/windows-x64-py312.json --report-dir "$env:AUDIT_ROOT/reports/packages"
+          & $env:PYTHON tools/package_cache.py fetch --manifest tools/package-manifests/windows-x64-py312.json --trust-domain "$env:CACHE_TRUST_DOMAIN" --cache-dir "$env:AUDIT_ROOT/package-cache" --report-dir "$env:AUDIT_ROOT/reports/packages"
           & $env:PYTHON tools/package_downloads.py install --manifest tools/package-manifests/windows-x64-py312.json --wheel-dir "$env:AUDIT_ROOT/reports/packages/wheels" --report-dir "$env:AUDIT_ROOT/reports/installation"
           & $env:PYTHON tools/package_sbom.py --manifest tools/package-manifests/windows-x64-py312.json --wheel-dir "$env:AUDIT_ROOT/reports/packages/wheels" | Set-Content -Path "$env:AUDIT_ROOT/reports/packages.cdx.json" -Encoding utf8
           & $env:PYTHON -m pip --isolated install --require-hashes --no-deps --no-cache-dir --only-binary=:all: -r tools/windows-test-requirements.lock
@@ -74,6 +91,12 @@ jobs:
           & $env:PYTHON -c "from pathlib import Path; import sys,json,hashlib; paths=list(Path(sys.argv[1]).rglob('export_manifest.json')); assert len(paths)==1; p=paths[0]; rows=json.loads(p.read_text(encoding='utf-8'))['files']; assert rows; assert all((p.parent/r['path']).stat().st_size==r['size'] and hashlib.sha256((p.parent/r['path']).read_bytes()).hexdigest()==r['sha256'] for r in rows)" "$env:AUDIT_ROOT/executable-export"
           @{ schema = "xrr-headless-executable-evidence-v1"; source_commit = $env:GITHUB_SHA; sha256 = (Get-FileHash -Algorithm SHA256 $executable).Hash.ToLowerInvariant(); size = (Get-Item $executable).Length; help = "PASS"; validate = "PASS"; export = "PASS"; gui_tested = $false } | ConvertTo-Json | Set-Content -Path "$env:AUDIT_ROOT/reports/executable.json" -Encoding utf8
           if (git status --porcelain=v1 --untracked-files=all) { throw "verification changed the source checkout" }
+      - name: Save verified wheel bytes only after successful validation
+        if: ${{ success() && steps.wheel-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          key: ${{ steps.cache-key.outputs.key }}
+          path: ${{ env.AUDIT_ROOT }}/package-cache/
       - name: Retain Windows evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
