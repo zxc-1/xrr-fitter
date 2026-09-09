@@ -112,6 +112,26 @@ fully established by this wheel archive scan. `--require-complete` retains the
 incomplete report but exits nonzero. Do not use a successful inventory exit as
 evidence of a complete native SBOM or vulnerability-free distribution.
 
+`tools/artifact_sbom.py` binds the built `artifact-manifest.json` and its exact
+wheel/sdist bytes to a second CycloneDX 1.6 report. It inventories every sdist
+member and every wheel member, preserves native headers and file hashes, and
+records the captured source commit/tree plus artifact-manifest SHA-256:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3.12 tools/artifact_sbom.py \
+  --repo-root . \
+  --artifact-manifest /tmp/xrr-distribution/artifact-manifest.json \
+  --artifact-dir /tmp/xrr-distribution/artifacts \
+  > /tmp/xrr-distribution/artifacts.cdx.json
+```
+
+The report intentionally declares `compositions: incomplete`: the built
+wheel/sdist pair does not prove installed dependency closure, native dynamic
+link relationships, or a final executable. `--require-complete` retains no
+false success and exits nonzero until those boundaries are supplied. The
+artifact manifest remains the authoritative exact release identity; this report
+does not replace it or add a release asset.
+
 ## Windows Audit
 
 `audit-windows.yml` is separate from the existing GUI executable release job.
