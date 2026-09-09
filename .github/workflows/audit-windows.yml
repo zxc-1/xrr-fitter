@@ -1,0 +1,97 @@
+name: audit-windows
+
+"on":
+  push:
+    branches: [audit-improvements]
+  pull_request: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-windows-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-headless:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c
+        with:
+          python-version: "3.12"
+          architecture: x64
+      - name: Bootstrap a unique external environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $actual = git rev-parse HEAD
+          if ($actual -ne $env:GITHUB_SHA) { throw "checkout differs from the requested commit" }
+          $root = Join-Path $env:RUNNER_TEMP "xrr-audit-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Path $root
+          New-Item -ItemType Directory -Path "$root/reports"
+          $env:PYTHONDONTWRITEBYTECODE = "1"
+          python -m venv "$root/venv"
+          $python = "$root/venv/Scripts/python.exe"
+          & $python -m pip --isolated install --require-hashes --no-deps --no-cache-dir --only-binary=:all: -r tools/bootstrap-requirements.lock
+          @("AUDIT_ROOT=$root", "PYTHON=$python", "PYTHONPATH=$env:GITHUB_WORKSPACE/src", "MPLCONFIGDIR=$root/mpl-cache", "PYTHONDONTWRITEBYTECODE=1", "PYTHONUTF8=1") | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
+          @{ source_commit = $actual; source_tree = (git rev-parse 'HEAD^{tree}') } | ConvertTo-Json | Set-Content -Path "$root/reports/source-identity.json" -Encoding utf8
+      - name: Verify and install the exact Windows wheel bytes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          & $env:PYTHON tools/package_downloads.py download --manifest tools/package-manifests/windows-x64-py312.json --report-dir "$env:AUDIT_ROOT/reports/packages"
+          & $env:PYTHON tools/package_downloads.py install --manifest tools/package-manifests/windows-x64-py312.json --wheel-dir "$env:AUDIT_ROOT/reports/packages/wheels" --report-dir "$env:AUDIT_ROOT/reports/installation"
+          & $env:PYTHON tools/package_sbom.py --manifest tools/package-manifests/windows-x64-py312.json --wheel-dir "$env:AUDIT_ROOT/reports/packages/wheels" | Set-Content -Path "$env:AUDIT_ROOT/reports/packages.cdx.json" -Encoding utf8
+          & $env:PYTHON -m pip --isolated install --require-hashes --no-deps --no-cache-dir --only-binary=:all: -r tools/windows-test-requirements.lock
+          & $env:PYTHON -m pip check
+      - name: Verify CLI and export behavior on Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          & $env:PYTHON -m pytest --import-mode=importlib -p tests.outcome_gate -p no:cacheprovider --basetemp "$env:AUDIT_ROOT/pytest" --junitxml "$env:AUDIT_ROOT/reports/pytest.xml" tests/unit/cli tests/integration/test_cli_workflow.py tests/unit/io/test_export_run.py -q 2>&1 | Tee-Object -FilePath "$env:AUDIT_ROOT/reports/pytest.log"
+      - name: Build and verify a headless executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          & $env:PYTHON -m PyInstaller --noconfirm --clean --onefile --console --name xrr-fitter-cli --paths src --exclude-module PySide6 --collect-data periodictable --collect-data orsopy --hidden-import xlsxwriter --distpath "$env:AUDIT_ROOT/executable" --workpath "$env:AUDIT_ROOT/build" --specpath "$env:AUDIT_ROOT" src/xrr_fitter/cli/main.py
+          $executable = "$env:AUDIT_ROOT/executable/xrr-fitter-cli.exe"
+          & $env:PYTHON -c "from pathlib import Path; import sys; p=Path(sys.argv[1]); assert p.stat().st_size > 1048576; assert p.open('rb').read(2) == b'MZ'" $executable
+          & $executable --help | Tee-Object -FilePath "$env:AUDIT_ROOT/reports/executable-help.txt"
+          & $env:PYTHON -c "from pathlib import Path; import sys; from tests.integration.test_cli_workflow import _write_fitted_project; p=Path(sys.argv[1]); p.mkdir(); _write_fitted_project(p)" "$env:AUDIT_ROOT/executable-case"
+          & $executable validate "$env:AUDIT_ROOT/executable-case/fitted.xrrproj.json"
+          & $executable export "$env:AUDIT_ROOT/executable-case/fitted.xrrproj.json" "$env:AUDIT_ROOT/executable-export" --ort | Tee-Object -FilePath "$env:AUDIT_ROOT/reports/executable-export.txt"
+          & $env:PYTHON -c "from pathlib import Path; import sys,json,hashlib; paths=list(Path(sys.argv[1]).rglob('export_manifest.json')); assert len(paths)==1; p=paths[0]; rows=json.loads(p.read_text(encoding='utf-8'))['files']; assert rows; assert all((p.parent/r['path']).stat().st_size==r['size'] and hashlib.sha256((p.parent/r['path']).read_bytes()).hexdigest()==r['sha256'] for r in rows)" "$env:AUDIT_ROOT/executable-export"
+          @{ schema = "xrr-headless-executable-evidence-v1"; source_commit = $env:GITHUB_SHA; sha256 = (Get-FileHash -Algorithm SHA256 $executable).Hash.ToLowerInvariant(); size = (Get-Item $executable).Length; help = "PASS"; validate = "PASS"; export = "PASS"; gui_tested = $false } | ConvertTo-Json | Set-Content -Path "$env:AUDIT_ROOT/reports/executable.json" -Encoding utf8
+          if (git status --porcelain=v1 --untracked-files=all) { throw "verification changed the source checkout" }
+      - name: Retain Windows evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: audit-windows-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.AUDIT_ROOT }}/reports/
+            !${{ env.AUDIT_ROOT }}/reports/packages/wheels/**
+            ${{ env.AUDIT_ROOT }}/executable/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove only the job-owned virtual environment
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $root = Join-Path $env:RUNNER_TEMP "xrr-audit-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if ($env:AUDIT_ROOT -and $env:AUDIT_ROOT -ne $root) { throw "job environment root changed" }
+          if (Test-Path -LiteralPath "$root/venv") { Remove-Item -LiteralPath "$root/venv" -Recurse -Force }

@@ -1,9 +1,12 @@
 # Non-GUI audit reporting baseline
 
-These measurements are advisory reporting, not new CI gates. The reporting
+These historical measurements are advisory reporting, not CI gate results. The reporting
 tools were installed in an external environment and were not added to project
 dependencies or release assets. Reports distinguish test execution, dependency
 metadata and artifact integrity; none substitutes for the others.
+
+The later permanent development-only tooling is described in `audit-tooling.md`.
+It does not retroactively convert this baseline into a passing single-run gate.
 
 ## Coverage
 

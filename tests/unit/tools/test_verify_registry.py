@@ -176,6 +176,39 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
                 module.ARTIFACT_MANIFEST,
             ),
         ),
+        "coverage": (
+            (
+                module.PYTHON,
+                "tools/audit_reports.py",
+                "coverage",
+                "--repo-root",
+                module.ROOT,
+                "--report-dir",
+                f"{module.REPORT}/audit",
+            ),
+        ),
+        "typing": (
+            (
+                module.PYTHON,
+                "tools/audit_reports.py",
+                "typing",
+                "--repo-root",
+                module.ROOT,
+                "--report-dir",
+                f"{module.REPORT}/audit",
+            ),
+        ),
+        "advisories": (
+            (
+                module.PYTHON,
+                "tools/audit_reports.py",
+                "advisories",
+                "--repo-root",
+                module.ROOT,
+                "--report-dir",
+                f"{module.REPORT}/audit",
+            ),
+        ),
         "release": (),
     }
 

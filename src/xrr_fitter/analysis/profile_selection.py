@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from xrr_fitter.model.analysis import UncertaintyReport
 from xrr_fitter.model.fitting import FitEvaluationContext
 
 EXHAUSTIVE_PROFILE_LIMIT = 11
@@ -16,7 +17,7 @@ def _structural_profile_names(names: tuple[str, ...]) -> set[str]:
     }
 
 
-def _reported_profile_names(preliminary_report: object | None) -> set[str]:
+def _reported_profile_names(preliminary_report: UncertaintyReport | None) -> set[str]:
     if preliminary_report is None:
         return set()
     selected = set(preliminary_report.boundary_hits)
@@ -41,7 +42,7 @@ def evidence_focused_layout(problem: FitEvaluationContext) -> bool:
 
 def select_profile_names(
     problem: FitEvaluationContext,
-    preliminary_report: object | None = None,
+    preliminary_report: UncertaintyReport | None = None,
     *,
     degeneracy_warnings: tuple[str, ...] = (),
 ) -> tuple[str, ...]:

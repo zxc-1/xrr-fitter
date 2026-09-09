@@ -63,6 +63,7 @@ from xrr_fitter.services.dataset_removal import (
 from xrr_fitter.services.materials import automatic_structure, initial_structure
 
 SERVICE_SEED_TREE_VERSION = 1
+ServiceSeedBranches = tuple[dict[str, int], int, dict[str, np.random.SeedSequence]]
 
 
 def _uint64_seed(sequence: np.random.SeedSequence) -> int:
@@ -71,7 +72,7 @@ def _uint64_seed(sequence: np.random.SeedSequence) -> int:
 
 def service_seed_branches(
     project: XrrProject,
-) -> tuple[dict[str, int], int, dict[str, np.random.SeedSequence]]:
+) -> ServiceSeedBranches:
     """Derive stable independent, joint, and MCMC service branches."""
     independent_root, joint_root, mcmc_root = np.random.SeedSequence(
         project.master_seed,

@@ -192,6 +192,15 @@ MODE_REGISTRY: Mapping[str, Mode] = {
             ),
         )
     ),
+    "coverage": Mode(
+        ((PYTHON, "tools/audit_reports.py", "coverage", "--repo-root", ROOT, "--report-dir", f"{REPORT}/audit"),)
+    ),
+    "typing": Mode(
+        ((PYTHON, "tools/audit_reports.py", "typing", "--repo-root", ROOT, "--report-dir", f"{REPORT}/audit"),)
+    ),
+    "advisories": Mode(
+        ((PYTHON, "tools/audit_reports.py", "advisories", "--repo-root", ROOT, "--report-dir", f"{REPORT}/audit"),)
+    ),
     "release": Mode(()),
 }
 

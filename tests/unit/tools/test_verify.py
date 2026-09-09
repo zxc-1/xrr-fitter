@@ -26,6 +26,9 @@ def _registry_names() -> tuple[str, ...]:
         "approved-data",
         "distribution",
         "identity",
+        "coverage",
+        "typing",
+        "advisories",
         "release",
     )
 

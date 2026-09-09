@@ -17,8 +17,11 @@ environment. Candidate readiness still checks prerequisite files before
 installing dependencies.
 
 `pip check` verifies installed dependency metadata, not package integrity or
-known vulnerabilities. Exact version pins and a full Git commit for `refnx`
-do not constitute a hash-locked download policy. Release wheel/sdist byte
+known vulnerabilities. The newer package-byte tooling in `audit-tooling.md`
+adds reviewed wheel identities and verified offline installation, but the
+existing shared macOS setup has not yet migrated its VCS build or cache policy.
+Exact version pins and a full Git commit alone do not constitute a hash-locked
+download policy. Release wheel/sdist byte
 identities remain owned by `tools/verify_distribution.py` and its
 `artifact-manifest.json`; release/source binding remains owned by
 `tools/release_identity.py`. The inventory below does not replace either.
@@ -63,22 +66,28 @@ bundle, publish an artifact, or introduce another required CI job.
   bytes. A report is not a vulnerability scan, signature, or release approval.
 - Format reference: [CycloneDX 1.6 JSON schema](https://github.com/CycloneDX/specification/blob/1.6/schema/bom-1.6.schema.json).
 
-## Changes requiring a separate rollout decision
+## Remaining Rollout Work
 
-The following are deliberately not enabled by this audit:
+Coverage, incremental typing and ordinary-pin advisory checks are now implemented
+as separate development-only audit modes and a read-only hosted workflow. See
+`audit-tooling.md` for pinned tools, commands and evidence limits. This does not
+add tools to distribution dependencies or change the release asset set.
+
+The following remain incomplete:
 
 - **Shared download cache:** first define trust-separated PR/release caches,
   platform/Python/pip/lock-hash keys, and package-byte verification. Do not
   restore an environment or release evidence across trust boundaries.
-- **Coverage and static typing:** select and pin development tools, measure a
-  baseline, and introduce reporting before negotiating incremental thresholds.
-  Annotation-contract tests are not a substitute for a static type checker.
-- **Vulnerability scanning and complete artifact SBOM:** approve the tool and
-  database/network policy, bind reports to downloaded/bundled bytes, and decide
+- **Native scanning and complete artifact SBOM:** bind reports to
+  the actual installed/bundled bytes and decide
   how findings affect releases before adding a CI gate or changing release
   assets. Existing exact release asset sets and schemas stay unchanged.
+  The wheel archive SBOM now records actual file/native hashes, metadata,
+  licenses and top-level dependency edges, including vendored metadata. It
+  explicitly retains incomplete native/vendored composition and is not a final
+  executable SBOM.
 
 An external reporting-only baseline and the subsequent build/test-tool security
 migration are recorded in `audit-reporting-baseline.md`. Those measurements did
-not introduce a coverage/type/advisory CI gate or add reporting tools to the
-project's dependency sets.
+not themselves introduce the later audit workflow. Real target-runner execution
+and the full package-byte/SBOM/cache acceptance must be recorded independently.

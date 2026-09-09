@@ -44,6 +44,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import partial
+from typing import cast
 
 import numpy as np
 
@@ -65,13 +66,14 @@ from xrr_fitter.fit.candidates import (
     select_full_search_candidates,
 )
 from xrr_fitter.fit.global_search import (
+    GlobalSearchResult,
     build_de_population,
     build_stage_e_population,
     downsample_prepared_data,
     feature_grid_indices,
     solve_global,
 )
-from xrr_fitter.fit.local_search import SearchCancelled, solve_local
+from xrr_fitter.fit.local_search import LocalSearchResult, SearchCancelled, solve_local
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem, compile_stage_problem
 from xrr_fitter.fit.progress import (
@@ -89,7 +91,8 @@ from xrr_fitter.fit.stage_schedule import (
 )
 from xrr_fitter.fit.tasking import TaskRunner
 from xrr_fitter.fit.tasking import run_tasks as _run_tasks
-from xrr_fitter.model.fitting import FitCandidate, FitProgress, FitStageSummary
+from xrr_fitter.model.data import PreparedData
+from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext, FitProgress, FitStageSummary, ModelEvaluation
 from xrr_fitter.model.parameters import ParameterSetting
 
 
@@ -115,8 +118,8 @@ class _StageESetup:
     against the complete context and may include the declared initial point.
     """
 
-    coarse_problem: object
-    full_problem: object
+    coarse_problem: FitEvaluationContext
+    full_problem: FitEvaluationContext
     centers: tuple[np.ndarray, ...]
     full_incumbents: tuple[np.ndarray, ...]
     population_size: int
@@ -125,7 +128,7 @@ class _StageESetup:
 #
 # Parameter settings
 #
-def _parameter_settings(problem: object) -> tuple[ParameterSetting, ...]:
+def _parameter_settings(problem: FitEvaluationContext) -> tuple[ParameterSetting, ...]:
     return tuple(
         ParameterSetting(
             definition.name,
@@ -141,7 +144,7 @@ def _parameter_settings(problem: object) -> tuple[ParameterSetting, ...]:
 #
 # Compile coarse problem
 #
-def compile_coarse_problem(problem: object) -> object:
+def compile_coarse_problem(problem: FitEvaluationContext) -> FitEvaluationContext:
     """Compile the immutable feature-grid context used by coarse stages.
 
     A problem already on the selected grid is reused exactly. Otherwise all
@@ -152,7 +155,7 @@ def compile_coarse_problem(problem: object) -> object:
     if np.array_equal(indices, np.arange(problem.data.qz_a_inv.size)):
         return problem
     return compile_fit_problem(
-        downsample_prepared_data(problem.data, indices),
+        cast(PreparedData, downsample_prepared_data(problem.data, indices)),
         problem.structure,
         problem.instrument,
         problem.config,
@@ -165,10 +168,10 @@ def compile_coarse_problem(problem: object) -> object:
 # Stage problems
 #
 def _stage_problems(
-    problem: object,
+    problem: FitEvaluationContext,
     stage: str,
     current_values: dict[str, float],
-) -> tuple[object, object]:
+) -> tuple[FitEvaluationContext, FitEvaluationContext]:
     full = compile_stage_problem(problem, stage, current_values)
     coarse = compile_coarse_problem(problem)
     return compile_stage_problem(coarse, stage, current_values), full
@@ -192,7 +195,7 @@ def _candidate_values(candidate: FitCandidate) -> dict[str, float]:
 #
 # Complete values
 #
-def _complete_values(problem: object, values: dict[str, float]) -> dict[str, float]:
+def _complete_values(problem: FitEvaluationContext, values: dict[str, float]) -> dict[str, float]:
     return {
         definition.name: values.get(definition.name, definition.initial) for definition in problem.parameter_definitions
     }
@@ -202,8 +205,8 @@ def _complete_values(problem: object, values: dict[str, float]) -> dict[str, flo
 # Published candidate
 #
 def _published_candidate(
-    problem: object,
-    stage_problem: object,
+    problem: FitEvaluationContext,
+    stage_problem: FitEvaluationContext,
     stage_unit: np.ndarray,
     candidate_id: str,
     seed_index: int,
@@ -249,7 +252,7 @@ def _summary(stage: str, candidates: tuple[FitCandidate, ...]) -> FitStageSummar
 #
 # Coarse log curve
 #
-def _coarse_log_curve(problem: object, candidate: FitCandidate) -> np.ndarray:
+def _coarse_log_curve(problem: FitEvaluationContext, candidate: FitCandidate) -> np.ndarray:
     modeled = candidate.model_normalized[problem.data.fit_mask]
     return np.log10(np.maximum(modeled, problem.data.r_floor))
 
@@ -281,7 +284,7 @@ def _ensure_two_starts(starts: tuple[CandidateStart, ...]) -> tuple[CandidateSta
 #
 # Stage a candidate
 #
-def _stage_a_candidate(problem: object, start: CandidateStart, index: int) -> FitCandidate | None:
+def _stage_a_candidate(problem: FitEvaluationContext, start: CandidateStart, index: int) -> FitCandidate | None:
     try:
         unit = encode_physical_vector(problem, dict(start.values))
     except (EvaluationConstraintError, PhysicalValueError):
@@ -302,7 +305,7 @@ def _stage_a_candidate(problem: object, start: CandidateStart, index: int) -> Fi
 # Evaluate stage a pool
 #
 def _evaluate_stage_a_pool(
-    problem: object,
+    problem: FitEvaluationContext,
     dataset_id: str | None,
     pool: tuple[CandidateStart, ...],
     progress: Callable[[FitProgress], None] | None,
@@ -390,10 +393,10 @@ def _stage_a_stop_reasons(
 # Run stage a
 #
 def run_stage_a(
-    problem: object,
+    problem: FitEvaluationContext,
     dataset_id: str | None,
     *,
-    coarse_problem: object | None = None,
+    coarse_problem: FitEvaluationContext | None = None,
     progress: Callable[[FitProgress], None] | None,
     cancelled: Callable[[], bool] | None,
 ) -> tuple[tuple[CandidateStart, ...], FitStageSummary, tuple[str, ...]]:
@@ -453,7 +456,7 @@ def run_stage_a(
 # Stage b candidate
 #
 def _stage_b_candidate(
-    problem: object,
+    problem: FitEvaluationContext,
     start: CandidateStart,
     index: int,
     seed: int,
@@ -465,6 +468,7 @@ def _stage_b_candidate(
     values = _complete_values(problem, dict(start.values))
     coarse_problem, full_problem = _stage_problems(problem, "B", values)
     unit = encode_physical_vector(coarse_problem, values)
+    solved: GlobalSearchResult | LocalSearchResult
     if unit.size == 0:
         solved = solve_local(full_problem, unit, max_nfev=1, cancelled=cancelled)
     else:
@@ -514,7 +518,7 @@ def _stage_b_candidate(
 # Stage b launch evidence
 #
 def _stage_b_launch_evidence(
-    problem: object,
+    problem: FitEvaluationContext,
     start: CandidateStart,
     optimized: FitCandidate,
     index: int,
@@ -537,7 +541,7 @@ def _stage_b_launch_evidence(
 #
 # Stage b geometry indices
 #
-def _stage_b_geometry_indices(problem: object) -> tuple[int, ...]:
+def _stage_b_geometry_indices(problem: FitEvaluationContext) -> tuple[int, ...]:
     return tuple(
         index
         for index, variable in enumerate(problem.variables)
@@ -564,7 +568,7 @@ def _stage_b_geometry_distance(
 # Stage b geometry group
 #
 def _stage_b_geometry_group(
-    problem: object,
+    problem: FitEvaluationContext,
     candidates: tuple[FitCandidate, ...],
     groups: list[list[int]],
     candidate_index: int,
@@ -589,7 +593,7 @@ def _stage_b_geometry_group(
 # Stage b representatives
 #
 def _stage_b_representatives(
-    problem: object,
+    problem: FitEvaluationContext,
     candidates: tuple[FitCandidate, ...],
     limit: int = 4,
 ) -> tuple[FitCandidate, ...]:
@@ -642,7 +646,7 @@ def _best_objective(candidates: tuple[FitCandidate, ...]) -> float:
 # Run stage b
 #
 def run_stage_b(
-    problem: object,
+    problem: FitEvaluationContext,
     dataset_id: str | None,
     starts: tuple[CandidateStart, ...],
     seeds: tuple[int, ...],
@@ -695,8 +699,8 @@ def run_stage_b(
 # Local stage candidate
 #
 def _local_stage_candidate(
-    problem: object,
-    stage_problem: object,
+    problem: FitEvaluationContext,
+    stage_problem: FitEvaluationContext,
     start: np.ndarray,
     candidate_id: str,
     seed_index: int,
@@ -729,8 +733,8 @@ def _local_stage_candidate(
 # Local stage starts
 #
 def _local_stage_starts(
-    problem: object,
-    stage_problem: object,
+    problem: FitEvaluationContext,
+    stage_problem: FitEvaluationContext,
     parent: FitCandidate,
     stage: str,
     cluster_index: int,
@@ -749,7 +753,7 @@ def _local_stage_starts(
 # Run local stage
 #
 def run_local_stage(
-    problem: object,
+    problem: FitEvaluationContext,
     dataset_id: str | None,
     stage: str,
     parents: tuple[FitCandidate, ...],
@@ -779,14 +783,19 @@ def run_local_stage(
     for index, (parent, count) in enumerate(zip(parents, counts, strict=True)):
         # A parent remains sequentially dependent, while its declared restarts
         # form one ordered batch that can safely execute concurrently.
-        values = _candidate_values(parent)
-        stage_problem = compile_stage_problem(problem, stage, values)
+        parent_values = _candidate_values(parent)
+        stage_problem = compile_stage_problem(problem, stage, parent_values)
         starts = _local_stage_starts(problem, stage_problem, parent, stage, index, count)
 
         #
         # Make local cb
         #
-        def _make_local_cb(stg_problem, cid, sidx, _completed=completed):
+        def _make_local_cb(
+            stg_problem: FitEvaluationContext,
+            cid: str,
+            sidx: int,
+            _completed: int = completed,
+        ) -> Callable[[np.ndarray], None]:
             #
             # Cb
             #
@@ -840,8 +849,8 @@ def run_local_stage(
                 message,
                 _best_candidate(current),
             )
-    values = tuple(candidates)
-    return StageOutcome(values, _summary(stage, values), perturbation_counts=counts)
+    stage_candidates = tuple(candidates)
+    return StageOutcome(stage_candidates, _summary(stage, stage_candidates), perturbation_counts=counts)
 
 
 #
@@ -897,7 +906,7 @@ def local_stage_continuation(
 #
 # Stage e setup
 #
-def _stage_e_setup(problem: object, parents: tuple[FitCandidate, ...]) -> _StageESetup:
+def _stage_e_setup(problem: FitEvaluationContext, parents: tuple[FitCandidate, ...]) -> _StageESetup:
     """Build Stage-E coarse centers and complete full-data incumbent starts.
 
     Only selectable parents participate. The declared initial vector is appended
@@ -930,7 +939,7 @@ def _stage_e_setup(problem: object, parents: tuple[FitCandidate, ...]) -> _Stage
 #
 # Population energies
 #
-def _population_energies(problem: object, solved: object) -> tuple[np.ndarray, np.ndarray]:
+def _population_energies(problem: FitEvaluationContext, solved: GlobalSearchResult) -> tuple[np.ndarray, np.ndarray]:
     """Validate and normalize one solver population trace.
 
     Missing energies are reevaluated in row order; supplied energies must align
@@ -953,7 +962,7 @@ def _population_energies(problem: object, solved: object) -> tuple[np.ndarray, n
 #
 # Population starts
 #
-def _population_starts(setup: _StageESetup, solved: object) -> tuple[np.ndarray, ...]:
+def _population_starts(setup: _StageESetup, solved: GlobalSearchResult) -> tuple[np.ndarray, ...]:
     population, energies = _population_energies(setup.coarse_problem, solved)
     ranked = np.where(np.isfinite(energies), energies, np.inf)
     order = np.argsort(ranked, kind="stable")[:4]
@@ -999,7 +1008,7 @@ def _incumbent_starts(
 # Stage e local candidate
 #
 def _stage_e_local_candidate(
-    problem: object,
+    problem: FitEvaluationContext,
     setup: _StageESetup,
     start: np.ndarray,
     candidate_id: str,
@@ -1033,7 +1042,7 @@ def _stage_e_local_candidate(
 # Run stage e locals
 #
 def _run_stage_e_locals(
-    problem: object,
+    problem: FitEvaluationContext,
     setup: _StageESetup,
     starts: tuple[np.ndarray, ...],
     seed_index: int,
@@ -1047,7 +1056,7 @@ def _run_stage_e_locals(
     # Result positions retain start order so winner selection and nfev totals
     # are independent of worker completion timing.
 
-    def _make_e_local_cb(cid, sidx):
+    def _make_e_local_cb(cid: str, sidx: int) -> Callable[[np.ndarray], None]:
         #
         # Cb
         #
@@ -1094,7 +1103,7 @@ def _run_stage_e_locals(
 # Stage e seed
 #
 def _stage_e_seed(
-    problem: object,
+    problem: FitEvaluationContext,
     setup: _StageESetup,
     seed_index: int,
     child_seed: int,
@@ -1226,7 +1235,11 @@ def _stage_e_seed(
 #
 # Materially improves
 #
-def _materially_improves(problem: object, incumbent: FitCandidate, candidate: FitCandidate) -> bool:
+def _materially_improves(
+    problem: FitEvaluationContext,
+    incumbent: FitCandidate,
+    candidate: FitCandidate | ModelEvaluation,
+) -> bool:
     thresholds = problem.config.confidence
     required = max(
         thresholds.equivalent_cost_fraction * abs(incumbent.objective),
@@ -1239,7 +1252,7 @@ def _materially_improves(problem: object, incumbent: FitCandidate, candidate: Fi
 # Profile rescue start
 #
 def _profile_rescue_start(
-    problem: object,
+    problem: FitEvaluationContext,
     center: np.ndarray,
     child_seed: int,
     seed_index: int,
@@ -1271,12 +1284,12 @@ def _profile_rescue_start(
 # Profile rescue paths
 #
 def _profile_rescue_paths(
-    problem: object,
+    problem: FitEvaluationContext,
     center: np.ndarray,
     child_seeds: tuple[int, ...],
     cancelled: Callable[[], bool] | None,
     task_runner: TaskRunner | None,
-) -> tuple[object, ...] | None:
+) -> tuple[LocalSearchResult, ...] | None:
     """Run every distinct rescue start without publishing partial evidence.
 
     Duplicate or malformed starts reject the continuation before local search.
@@ -1315,11 +1328,11 @@ def _profile_rescue_paths(
 # Solve profile rescue path
 #
 def _solve_profile_rescue_path(
-    problem: object,
+    problem: FitEvaluationContext,
     start: np.ndarray,
     maximum: int,
     cancelled: Callable[[], bool] | None,
-):
+) -> LocalSearchResult:
     _poll(cancelled)
     return solve_local(problem, start, max_nfev=maximum, cancelled=cancelled)
 
@@ -1327,7 +1340,7 @@ def _solve_profile_rescue_path(
 #
 # Valid profile rescue result
 #
-def _valid_profile_rescue_result(problem: object, result: object) -> bool:
+def _valid_profile_rescue_result(problem: FitEvaluationContext, result: LocalSearchResult) -> bool:
     """Check one local result's coordinate layout and finite evaluation."""
     unit = np.asarray(result.unit_vector, dtype=float)
     evaluation = result.evaluation
@@ -1344,9 +1357,9 @@ def _valid_profile_rescue_result(problem: object, result: object) -> bool:
 # Publish profile rescue
 #
 def _publish_profile_rescue(
-    problem: object,
+    problem: FitEvaluationContext,
     originals: tuple[FitCandidate, ...],
-    refined: tuple[object, ...],
+    refined: tuple[LocalSearchResult, ...],
     parameter_name: str,
 ) -> tuple[FitCandidate, ...] | None:
     """Build four replacement candidates after all-or-nothing validation.
@@ -1387,7 +1400,7 @@ def _publish_profile_rescue(
 # Reconverge profile basin
 #
 def reconverge_profile_basin(
-    problem: object,
+    problem: FitEvaluationContext,
     stage_candidates: tuple[FitCandidate, ...],
     center_unit: np.ndarray,
     child_seeds: tuple[int, ...],
@@ -1431,7 +1444,7 @@ def reconverge_profile_basin(
 # Run stage e
 #
 def run_stage_e(
-    problem: object,
+    problem: FitEvaluationContext,
     dataset_id: str | None,
     parents: tuple[FitCandidate, ...],
     seeds: tuple[int, ...],

@@ -1,0 +1,56 @@
+name: audit
+
+"on":
+  pull_request: {}
+  push:
+    branches: [main, audit-improvements]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Audit ${{ matrix.audit }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        audit: [coverage, typing, advisories]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
+      - name: Install hash-pinned audit tools
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$PYTHON" -m pip --isolated install --no-cache-dir --require-hashes --only-binary=:all: -r tools/audit-requirements.lock
+          "$PYTHON" -m pip check
+      - name: Audit ${{ matrix.audit }}
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$PYTHON" tools/verify.py "${{ matrix.audit }}" --report-dir "$RUNNER_TEMP/audit-reports"
+      - name: Retain audit evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: audit-${{ matrix.audit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/audit-reports/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

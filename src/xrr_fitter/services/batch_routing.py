@@ -12,10 +12,13 @@ import hashlib
 import json
 
 from xrr_fitter.model.automation import MeasurementPreset
-from xrr_fitter.model.structure import GradientLayerSpec, LayerSpec, PeriodicBlock
+from xrr_fitter.model.data import BeamSpec
+from xrr_fitter.model.instrument import InstrumentSpec
+from xrr_fitter.model.project import DatasetProject
+from xrr_fitter.model.structure import GradientLayerSpec, LayerSpec, MaterialSpec, PeriodicBlock, StructureComponent
 
 
-def _material_signature(material) -> tuple[object, ...]:
+def _material_signature(material: MaterialSpec) -> tuple[str, str | None, bool]:
     """Return the material identity relevant to automatic sharing."""
 
     return (
@@ -25,7 +28,7 @@ def _material_signature(material) -> tuple[object, ...]:
     )
 
 
-def _component_signature(component) -> tuple[object, ...]:
+def _component_signature(component: StructureComponent) -> tuple[object, ...]:
     """Describe one structure component for physical-route hashing."""
 
     if isinstance(component, LayerSpec):
@@ -47,7 +50,7 @@ def _component_signature(component) -> tuple[object, ...]:
     raise TypeError(f"unsupported automatic structure component: {type(component).__name__}")
 
 
-def _dataclass_values(value) -> tuple[object, ...]:
+def _dataclass_values(value: BeamSpec | InstrumentSpec) -> tuple[object, ...]:
     """Read declared dataclass fields in stable definition order."""
 
     return tuple(getattr(value, field) for field in value.__dataclass_fields__)
@@ -59,7 +62,7 @@ def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
-def automatic_physical_signature(dataset, preset: MeasurementPreset) -> str:
+def automatic_physical_signature(dataset: DatasetProject, preset: MeasurementPreset) -> str:
     """Hash the behavior-changing automatic grouping contract."""
 
     if dataset.structure is None:

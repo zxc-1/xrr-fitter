@@ -1,6 +1,7 @@
 """Independent, joint, and automatic project fit transactions.
 
-The module owns immutable project publication around numerical service calls.
+The module coordinates project transactions around numerical service calls;
+dataset value updates belong to ``batch_publication``.
 Preparation failures remain dataset-scoped for independent and automatic work,
 while expert joint failures invalidate the complete joint result graph.
 
@@ -12,21 +13,82 @@ final quality decision is ``PASSED``.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
+from functools import partial
 from threading import Lock
+from typing import Protocol, cast
 
-from xrr_fitter.model.analysis import ConfidenceClass, FitResult
+from xrr_fitter.model.analysis import FitResult
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
 from xrr_fitter.model.fitting import FitCheckpoint, FitProgress
 from xrr_fitter.model.operations import DatasetFitResult, ProjectFitResult
-from xrr_fitter.model.parameters import ParameterSetting
-from xrr_fitter.model.project import DatasetProject, ScalePriorState, XrrProject
+from xrr_fitter.model.parameters import SharingRule
+from xrr_fitter.model.project import DatasetProject, DatasetSourceValidation, ProjectValidation, XrrProject
+from xrr_fitter.services.batch_publication import (
+    _automatic_fit_parts,
+    _checkpoint_with_result_diagnostics,
+    _clear_all,
+    _clear_dataset,
+    _commit_automatic_failure,
+    _commit_automatic_result,
+    _commit_success,
+    _failure_result,
+    _replace_dataset,
+    _replay_checkpoints,
+    _warnings,
+)
 from xrr_fitter.services.batch_routing import automatic_group_id as _automatic_group_id
 from xrr_fitter.services.batch_routing import automatic_physical_signature
-from xrr_fitter.services.fitting_phases.common import PreparedDatasetFit
+from xrr_fitter.services.datasets import ServiceSeedBranches
+from xrr_fitter.services.fitting_phases.common import AutomaticPreparedResult, PreparedDatasetFit
 from xrr_fitter.services.parallel import OrderedTaskRunner
 from xrr_fitter.services.projects import inspect_sources
+
+_SeedBranches = Callable[[XrrProject], ServiceSeedBranches]
+_PrepareDataset = Callable[[XrrProject, str, int], PreparedDatasetFit]
+
+
+class _DatasetFit[Result](Protocol):
+    """The keyword callback contract shared by expert and automatic searches."""
+
+    def __call__(
+        self,
+        prepared: PreparedDatasetFit,
+        /,
+        *,
+        progress: Callable[[FitProgress], None] | None,
+        cancelled: Callable[[], bool] | None,
+        checkpoint: Callable[[FitCheckpoint | None], None] | None,
+        local_workers: int,
+    ) -> Result: ...
+
+
+class _JointFit(Protocol):
+    def __call__(
+        self,
+        prepared: tuple[PreparedDatasetFit, ...],
+        sharing_rules: tuple[SharingRule, ...],
+        /,
+        *,
+        progress: Callable[[FitProgress], None] | None,
+        cancelled: Callable[[], bool] | None,
+        checkpoint: Callable[[tuple[FitCheckpoint, ...]], None] | None,
+    ) -> tuple[FitResult, ...]: ...
+
+
+class _AutomaticJointFit(Protocol):
+    def __call__(
+        self,
+        prepared: tuple[PreparedDatasetFit, ...],
+        prefits: tuple[AutomaticPreparedResult, ...],
+        fit_group_id: str,
+        /,
+        *,
+        progress: Callable[[FitProgress], None] | None,
+        cancelled: Callable[[], bool] | None,
+        checkpoint: Callable[[tuple[FitCheckpoint, ...]], None] | None,
+    ) -> tuple[AutomaticPreparedResult, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,15 +105,15 @@ class _IndependentPreparation:
 
 
 @dataclass(frozen=True, slots=True)
-class _BufferedFit:
+class _BufferedFit[Result]:
     """Retain a worker outcome until ordered project publication.
 
     Checkpoints are buffered because they mutate the immutable project value.
     """
 
-    result: FitResult | None
+    result: Result | None
     error: Exception | None
-    checkpoints: tuple[FitCheckpoint, ...]
+    checkpoints: tuple[FitCheckpoint | None, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,62 +131,7 @@ class _AutomaticPreparation:
     error: Exception | None = None
 
 
-def _clear_dataset(dataset):
-    """Remove numerical state while retaining declared dataset inputs.
-
-    Source, structure, instrument, and parameter declarations remain intact.
-    """
-
-    return replace(
-        dataset,
-        scale_prior=ScalePriorState(enabled=False),
-        last_valid_result=None,
-        checkpoint=None,
-    )
-
-
-def _replace_dataset(project: XrrProject, index: int, dataset) -> XrrProject:
-    """Publish one dataset replacement without mutating the project.
-
-    Dataset order is a persisted contract and is never recomputed here.
-    """
-
-    datasets = list(project.datasets)
-    datasets[index] = dataset
-    return replace(project, datasets=tuple(datasets))
-
-
-def _clear_all(project: XrrProject) -> XrrProject:
-    """Invalidate every result participating in an expert joint graph.
-
-    A joint result is not publishable when any member transaction fails.
-    """
-
-    return replace(project, datasets=tuple(map(_clear_dataset, project.datasets)))
-
-
-def _failure_result(dataset, error: BaseException | str) -> FitResult:
-    """Represent a transaction failure as an untrusted dataset result.
-
-    Region arrays retain source length so downstream rendering stays aligned.
-    """
-
-    message = error if isinstance(error, str) else f"{type(error).__name__}: {error}"
-    return FitResult(
-        parameter_definitions=(),
-        candidates=(),
-        best_index=None,
-        confidence=ConfidenceClass.UNTRUSTED,
-        warnings=(message,),
-        child_seeds=(),
-        stage_summaries=(),
-        region_labels=(-1,) * len(dataset.fit_mask),
-        region_weights=(0.0,) * len(dataset.fit_mask),
-        uncertainty=None,
-    )
-
-
-def _source_records(validation) -> dict[str, object]:
+def _source_records(validation: ProjectValidation) -> dict[str, DatasetSourceValidation]:
     """Index source validation records by persisted dataset identity.
 
     Transaction preparation consumes this snapshot without re-reading sources.
@@ -133,7 +140,7 @@ def _source_records(validation) -> dict[str, object]:
     return {record.dataset_id: record for record in validation.datasets}
 
 
-def _source_error(records: dict[str, object], dataset_id: str) -> ValueError | None:
+def _source_error(records: dict[str, DatasetSourceValidation], dataset_id: str) -> ValueError | None:
     """Translate a non-current source record into a preparation error.
 
     Missing records are treated as unavailable only when a record says so.
@@ -143,36 +150,6 @@ def _source_error(records: dict[str, object], dataset_id: str) -> ValueError | N
     if record is None or record.status.value == "ok":
         return None
     return ValueError(f"source status {record.status.value}: {record.message}")
-
-
-def _warnings(results: tuple[DatasetFitResult, ...]) -> tuple[str, ...]:
-    """Flatten dataset warnings in publication order.
-
-    The project result preserves dataset order and warning order within rows.
-    """
-
-    return tuple(warning for item in results for warning in item.fit_result.warnings)
-
-
-def _checkpoint_with_result_diagnostics(checkpoint, result: FitResult):
-    """Project final candidate diagnostics back onto a saved checkpoint.
-
-    Candidate identity, rather than tuple position, controls the replacement.
-    """
-
-    if checkpoint is None:
-        return None
-    result_candidates = {candidate.candidate_id: candidate for candidate in result.candidates}
-    candidates = tuple(
-        replace(
-            candidate,
-            diagnostics=result_candidates[candidate.candidate_id].diagnostics,
-        )
-        if candidate.candidate_id in result_candidates
-        else candidate
-        for candidate in checkpoint.candidates
-    )
-    return replace(checkpoint, candidates=candidates)
 
 
 def _cancelled(error: BaseException) -> bool:
@@ -186,9 +163,9 @@ def _cancelled(error: BaseException) -> bool:
 
 def _prepare_independent_rows(
     project: XrrProject,
-    records: dict[str, object],
+    records: dict[str, DatasetSourceValidation],
     seeds: dict[str, int],
-    prepare_dataset,
+    prepare_dataset: _PrepareDataset,
 ) -> tuple[_IndependentPreparation, ...]:
     """Prepare independent rows while retaining every row-level failure.
 
@@ -198,7 +175,7 @@ def _prepare_independent_rows(
     working = project
     rows = []
     for index, original in enumerate(project.datasets):
-        error = _source_error(records, original.dataset_id)
+        error: Exception | None = _source_error(records, original.dataset_id)
         prepared = None
         if error is None:
             try:
@@ -229,13 +206,13 @@ def _worker_allocations(total_workers: int, count: int) -> tuple[int, ...]:
     return tuple(base + int(index < remainder) for index in range(count))
 
 
-def _dataset_fit(
-    prepared,
+def _dataset_fit[Result](
+    prepared: PreparedDatasetFit,
     local_workers: int,
-    fit_dataset,
-    cancelled,
+    fit_dataset: _DatasetFit[Result],
+    cancelled: Callable[[], bool] | None,
     progress: Callable[[FitProgress], None] | None,
-) -> _BufferedFit:
+) -> _BufferedFit[Result]:
     """Publish progress as it happens while deferring checkpoint commits.
 
     Progress is a pure notification, so it reaches the caller immediately even
@@ -243,7 +220,7 @@ def _dataset_fit(
     id. Checkpoints are withheld because replaying one mutates the accumulated
     immutable project, which must stay serialized in project order.
     """
-    checkpoints: list[object] = []
+    checkpoints: list[FitCheckpoint | None] = []
     try:
         if cancelled is not None and cancelled():
             raise InterruptedError("cancelled")
@@ -277,16 +254,17 @@ def _serialized_progress(
 def _run_independent_rows(
     rows: tuple[_IndependentPreparation, ...],
     total_workers: int,
-    fit_dataset,
-    cancelled,
+    fit_dataset: _DatasetFit[FitResult],
+    cancelled: Callable[[], bool] | None,
     progress: Callable[[FitProgress], None] | None,
-) -> dict[int, _BufferedFit]:
+) -> dict[int, _BufferedFit[FitResult]]:
     runnable = tuple(row for row in rows if row.prepared is not None)
     allocations = _worker_allocations(total_workers, len(runnable))
     published = _serialized_progress(progress)
-    tasks = tuple(
-        lambda row=row, workers=workers: _dataset_fit(
-            row.prepared,
+    tasks: tuple[Callable[[], _BufferedFit[FitResult]], ...] = tuple(
+        partial(
+            _dataset_fit,
+            cast(PreparedDatasetFit, row.prepared),
             workers,
             fit_dataset,
             cancelled,
@@ -300,43 +278,6 @@ def _run_independent_rows(
     with OrderedTaskRunner(concurrency) as runner:
         buffered = runner.run(tasks)
     return {row.index: result for row, result in zip(runnable, buffered, strict=True)}
-
-
-def _replay_checkpoints(
-    working: XrrProject,
-    index: int,
-    checkpoints: tuple[object, ...],
-    checkpoint_callback: Callable[[XrrProject], None] | None,
-) -> XrrProject:
-    """Commit one dataset's checkpoints in project order after it finishes."""
-    for value in checkpoints:
-        dataset = replace(working.datasets[index], checkpoint=value)
-        working = _replace_dataset(working, index, dataset)
-        if checkpoint_callback is not None:
-            checkpoint_callback(working)
-    return working
-
-
-def _commit_success(
-    working: XrrProject,
-    index: int,
-    fit_result: FitResult,
-) -> XrrProject:
-    """Publish one successful independent fit and its final diagnostics.
-
-    The latest checkpoint is retained as resumable provenance for the result.
-    """
-
-    dataset = working.datasets[index]
-    dataset = replace(
-        dataset,
-        last_valid_result=fit_result,
-        checkpoint=_checkpoint_with_result_diagnostics(
-            dataset.checkpoint,
-            fit_result,
-        ),
-    )
-    return _replace_dataset(working, index, dataset)
 
 
 AUTOMATIC_RUNNABLE_STATUSES = frozenset({AutomaticStatus.PENDING, AutomaticStatus.REFINING, AutomaticStatus.REVIEW})
@@ -411,9 +352,9 @@ def _automatic_preparations(
     indices: tuple[int, ...],
     routes: dict[int, tuple[str, int]],
     route_errors: dict[int, Exception],
-    records: dict[str, object],
+    records: dict[str, DatasetSourceValidation],
     seeds: dict[str, int],
-    prepare_dataset,
+    prepare_dataset: _PrepareDataset,
 ) -> tuple[_AutomaticPreparation, ...]:
     """Compile each routed automatic row and preserve preparation errors.
 
@@ -448,187 +389,15 @@ def _automatic_preparations(
     return tuple(rows)
 
 
-def _automatic_fit_parts(result: object) -> tuple[object, FitResult, bool, str | None]:
-    """Validate the structural result contract returned by a fit service.
-
-    Batch publication depends only on these four service-owned fields.
-    """
-
-    prepared = getattr(result, "prepared", None)
-    fit_result = getattr(result, "fit_result", None)
-    passed = getattr(result, "passed", None)
-    reason = getattr(result, "reason", None)
-    if prepared is None or not isinstance(fit_result, FitResult):
-        raise TypeError("automatic fit must return AutomaticPreparedResult")
-    if not isinstance(passed, bool):
-        raise TypeError("automatic fit result passed flag must be bool")
-    return prepared, fit_result, passed, reason
-
-
-def _winner_settings(
-    current: tuple[ParameterSetting, ...],
-    fit_result: FitResult,
-) -> tuple[ParameterSetting, ...]:
-    """Freeze the winning physical vector into persisted parameter settings.
-
-    Incomplete candidate vectors leave the caller's declarations unchanged.
-    """
-
-    best = fit_result.best_candidate
-    if best is None or not fit_result.parameter_definitions:
-        return current
-    values = {parameter.name: parameter.value for parameter in best.parameters}
-    if any(definition.name not in values for definition in fit_result.parameter_definitions):
-        return current
-    return tuple(
-        ParameterSetting(
-            definition.name,
-            values[definition.name],
-            definition.lower,
-            definition.upper,
-            locked=definition.locked,
-        )
-        for definition in fit_result.parameter_definitions
-    )
-
-
-def _automatic_status(
-    fit_result: FitResult,
-    passed: bool,
-    refining: bool,
-) -> AutomaticStatus:
-    """Map candidate validity and quality state onto publication status.
-
-    Joint prefits remain ``REFINING`` until their group decision completes.
-    """
-
-    best = fit_result.best_candidate
-    if best is None or not best.valid:
-        return AutomaticStatus.FAILED
-    if refining:
-        return AutomaticStatus.REFINING
-    return AutomaticStatus.PASSED if passed else AutomaticStatus.REVIEW
-
-
-def _automatic_reason(
-    status: AutomaticStatus,
-    reason: str | None,
-    role: AutomaticRole,
-) -> str | None:
-    """Normalize the audit reason associated with an automatic status.
-
-    Successful isolated retries retain their isolation reason for provenance.
-    """
-
-    if status is AutomaticStatus.PASSED:
-        return reason if role is AutomaticRole.ISOLATED_RETRY else None
-    if status is AutomaticStatus.REFINING:
-        return reason
-    if reason:
-        return reason
-    if status is AutomaticStatus.FAILED:
-        return "no valid automatic candidate"
-    return "automatic quality review required"
-
-
-def _commit_automatic_result(
-    working: XrrProject,
-    row: _AutomaticPreparation,
-    result: object,
-    *,
-    refining: bool,
-) -> tuple[XrrProject, DatasetFitResult]:
-    """Publish one automatic result with coherent settings and checkpoints.
-
-    Parameter changes invalidate stale checkpoints; invalid winners clear the
-    publishable result while preserving the prepared declaration state.
-    """
-
-    prepared, fit_result, passed, reason = _automatic_fit_parts(result)
-    current = working.datasets[row.index]
-    prepared_dataset = prepared.updated_dataset
-    winner_settings = _winner_settings(
-        prepared_dataset.parameter_settings,
-        fit_result,
-    )
-    changed_settings = (
-        row.prepared is not None
-        and prepared_dataset.parameter_settings != row.prepared.updated_dataset.parameter_settings
-    )
-    status = _automatic_status(fit_result, passed, refining)
-    settings_changed = winner_settings != prepared_dataset.parameter_settings
-    if status is AutomaticStatus.FAILED:
-        checkpoint = None
-        last_valid_result = None
-        persisted_settings = prepared_dataset.parameter_settings
-    else:
-        checkpoint = (
-            None if settings_changed else prepared_dataset.checkpoint if changed_settings else current.checkpoint
-        )
-        last_valid_result = fit_result
-        persisted_settings = winner_settings
-    automation = replace(
-        prepared_dataset.automation,
-        status=status,
-        statistics_member=status is AutomaticStatus.PASSED,
-        reason=_automatic_reason(
-            status,
-            (
-                prepared_dataset.automation.reason
-                if status is AutomaticStatus.PASSED
-                else reason or prepared_dataset.automation.reason
-            ),
-            prepared_dataset.automation.role,
-        ),
-    )
-    dataset = replace(
-        prepared_dataset,
-        automation=automation,
-        parameter_settings=persisted_settings,
-        last_valid_result=last_valid_result,
-        checkpoint=_checkpoint_with_result_diagnostics(checkpoint, fit_result),
-    )
-    updated = _replace_dataset(working, row.index, dataset)
-    return updated, DatasetFitResult(dataset.dataset_id, fit_result)
-
-
-def _commit_automatic_failure(
-    working: XrrProject,
-    row: _AutomaticPreparation,
-    error: BaseException,
-) -> tuple[XrrProject, DatasetFitResult]:
-    """Publish a row-level automatic failure without a stale candidate.
-
-    The exception type and message become both warning and automation reason.
-    """
-
-    fit_result = _failure_result(row.original, error)
-    message = f"{type(error).__name__}: {error}"
-    automation = replace(
-        working.datasets[row.index].automation,
-        status=AutomaticStatus.FAILED,
-        statistics_member=False,
-        reason=message,
-    )
-    dataset = replace(
-        working.datasets[row.index],
-        automation=automation,
-        last_valid_result=None,
-        checkpoint=None,
-    )
-    updated = _replace_dataset(working, row.index, dataset)
-    return updated, DatasetFitResult(dataset.dataset_id, fit_result)
-
-
 def _independent_fit(
     project: XrrProject,
-    validation,
+    validation: ProjectValidation,
     progress: Callable[[FitProgress], None] | None,
     checkpoint_callback: Callable[[XrrProject], None] | None,
     cancelled: Callable[[], bool] | None,
-    seed_branches,
-    prepare_dataset,
-    fit_dataset,
+    seed_branches: _SeedBranches,
+    prepare_dataset: _PrepareDataset,
+    fit_dataset: _DatasetFit[FitResult],
 ) -> ProjectFitResult:
     seeds, _joint, _mcmc = seed_branches(project)
     records = _source_records(validation)
@@ -650,7 +419,8 @@ def _independent_fit(
             working = _replace_dataset(working, index, _clear_dataset(working.datasets[index]))
             fit_result = _failure_result(original, row.error)
         else:
-            working = _replace_dataset(working, index, row.prepared.updated_dataset)
+            prepared = cast(PreparedDatasetFit, row.prepared)
+            working = _replace_dataset(working, index, prepared.updated_dataset)
             outcome = buffered[index]
             working = _replay_checkpoints(
                 working,
@@ -700,13 +470,13 @@ def _joint_failure(project: XrrProject, error: BaseException) -> ProjectFitResul
 
 def _joint_fit(
     project: XrrProject,
-    validation,
+    validation: ProjectValidation,
     progress: Callable[[FitProgress], None] | None,
     checkpoint_callback: Callable[[XrrProject], None] | None,
     cancelled: Callable[[], bool] | None,
-    seed_branches,
-    prepare_dataset,
-    fit_joint,
+    seed_branches: _SeedBranches,
+    prepare_dataset: _PrepareDataset,
+    fit_joint: _JointFit,
 ) -> ProjectFitResult:
     """Execute one all-or-nothing expert joint transaction.
 
@@ -728,7 +498,7 @@ def _joint_fit(
             datasets=tuple(item.updated_dataset for item in prepared),
         )
 
-        def publish_checkpoints(values):
+        def publish_checkpoints(values: Iterable[FitCheckpoint | None]) -> None:
             nonlocal working
             checkpoints = tuple(values)
             if len(checkpoints) != len(working.datasets):
@@ -787,7 +557,8 @@ def _publish_automatic_preparation_failures(
             continue
         working, published[row.index] = _commit_automatic_failure(
             working,
-            row,
+            row.index,
+            row.original,
             row.error,
         )
         if checkpoint_callback is not None:
@@ -801,23 +572,24 @@ def _run_automatic_prefits(
     total_workers: int,
     published: dict[int, DatasetFitResult],
     *,
-    fit_dataset,
+    fit_dataset: _DatasetFit[AutomaticPreparedResult],
     progress_callback: Callable[[FitProgress], None] | None,
     checkpoint_callback: Callable[[XrrProject], None] | None,
     cancelled: Callable[[], bool] | None,
 ) -> tuple[
     XrrProject,
     tuple[_AutomaticPreparation, ...],
-    dict[int, object],
+    dict[int, AutomaticPreparedResult],
     bool,
     Callable[[FitProgress], None] | None,
 ]:
     runnable = tuple(row for row in rows if row.prepared is not None)
     allocations = _worker_allocations(total_workers, len(runnable))
     published_progress = _serialized_progress(progress_callback)
-    tasks = tuple(
-        lambda row=row, workers=workers: _dataset_fit(
-            row.prepared,
+    tasks: tuple[Callable[[], _BufferedFit[AutomaticPreparedResult]], ...] = tuple(
+        partial(
+            _dataset_fit,
+            cast(PreparedDatasetFit, row.prepared),
             workers,
             fit_dataset,
             cancelled,
@@ -825,10 +597,10 @@ def _run_automatic_prefits(
         )
         for row, workers in zip(runnable, allocations, strict=True)
     )
-    prefit_results: dict[int, object] = {}
+    prefit_results: dict[int, AutomaticPreparedResult] = {}
     was_cancelled = False
 
-    def publish_prefit(position: int, outcome: _BufferedFit) -> None:
+    def publish_prefit(position: int, outcome: _BufferedFit[AutomaticPreparedResult]) -> None:
         nonlocal working, was_cancelled
         row = runnable[position]
         working = _replay_checkpoints(
@@ -842,14 +614,16 @@ def _run_automatic_prefits(
             prefit_results[row.index] = outcome.result
             working, published[row.index] = _commit_automatic_result(
                 working,
-                row,
+                row.index,
+                row.prepared,
                 outcome.result,
                 refining=row.group_size > 1,
             )
         else:
             working, published[row.index] = _commit_automatic_failure(
                 working,
-                row,
+                row.index,
+                row.original,
                 outcome.error,
             )
             was_cancelled = was_cancelled or _cancelled(outcome.error)
@@ -870,7 +644,7 @@ def _run_automatic_prefits(
 
 def _automatic_joint_groups(
     runnable: tuple[_AutomaticPreparation, ...],
-    prefit_results: dict[int, object],
+    prefit_results: dict[int, AutomaticPreparedResult],
 ) -> dict[str, tuple[_AutomaticPreparation, ...]]:
     """Collect successful prefits that still require joint refinement.
 
@@ -887,7 +661,7 @@ def _automatic_joint_groups(
 def _commit_incomplete_automatic_group(
     working: XrrProject,
     row: _AutomaticPreparation,
-    prefit: object,
+    prefit: AutomaticPreparedResult,
 ) -> tuple[XrrProject, DatasetFitResult]:
     """Demote a lone surviving group member to an auditable review result.
 
@@ -901,7 +675,8 @@ def _commit_incomplete_automatic_group(
     )
     return _commit_automatic_result(
         working,
-        row,
+        row.index,
+        row.prepared,
         review,
         refining=False,
     )
@@ -910,7 +685,7 @@ def _commit_incomplete_automatic_group(
 def _automatic_joint_checkpoint_project(
     working: XrrProject,
     member_rows: tuple[_AutomaticPreparation, ...],
-    values: object,
+    values: Iterable[FitCheckpoint | None],
 ) -> XrrProject:
     """Apply one aligned joint checkpoint batch to its member rows.
 
@@ -929,7 +704,7 @@ def _automatic_joint_checkpoint_project(
 def _commit_automatic_joint_success(
     working: XrrProject,
     member_rows: tuple[_AutomaticPreparation, ...],
-    joint_results: tuple[object, ...],
+    joint_results: tuple[AutomaticPreparedResult, ...],
 ) -> tuple[XrrProject, dict[int, DatasetFitResult]]:
     """Commit an aligned automatic joint result batch by original row index.
 
@@ -945,7 +720,8 @@ def _commit_automatic_joint_success(
             raise ValueError("automatic joint result dataset order mismatch")
         working, published[row.index] = _commit_automatic_result(
             working,
-            row,
+            row.index,
+            row.prepared,
             result,
             refining=False,
         )
@@ -956,9 +732,9 @@ def _fit_automatic_joint_transaction_group(
     working: XrrProject,
     fit_group_id: str,
     member_rows: tuple[_AutomaticPreparation, ...],
-    prefit_results: dict[int, object],
+    prefit_results: dict[int, AutomaticPreparedResult],
     *,
-    fit_joint,
+    fit_joint: _AutomaticJointFit,
     progress: Callable[[FitProgress], None] | None,
     checkpoint_callback: Callable[[XrrProject], None] | None,
     cancelled: Callable[[], bool] | None,
@@ -981,7 +757,7 @@ def _fit_automatic_joint_transaction_group(
     member_prepared = tuple(_automatic_fit_parts(prefit)[0] for prefit in member_prefits)
     group_baseline = working
 
-    def publish_checkpoints(values) -> None:
+    def publish_checkpoints(values: Iterable[FitCheckpoint | None]) -> None:
         nonlocal working
         working = _automatic_joint_checkpoint_project(
             working,
@@ -1014,7 +790,8 @@ def _fit_automatic_joint_transaction_group(
         for row in member_rows:
             working, published[row.index] = _commit_automatic_failure(
                 working,
-                row,
+                row.index,
+                row.original,
                 error,
             )
         was_cancelled = _cancelled(error)
@@ -1030,10 +807,10 @@ def fit_automatic_transaction(
     checkpoint_callback: Callable[[XrrProject], None] | None,
     cancelled: Callable[[], bool] | None,
     *,
-    seed_branches,
-    prepare_dataset,
-    fit_dataset,
-    fit_joint,
+    seed_branches: _SeedBranches,
+    prepare_dataset: _PrepareDataset,
+    fit_dataset: _DatasetFit[AutomaticPreparedResult],
+    fit_joint: _AutomaticJointFit,
 ) -> ProjectFitResult:
     """Route automatic prefits, joint groups, and isolated final results.
 
@@ -1115,10 +892,10 @@ def fit_project_transaction(
     checkpoint_callback: Callable[[XrrProject], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
     *,
-    seed_branches,
-    prepare_dataset,
-    fit_dataset,
-    fit_joint,
+    seed_branches: _SeedBranches,
+    prepare_dataset: _PrepareDataset,
+    fit_dataset: _DatasetFit[FitResult],
+    fit_joint: _JointFit,
 ) -> ProjectFitResult:
     """Dispatch exactly the persisted independent or joint batch mode.
 
