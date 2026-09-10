@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+from tests.support.macos_action_contract import cleanup_step
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "pr-verify.yml"
@@ -104,5 +105,6 @@ def test_pr_workflow_preserves_exact_gate_execution() -> None:
                     )
                 ),
             },
+            cleanup_step(),
         ],
     }

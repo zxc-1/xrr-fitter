@@ -177,7 +177,9 @@ def test_actions_are_commit_pinned_and_checkout_drops_credentials() -> None:
     steps = tuple(_action_steps(_payload()))
     assert steps
     for step in steps:
-        assert step["uses"] == SETUP_MACOS_PYTHON or re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"])
+        assert step["uses"] in {SETUP_MACOS_PYTHON, "./.github/actions/cleanup-macos-python"} or re.fullmatch(
+            r"[^@]+@[0-9a-f]{40}", step["uses"]
+        )
 
 
 def test_release_tool_consumers_use_the_declared_public_owners() -> None:
@@ -222,7 +224,8 @@ def test_standard_jobs_use_required_runner_and_explicit_verifier_modes() -> None
         "release",
     ):
         _assert_standard_job(name, jobs[name])
-    assert "tools/check_hygiene.py --require-git-clean" in _setup_action()["runs"]["steps"][0]["run"]
+    run = next(step["run"] for step in _setup_action()["runs"]["steps"] if step.get("id") == "environment")
+    assert "tools/check_hygiene.py --require-git-clean" in run
 
 
 def test_standard_jobs_verify_locked_environment_metadata() -> None:
@@ -243,7 +246,8 @@ def test_standard_jobs_verify_locked_environment_metadata() -> None:
         assert setup_step() in jobs[name]["steps"]
         command = next(step for step in jobs[name]["steps"] if step.get("name") == f"Verify {name}")
         assert command["env"] == PYTHON_ENV
-    assert '"$PYTHON" -m pip check' in _setup_action()["runs"]["steps"][0]["run"]
+    run = next(step["run"] for step in _setup_action()["runs"]["steps"] if step.get("id") == "environment")
+    assert '"$PYTHON" -m pip check' in run
 
 
 def test_release_job_runs_nested_gui_gates_offscreen() -> None:

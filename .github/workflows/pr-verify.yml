@@ -46,6 +46,11 @@ jobs:
           else
             "$PYTHON" tools/verify.py "${{ matrix.mode }}"
           fi
+      - name: Clean the owned macOS environment
+        if: ${{ always() && steps.python.outputs.job-root != '' }}
+        uses: ./.github/actions/cleanup-macos-python
+        with:
+          job-root: ${{ steps.python.outputs.job-root }}
 
   checkpoint:
     needs: [standard]

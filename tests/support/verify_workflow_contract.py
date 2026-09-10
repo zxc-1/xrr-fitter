@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tests.support.macos_action_contract import cleanup_step
 from tests.support.release_workflow_contract import (
     CHECKOUT,
     DOWNLOAD_ARTIFACT,
@@ -308,7 +309,7 @@ def _checkpoint_job() -> dict[str, object]:
 
 
 def expected_workflow() -> dict[str, object]:
-    return {
+    workflow = {
         "name": "verify",
         "on": {
             "push": {
@@ -339,3 +340,9 @@ def expected_workflow() -> dict[str, object]:
             "checkpoint": _checkpoint_job(),
         },
     }
+    for job in workflow["jobs"].values():
+        steps = job.get("steps", [])
+        if any(step.get("uses") == SETUP_MACOS_PYTHON for step in steps):
+            index = next((index for index, step in enumerate(steps) if step.get("uses") == UPLOAD_ARTIFACT), len(steps))
+            steps.insert(index, cleanup_step())
+    return workflow

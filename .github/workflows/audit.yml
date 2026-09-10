@@ -45,6 +45,11 @@ jobs:
         run: |
           set -euo pipefail
           "$PYTHON" tools/verify.py "${{ matrix.audit }}" --report-dir "$RUNNER_TEMP/audit-reports"
+      - name: Clean the owned macOS environment
+        if: ${{ always() && steps.python.outputs.job-root != '' }}
+        uses: ./.github/actions/cleanup-macos-python
+        with:
+          job-root: ${{ steps.python.outputs.job-root }}
       - name: Retain audit evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

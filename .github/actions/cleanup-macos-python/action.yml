@@ -1,0 +1,16 @@
+name: Clean owned macOS Python
+description: Remove only the identity-checked job virtual environment; retain evidence
+inputs:
+  job-root:
+    description: Owned directory returned by setup-macos-python
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        JOB_ROOT: ${{ inputs.job-root }}
+        PYTHONDONTWRITEBYTECODE: "1"
+      run: |
+        set -euo pipefail
+        python3.12 tools/macos_environment.py cleanup --job-root "$JOB_ROOT"
