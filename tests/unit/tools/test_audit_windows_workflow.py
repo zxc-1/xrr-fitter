@@ -117,7 +117,7 @@ def test_windows_cache_restores_only_an_exact_key_and_saves_only_verified_wheels
     for step in _cache_steps():
         assert step["with"] == {
             "key": "${{ steps.cache-key.outputs.key }}",
-            "path": "${{ env.AUDIT_ROOT }}/package-cache/",
+            "path": "${{ runner.temp }}/xrr-wheel-cache/",
         }
 
 
@@ -148,3 +148,22 @@ def test_windows_cache_verifies_restored_bytes():
     runs = "\n".join(step.get("run", "") for step in steps)
     assert "tools/package_cache.py fetch" in runs
     assert '--trust-domain "$env:CACHE_TRUST_DOMAIN"' in runs
+
+
+def test_windows_cache_fetch_uses_the_stable_restore_directory():
+    steps = _workflow()["jobs"]["windows-headless"]["steps"]
+    fetch = next(step["run"] for step in steps if "tools/package_cache.py fetch" in step.get("run", ""))
+    assert '--cache-dir "$env:RUNNER_TEMP/xrr-wheel-cache"' in fetch
+    assert '--report-dir "$env:AUDIT_ROOT/reports/packages"' in fetch
+
+
+def test_windows_cache_path_is_unchanged_across_runs_and_attempts():
+    for step in _cache_steps():
+        template = step["with"]["path"]
+        paths = {
+            template.replace("${{ runner.temp }}", "D:/a/_temp").replace(
+                "${{ env.AUDIT_ROOT }}", f"D:/a/_temp/xrr-audit-{run_id}-{attempt}"
+            )
+            for run_id, attempt in ((123, 1), (123, 2), (456, 1))
+        }
+        assert len(paths) == 1, "actions/cache versions include the resolved path, not only the explicit key"
