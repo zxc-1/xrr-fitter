@@ -146,6 +146,57 @@ false success and exits nonzero until those boundaries are supplied. The
 artifact manifest remains the authoritative exact release identity; this report
 does not replace it or add a release asset.
 
+## Installed and Frozen Artifact Evidence
+
+`tools/installed_sbom.py` checks the actual target venv against independently
+hash-verified wheel inputs. Run it before installing the separate audit-tool
+closure. It reconstructs relocation, pip scripts/launchers and metadata, RECORD,
+and CPython 3.12 bytecode without executing inspected package source. Installed
+RECORD hashes are not trusted as proof of file contents. Identical shared files
+retain every owner; conflicting, missing or unowned site-packages files fail.
+Input/output paths must have regular, unchanged ancestors, not symlink aliases.
+
+The macOS scope is 44 ordinary wheels plus pinned bootstrap pip and the separately
+verified refnx build. Windows retains six auxiliary input wheels from the
+bootstrap/test locks, including packaging already in the 38-wheel ordinary
+manifest; its installed scope is 43 distributions. The ordinary manifest is not
+expanded to include these auxiliary packages. Interpreter and venv-bootstrap
+members outside wheel ownership are reported separately.
+
+The optional `--artifact-manifest` / `--artifact-dir` pair binds real wheel/sdist
+members to captured Git blobs, then selects the wheel-metadata runtime dependency
+closure rather than claiming every development package is shipped. The optional
+`--executable` / `--executable-evidence` pair verifies the successful headless
+execution receipt and inventories the unsigned Windows PyInstaller 6.21.0
+CArchive, PYZ and nested base-library ZIP without loading their code objects.
+Payloads retain full byte hashes and all matching installed-input candidates.
+Python sources use complete module paths and the declared CLI entry point,
+never basename-only attribution. Recompiled code must match all code fields;
+valid marshal sharing/interning layout differences are explicitly distinguished
+from exact wire-byte matches and retain both wire hashes and a code-field digest.
+
+Reports include `inventory.json`, `installed.cdx.json`, optional artifact/frozen
+reports, and a `summary.json` binding every report hash to the source commit/tree.
+`--require-complete` retains the evidence but exits 2: modified bootloader bytes,
+unmatched OS/CPython files, native/vendored resolution and observed runtime loader
+closure are still incomplete. A byte match proves an input witness, not that an
+entire package or its complete runtime closure is bundled.
+
+`tools/audit_bundle.py` links these reports to a successful `advisories` report:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3.12 tools/audit_bundle.py --repo-root . --installed-report /private/tmp/xrr-installed-run --advisory-report /private/tmp/xrr-advisories-run/audit --report-dir /private/tmp/xrr-audit-binding-run
+```
+
+It verifies source/input identities, report hashes and inner SBOM bindings,
+both exact-pin scan scopes and tool versions, zero findings, and the actual
+ordinary wheel records including SHA-256. Bootstrap, VCS and Windows test-only
+inputs remain explicitly unscanned. Windows pin lookup is produced by the macOS
+advisory job; attaching it to Windows artifact evidence does not claim Windows
+executed pip-audit. This receipt is neither a signature nor a complete native
+vulnerability scan. Keep the original reports alongside it, and do not promote
+PR evidence into trusted release attestations.
+
 ## Windows Audit
 
 `audit-windows.yml` is separate from the existing GUI executable release job.
@@ -154,8 +205,9 @@ commit, creates a unique external environment and disables shared pip caching.
 The bootstrap and pytest additions reuse existing universal hash-pinned wheels.
 It verifies the Windows wheel bytes before installation, runs existing CLI and
 export tests, and builds a headless executable for help/validation/export
-checks. Reports bind the executable hash to the source commit and explicitly
-state that the GUI was not tested. The job-owned environment is cleaned after
+checks. Installed/frozen byte verification follows those execution checks and
+precedes wheel-cache publication. Reports bind the executable hash to the source
+commit and explicitly state that the GUI was not tested. The job-owned environment is cleaned after
 evidence upload; the release asset set is unchanged.
 
 ## Verified Wheel Cache

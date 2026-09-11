@@ -80,8 +80,7 @@ The following remain incomplete:
   and separately verify the deployed main/release runner's account and process
   boundaries. Account, permission or service changes require approval. Never
   restore a venv, derived refnx wheel or release evidence across trust boundaries.
-- **Native scanning and complete artifact SBOM:** bind reports to
-  the actual installed/bundled bytes and decide
+- **Complete native/runtime evidence and release policy:** decide
   how findings affect releases before adding a CI gate or changing release
   assets. Existing exact release asset sets and schemas stay unchanged.
   The wheel archive SBOM now records actual file/native hashes, metadata,
@@ -89,8 +88,10 @@ The following remain incomplete:
   loader declarations, per-architecture image hashes and exact wheel-local
   path edges are also recorded; these do not prove runtime loader resolution.
   Unparsed native members and unresolved requests remain explicit. The report
-  retains incomplete native/vendored composition and is not a final executable
-  SBOM.
+  retains incomplete native/vendored composition. The separate installed and
+  frozen-artifact inventories in `audit-tooling.md` bind actual bytes and source
+  transformations, with exact ordinary-pin scan receipts; they do not establish
+  OS/runtime loader completeness or scan native/VCS/bootstrap components.
 
 An external reporting-only baseline and the subsequent build/test-tool security
 migration are recorded in `audit-reporting-baseline.md`. Those measurements did

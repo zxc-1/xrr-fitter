@@ -42,7 +42,8 @@ def test_audit_matrix_is_non_gui_and_does_not_change_release_modes():
 
 
 def test_audit_tools_are_hash_checked_before_verification():
-    install, verify = _job()["steps"][2:4]
+    install = next(step for step in _job()["steps"] if step.get("name") == "Install hash-pinned audit tools")
+    verify = next(step for step in _job()["steps"] if step.get("name") == "Audit ${{ matrix.audit }}")
     assert install["env"] == verify["env"] == {"PYTHON": "${{ steps.python.outputs.python }}"}
     assert install["run"].splitlines() == [
         "set -euo pipefail",
@@ -62,7 +63,8 @@ def test_audit_upload_keeps_failure_evidence_and_coverage_raw_data():
     assert upload["uses"] == "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
     assert upload["with"] == {
         "name": "audit-${{ matrix.audit }}-${{ github.run_id }}-${{ github.run_attempt }}",
-        "path": "${{ runner.temp }}/audit-reports/",
+        "path": "${{ runner.temp }}/audit-reports/\n${{ steps.python.outputs.job-root }}/reports/installed/\n"
+        "${{ steps.python.outputs.job-root }}/reports/distribution/\n",
         "include-hidden-files": True,
         "if-no-files-found": "error",
         "retention-days": 14,

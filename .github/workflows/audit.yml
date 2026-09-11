@@ -30,6 +30,16 @@ jobs:
       - name: Set up locked macOS Python
         id: python
         uses: ./.github/actions/setup-macos-python
+      - name: Bind installed and distribution byte evidence
+        if: ${{ matrix.audit == 'advisories' }}
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
+          JOB_ROOT: ${{ steps.python.outputs.job-root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$PYTHON" tools/verify.py distribution --report-dir "$JOB_ROOT/reports/distribution"
+          "$PYTHON" tools/installed_sbom.py --manifest tools/package-manifests/macos-arm64-py312.json --wheel-dir "$JOB_ROOT/reports/packages/wheels" --pip-wheel "$JOB_ROOT/reports/refnx-inputs/inputs/pip-26.1.2-py3-none-any.whl" --refnx-build "$JOB_ROOT/reports/refnx-build/build.json" --artifact-manifest "$JOB_ROOT/reports/distribution/artifact-manifest.json" --artifact-dir "$JOB_ROOT/reports/distribution/artifacts" --report-dir "$JOB_ROOT/reports/installed"
       - name: Install hash-pinned audit tools
         env:
           PYTHON: ${{ steps.python.outputs.python }}
@@ -45,6 +55,15 @@ jobs:
         run: |
           set -euo pipefail
           "$PYTHON" tools/verify.py "${{ matrix.audit }}" --report-dir "$RUNNER_TEMP/audit-reports"
+      - name: Bind advisory scope to verified artifacts
+        if: ${{ matrix.audit == 'advisories' }}
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
+          JOB_ROOT: ${{ steps.python.outputs.job-root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$PYTHON" tools/audit_bundle.py --installed-report "$JOB_ROOT/reports/installed" --advisory-report "$RUNNER_TEMP/audit-reports/audit" --report-dir "$RUNNER_TEMP/audit-reports/binding"
       - name: Clean the owned macOS environment
         if: ${{ always() && steps.python.outputs.job-root != '' }}
         uses: ./.github/actions/cleanup-macos-python
@@ -55,7 +74,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: audit-${{ matrix.audit }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/audit-reports/
+          path: |
+            ${{ runner.temp }}/audit-reports/
+            ${{ steps.python.outputs.job-root }}/reports/installed/
+            ${{ steps.python.outputs.job-root }}/reports/distribution/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
