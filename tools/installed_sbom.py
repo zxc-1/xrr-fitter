@@ -19,6 +19,7 @@ from artifact_binding import bind_distribution  # noqa: E402
 from audit_reports import _write  # noqa: E402
 from distribution_source import clean_head_identity  # noqa: E402
 from executable_binding import bind_executable  # noqa: E402
+from installed_diagnostics import InstalledMismatch  # noqa: E402
 from installed_inputs import load_installation_inputs  # noqa: E402
 from installed_inventory import current_layout, inspect_installation  # noqa: E402
 from lock_sbom import canonical_sbom_bytes  # noqa: E402
@@ -157,6 +158,13 @@ def _artifact_reports(args, root, inputs, inventory, bom, source):
     return reports, guards
 
 
+def _failure_report(error: Exception) -> str:
+    result = {"state": "FAIL", "error": str(error)}
+    if isinstance(error, InstalledMismatch):
+        result["verification"] = error.evidence
+    return json.dumps(result, sort_keys=True) + "\n"
+
+
 def report_installation(args) -> dict:
     root = args.repo_root.resolve()
     report, guard, _environment = prepare_report(root, args.report_dir)
@@ -201,7 +209,7 @@ def report_installation(args) -> dict:
         return summary
     except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile) as error:
         guard()
-        _write(report, "failure.json", json.dumps({"state": "FAIL", "error": str(error)}, sort_keys=True) + "\n")
+        _write(report, "failure.json", _failure_report(error))
         raise
 
 

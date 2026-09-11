@@ -177,6 +177,10 @@ from exact wire-byte matches and retain both wire hashes and a code-field digest
 
 Reports include `inventory.json`, `installed.cdx.json`, optional artifact/frozen
 reports, and a `summary.json` binding every report hash to the source commit/tree.
+Failed installed-byte checks retain package, source, transformation and anchored
+byte diagnostics in `failure.json`, never a success summary. Small byte samples
+are capped at 64 KiB per side; bytecode diagnostics use the bounded code-field
+parser, not `marshal.loads`, and do not relax exact installed-byte comparison.
 `--require-complete` retains the evidence but exits 2: modified bootloader bytes,
 unmatched OS/CPython files, native/vendored resolution and observed runtime loader
 closure are still incomplete. A byte match proves an input witness, not that an

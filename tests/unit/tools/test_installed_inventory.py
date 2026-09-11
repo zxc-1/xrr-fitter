@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import csv
 import io
 import json
+import marshal
 
 import pytest
 from tests.support.installed_wheels import (
@@ -174,3 +176,76 @@ def test_direct_url_cannot_point_at_another_equal_named_archive(tmp_path, load_t
     rewrite_installed_record(path.with_name("RECORD"), layout["library"])
     with pytest.raises(ValueError, match="bytes|metadata"):
         inspect(module, layout, wheels)
+
+
+def test_failed_installed_copy_identifies_the_exact_package_source_and_bytes(tmp_path, load_tool_module):
+    module = load_tool_module("installed_inventory")
+    layout, wheels = sample_installation(tmp_path)
+    path = layout["library"] / "sample/__init__.py"
+    path.write_bytes(b"changed package source")
+    with pytest.raises(ValueError) as failure:
+        inspect(module, layout, wheels)
+    assert "sample/__init__.py" in str(failure.value)
+    evidence = failure.value.evidence
+    assert evidence["transform"] == "wheel-copy"
+    assert evidence["actual"]["sha256"] == digest(path.read_bytes())
+    assert evidence["package"] == "sample"
+    assert evidence["source"] == "sample/__init__.py"
+    assert base64.b64decode(evidence["actual"]["bytes_base64"]) == path.read_bytes()
+
+
+def test_failed_bytecode_retains_bounded_expected_and_actual_field_evidence(tmp_path, load_tool_module):
+    module = load_tool_module("installed_inventory")
+    layout, wheels = sample_installation(tmp_path)
+    path = next((layout["library"] / "sample").rglob("*.pyc"))
+    altered = path.read_bytes()[:16] + marshal.dumps(compile("value = 2", "changed.py", "exec"))
+    path.write_bytes(altered)
+    with pytest.raises(ValueError) as failure:
+        inspect(module, layout, wheels)
+    evidence = failure.value.evidence
+    assert evidence["transform"] == "cpython-bytecode"
+    assert evidence["expected"]["code_fields_sha256"] != evidence["actual"]["code_fields_sha256"]
+    assert evidence["actual"]["sha256"] == digest(altered)
+    assert evidence["actual"]["header_hex"] == altered[:16].hex()
+
+
+@pytest.mark.parametrize("size", [64 * 1024, 64 * 1024 + 1])
+def test_installed_failure_byte_capture_has_an_explicit_size_bound(tmp_path, load_tool_module, size):
+    module = load_tool_module("installed_inventory")
+    layout, wheels = sample_installation(tmp_path)
+    data = b"x" * size
+    (layout["library"] / "sample/__init__.py").write_bytes(data)
+    with pytest.raises(ValueError) as failure:
+        inspect(module, layout, wheels)
+    actual = failure.value.evidence["actual"]
+    assert (actual["size"], actual["sha256"]) == (size, digest(data))
+    assert ("bytes_base64" in actual) == (size <= 64 * 1024)
+    assert actual["prefix_hex"] == data[:64].hex()
+
+
+def test_invalid_bytecode_diagnostic_preserves_failure_without_loading_code(tmp_path, load_tool_module):
+    module = load_tool_module("installed_inventory")
+    layout, wheels = sample_installation(tmp_path)
+    path = next((layout["library"] / "sample").rglob("*.pyc"))
+    altered = path.read_bytes()[:16] + b"?"
+    path.write_bytes(altered)
+    with pytest.raises(ValueError) as failure:
+        inspect(module, layout, wheels)
+    actual = failure.value.evidence["actual"]
+    assert actual["sha256"] == digest(altered)
+    assert "code_fields_error" in actual
+
+
+def test_installed_failure_diagnostics_never_follow_a_replaced_file_link(tmp_path, load_tool_module):
+    module = load_tool_module("installed_inventory")
+    layout, wheels = sample_installation(tmp_path)
+    path = layout["library"] / "sample/__init__.py"
+    outside = tmp_path / "outside.py"
+    path.rename(outside)
+    path.symlink_to(outside)
+    with pytest.raises(ValueError, match="symlink") as failure:
+        inspect(module, layout, wheels)
+    actual = failure.value.evidence["actual"]
+    assert "read_error" in actual
+    assert "sha256" not in actual
+    assert "bytes_base64" not in actual

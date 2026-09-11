@@ -15,6 +15,7 @@ TOOL_DIRECTORY = str(Path(__file__).resolve().parent)
 if TOOL_DIRECTORY not in sys.path:
     sys.path.insert(0, TOOL_DIRECTORY)
 
+from installed_diagnostics import InstalledMismatch, mismatch_evidence  # noqa: E402
 from installed_files import InstalledSnapshot, VerifiedWheel  # noqa: E402
 from installed_transforms import (  # noqa: E402
     bytecode,
@@ -95,8 +96,13 @@ class InstallationInspection:
         self.compile_failures: list[dict] = []
         self.compile_warnings: list[dict] = []
 
-    def claim(self, path, digest, item, source, transform) -> dict:
-        file = self.snapshot.verify(path, digest)
+    def claim(self, path, digest, item, source, transform, *, expected=None) -> dict:
+        try:
+            file = self.snapshot.verify(path, digest)
+        except (OSError, ValueError) as error:
+            evidence = mismatch_evidence(self.snapshot, path, digest, item, source, transform, expected)
+            message = f"installed {transform} bytes differ for {item.record['name']} {evidence['path']}: {error}"
+            raise InstalledMismatch(message, evidence) from error
         canonical = self.canonical_paths.get(os.path.normcase(file["path"]))
         if canonical is None:
             raise ValueError("installed file appeared during inspection")
@@ -114,7 +120,7 @@ class InstallationInspection:
         return file
 
     def generated(self, path, content, item, source, transform, rows, *, unhashed=False) -> None:
-        self.claim(path, hashlib.sha256(content).hexdigest(), item, source, transform)
+        self.claim(path, hashlib.sha256(content).hexdigest(), item, source, transform, expected=content)
         relative = self.layout.record_path(path)
         rows.append((relative, "", "") if unhashed else record_row(relative, content))
 
@@ -126,7 +132,7 @@ class InstallationInspection:
             content = b"#!" + os.fsencode(self.layout.interpreter) + os.linesep.encode() + content.partition(b"\n")[2]
             self.generated(destination, content, item, name, "wheel-script-shebang", rows)
         else:
-            self.claim(destination, wheel.files[name]["sha256"], item, name, "wheel-copy")
+            self.claim(destination, wheel.files[name]["sha256"], item, name, "wheel-copy", expected=content)
             rows.append((self.layout.record_path(destination), digest, size))
         if destination.suffix == ".py":
             self.compiled(destination, content, item, name, rows)
@@ -171,6 +177,7 @@ class InstallationInspection:
                 item,
                 record_path,
                 "pip-RECORD",
+                expected=record_bytes(rows),
             )
             self.packages.append(
                 {"wheel": dict(item.record), "provenance": item.provenance, "inventory": wheel.inventory}

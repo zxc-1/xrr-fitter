@@ -125,3 +125,18 @@ def test_installed_cli_binds_all_emitted_reports_by_hash(tmp_path, load_tool_mod
     assert set(summary["reports"]) == {"inventory.json", "installed.cdx.json"}
     for name, checksum in summary["reports"].items():
         assert __import__("hashlib").sha256((tmp_path / "report" / name).read_bytes()).hexdigest() == checksum
+
+
+def test_installed_cli_failure_retains_bounded_byte_diagnostics(tmp_path, load_tool_module, monkeypatch):
+    module, argv = _cli_fixture(tmp_path, load_tool_module, monkeypatch)
+
+    def fail(*args, **kwargs):
+        raise module.InstalledMismatch("changed installed bytes", {"path": "sample/file.py"})
+
+    monkeypatch.setattr(module, "inspect_installation", fail)
+    with pytest.raises(SystemExit) as error:
+        module.main(argv)
+    assert error.value.code == 2
+    failure = json.loads((tmp_path / "report/failure.json").read_bytes())
+    assert failure["verification"] == {"path": "sample/file.py"}
+    assert not (tmp_path / "report/summary.json").exists()
