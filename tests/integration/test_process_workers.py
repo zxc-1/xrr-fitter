@@ -164,7 +164,8 @@ def test_real_spawn_automatic_joint_worker_serializes_checkpoints_and_projection
     checkpoint_path = tmp_path / "automatic-joint-checkpoint.xrrproj.json"
 
     job = api.start_automatic_fit_job(project, batch_id, checkpoint_path)
-    events = collect_events(job)
+    # Bound the full numerical protocol while allowing for subprocess coverage overhead.
+    events = collect_events(job, timeout_seconds=120.0)
 
     _assert_terminal_then_stopped(events, "fit_result")
     partial = _checkpoints_before_terminal(events, "fit_result")
