@@ -10,11 +10,11 @@ from tests.support.release_workflow_contract import (
     expected_windows_job,
 )
 
-RUNNER = ["self-hosted", "macOS", "ARM64", "xrr-ci"]
+RUNNER = "macos-15"
 SETUP_MACOS_PYTHON = "./.github/actions/setup-macos-python"
 PYTHON_ENV = {"PYTHON": "${{ steps.python.outputs.python }}"}
 UPLOAD_ARTIFACT = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
-JOB_TIMEOUTS = {"statistical": 720, "release": 720}
+JOB_TIMEOUTS = {"statistical": 360, "release": 360}
 
 
 def setup_step(if_condition: str | None = None) -> dict[str, object]:
@@ -201,7 +201,7 @@ def _identity_job() -> dict[str, object]:
 
 def _release_job() -> dict[str, object]:
     job = _standard_job("release")
-    job["timeout-minutes"] = 720
+    job["timeout-minutes"] = JOB_TIMEOUTS["release"]
     job["needs"] = ["candidate-readiness"]
     job["if"] = "startsWith(github.ref, 'refs/tags/') && needs.candidate-readiness.outputs.ready == 'true'"
     job["steps"][-1]["run"] = _standard_run("release").replace(

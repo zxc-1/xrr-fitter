@@ -250,6 +250,30 @@ Lock-resolver caches are separate from these verified inputs. Neither cache
 establishes account isolation for a self-hosted runner sharing the developer's
 account.
 
+## GitHub-hosted Verification
+
+All macOS workflow jobs use GitHub-hosted `macos-15`, including the `main` and
+version-tag gates in `verify.yml`. Windows jobs use `windows-2025`; draft-release
+publication uses `ubuntu-latest`. The existing verifier modes, tag/readiness
+conditions, exact artifact identity and final checkpoint remain unchanged.
+Statistical and complete release jobs allow 360 minutes, matching GitHub's
+[six-hour hosted job limit](https://docs.github.com/en/actions/reference/limits).
+Reaching that limit fails the job; it does not reduce the test selection.
+
+`hosted-release-verify.yml` runs the complete `tools/verify.py release` sequence
+with offscreen Qt, including the full statistical corpus, distribution and
+identity checks. It has read-only repository permissions and retains the log
+and release verification bundle on failure as well as success. It can be run
+manually; changes to the main verification or shared setup/cleanup workflows
+also trigger it on the `audit-improvements` branch. It does not create a tag
+or publish a GitHub Release, and it does not add long-running checks to PRs.
+
+Retire a previously registered local runner only after the default branch
+selects hosted runners and actual hosted verification succeeds. Check that
+the local runner has no active worker, preserve its service recovery details,
+then stop its service and remove its registration. Changing a branch's YAML
+alone does not migrate workflows still defined by an older default branch.
+
 ## Verified macOS Build Inputs
 
 The shared macOS setup uses one exact, trust-scoped cache key for ordinary

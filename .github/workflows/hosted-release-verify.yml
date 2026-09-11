@@ -1,0 +1,55 @@
+name: hosted-release-verify
+
+"on":
+  workflow_dispatch: {}
+  push:
+    branches: [audit-improvements]
+    paths:
+      - .github/workflows/verify.yml
+      - .github/workflows/hosted-release-verify.yml
+      - .github/actions/setup-macos-python/action.yml
+      - .github/actions/cleanup-macos-python/action.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-release-verify-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
+      - name: Verify release
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
+          QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release --report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts" 2>&1 | tee "$RUNNER_TEMP/hosted-release-verify.log"
+      - name: Clean the owned macOS environment
+        if: ${{ always() && steps.python.outputs.job-root != '' }}
+        uses: ./.github/actions/cleanup-macos-python
+        with:
+          job-root: ${{ steps.python.outputs.job-root }}
+      - name: Retain full verification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: hosted-release-verify-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/hosted-release-verify.log
+            ${{ runner.temp }}/release/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
