@@ -62,6 +62,16 @@ def test_macos_inventory_is_only_an_audit_slice_and_precedes_audit_tool_installa
     assert "installed_sbom.py" not in setup
 
 
+def test_macos_distribution_producer_supplies_its_required_artifact_directory():
+    steps = _steps("audit.yml", "audit")
+    script = steps[_run_index(steps, "tools/verify.py distribution")]["run"]
+    command = next(line for line in script.splitlines() if "tools/verify.py distribution" in line)
+    _arguments(
+        command,
+        ('--report-dir "$JOB_ROOT/reports/distribution"', '--artifact-dir "$JOB_ROOT/reports/distribution/artifacts"'),
+    )
+
+
 def test_advisory_binding_keeps_artifact_and_installed_evidence_even_on_failure():
     steps = _steps("audit.yml", "audit")
     binding = [step for step in steps if "tools/audit_bundle.py" in step.get("run", "")]

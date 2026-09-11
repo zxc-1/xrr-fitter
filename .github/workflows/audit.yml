@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$PYTHON" tools/verify.py distribution --report-dir "$JOB_ROOT/reports/distribution"
+          "$PYTHON" tools/verify.py distribution --report-dir "$JOB_ROOT/reports/distribution" --artifact-dir "$JOB_ROOT/reports/distribution/artifacts"
           "$PYTHON" tools/installed_sbom.py --manifest tools/package-manifests/macos-arm64-py312.json --wheel-dir "$JOB_ROOT/reports/packages/wheels" --pip-wheel "$JOB_ROOT/reports/refnx-inputs/inputs/pip-26.1.2-py3-none-any.whl" --refnx-build "$JOB_ROOT/reports/refnx-build/build.json" --artifact-manifest "$JOB_ROOT/reports/distribution/artifact-manifest.json" --artifact-dir "$JOB_ROOT/reports/distribution/artifacts" --report-dir "$JOB_ROOT/reports/installed"
       - name: Install hash-pinned audit tools
         env:
