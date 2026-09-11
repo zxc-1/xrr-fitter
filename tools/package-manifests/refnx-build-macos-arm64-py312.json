@@ -1,5 +1,5 @@
 {
-  "application_lock_sha256": "514cda1919d3d1cccebc8828fab9da7aecc04fd515f02812ac750e29f65b323c",
+  "application_lock_sha256": "faaf7245b960f9974e89067dfd5b8779b9323c8ca2bf8d2861e905f415d68320",
   "lock_sha256": "7f997ba57d8190d82746e62c694dcf75ce84ac9182d13c35c5fe2137a726d408",
   "pip_version": "26.1.2",
   "python_version": "3.12",

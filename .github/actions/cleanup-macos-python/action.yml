@@ -7,10 +7,18 @@ inputs:
 runs:
   using: composite
   steps:
-    - shell: bash
+    - id: cleanup
+      shell: bash
       env:
         JOB_ROOT: ${{ inputs.job-root }}
         PYTHONDONTWRITEBYTECODE: "1"
       run: |
         set -euo pipefail
         python3.12 tools/macos_environment.py cleanup --job-root "$JOB_ROOT"
+        printf 'evidence-name=%s-cleanup\n' "${JOB_ROOT##*/}" >> "$GITHUB_OUTPUT"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ steps.cleanup.outputs.evidence-name }}
+        path: ${{ inputs.job-root }}/cleanup.json
+        if-no-files-found: error
+        retention-days: 14

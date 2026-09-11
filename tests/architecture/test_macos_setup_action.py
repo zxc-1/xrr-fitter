@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from tests.support.macos_action_contract import cleanup_step, expected_action
+from tests.support.macos_action_contract import UPLOAD, cleanup_step, expected_action
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "verify.yml"
@@ -159,13 +159,49 @@ def test_cleanup_action_rechecks_ownership_with_system_python() -> None:
             "using": "composite",
             "steps": [
                 {
+                    "id": "cleanup",
                     "shell": "bash",
                     "env": {"JOB_ROOT": "${{ inputs.job-root }}", "PYTHONDONTWRITEBYTECODE": "1"},
-                    "run": 'set -euo pipefail\npython3.12 tools/macos_environment.py cleanup --job-root "$JOB_ROOT"\n',
-                }
+                    "run": (
+                        'set -euo pipefail\npython3.12 tools/macos_environment.py cleanup --job-root "$JOB_ROOT"\n'
+                        'printf \'evidence-name=%s-cleanup\\n\' "${JOB_ROOT##*/}" >> "$GITHUB_OUTPUT"\n'
+                    ),
+                },
+                {
+                    "uses": UPLOAD,
+                    "with": {
+                        "name": "${{ steps.cleanup.outputs.evidence-name }}",
+                        "path": "${{ inputs.job-root }}/cleanup.json",
+                        "if-no-files-found": "error",
+                        "retention-days": 14,
+                    },
+                },
             ],
         },
     }
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_cleanup_exports_receipt_only_after_success(tmp_path: Path, failed: bool) -> None:
+    environment = _fake_setup_environment(tmp_path)
+    job = tmp_path / "xrr-macos-owned.abcdefgh"
+    command = f"tools/macos_environment.py cleanup --job-root {job}"
+    environment.update(JOB_ROOT=str(job), FAIL_ARGS=command if failed else "")
+    action = yaml.safe_load((ROOT / ".github/actions/cleanup-macos-python/action.yml").read_text())
+    result = subprocess.run(
+        ("bash", "-c", action["runs"]["steps"][0]["run"]),
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    output = Path(environment["GITHUB_OUTPUT"])
+    assert result.returncode == (19 if failed else 0)
+    if failed:
+        assert not output.exists()
+    else:
+        assert output.is_file(), "successful cleanup must identify its retained receipt"
+        assert output.read_text() == f"evidence-name={job.name}-cleanup\n"
 
 
 def _readiness_repository(tmp_path: Path, *, has_manifest: bool) -> Path:

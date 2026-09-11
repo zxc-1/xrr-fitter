@@ -172,6 +172,35 @@ boundary. Only the dedicated package cache is uploaded, never a venv, report,
 credential or pip HTTP cache. Cache saving requires successful validation.
 Actual hosted cold/warm runs remain a separate verification requirement.
 
-This does not migrate the existing shared macOS setup or lock-resolver caches,
-nor cache the refnx VCS build. It also does not establish isolation for a
-self-hosted runner sharing the developer's account.
+Lock-resolver caches are separate from these verified inputs. Neither cache
+establishes account isolation for a self-hosted runner sharing the developer's
+account.
+
+## Verified macOS Build Inputs
+
+The shared macOS setup uses one exact, trust-scoped cache key for ordinary
+wheel inputs and `tools/refnx-build-requirements.lock`. The dedicated builder
+manifest also binds the application lock, direct builder requirements and
+`refnx-source.json`; it does not enlarge the application wheel manifest or
+published runtime dependencies. Every restore rechecks all source/wheel bytes.
+
+`tools/refnx_build.py` extracts only the verified source archive and builds in
+a disposable external venv using hash-pinned pip, Meson, Cython, Ninja and their
+closure. Pip builds with `--no-index --no-deps --no-build-isolation`; inherited
+compiler/cache flags are excluded. The report records the actual compiler,
+SDK, Python and CPU, the derived wheel hash, metadata and installed native
+bytes. Optional reduction imports are not part of the reflect smoke test;
+their native files are still byte-checked. This is not a claim of cross-host
+bit-reproducibility or a network sandbox around the build backend.
+
+The provider cache path is stable across jobs and run attempts, while venvs
+and reports have unique private job roots. `tools/macos_environment.py` binds
+ownership to the current user and directory identities. The paired cleanup
+action rechecks those identities, removes only the job venv and uploads its
+receipt. Setup retains reports and the derived refnx wheel as build evidence,
+but excludes downloaded input copies from the artifact. The derived wheel is
+never saved to the shared cache or treated as independent trusted input.
+
+Native dependency/installed/executable SBOM completeness and actual hosted
+cold/warm behavior remain separate acceptance checks. Main/tag runner
+selection is unchanged; changing the account or runner requires approval.

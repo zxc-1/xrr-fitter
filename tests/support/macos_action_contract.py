@@ -95,8 +95,8 @@ def expected_action():
                         "path": _run(
                             "${{ steps.bootstrap.outputs.root }}/owner.json",
                             "${{ steps.bootstrap.outputs.root }}/reports/",
-                            "!${{ steps.bootstrap.outputs.root }}/reports/**/wheels/**",
-                            "!${{ steps.bootstrap.outputs.root }}/reports/**/inputs/**",
+                            "!${{ steps.bootstrap.outputs.root }}/reports/packages/wheels/**",
+                            "!${{ steps.bootstrap.outputs.root }}/reports/refnx-inputs/inputs/**",
                         ),
                         "include-hidden-files": True,
                         "if-no-files-found": "error",

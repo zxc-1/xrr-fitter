@@ -1,5 +1,5 @@
 {
-  "lock_sha256": "514cda1919d3d1cccebc8828fab9da7aecc04fd515f02812ac750e29f65b323c",
+  "lock_sha256": "faaf7245b960f9974e89067dfd5b8779b9323c8ca2bf8d2861e905f415d68320",
   "pip_version": "26.1.2",
   "pyproject_sha256": "1636118f165bd955d711b1303045dd657433a3310a362d140043027d8d7eb878",
   "python_version": "3.12",
@@ -56,11 +56,11 @@
       "version": "2.0.0"
     },
     {
-      "filename": "fonttools-4.64.0-cp312-cp312-macosx_10_13_universal2.whl",
+      "filename": "fonttools-4.65.0-cp312-cp312-macosx_10_13_universal2.whl",
       "name": "fonttools",
-      "sha256": "9ecb2b206b5b2386f6968721a0770226b66bdd54adc4279bfff3ddf62873eed8",
-      "url": "https://files.pythonhosted.org/packages/82/23/4ea251977fef70ed14193785e1b2949355f1f5927dc0ef1dada675c0bbb2/fonttools-4.64.0-cp312-cp312-macosx_10_13_universal2.whl",
-      "version": "4.64.0"
+      "sha256": "e844a45c9e5ced6536f184cf1a65b5d65e8f7e711993b413e10500a8223622e5",
+      "url": "https://files.pythonhosted.org/packages/58/db/242fa4fce7f632c5f7ab15585343393b25792510c0c32bd218ad24d59f1c/fonttools-4.65.0-cp312-cp312-macosx_10_13_universal2.whl",
+      "version": "4.65.0"
     },
     {
       "filename": "iniconfig-2.3.0-py3-none-any.whl",

@@ -9,17 +9,18 @@ tools, not the macOS test closure. Do not interchange these files or resolve
 Windows environment markers using the host platform.
 
 The local composite action `.github/actions/setup-macos-python/action.yml`
-owns the macOS runner assertion, external virtual environment, pinned pip,
-lock installation, `pip check`, and repository hygiene check. PR jobs remain on
+owns the macOS runner assertion, unique external virtual environment, hash-pinned
+inputs, offline refnx build, `pip check`, and repository hygiene check. PR jobs remain on
 isolated GitHub-hosted runners; main/release jobs retain their existing runner
 and permission contracts. The action does not cache or reuse a virtual
 environment. Candidate readiness still checks prerequisite files before
 installing dependencies.
 
 `pip check` verifies installed dependency metadata, not package integrity or
-known vulnerabilities. The newer package-byte tooling in `audit-tooling.md`
-adds reviewed wheel identities and verified offline installation, but the
-existing shared macOS setup has not yet migrated its VCS build or cache policy.
+known vulnerabilities. The package-byte tooling in `audit-tooling.md`
+verifies ordinary wheels, refnx source and its separate builder closure before
+installation or cache reuse. Every job rebuilds refnx from those inputs; a
+cached compiled wheel and its own claimed digest are not accepted as provenance.
 Exact version pins and a full Git commit alone do not constitute a hash-locked
 download policy. Release wheel/sdist byte
 identities remain owned by `tools/verify_distribution.py` and its
@@ -75,9 +76,9 @@ add tools to distribution dependencies or change the release asset set.
 
 The following remain incomplete:
 
-- **Shared download cache:** first define trust-separated PR/release caches,
-  platform/Python/pip/lock-hash keys, and package-byte verification. Do not
-  restore an environment or release evidence across trust boundaries.
+- **Target-runner cache acceptance:** verify actual cold/warm hosted runs of the
+  trust-separated Windows wheel and macOS input caches. Never restore a venv,
+  derived refnx wheel or release evidence across trust boundaries.
 - **Native scanning and complete artifact SBOM:** bind reports to
   the actual installed/bundled bytes and decide
   how findings affect releases before adding a CI gate or changing release

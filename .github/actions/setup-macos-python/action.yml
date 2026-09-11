@@ -62,8 +62,8 @@ runs:
         path: |
           ${{ steps.bootstrap.outputs.root }}/owner.json
           ${{ steps.bootstrap.outputs.root }}/reports/
-          !${{ steps.bootstrap.outputs.root }}/reports/**/wheels/**
-          !${{ steps.bootstrap.outputs.root }}/reports/**/inputs/**
+          !${{ steps.bootstrap.outputs.root }}/reports/packages/wheels/**
+          !${{ steps.bootstrap.outputs.root }}/reports/refnx-inputs/inputs/**
         include-hidden-files: true
         if-no-files-found: error
         retention-days: 14

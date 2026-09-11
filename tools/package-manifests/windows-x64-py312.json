@@ -1,5 +1,5 @@
 {
-  "lock_sha256": "684f58636502d1b33f34e8e7bb4f6bf46775d6ddb719244d4a0af8f6037312e8",
+  "lock_sha256": "39e3f22a5144892921a7baa3c288d54cf625027e2250bcb77080a4d4727f8926",
   "pip_version": "26.1.2",
   "pyproject_sha256": "1636118f165bd955d711b1303045dd657433a3310a362d140043027d8d7eb878",
   "python_version": "3.12",
@@ -43,11 +43,11 @@
       "version": "0.12.1"
     },
     {
-      "filename": "fonttools-4.64.0-cp312-cp312-win_amd64.whl",
+      "filename": "fonttools-4.65.0-cp312-cp312-win_amd64.whl",
       "name": "fonttools",
-      "sha256": "06b6409b868494556a831ae33b2d9a090476c37516b38d70f45a9720b460d423",
-      "url": "https://files.pythonhosted.org/packages/6f/1c/ce0e89183c0235ff6cfbf0603d593023a5afa5333efb35ff569cc0be9ce2/fonttools-4.64.0-cp312-cp312-win_amd64.whl",
-      "version": "4.64.0"
+      "sha256": "3b5d9ba89edf778b376e669b879ae33a198bf45cf5a23c3f6514f935cf9d0d9d",
+      "url": "https://files.pythonhosted.org/packages/3a/02/e436a6a1863b9862bab9f82d6da33055dd7aa3738017edd902a163525dc2/fonttools-4.65.0-cp312-cp312-win_amd64.whl",
+      "version": "4.65.0"
     },
     {
       "filename": "jsonschema-4.26.0-py3-none-any.whl",
