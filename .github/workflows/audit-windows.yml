@@ -42,6 +42,8 @@ jobs:
           $python = "$root/venv/Scripts/python.exe"
           & $python -m pip --isolated download --require-hashes --no-deps --no-cache-dir --only-binary=:all: --dest "$root/reports/auxiliary-wheels" -r tools/bootstrap-requirements.lock -r tools/windows-test-requirements.lock
           & $python -m pip --isolated install --require-hashes --no-deps --no-cache-dir --no-index --find-links "$root/reports/auxiliary-wheels" --only-binary=:all: -r tools/bootstrap-requirements.lock
+          # Recreate bootstrap outputs with the pinned installer, not ensurepip's seed pip.
+          & $python -m pip --isolated install --force-reinstall --require-hashes --no-deps --no-cache-dir --no-index --find-links "$root/reports/auxiliary-wheels" --only-binary=:all: -r tools/bootstrap-requirements.lock
           @("AUDIT_ROOT=$root", "PYTHON=$python", "PYTHONPATH=$env:GITHUB_WORKSPACE/src", "MPLCONFIGDIR=$root/mpl-cache", "PYTHONDONTWRITEBYTECODE=1", "PYTHONUTF8=1") | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
           @{ source_commit = $actual; source_tree = (git rev-parse 'HEAD^{tree}') } | ConvertTo-Json | Set-Content -Path "$root/reports/source-identity.json" -Encoding utf8
       - name: Derive an exact trust-scoped wheel cache key

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import ntpath
 import os
 import platform
 import sys
@@ -138,7 +139,9 @@ class InstallationInspection:
             self.compiled(destination, content, item, name, rows)
 
     def compiled(self, destination, content, item, name, rows) -> None:
-        filename = str(self.layout.library / self.layout.record_path(destination))
+        # pip joins the library with its slash-separated RECORD path before compileall.
+        join = ntpath.join if self.layout.target == "windows-x64-py312" else os.path.join
+        filename = join(str(self.layout.library), self.layout.record_path(destination))
         code, notices, failure = compile_source(content, filename)
         self.compile_warnings.extend({"package": item.record["name"], "source": name, **notice} for notice in notices)
         if failure is not None:

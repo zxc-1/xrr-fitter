@@ -105,7 +105,7 @@ def _install_member(name, data, layout, rows, *, hash_pyc=False):
         return
     try:
         mode = py_compile.PycInvalidationMode.CHECKED_HASH if hash_pyc else py_compile.PycInvalidationMode.TIMESTAMP
-        raw_path = str(layout["library"] / _record_path(path, layout))
+        raw_path = os.path.join(str(layout["library"]), _record_path(path, layout))
         cache = py_compile.compile(raw_path, doraise=True, invalidation_mode=mode)
     except py_compile.PyCompileError:
         return

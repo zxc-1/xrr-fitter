@@ -5,6 +5,8 @@ import csv
 import io
 import json
 import marshal
+from pathlib import PureWindowsPath
+from types import SimpleNamespace
 
 import pytest
 from tests.support.installed_wheels import (
@@ -249,3 +251,26 @@ def test_installed_failure_diagnostics_never_follow_a_replaced_file_link(tmp_pat
     assert "read_error" in actual
     assert "sha256" not in actual
     assert "bytes_base64" not in actual
+
+
+def test_windows_bytecode_preserves_the_pip_record_path_inside_co_filename(load_tool_module, monkeypatch):
+    module = load_tool_module("installed_inventory")
+    library = PureWindowsPath(r"D:\venv\Lib\site-packages")
+    inspection = object.__new__(module.InstallationInspection)
+    inspection.layout = SimpleNamespace(
+        library=library, target="windows-x64-py312", record_path=lambda path: "altgraph/Dot.py"
+    )
+    inspection.compile_warnings, inspection.compile_failures = [], []
+    inspection.snapshot = None
+    observed = []
+
+    def capture(content, filename, code, snapshot):
+        observed.append(code.co_filename)
+        return "cache.pyc", b""
+
+    monkeypatch.setattr(module, "bytecode", capture)
+    monkeypatch.setattr(inspection, "generated", lambda *args, **kwargs: None)
+    inspection.compiled(
+        library / "altgraph/Dot.py", b"value = 1\n", SimpleNamespace(record={"name": "altgraph"}), "altgraph/Dot.py", []
+    )
+    assert observed == [r"D:\venv\Lib\site-packages\altgraph/Dot.py"]

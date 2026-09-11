@@ -155,6 +155,10 @@ and CPython 3.12 bytecode without executing inspected package source. Installed
 RECORD hashes are not trusted as proof of file contents. Identical shared files
 retain every owner; conflicting, missing or unowned site-packages files fail.
 Input/output paths must have regular, unchanged ancestors, not symlink aliases.
+Bootstrap installation runs twice with the same hash lock: the second invocation
+uses the pinned pip to recreate its own scripts and metadata, so ensurepip's seed
+version cannot determine those bytes. Bytecode reconstruction preserves pip's
+join of the library directory with its slash-separated RECORD path on Windows.
 
 The macOS scope is 44 ordinary wheels plus pinned bootstrap pip and the separately
 verified refnx build. Windows retains six auxiliary input wheels from the

@@ -89,12 +89,28 @@ def test_shared_setup_executes_in_order_and_exports_validated_python(tmp_path: P
         f"-m venv {job}/venv",
         f"tools/macos_environment.py own --job-root {job}",
         "-m pip --isolated install --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r tools/bootstrap-requirements.lock",
+        "-m pip --isolated install --force-reinstall --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r tools/bootstrap-requirements.lock",
         f"tools/macos_environment.py setup --job-root {job} --cache-dir {tmp_path}/cache --trust-domain pr-26",
         "-m pip check",
         "tools/check_hygiene.py --require-git-clean",
     ]
     assert Path(environment["GITHUB_OUTPUT"]).read_text() == f"python={job}/venv/bin/python\n"
     assert job.parent == Path(environment["RUNNER_TEMP"])
+
+
+def test_bootstrap_self_install_failure_is_not_ignored(tmp_path: Path) -> None:
+    environment = _fake_setup_environment(tmp_path)
+    Path(environment["RUNNER_TEMP"]).mkdir()
+    failure = (
+        "-m pip --isolated install --force-reinstall --no-cache-dir --require-hashes "
+        "--no-deps --only-binary=:all: -r tools/bootstrap-requirements.lock"
+    )
+    environment["FAIL_ARGS"] = failure
+    result = subprocess.run(
+        ("bash", "-c", _action_step("bootstrap")["run"]), cwd=tmp_path, env=environment, capture_output=True, text=True
+    )
+    assert result.returncode == 19
+    assert Path(environment["CALLS"]).read_text().splitlines()[-1] == failure
 
 
 @pytest.mark.parametrize("failure", ["setup", "-m pip check", "tools/check_hygiene.py --require-git-clean"])

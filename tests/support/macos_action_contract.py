@@ -23,6 +23,8 @@ def bootstrap_run():
         'printf \'PYTHONDONTWRITEBYTECODE=1\\nMPLCONFIGDIR=%s/mpl-cache\\nXDG_CACHE_HOME=%s/xdg-cache\\n\' "$JOB_ROOT" "$JOB_ROOT" >> "$GITHUB_ENV"',
         'PYTHON="$JOB_ROOT/venv/bin/python"',
         '"$PYTHON" -m pip --isolated install --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r tools/bootstrap-requirements.lock',
+        "# Recreate bootstrap outputs with the pinned installer, not ensurepip's seed pip.",
+        '"$PYTHON" -m pip --isolated install --force-reinstall --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r tools/bootstrap-requirements.lock',
     )
 
 

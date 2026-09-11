@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -35,6 +36,31 @@ def test_windows_auxiliary_inputs_are_retained_and_used_offline_separately():
             '--no-index --find-links "$env:AUDIT_ROOT/reports/auxiliary-wheels"',
         ],
     )
+
+
+def _bootstrap_script(target):
+    if target == "macos":
+        action = yaml.safe_load((ROOT / ".github/actions/setup-macos-python/action.yml").read_text())
+        return next(step["run"] for step in action["runs"]["steps"] if step.get("id") == "bootstrap")
+    return next(
+        step["run"]
+        for step in _steps("audit-windows.yml", "windows-headless")
+        if step.get("name") == "Bootstrap a unique external environment"
+    )
+
+
+@pytest.mark.parametrize("target", ["macos", "windows"])
+def test_bootstrap_is_reinstalled_by_the_pinned_installer_not_the_seed_pip(target):
+    script = _bootstrap_script(target)
+    installs = [
+        line.strip()
+        for line in script.splitlines()
+        if "-m pip --isolated install " in line and "-r tools/bootstrap-requirements.lock" in line
+    ]
+    assert len(installs) == 2
+    assert "--force-reinstall" not in installs[0]
+    assert "--force-reinstall " in installs[1]
+    assert installs[1].replace("--force-reinstall ", "") == installs[0]
 
 
 def test_windows_binding_follows_execution_and_precedes_cache_publication():
