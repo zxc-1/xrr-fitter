@@ -106,6 +106,20 @@ is recorded separately, with its own name/version/licenses and metadata hash;
 it is never assigned a fabricated standalone wheel hash. Native files are
 identified by headers or native suffixes and retain their byte identities.
 
+The package SBOM also inspects PE normal/delay imports and export forwarders,
+Mach-O load commands across every universal slice, and GNU/BSD/Microsoft
+archive members. Image hashes, architecture, member lineage and unparsed
+content remain bound to the containing wheel. Recognized malformed loader
+tables fail; unsupported content remains explicit. Native reads are bounded,
+and file/descriptor identity checks reject a wheel rewritten during inspection.
+
+Native dependency edges describe only unambiguous, architecture-matching
+wheel-local `@loader_path` and loader-relative declared `@rpath` paths. They are
+not observed runtime loads. Unknown rpath/executable context, Windows loader
+search, relocated wheel paths, system libraries and unsupported COFF objects
+remain unresolved. Foreign-platform or foreign-architecture payloads are
+retained and labeled rather than dropped from the target wheel inventory.
+
 Composition remains `incomplete`: native and vendored linking relationships,
 installed/archive differences, the VCS wheel and the final executable are not
 fully established by this wheel archive scan. `--require-complete` retains the

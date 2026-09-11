@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import stat
 import sys
 import zipfile
@@ -19,10 +20,11 @@ from packaging.requirements import Requirement  # noqa: E402
 from packaging.utils import canonicalize_name  # noqa: E402
 from packaging.version import Version  # noqa: E402
 
-from package_manifest import _verified_file  # noqa: E402
+from native_binary import FAT, MACHO, inspect_native  # noqa: E402
+from package_manifest import _file_identity, _same_file_identity, _verified_file  # noqa: E402
 
-MACH_HEADERS = {b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe"}
 NATIVE_SUFFIXES = {".so", ".dylib", ".dll", ".pyd", ".exe", ".a", ".lib"}
+NATIVE_READ_LIMIT = 512 * 1024**2
 
 
 def _native_format(prefix: bytes, path: PurePosixPath) -> str | None:
@@ -30,9 +32,9 @@ def _native_format(prefix: bytes, path: PurePosixPath) -> str | None:
     for signature, kind in signatures.items():
         if prefix.startswith(signature):
             return kind
-    if prefix[:4] in MACH_HEADERS:
+    if prefix[:4] in MACHO:
         return "mach-o"
-    if prefix[:4] == b"\xca\xfe\xba\xbe" and 0 < int.from_bytes(prefix[4:8], "big") < 64:
+    if prefix[:4] in FAT:
         return "mach-o-universal"
     return "unclassified" if path.suffix.lower() in NATIVE_SUFFIXES else None
 
@@ -75,22 +77,40 @@ def _file_kind(path: PurePosixPath, prefix: bytes) -> dict[str, str]:
     return {"kind": "python" if path.suffix in {".py", ".pyi", ".pyc"} else "data"}
 
 
-def _inventory_file(archive: zipfile.ZipFile, member: zipfile.ZipInfo) -> dict:
+def _native_buffer(kind: str, prefix: bytes, size: int, enabled: bool) -> bytearray | None:
+    if not enabled or kind != "native":
+        return None
+    if size > NATIVE_READ_LIMIT:
+        raise ValueError("native wheel member exceeds the loader inspection limit")
+    return bytearray(prefix)
+
+
+def _inventory_file(archive: zipfile.ZipFile, member: zipfile.ZipInfo, *, native_loaders: bool = False) -> dict:
     with archive.open(member) as handle:
         prefix = handle.read(16)
+        kind = _file_kind(PurePosixPath(member.filename), prefix)
+        buffer = _native_buffer(kind["kind"], prefix, member.file_size, native_loaders)
         digest = hashlib.sha256(prefix)
         size = len(prefix)
         while block := handle.read(1024 * 1024):
             digest.update(block)
             size += len(block)
+            if buffer is not None:
+                buffer.extend(block)
     if size != member.file_size:
         raise ValueError("wheel member size changed during reading")
-    return {
+    result = {
         "path": member.filename,
         "sha256": digest.hexdigest(),
         "size": size,
-        **_file_kind(PurePosixPath(member.filename), prefix),
+        **kind,
     }
+    if buffer is not None:
+        try:
+            result["native"] = inspect_native(memoryview(buffer))
+        except ValueError as error:
+            raise ValueError(f"invalid native wheel member {member.filename}: {error}") from error
+    return result
 
 
 def _licenses(message) -> list[dict]:
@@ -137,13 +157,22 @@ def _vendored_metadata(archive: zipfile.ZipFile, members: list[zipfile.ZipInfo])
     return result
 
 
-def inspect_wheel(path: Path, record: dict) -> dict:
+def _require_wheel_identity(value: os.stat_result, expected: tuple) -> None:
+    if not _same_file_identity(_file_identity(value), expected):
+        raise ValueError("wheel identity changed during inventory generation")
+
+
+def inspect_wheel(path: Path, record: dict, *, native_loaders: bool = False) -> dict:
+    identity = _file_identity(path.lstat())
     _verified_file(path, record["sha256"])
     with zipfile.ZipFile(path) as archive:
+        _require_wheel_identity(os.fstat(archive.fp.fileno()), identity)
         members = _members(archive)
         metadata_members = [item for item in members if item.filename.endswith(".dist-info/METADATA")]
         metadata = _metadata(archive, metadata_members, record)
         vendored = _vendored_metadata(archive, metadata_members)
-        files = [_inventory_file(archive, member) for member in members]
+        files = [_inventory_file(archive, member, native_loaders=native_loaders) for member in members]
+        _require_wheel_identity(os.fstat(archive.fp.fileno()), identity)
     _verified_file(path, record["sha256"])
+    _require_wheel_identity(path.lstat(), identity)
     return {**metadata, "files": files, "vendored": vendored}

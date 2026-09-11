@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from tests.support.native_fixtures import macho, macho_command, pe_image, universal
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -103,3 +104,63 @@ def test_inventory_separates_vendored_metadata_from_top_level_distribution(load_
             "metadata_sha256": hashlib.sha256(metadata).hexdigest(),
         }
     ]
+
+
+def test_native_loader_inventory_binds_declarations_to_the_actual_member_bytes(load_tool_module, tmp_path):
+    content = macho([macho_command(12, "@loader_path/libdependency.dylib")])
+    path, record = _wheel(tmp_path, entries=[("sample/native/library", content)])
+    result = _module(load_tool_module).inspect_wheel(path, record, native_loaders=True)
+    native = next(item for item in result["files"] if item["kind"] == "native")
+    image = native["native"]["images"][0]
+    assert native["sha256"] == image["sha256"] == hashlib.sha256(content).hexdigest()
+    assert image["imports"][0]["name"] == "@loader_path/libdependency.dylib"
+    assert native["native"]["unparsed"] == []
+
+
+@pytest.mark.parametrize("endian,wide", [("<", False), ("<", True), (">", False), (">", True)])
+def test_extensionless_universal_formats_are_not_silently_classified_as_data(load_tool_module, tmp_path, endian, wide):
+    content = universal([(0x100000C, macho())], endian=endian, wide=wide)
+    path, record = _wheel(tmp_path, entries=[("sample/native/library", content)])
+    result = _module(load_tool_module).inspect_wheel(path, record)
+    file = next(item for item in result["files"] if item["path"] == "sample/native/library")
+    assert file["kind"] == "native" and file["format"] == "mach-o-universal"
+
+
+def test_native_loader_inventory_rejects_malformed_recognized_images(load_tool_module, tmp_path):
+    path, record = _wheel(tmp_path, entries=[("sample/broken.dll", b"MZ")])
+    with pytest.raises(ValueError, match="native|PE") as failure:
+        _module(load_tool_module).inspect_wheel(path, record, native_loaders=True)
+    assert "sample/broken.dll" in str(failure.value)
+
+
+def test_unsupported_native_format_retains_its_incompleteness(load_tool_module, tmp_path):
+    path, record = _wheel(tmp_path, entries=[("sample/library.so", b"\x7fELF" + b"\0" * 128)])
+    result = _module(load_tool_module).inspect_wheel(path, record, native_loaders=True)
+    file = next(item for item in result["files"] if item["kind"] == "native")
+    assert file["format"] == "elf"
+    assert file["native"]["images"] == [] and file["native"]["unparsed"]
+
+
+def test_native_loader_buffer_has_an_explicit_size_bound(load_tool_module, tmp_path, monkeypatch):
+    module = _module(load_tool_module)
+    path, record = _wheel(tmp_path, entries=[("sample/library.dll", pe_image())])
+    monkeypatch.setattr(module, "NATIVE_READ_LIMIT", 1024, raising=False)
+    with pytest.raises(ValueError, match="native.*limit"):
+        module.inspect_wheel(path, record, native_loaders=True)
+
+
+def test_inventory_rejects_a_wheel_rewritten_then_restored_mid_read(load_tool_module, tmp_path, monkeypatch):
+    module = _module(load_tool_module)
+    path, record = _wheel(tmp_path)
+    content = path.read_bytes()
+    original = module._inventory_file
+
+    def rewrite_and_restore(*args, **kwargs):
+        result = original(*args, **kwargs)
+        path.write_bytes(content + b"changed")
+        path.write_bytes(content)
+        return result
+
+    monkeypatch.setattr(module, "_inventory_file", rewrite_and_restore)
+    with pytest.raises(ValueError, match="changed|identity"):
+        module.inspect_wheel(path, record)

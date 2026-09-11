@@ -20,6 +20,7 @@ from packaging.requirements import Requirement  # noqa: E402
 from packaging.utils import canonicalize_name  # noqa: E402
 
 from lock_sbom import TARGETS, canonical_sbom_bytes  # noqa: E402
+from native_inventory import build_native_inventory, wheel_file_reference  # noqa: E402
 from package_downloads import read_manifest  # noqa: E402
 from package_manifest import manifest_bytes, verify_wheels  # noqa: E402
 from wheel_inventory import inspect_wheel  # noqa: E402
@@ -90,17 +91,22 @@ def _properties(values: dict) -> list[dict[str, str]]:
     return [{"name": name, "value": str(value)} for name, value in sorted(values.items())]
 
 
-def _file_component(wheel: dict, file: dict) -> dict:
+def _file_component(wheel: dict, file: dict, native_files: dict | None = None) -> dict:
     properties = {"xrr:archive:path": file["path"], "xrr:file:kind": file["kind"], "xrr:file:size": file["size"]}
     if "format" in file:
         properties["xrr:native:header-format"] = file["format"]
-    return {
+    result = {
         "type": "file",
-        "bom-ref": f"urn:xrr:wheel:{wheel['sha256']}:{quote(file['path'], safe='')}",
+        "bom-ref": wheel_file_reference(wheel, file["path"]),
         "name": file["path"],
         "hashes": [{"alg": "SHA-256", "content": file["sha256"]}],
         "properties": _properties(properties),
     }
+    if native_files is not None and result["bom-ref"] in native_files:
+        native = native_files[result["bom-ref"]]
+        result["properties"].extend(native["properties"])
+        result["components"] = native["components"]
+    return result
 
 
 def _vendored_component(wheel: dict, inventory: dict) -> dict:
@@ -124,7 +130,7 @@ def _vendored_component(wheel: dict, inventory: dict) -> dict:
     return result
 
 
-def _package_component(wheel: dict, inventory: dict) -> dict:
+def _package_component(wheel: dict, inventory: dict, native_files: dict | None = None) -> dict:
     result = {
         "type": "library",
         "bom-ref": _purl(wheel),
@@ -134,7 +140,7 @@ def _package_component(wheel: dict, inventory: dict) -> dict:
         "hashes": [{"alg": "SHA-256", "content": wheel["sha256"]}],
         "externalReferences": [{"type": "distribution", "url": wheel["url"]}],
         "properties": _properties({"xrr:metadata:requires-dist": json.dumps(inventory["requirements"])}),
-        "components": [_file_component(wheel, file) for file in inventory["files"]],
+        "components": [_file_component(wheel, file, native_files) for file in inventory["files"]],
     }
     if inventory["licenses"]:
         result["licenses"] = inventory["licenses"]
@@ -142,7 +148,7 @@ def _package_component(wheel: dict, inventory: dict) -> dict:
     return result
 
 
-def _inventory_properties(manifest: dict, inventories: list[dict]) -> list[dict]:
+def _inventory_properties(manifest: dict, inventories: list[dict], native: dict) -> list[dict]:
     native_count = sum(file["kind"] == "native" for item in inventories for file in item["files"])
     properties = {
         "xrr:inventory:scope": "verified-wheel-archives",
@@ -150,12 +156,19 @@ def _inventory_properties(manifest: dict, inventories: list[dict]) -> list[dict]
         "xrr:inventory:files": "complete",
         "xrr:inventory:native-files": native_count,
         "xrr:inventory:native-relationships": "unresolved" if native_count else "not-observed",
+        "xrr:inventory:native-loader-images": native["images"],
+        "xrr:inventory:native-resolved-requests": native["resolved"],
+        "xrr:inventory:native-unresolved-requests": native["unresolved"],
+        "xrr:inventory:native-unparsed-records": native["unparsed"],
+        "xrr:inventory:native-resolution-scope": "declared-wheel-local-paths-not-runtime-loads",
         "xrr:inventory:installed-distribution": "not-inspected",
         "xrr:inventory:vcs-excluded": json.dumps(manifest["vcs"], sort_keys=True),
         "xrr:markers:environment": json.dumps(_marker_environment(manifest["target"]), sort_keys=True),
         "xrr:lock:sha256": manifest["lock_sha256"],
         "xrr:package-manifest:sha256": hashlib.sha256(manifest_bytes(manifest)).hexdigest(),
     }
+    if native["resolved"]:
+        properties["xrr:inventory:native-relationships"] = "partial"
     return _properties(properties)
 
 
@@ -167,16 +180,18 @@ def assemble_sbom(manifest: dict, inventories: list[dict]) -> dict:
     }:
         raise ValueError("SBOM metadata does not cover the exact wheel manifest")
     edges = dependency_edges(inventories, manifest["target"])
+    native = build_native_inventory(manifest["wheels"], inventories, manifest["target"])
     return {
         "bomFormat": "CycloneDX",
         "specVersion": "1.6",
         "version": 1,
-        "metadata": {"properties": _inventory_properties(manifest, inventories)},
-        "components": [_package_component(wheels[name], by_name[name]) for name in sorted(wheels)],
+        "metadata": {"properties": _inventory_properties(manifest, inventories, native)},
+        "components": [_package_component(wheels[name], by_name[name], native["files"]) for name in sorted(wheels)],
         "dependencies": [
             {"ref": _purl(wheels[name]), "dependsOn": [_purl(wheels[dependency]) for dependency in dependencies]}
             for name, dependencies in edges.items()
-        ],
+        ]
+        + native["dependencies"],
         "compositions": [{"aggregate": "incomplete"}],
     }
 
@@ -184,7 +199,9 @@ def assemble_sbom(manifest: dict, inventories: list[dict]) -> dict:
 def build_package_sbom(root: Path, manifest_path: Path, wheel_directory: Path) -> dict:
     manifest = read_manifest(root, manifest_path)
     before = verify_wheels(wheel_directory, manifest["wheels"])
-    inventories = [inspect_wheel(wheel_directory / item["filename"], item) for item in manifest["wheels"]]
+    inventories = [
+        inspect_wheel(wheel_directory / item["filename"], item, native_loaders=True) for item in manifest["wheels"]
+    ]
     result = assemble_sbom(manifest, inventories)
     if read_manifest(root, manifest_path) != manifest or verify_wheels(wheel_directory, manifest["wheels"]) != before:
         raise ValueError("SBOM inputs changed during inventory generation")

@@ -76,17 +76,21 @@ add tools to distribution dependencies or change the release asset set.
 
 The following remain incomplete:
 
-- **Target-runner cache acceptance:** verify actual cold/warm hosted runs of the
-  trust-separated Windows wheel and macOS input caches. Never restore a venv,
-  derived refnx wheel or release evidence across trust boundaries.
+- **Active-runner isolation:** retain actual cold/warm hosted cache evidence,
+  and separately verify the deployed main/release runner's account and process
+  boundaries. Account, permission or service changes require approval. Never
+  restore a venv, derived refnx wheel or release evidence across trust boundaries.
 - **Native scanning and complete artifact SBOM:** bind reports to
   the actual installed/bundled bytes and decide
   how findings affect releases before adding a CI gate or changing release
   assets. Existing exact release asset sets and schemas stay unchanged.
   The wheel archive SBOM now records actual file/native hashes, metadata,
-  licenses and top-level dependency edges, including vendored metadata. It
-  explicitly retains incomplete native/vendored composition and is not a final
-  executable SBOM.
+  licenses and top-level dependency edges, including vendored metadata. Native
+  loader declarations, per-architecture image hashes and exact wheel-local
+  path edges are also recorded; these do not prove runtime loader resolution.
+  Unparsed native members and unresolved requests remain explicit. The report
+  retains incomplete native/vendored composition and is not a final executable
+  SBOM.
 
 An external reporting-only baseline and the subsequent build/test-tool security
 migration are recorded in `audit-reporting-baseline.md`. Those measurements did
