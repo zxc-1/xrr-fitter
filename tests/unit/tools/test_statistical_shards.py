@@ -33,7 +33,7 @@ def test_producer_emits_only_a_complete_shard_and_all_case_byte_hashes(producer,
     module, root, report = producer()
     monkeypatch.setattr(module, "_compute_cases", _complete)
 
-    value = module.run_shard(root, report, 0)
+    value = module.run_shard(root, report, 0, allow_compute=True)
 
     assert value == json.loads((report / "result.json").read_bytes())
     assert value["state"] == "SHARD_COMPLETE"
@@ -54,7 +54,7 @@ def test_producer_preserves_completed_case_evidence_but_never_success_after_fail
     monkeypatch.setattr(module, "_compute_cases", fail)
 
     with pytest.raises(RuntimeError, match="fit failed"):
-        module.run_shard(root, report, 0)
+        module.run_shard(root, report, 0, allow_compute=True)
     assert not (report / "result.json").exists()
     assert len(tuple(report.glob("case-*.json"))) == 1
     assert json.loads((report / "failure.json").read_bytes())["state"] == "FAIL"
@@ -69,7 +69,7 @@ def test_producer_refuses_source_changes_during_computation(producer, monkeypatc
 
     monkeypatch.setattr(module, "_compute_cases", changed)
     with pytest.raises(ValueError, match="source"):
-        module.run_shard(root, report, 0)
+        module.run_shard(root, report, 0, allow_compute=True)
     assert not (report / "result.json").exists()
 
 
@@ -88,7 +88,7 @@ def test_producer_requires_a_new_regular_external_output(producer, monkeypatch, 
     monkeypatch.setattr(module, "_compute_cases", lambda *_args: called.append(True))
 
     with pytest.raises(ValueError):
-        module.run_shard(root, report, 0)
+        module.run_shard(root, report, 0, allow_compute=True)
     assert called == []
 
 

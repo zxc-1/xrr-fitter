@@ -1,6 +1,18 @@
 name: verify
 
 "on":
+  workflow_dispatch:
+    inputs:
+      compute:
+        description: Explicitly authorize new fits on the first manual attempt only
+        type: boolean
+        required: false
+        default: false
+      producer:
+        description: Exact producer descriptor JSON for revalidation without new fits
+        type: string
+        required: false
+        default: ''
   push:
     branches:
       - main
@@ -9,6 +21,7 @@ name: verify
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: verify-${{ github.ref }}-${{ github.sha }}
@@ -193,6 +206,9 @@ jobs:
   statistical:
     if: startsWith(github.ref, 'refs/tags/')
     uses: ./.github/workflows/statistical.yml
+    with:
+      compute: ${{ inputs.compute || false }}
+      producer: ${{ inputs.producer || '' }}
 
   distribution:
     runs-on: macos-15
@@ -331,6 +347,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Download statistical shard evidence
+        if: ${{ inputs.producer == '' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: statistical-shard-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-*
@@ -342,11 +359,18 @@ jobs:
       - name: Verify release
         env:
           PYTHON: ${{ steps.python.outputs.python }}
+          PRODUCER: ${{ inputs.producer }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           test "$PYTHON" = "${{ steps.python.outputs.python }}"
-          QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release --report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts" --statistical-results "$RUNNER_TEMP/statistical-inputs"
+          STATISTICAL_ARGS=(--statistical-results "$RUNNER_TEMP/statistical-inputs")
+          if test -n "$PRODUCER"; then
+            "$PYTHON" tools/statistical_handoff.py --producer-json "$PRODUCER" --report-dir "$RUNNER_TEMP/statistical-handoff"
+            STATISTICAL_ARGS=(--statistical-results "$RUNNER_TEMP/statistical-handoff/shards" --statistical-producer "$RUNNER_TEMP/statistical-handoff/producer.json")
+          fi
+          QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release --report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts" "${STATISTICAL_ARGS[@]}"
       - name: Clean the owned macOS environment
         if: ${{ always() && steps.python.outputs.job-root != '' }}
         uses: ./.github/actions/cleanup-macos-python

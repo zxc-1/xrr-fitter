@@ -30,6 +30,7 @@ def _registry_names() -> tuple[str, ...]:
         "typing",
         "advisories",
         "release",
+        "preflight",
     )
 
 
@@ -133,9 +134,9 @@ def test_registry_commands_are_exact_for_completed_suites(load_tool_module) -> N
     expected_distribution = (
         (
             module.PYTHON,
-            "tools/lock_windows_environment.py",
-            "--verify",
-            "requirements-windows-x64-py312.lock",
+            "tools/locked_closure.py",
+            "--repo-root",
+            module.ROOT,
         ),
         (
             module.PYTHON,
@@ -343,6 +344,7 @@ def _write_verifier_fixture(root: Path, verifier: Path, outcome_gate: Path) -> N
     shutil.copy2(verifier, root / "tools/verify.py")
     shutil.copy2(verifier.parent / "verify_registry.py", root / "tools/verify_registry.py")
     shutil.copy2(verifier.parent / "verify_report.py", root / "tools/verify_report.py")
+    shutil.copy2(verifier.parent / "verify_statistical.py", root / "tools/verify_statistical.py")
     shutil.copy2(outcome_gate, root / "tests/outcome_gate.py")
     checker = (
         "from pathlib import Path\n"

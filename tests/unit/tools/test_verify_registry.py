@@ -133,9 +133,9 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
         "distribution": (
             (
                 module.PYTHON,
-                "tools/lock_windows_environment.py",
-                "--verify",
-                "requirements-windows-x64-py312.lock",
+                "tools/locked_closure.py",
+                "--repo-root",
+                module.ROOT,
             ),
             (
                 module.PYTHON,
@@ -210,6 +210,7 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
             ),
         ),
         "release": (),
+        "preflight": (),
     }
 
 

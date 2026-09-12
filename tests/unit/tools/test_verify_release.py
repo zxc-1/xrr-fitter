@@ -227,7 +227,7 @@ def test_release_runs_every_software_gate_in_order_without_approved_data(
             report.mkdir()
 
     monkeypatch.setattr(module, "run_mode", run)
-    module.run_release(root, report, artifacts)
+    module.run_release(root, report, artifacts, compute_statistical=True)
 
     assert tuple(item[0] for item in calls) == module.RELEASE_ORDER
     assert "approved-data" not in module.RELEASE_ORDER
@@ -258,6 +258,7 @@ def test_release_stops_at_first_nonzero_submode(
             tmp_path / "repo",
             tmp_path / "release",
             tmp_path / "release/artifacts",
+            compute_statistical=True,
         )
     assert tuple(calls) == module.RELEASE_ORDER[:8]
 

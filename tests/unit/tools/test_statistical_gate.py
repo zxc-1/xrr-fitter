@@ -20,9 +20,16 @@ def _plugin():
     return module
 
 
-def _request(inputs=None, report=None):
-    options = {"statistical_results": inputs, "statistical_report": report}
-    return SimpleNamespace(config=SimpleNamespace(getoption=lambda name, **_kwargs: options[name]))
+def _request(inputs=None, report=None, producer=None, compute=False):
+    options = {
+        "statistical_results": inputs,
+        "statistical_report": report,
+        "statistical_producer": producer,
+        "compute_statistical": compute,
+    }
+    return SimpleNamespace(
+        config=SimpleNamespace(getoption=lambda name, **kwargs: options.get(name, kwargs.get("default")))
+    )
 
 
 def test_default_fixture_ignores_environment_shortcuts(monkeypatch, tmp_path) -> None:
@@ -31,7 +38,8 @@ def test_default_fixture_ignores_environment_shortcuts(monkeypatch, tmp_path) ->
     calls = []
     monkeypatch.setattr(module, "load_results", lambda *_args: calls.append(True))
 
-    assert module.statistical_evidence.__wrapped__(_request()) is None
+    with pytest.raises(ValueError, match="explicit"):
+        module.statistical_evidence.__wrapped__(_request())
     assert calls == []
 
 
@@ -87,3 +95,28 @@ def test_acceptance_test_reuses_full_expected_counts_without_refitting(monkeypat
     acceptance.test_synthetic_recovery_corpus_meets_approved_thresholds(statistical_evidence=execution)
 
     assert published == [report]
+
+
+def test_direct_pytest_requires_an_explicit_compute_opt_in() -> None:
+    module = _plugin()
+    assert module.statistical_evidence.__wrapped__(_request(compute=True)) is None
+
+
+def test_pytest_compute_and_replay_are_mutually_exclusive() -> None:
+    module = _plugin()
+    with pytest.raises(ValueError, match="exclusive"):
+        module.statistical_evidence.__wrapped__(_request("inputs", "report", compute=True))
+
+
+def test_descriptor_cannot_enable_fitting_without_result_inputs() -> None:
+    module = _plugin()
+    with pytest.raises(ValueError, match="producer"):
+        module.statistical_evidence.__wrapped__(_request(producer="producer.json"))
+
+
+def test_plugin_forwards_explicit_producer_without_relabeling_context(monkeypatch) -> None:
+    module = _plugin()
+    calls = []
+    monkeypatch.setattr(module, "load_results", lambda *args, **kwargs: calls.append(kwargs))
+    module.statistical_evidence.__wrapped__(_request("inputs", "report", producer="producer.json"))
+    assert calls == [{"producer_path": Path("producer.json")}]

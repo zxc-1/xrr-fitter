@@ -16,6 +16,7 @@ from tests.support.synthetic_recovery import build_corpus, validate_corpus_outco
 
 from installed_files import InstalledSnapshot  # noqa: E402
 from installed_inputs import InputBindings, json_object  # noqa: E402
+from statistical_handoff import StatisticalHandoff, load_handoff  # noqa: E402
 from statistical_partition import SHARD_COUNT, shard_cases  # noqa: E402
 from statistical_provenance import capture_identity  # noqa: E402
 from statistical_records import decode_record, require_schema  # noqa: E402
@@ -73,6 +74,7 @@ class StatisticalResults:
     memberships: dict[Path, set[str]]
     outcomes: tuple
     elapsed_seconds: dict[str, float]
+    handoff: StatisticalHandoff | None = None
 
     @property
     def input_hashes(self) -> dict[str, str]:
@@ -80,6 +82,10 @@ class StatisticalResults:
 
     def guard(self) -> None:
         self.inputs.guard()
+        if self.handoff is not None:
+            self.handoff.guard()
+            if self.input_hashes != self.handoff.hashes:
+                raise ValueError("statistical producer artifact bytes differ from the authenticated inputs")
         for directory, names in self.memberships.items():
             _directory_members(directory, names)
         if capture_identity(self.root) != self.identity:
@@ -98,9 +104,8 @@ class StatisticalResults:
         if path.is_relative_to(self.root.resolve()):
             raise ValueError("statistical summary must be external")
         value = {
-            "schema": "xrr-r23-statistical-evidence-v1",
+            **self._attribution(),
             "state": "PASS",
-            "identity": self.identity,
             "corpus": asdict(report),
             "input_sha256": self.input_hashes,
             "case_elapsed_seconds": self.elapsed_seconds,
@@ -115,6 +120,19 @@ class StatisticalResults:
             file_label="statistical summary",
         )
         self.guard()
+
+    def _attribution(self) -> dict:
+        if self.handoff is None:
+            return {"schema": "xrr-r23-statistical-evidence-v1", "identity": self.identity}
+        return {
+            "schema": "xrr-r23-statistical-evidence-v2",
+            "execution": "revalidated-existing-outcomes",
+            "new_fit_count": 0,
+            "producer_identity": self.handoff.producer,
+            "consumer_identity": self.identity,
+            "compatibility": self.handoff.proof,
+            "producer_provenance": self.handoff.provenance,
+        }
 
 
 def _read_case(shard: Path, case, binding: dict, inputs: InputBindings):
@@ -152,10 +170,12 @@ def _input_shards(root: Path, directory: Path) -> tuple[Path, ...]:
     return shards
 
 
-def load_results(root: Path, directory: Path) -> StatisticalResults:
+def load_results(root: Path, directory: Path, *, producer_path: Path | None = None) -> StatisticalResults:
     directory = directory.absolute()
     shards = _input_shards(root, directory)
     identity = capture_identity(root)
+    handoff = load_handoff(root, producer_path, identity) if producer_path is not None else None
+    record_identity = handoff.producer if handoff is not None else identity
     cases = build_corpus()
     inputs = InputBindings({}, limit=2 * 1024**2)
     memberships = {directory: {shard.name for shard in shards}}
@@ -163,7 +183,7 @@ def load_results(root: Path, directory: Path) -> StatisticalResults:
     outcomes = {}
     durations = {}
     for shard in shards:
-        index, names, records = _load_shard(shard, cases, identity, inputs)
+        index, names, records = _load_shard(shard, cases, record_identity, inputs)
         if index in seen:
             raise ValueError("duplicate statistical shard index")
         seen.add(index)
@@ -172,6 +192,6 @@ def load_results(root: Path, directory: Path) -> StatisticalResults:
             outcomes[outcome.case_id] = outcome
             durations[outcome.case_id] = elapsed
     ordered = tuple(outcomes[case.case_id] for case in cases)
-    evidence = StatisticalResults(root, directory, identity, inputs, memberships, ordered, durations)
+    evidence = StatisticalResults(root, directory, identity, inputs, memberships, ordered, durations, handoff)
     evidence.guard()
     return evidence

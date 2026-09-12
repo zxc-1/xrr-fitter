@@ -5,7 +5,12 @@ from pathlib import Path
 import yaml
 from tests.support.macos_action_contract import cleanup_step
 from tests.support.release_workflow_contract import CHECKOUT
-from tests.support.statistical_workflow_contract import statistical_download_step
+from tests.support.statistical_workflow_contract import (
+    replay_arguments,
+    statistical_download_step,
+    statistical_environment,
+    statistical_inputs,
+)
 from tests.support.verify_workflow_contract import UPLOAD_ARTIFACT, setup_step
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -17,18 +22,18 @@ def _workflow():
     return yaml.safe_load(path.read_text())
 
 
-def test_statistical_workflow_is_reusable_read_only_and_exactly_two_stages() -> None:
+def test_statistical_workflow_is_reusable_read_only_with_preflight_before_shards() -> None:
     payload = _workflow()
     assert set(payload) == {"name", "on", "permissions", "jobs"}
     assert payload["name"] == "statistical"
-    assert payload["on"] == {"workflow_call": {}}
-    assert payload["permissions"] == {"contents": "read"}
-    assert set(payload["jobs"]) == {"shards", "aggregate"}
+    assert payload["on"] == {"workflow_call": {"inputs": statistical_inputs()}}
+    assert payload["permissions"] == {"contents": "read", "actions": "read"}
+    assert set(payload["jobs"]) == {"preflight", "shards", "aggregate"}
 
 
 def test_all_eight_shards_use_standard_runners_without_cancelling_other_evidence() -> None:
     job = _workflow()["jobs"]["shards"]
-    assert set(job) == {"runs-on", "timeout-minutes", "strategy", "steps"}
+    assert set(job) == {"needs", "if", "runs-on", "timeout-minutes", "strategy", "steps"}
     assert job["runs-on"] == "macos-15"
     assert job["timeout-minutes"] == 360
     assert job["strategy"] == {
@@ -58,7 +63,7 @@ def test_shard_command_computes_only_the_canonical_index_and_checks_hygiene() ->
                 "set -euo pipefail",
                 'test "$PYTHON" = "${{ steps.python.outputs.python }}"',
                 '"$PYTHON" tools/check_hygiene.py --require-git-clean',
-                'PYTHONPATH="$GITHUB_WORKSPACE/src" "$PYTHON" tools/statistical_shards.py --shard-index "$SHARD" --report-dir "$RUNNER_TEMP/statistical-shard-$SHARD" 2>&1 | tee "$RUNNER_TEMP/statistical-shard-$SHARD.log"',
+                'PYTHONPATH="$GITHUB_WORKSPACE/src" "$PYTHON" tools/statistical_shards.py --compute --shard-index "$SHARD" --report-dir "$RUNNER_TEMP/statistical-shard-$SHARD" 2>&1 | tee "$RUNNER_TEMP/statistical-shard-$SHARD.log"',
                 '"$PYTHON" tools/check_hygiene.py --require-git-clean',
                 "",
             )
@@ -98,21 +103,22 @@ def test_shard_bytes_and_failure_logs_are_retained_separately_with_exact_run_att
 
 def test_aggregate_requires_every_shard_and_reruns_the_original_statistical_gate() -> None:
     job = _workflow()["jobs"]["aggregate"]
-    assert set(job) == {"needs", "runs-on", "timeout-minutes", "steps"}
-    assert job["needs"] == ["shards"]
+    assert set(job) == {"needs", "if", "runs-on", "timeout-minutes", "steps"}
+    assert job["needs"] == ["preflight", "shards"]
     assert job["runs-on"] == "macos-15"
     assert job["timeout-minutes"] == 60
     assert job["steps"][1] == statistical_download_step()
     step = job["steps"][3]
     assert step == {
         "name": "Verify complete statistical corpus",
-        "env": {"PYTHON": "${{ steps.python.outputs.python }}"},
+        "env": statistical_environment(),
         "shell": "bash",
         "run": "\n".join(
             (
                 "set -euo pipefail",
                 'test "$PYTHON" = "${{ steps.python.outputs.python }}"',
-                '"$PYTHON" tools/verify.py statistical --statistical-results "$RUNNER_TEMP/statistical-inputs" --report-dir "$RUNNER_TEMP/statistical-aggregate" 2>&1 | tee "$RUNNER_TEMP/statistical-aggregate.log"',
+                *replay_arguments(),
+                '"$PYTHON" tools/verify.py statistical "${STATISTICAL_ARGS[@]}" --report-dir "$RUNNER_TEMP/statistical-aggregate" 2>&1 | tee "$RUNNER_TEMP/statistical-aggregate.log"',
                 "",
             )
         ),

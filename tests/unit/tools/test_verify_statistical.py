@@ -38,7 +38,7 @@ def test_statistical_input_is_explicit_and_keeps_the_original_pytest_selection(t
     assert "XRR_STATISTICAL_RESULTS" not in kwargs["env"]
 
 
-def test_default_statistical_command_does_not_load_external_outcomes(tmp_path, load_tool_module) -> None:
+def test_explicit_compute_command_does_not_load_external_outcomes(tmp_path, load_tool_module) -> None:
     module = load_tool_module("verify")
     root = tmp_path / "repo"
     (root / "src").mkdir(parents=True)
@@ -48,11 +48,14 @@ def test_default_statistical_command_does_not_load_external_outcomes(tmp_path, l
         module.MODE_REGISTRY["statistical"],
         repo_root=root,
         report_dir=tmp_path / "report",
+        compute_statistical=True,
         runner=lambda args, **kwargs: calls.append(args),
     )
 
     command = next(args for args in calls if "pytest" in args)
-    assert command[-2:] == ("tests/acceptance/test_synthetic_recovery_corpus.py", "-q")
+    index = command.index("tests/acceptance/test_synthetic_recovery_corpus.py")
+    assert command[index : index + 2] == ("tests/acceptance/test_synthetic_recovery_corpus.py", "-q")
+    assert command[-3:] == ("-p", "tests.statistical_gate", "--compute-statistical")
     assert "--statistical-results" not in command
 
 

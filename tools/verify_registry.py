@@ -146,9 +146,9 @@ MODE_REGISTRY: Mapping[str, Mode] = {
         (
             (
                 PYTHON,
-                "tools/lock_windows_environment.py",
-                "--verify",
-                "requirements-windows-x64-py312.lock",
+                "tools/locked_closure.py",
+                "--repo-root",
+                ROOT,
             ),
             (
                 PYTHON,
@@ -202,6 +202,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
         ((PYTHON, "tools/audit_reports.py", "advisories", "--repo-root", ROOT, "--report-dir", f"{REPORT}/audit"),)
     ),
     "release": Mode(()),
+    "preflight": Mode(()),
 }
 
 RELEASE_ORDER = (

@@ -10,6 +10,7 @@ import yaml
 from tests.support.release_workflow_contract import (
     DOWNLOAD_ARTIFACT,
 )
+from tests.support.statistical_workflow_contract import statistical_environment, statistical_inputs
 from tests.support.verify_workflow_contract import (
     JOB_TIMEOUTS,
     PYTHON_ENV,
@@ -53,12 +54,13 @@ def _assert_exact_workflow(payload: dict[str, object]) -> None:
 
 def test_initial_workflow_has_exact_jobs_permissions_and_trigger() -> None:
     payload = _payload()
-    assert payload["permissions"] == {"contents": "read"}
+    assert payload["permissions"] == {"contents": "read", "actions": "read"}
     assert payload["on"] == {
+        "workflow_dispatch": {"inputs": statistical_inputs()},
         "push": {
             "branches": ["main"],
             "tags": ["v*"],
-        }
+        },
     }
     assert set(payload["jobs"]) == {
         "quality",
@@ -243,7 +245,7 @@ def test_standard_jobs_verify_locked_environment_metadata() -> None:
     ):
         assert setup_step() in jobs[name]["steps"]
         command = next(step for step in jobs[name]["steps"] if step.get("name") == f"Verify {name}")
-        assert command["env"] == PYTHON_ENV
+        assert command["env"] == (statistical_environment() if name == "release" else PYTHON_ENV)
     run = next(step["run"] for step in _setup_action()["runs"]["steps"] if step.get("id") == "environment")
     assert '"$PYTHON" -m pip check' in run
 
@@ -256,7 +258,7 @@ def test_release_job_runs_nested_gui_gates_offscreen() -> None:
         'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release '
         '--report-dir "$RUNNER_TEMP/release" '
         '--artifact-dir "$RUNNER_TEMP/release/artifacts" '
-        '--statistical-results "$RUNNER_TEMP/statistical-inputs"'
+        '"${STATISTICAL_ARGS[@]}"'
     ) in commands
 
 

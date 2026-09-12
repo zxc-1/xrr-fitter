@@ -261,12 +261,18 @@ Statistical and complete release jobs allow 360 minutes, matching GitHub's
 Reaching that limit fails the job; it does not reduce the test selection.
 
 `hosted-release-verify.yml` runs the complete `tools/verify.py release` sequence
-with offscreen Qt, including the full statistical corpus, distribution and
-identity checks. It has read-only repository permissions and retains the log
-and release verification bundle on failure as well as success. It can be run
-manually; changes to the main verification or shared setup/cleanup workflows
-also trigger it on the `audit-improvements` branch. It does not create a tag
-or publish a GitHub Release, and it does not add long-running checks to PRs.
+with offscreen Qt, including full-corpus outcome validation, distribution and
+identity checks. It has read-only contents/actions permissions and retains the log
+and release verification bundle on failure as well as success. It is manual-only:
+control-layer pushes no longer start a hosted statistical run. `compute` defaults
+to false; an explicit producer descriptor selects provenance-preserving replay.
+New fits require first-attempt manual authorization and a successful complete
+`preflight`. Push/tag/retry cannot authorize fits; missing evidence fails rather
+than becoming skipped PASS. Distribution verifies the frozen wheel dependency
+closure, not a fresh latest-index resolution. See
+[statistical verification](statistical-verification.md) for exact boundaries.
+This workflow does not create a tag or publish a GitHub Release, and does not add
+long-running checks to PRs.
 
 Retire a previously registered local runner only after the default branch
 selects hosted runners and actual hosted verification succeeds. Check that

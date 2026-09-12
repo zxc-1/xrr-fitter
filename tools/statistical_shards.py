@@ -119,7 +119,9 @@ def _manifest(index: int, identity: dict, budget: dict, cases, hashes: dict) -> 
     }
 
 
-def run_shard(root: Path, report: Path, index: int) -> dict:
+def run_shard(root: Path, report: Path, index: int, *, allow_compute: bool = False) -> dict:
+    if allow_compute is not True:
+        raise ValueError("statistical shard fitting requires explicit --compute permission")
     cases = shard_cases(build_corpus(), index)
     identity = capture_identity(root)
     budget = worker_budget()
@@ -151,8 +153,11 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shard-index", type=int, choices=range(SHARD_COUNT), required=True)
     parser.add_argument("--report-dir", type=Path, required=True)
+    parser.add_argument("--compute", action="store_true", help="explicitly allow new shard fits")
     args = parser.parse_args(argv)
-    run_shard(ROOT, args.report_dir, args.shard_index)
+    if not args.compute:
+        parser.error("statistical shard fitting requires explicit --compute permission")
+    run_shard(ROOT, args.report_dir, args.shard_index, allow_compute=args.compute)
     return 0
 
 

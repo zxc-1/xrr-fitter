@@ -9,7 +9,13 @@ from tests.support.release_workflow_contract import (
     expected_draft_release_job,
     expected_windows_job,
 )
-from tests.support.statistical_workflow_contract import statistical_download_step
+from tests.support.statistical_workflow_contract import (
+    replay_arguments,
+    statistical_call_inputs,
+    statistical_download_step,
+    statistical_environment,
+    statistical_inputs,
+)
 
 RUNNER = "macos-15"
 SETUP_MACOS_PYTHON = "./.github/actions/setup-macos-python"
@@ -71,6 +77,7 @@ def _statistical_job() -> dict[str, object]:
     return {
         "if": "startsWith(github.ref, 'refs/tags/')",
         "uses": "./.github/workflows/statistical.yml",
+        "with": statistical_call_inputs(),
     }
 
 
@@ -205,12 +212,11 @@ def _release_job() -> dict[str, object]:
     job["timeout-minutes"] = JOB_TIMEOUTS["release"]
     job["needs"] = ["candidate-readiness", "statistical"]
     job["if"] = "startsWith(github.ref, 'refs/tags/') && needs.candidate-readiness.outputs.ready == 'true'"
-    job["steps"][-1]["run"] = _standard_run("release").replace(
-        '"$PYTHON" tools/verify.py release',
+    job["steps"][-1]["env"] = statistical_environment()
+    job["steps"][-1]["run"] = _gate_run(
+        *replay_arguments(),
         'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release '
-        '--report-dir "$RUNNER_TEMP/release" '
-        '--artifact-dir "$RUNNER_TEMP/release/artifacts" '
-        '--statistical-results "$RUNNER_TEMP/statistical-inputs"',
+        '--report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts" "${STATISTICAL_ARGS[@]}"',
     )
     job["steps"].insert(1, statistical_download_step())
     job["steps"].append(
@@ -315,12 +321,13 @@ def expected_workflow() -> dict[str, object]:
     workflow = {
         "name": "verify",
         "on": {
+            "workflow_dispatch": {"inputs": statistical_inputs()},
             "push": {
                 "branches": ["main"],
                 "tags": ["v*"],
-            }
+            },
         },
-        "permissions": {"contents": "read"},
+        "permissions": {"contents": "read", "actions": "read"},
         "concurrency": {
             "group": "verify-${{ github.ref }}-${{ github.sha }}",
             "cancel-in-progress": False,

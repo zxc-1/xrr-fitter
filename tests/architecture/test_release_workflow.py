@@ -8,7 +8,13 @@ import pytest
 import yaml
 from tests.support.macos_action_contract import cleanup_step
 from tests.support.release_workflow_contract import CHECKOUT
-from tests.support.statistical_workflow_contract import statistical_download_step
+from tests.support.statistical_workflow_contract import (
+    replay_arguments,
+    statistical_call_inputs,
+    statistical_download_step,
+    statistical_environment,
+    statistical_inputs,
+)
 from tests.support.verify_workflow_contract import UPLOAD_ARTIFACT, setup_step
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,10 +29,11 @@ def _payload() -> dict[str, object]:
 def test_release_trigger_uses_stable_version_tags_only() -> None:
     payload = _payload()
     assert payload["on"] == {
+        "workflow_dispatch": {"inputs": statistical_inputs()},
         "push": {
             "branches": ["main"],
             "tags": ["v*"],
-        }
+        },
     }
 
 
@@ -113,27 +120,13 @@ def _hosted_payload() -> dict[str, object]:
 
 def test_hosted_release_verification_is_read_only_and_explicitly_triggered() -> None:
     payload = _hosted_payload()
-    assert payload["on"] == {
-        "workflow_dispatch": {},
-        "push": {
-            "branches": ["audit-improvements"],
-            "paths": [
-                ".github/workflows/verify.yml",
-                ".github/workflows/hosted-release-verify.yml",
-                ".github/workflows/statistical.yml",
-                "tools/statistical_*.py",
-                "tools/verify.py",
-                "tests/statistical_gate.py",
-                "tests/support/synthetic_recovery*.py",
-                "tests/acceptance/test_synthetic_recovery_corpus.py",
-                ".github/actions/setup-macos-python/action.yml",
-                ".github/actions/cleanup-macos-python/action.yml",
-            ],
-        },
-    }
-    assert payload["permissions"] == {"contents": "read"}
+    assert payload["on"] == {"workflow_dispatch": {"inputs": statistical_inputs()}}
+    assert payload["permissions"] == {"contents": "read", "actions": "read"}
     assert set(payload["jobs"]) == {"statistical", "release"}
-    assert payload["jobs"]["statistical"] == {"uses": "./.github/workflows/statistical.yml"}
+    assert payload["jobs"]["statistical"] == {
+        "uses": "./.github/workflows/statistical.yml",
+        "with": statistical_call_inputs(),
+    }
     job = payload["jobs"]["release"]
     assert set(job) == {"needs", "runs-on", "timeout-minutes", "steps"}
     assert job["needs"] == ["statistical"]
@@ -164,15 +157,16 @@ def test_hosted_release_verification_runs_the_complete_release_mode_and_retains_
     verification = steps[3]
     assert verification == {
         "name": "Verify release",
-        "env": {"PYTHON": "${{ steps.python.outputs.python }}"},
+        "env": statistical_environment(),
         "shell": "bash",
         "run": "\n".join(
             (
                 "set -euo pipefail",
                 'test "$PYTHON" = "${{ steps.python.outputs.python }}"',
+                *replay_arguments(),
                 'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release '
                 '--report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts" '
-                '--statistical-results "$RUNNER_TEMP/statistical-inputs" '
+                '"${STATISTICAL_ARGS[@]}" '
                 '2>&1 | tee "$RUNNER_TEMP/hosted-release-verify.log"',
                 "",
             )
@@ -199,7 +193,7 @@ def test_hosted_release_log_capture_preserves_the_verifier_exit_code(tmp_path: P
     python.write_text(f"#!/bin/sh\nprintf 'verification evidence\\n'\nexit {exit_code}\n", encoding="utf-8")
     python.chmod(0o700)
     script = step["run"].replace("${{ steps.python.outputs.python }}", str(python))
-    environment = {**os.environ, "PYTHON": str(python), "RUNNER_TEMP": str(tmp_path)}
+    environment = {**os.environ, "PYTHON": str(python), "RUNNER_TEMP": str(tmp_path), "PRODUCER": ""}
 
     result = subprocess.run(["bash", "-c", script], env=environment, capture_output=True, text=True, check=False)
 
