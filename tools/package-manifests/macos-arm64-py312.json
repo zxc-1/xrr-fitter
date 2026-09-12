@@ -1,5 +1,5 @@
 {
-  "lock_sha256": "faaf7245b960f9974e89067dfd5b8779b9323c8ca2bf8d2861e905f415d68320",
+  "lock_sha256": "7941128a9682c5de41a8a110b31b02902a7b266af0a3350efa481c3c90ee0ff7",
   "pip_version": "26.1.2",
   "pyproject_sha256": "1636118f165bd955d711b1303045dd657433a3310a362d140043027d8d7eb878",
   "python_version": "3.12",
@@ -35,11 +35,11 @@
       "version": "0.4.6"
     },
     {
-      "filename": "contourpy-1.3.3-cp312-cp312-macosx_11_0_arm64.whl",
+      "filename": "contourpy-1.4.0-cp312-cp312-macosx_11_0_arm64.whl",
       "name": "contourpy",
-      "sha256": "556dba8fb6f5d8742f2923fe9457dbdd51e1049c4a43fd3986a0b14a1d815fc6",
-      "url": "https://files.pythonhosted.org/packages/53/3e/405b59cfa13021a56bba395a6b3aca8cec012b45bf177b0eaf7a202cde2c/contourpy-1.3.3-cp312-cp312-macosx_11_0_arm64.whl",
-      "version": "1.3.3"
+      "sha256": "c76f3a5318164db7d9401132fc1b5364b784c613c93fa506e3b5e6d1bf353ec8",
+      "url": "https://files.pythonhosted.org/packages/dd/f5/c5bf67522d49a2222f3154fe46879451d26f0e35ece41770758a64ea78cb/contourpy-1.4.0-cp312-cp312-macosx_11_0_arm64.whl",
+      "version": "1.4.0"
     },
     {
       "filename": "cycler-0.12.1-py3-none-any.whl",
