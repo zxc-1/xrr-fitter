@@ -29,6 +29,7 @@ GitHub Actions、`R23-final` tag 或 GitHub Release 的前置条件。
 
 ### 当前版本发布与 CI 约定（2026-08-06）
 
+- 完整 220-case 统计验收的调度与证据协议见 [完整统计验收与分片证据](statistical-verification.md)；分片不改变原科学门禁。
 - PR 只使用独立的 `pr-verify.yml`，运行在非 self-hosted 的隔离 runner；不得使用
   `pull_request_target` checkout 不可信 PR，也不得把 fork PR 放到现有 `xrr-ci` runner。
 - `verify.yml` 的 `main` push 只运行普通 quality/tools/unit/gui/integration/spawn/regression/

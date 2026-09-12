@@ -143,6 +143,7 @@ def run_mode(
     artifact_manifest: str | Path | None = None,
     approved_data_root: str | Path | None = None,
     capture_candidate: bool = False,
+    statistical_results: str | Path | None = None,
     expected_report_identity: DirectoryIdentity | None = None,
     runner: Runner = subprocess.run,
 ) -> None:
@@ -151,6 +152,9 @@ def run_mode(
     artifact = _resolve_output_path(artifact_dir, "artifact directory") if artifact_dir is not None else None
     manifest = _resolve_output_path(artifact_manifest, "artifact manifest") if artifact_manifest is not None else None
     approved = Path(approved_data_root).resolve() if approved_data_root is not None else None
+    results = _statistical_results_path(name, root, statistical_results)
+    if name == "statistical" and results is not None:
+        mode = _statistical_input_mode(mode, results)
     if expected_report_identity is not None:
         _require_same_directory(report, expected_report_identity, "report directory")
     report_anchor = _make_report_anchor(report)
@@ -164,6 +168,7 @@ def run_mode(
         manifest=manifest,
         approved=approved,
         capture_candidate=capture_candidate,
+        statistical_results=results,
         report_anchor=report_anchor,
         expected_report_identity=expected_report_identity,
         runner=runner,
@@ -179,6 +184,29 @@ def run_mode(
         report_anchor=report_anchor,
         runner=runner,
     )
+
+
+def _statistical_results_path(name: str, root: Path, value: str | Path | None) -> Path | None:
+    if value is None:
+        return None
+    if name not in {"statistical", "release"}:
+        raise ValueError("statistical results are only valid for statistical or release")
+    path = _resolve_output_path(value, "statistical results")
+    if path.is_relative_to(root) or not path.is_dir():
+        raise ValueError("statistical results must be an existing external directory")
+    return path
+
+
+def _statistical_input_mode(mode: Mode, results: Path) -> Mode:
+    options = (
+        "-p",
+        "tests.statistical_gate",
+        "--statistical-results",
+        str(results),
+        "--statistical-report",
+        f"{REPORT}/statistical-evidence.json",
+    )
+    return Mode(tuple((*command, *options) for command in mode.commands))
 
 
 def _validate_mode_inputs(
@@ -242,6 +270,7 @@ def _run_special_mode(
     manifest: Path | None,
     approved: Path | None,
     capture_candidate: bool,
+    statistical_results: Path | None,
     report_anchor: ReportAnchor,
     expected_report_identity: DirectoryIdentity | None,
     runner: Runner,
@@ -260,7 +289,7 @@ def _run_special_mode(
     if name == "release":
         if artifact is None:
             raise ValueError("release requires an artifact directory")
-        run_release(root, report, artifact, runner=runner)
+        run_release(root, report, artifact, statistical_results=statistical_results, runner=runner)
         return True
     if name == "identity":
         _run_isolated(
@@ -471,11 +500,13 @@ def run_release(
     report_dir: str | Path,
     artifact_dir: str | Path,
     *,
+    statistical_results: str | Path | None = None,
     runner: Runner = subprocess.run,
 ) -> None:
     root = Path(repo_root).resolve()
     report = _resolve_output_path(report_dir, "release report directory")
     artifact = _resolve_output_path(artifact_dir, "release artifact directory")
+    results = _statistical_results_path("release", root, statistical_results)
     if artifact != report / "artifacts":
         raise ValueError("release artifact directory must equal report-dir/artifacts")
     if report.is_relative_to(root) or os.path.lexists(report):
@@ -485,6 +516,8 @@ def run_release(
         report_identity: DirectoryIdentity | None = None
         for name in RELEASE_ORDER:
             kwargs = _release_mode_kwargs(name, root, report, artifact, scratch, report_identity, runner)
+            if name == "statistical" and results is not None:
+                kwargs["statistical_results"] = results
             run_mode(name, MODE_REGISTRY[name], **kwargs)
             report_identity = _advance_release_report_identity(name, report, report_identity)
 
@@ -496,6 +529,7 @@ def _run_with_report(
     artifact_manifest: Path | None = None,
     approved_data_root: Path | None = None,
     capture_candidate: bool = False,
+    statistical_results: Path | None = None,
 ) -> None:
     root = _repository_root()
     run_mode(
@@ -507,6 +541,7 @@ def _run_with_report(
         artifact_manifest=artifact_manifest,
         approved_data_root=approved_data_root,
         capture_candidate=capture_candidate,
+        statistical_results=statistical_results,
     )
 
 
@@ -518,6 +553,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact-manifest", type=Path)
     parser.add_argument("--approved-data-root", type=Path)
     parser.add_argument("--capture-candidate", action="store_true")
+    parser.add_argument("--statistical-results", type=Path)
     return parser
 
 
@@ -535,6 +571,11 @@ REQUIRED_ARGUMENT_ERRORS = {
 }
 
 OPTION_SCOPE_ERRORS = (
+    (
+        "statistical_results",
+        {"statistical", "release"},
+        "--statistical-results is only valid with statistical or release",
+    ),
     ("capture_candidate", {"approved-data"}, "--capture-candidate is only valid with approved-data"),
     ("approved_data_root", {"approved-data"}, "--approved-data-root is only valid with approved-data"),
     (
@@ -568,6 +609,7 @@ def _run_explicit(args: argparse.Namespace) -> int:
             args.artifact_manifest,
             args.approved_data_root,
             args.capture_candidate,
+            args.statistical_results,
         )
     except MissingApprovedEvidence as error:
         print(str(error), file=sys.stderr)
@@ -583,8 +625,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.report_dir is not None:
         return _run_explicit(args)
     with tempfile.TemporaryDirectory(prefix=f"xrr-r23-{args.mode}-") as directory:
-        _run_with_report(args.mode, Path(directory))
-    return 0
+        args.report_dir = Path(directory)
+        return _run_explicit(args)
 
 
 if __name__ == "__main__":

@@ -218,7 +218,6 @@ def test_standard_jobs_use_required_runner_and_explicit_verifier_modes() -> None
         "integration",
         "spawn",
         "regression",
-        "statistical",
         "distribution",
         "identity",
         "release",
@@ -238,7 +237,6 @@ def test_standard_jobs_verify_locked_environment_metadata() -> None:
         "integration",
         "spawn",
         "regression",
-        "statistical",
         "distribution",
         "identity",
         "release",
@@ -257,7 +255,8 @@ def test_release_job_runs_nested_gui_gates_offscreen() -> None:
     assert (
         'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release '
         '--report-dir "$RUNNER_TEMP/release" '
-        '--artifact-dir "$RUNNER_TEMP/release/artifacts"'
+        '--artifact-dir "$RUNNER_TEMP/release/artifacts" '
+        '--statistical-results "$RUNNER_TEMP/statistical-inputs"'
     ) in commands
 
 
@@ -281,7 +280,7 @@ def test_release_jobs_are_readiness_gated_and_use_exact_bundles() -> None:
     identity = jobs["identity"]
     release = jobs["release"]
     assert identity["needs"] == ["candidate-readiness", "distribution"]
-    assert release["needs"] == ["candidate-readiness"]
+    assert release["needs"] == ["candidate-readiness", "statistical"]
     expected_condition = "startsWith(github.ref, 'refs/tags/') && needs.candidate-readiness.outputs.ready == 'true'"
     assert identity["if"] == expected_condition
     assert release["if"] == expected_condition

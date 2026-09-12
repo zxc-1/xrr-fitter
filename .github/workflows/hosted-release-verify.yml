@@ -7,6 +7,12 @@ name: hosted-release-verify
     paths:
       - .github/workflows/verify.yml
       - .github/workflows/hosted-release-verify.yml
+      - .github/workflows/statistical.yml
+      - tools/statistical_*.py
+      - tools/verify.py
+      - tests/statistical_gate.py
+      - tests/support/synthetic_recovery*.py
+      - tests/acceptance/test_synthetic_recovery_corpus.py
       - .github/actions/setup-macos-python/action.yml
       - .github/actions/cleanup-macos-python/action.yml
 
@@ -18,7 +24,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  statistical:
+    uses: ./.github/workflows/statistical.yml
+
   release:
+    needs: [statistical]
     runs-on: macos-15
     timeout-minutes: 360
     steps:
@@ -26,6 +36,12 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Download statistical shard evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: statistical-shard-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: ${{ runner.temp }}/statistical-inputs
+          merge-multiple: false
       - name: Set up locked macOS Python
         id: python
         uses: ./.github/actions/setup-macos-python
@@ -36,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$PYTHON" = "${{ steps.python.outputs.python }}"
-          QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release --report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts" 2>&1 | tee "$RUNNER_TEMP/hosted-release-verify.log"
+          QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release --report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts" --statistical-results "$RUNNER_TEMP/statistical-inputs" 2>&1 | tee "$RUNNER_TEMP/hosted-release-verify.log"
       - name: Clean the owned macOS environment
         if: ${{ always() && steps.python.outputs.job-root != '' }}
         uses: ./.github/actions/cleanup-macos-python

@@ -144,7 +144,9 @@ def test_environment_paths_are_unique_while_exact_cache_paths_are_stable(tmp_pat
     assert all(value not in cache["with"]["path"] for value in ("run_id", "run_attempt", "bootstrap.outputs.root"))
 
 
-@pytest.mark.parametrize("workflow", ["verify.yml", "pr-verify.yml", "audit.yml"])
+@pytest.mark.parametrize(
+    "workflow", ["verify.yml", "pr-verify.yml", "audit.yml", "hosted-release-verify.yml", "statistical.yml"]
+)
 def test_setup_consumers_always_clean_only_the_owned_environment(workflow: str) -> None:
     payload = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())
     for job in payload["jobs"].values():

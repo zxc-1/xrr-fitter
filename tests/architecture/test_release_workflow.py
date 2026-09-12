@@ -8,6 +8,7 @@ import pytest
 import yaml
 from tests.support.macos_action_contract import cleanup_step
 from tests.support.release_workflow_contract import CHECKOUT
+from tests.support.statistical_workflow_contract import statistical_download_step
 from tests.support.verify_workflow_contract import UPLOAD_ARTIFACT, setup_step
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -119,15 +120,23 @@ def test_hosted_release_verification_is_read_only_and_explicitly_triggered() -> 
             "paths": [
                 ".github/workflows/verify.yml",
                 ".github/workflows/hosted-release-verify.yml",
+                ".github/workflows/statistical.yml",
+                "tools/statistical_*.py",
+                "tools/verify.py",
+                "tests/statistical_gate.py",
+                "tests/support/synthetic_recovery*.py",
+                "tests/acceptance/test_synthetic_recovery_corpus.py",
                 ".github/actions/setup-macos-python/action.yml",
                 ".github/actions/cleanup-macos-python/action.yml",
             ],
         },
     }
     assert payload["permissions"] == {"contents": "read"}
-    assert set(payload["jobs"]) == {"release"}
+    assert set(payload["jobs"]) == {"statistical", "release"}
+    assert payload["jobs"]["statistical"] == {"uses": "./.github/workflows/statistical.yml"}
     job = payload["jobs"]["release"]
-    assert set(job) == {"runs-on", "timeout-minutes", "steps"}
+    assert set(job) == {"needs", "runs-on", "timeout-minutes", "steps"}
+    assert job["needs"] == ["statistical"]
 
 
 def test_hosted_release_verification_uses_the_hosted_time_limit_without_cancellation() -> None:
@@ -143,15 +152,16 @@ def test_hosted_release_verification_uses_the_hosted_time_limit_without_cancella
 
 def test_hosted_release_verification_uses_the_same_locked_setup_and_owned_cleanup() -> None:
     steps = _hosted_payload()["jobs"]["release"]["steps"]
-    assert len(steps) == 5
+    assert len(steps) == 6
     assert steps[0] == {"uses": CHECKOUT, "with": {"persist-credentials": False, "fetch-depth": 0}}
-    assert steps[1] == setup_step()
-    assert steps[3] == cleanup_step()
+    assert steps[1] == statistical_download_step()
+    assert steps[2] == setup_step()
+    assert steps[4] == cleanup_step()
 
 
 def test_hosted_release_verification_runs_the_complete_release_mode_and_retains_evidence() -> None:
     steps = _hosted_payload()["jobs"]["release"]["steps"]
-    verification = steps[2]
+    verification = steps[3]
     assert verification == {
         "name": "Verify release",
         "env": {"PYTHON": "${{ steps.python.outputs.python }}"},
@@ -162,12 +172,13 @@ def test_hosted_release_verification_runs_the_complete_release_mode_and_retains_
                 'test "$PYTHON" = "${{ steps.python.outputs.python }}"',
                 'QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py release '
                 '--report-dir "$RUNNER_TEMP/release" --artifact-dir "$RUNNER_TEMP/release/artifacts" '
+                '--statistical-results "$RUNNER_TEMP/statistical-inputs" '
                 '2>&1 | tee "$RUNNER_TEMP/hosted-release-verify.log"',
                 "",
             )
         ),
     }
-    assert steps[4] == {
+    assert steps[5] == {
         "name": "Retain full verification evidence",
         "if": "${{ always() }}",
         "uses": UPLOAD_ARTIFACT,
@@ -183,7 +194,7 @@ def test_hosted_release_verification_runs_the_complete_release_mode_and_retains_
 
 @pytest.mark.parametrize("exit_code", [0, 42])
 def test_hosted_release_log_capture_preserves_the_verifier_exit_code(tmp_path: Path, exit_code: int) -> None:
-    step = _hosted_payload()["jobs"]["release"]["steps"][2]
+    step = next(step for step in _hosted_payload()["jobs"]["release"]["steps"] if step.get("name") == "Verify release")
     python = tmp_path / "verification stub"
     python.write_text(f"#!/bin/sh\nprintf 'verification evidence\\n'\nexit {exit_code}\n", encoding="utf-8")
     python.chmod(0o700)
