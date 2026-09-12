@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from collections import Counter
 
+from tests.statistical_gate import statistical_evidence as statistical_evidence
 from tests.support.synthetic_recovery import build_corpus, run_corpus
-
-pytest_plugins = ("tests.statistical_gate",)
 
 EXPECTED_CATEGORIES = {
     "ambiguous": 20,
