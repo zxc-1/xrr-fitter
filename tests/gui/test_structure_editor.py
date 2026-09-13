@@ -523,4 +523,4 @@ def test_the_row_widget_is_the_only_thing_that_paints_a_layer_name(qtbot, tmp_pa
     for index in range(tree.topLevelItemCount()):
         item = tree.topLevelItem(index)
         assert item.text(0) != ""
-        assert item.foreground(0).color().alpha() == 0
+        assert tree.itemWidget(item, 0).name_text() == item.text(0)

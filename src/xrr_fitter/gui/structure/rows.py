@@ -10,7 +10,16 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QPainter
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from xrr_fitter.gui import theme
 
@@ -71,6 +80,20 @@ class _ElidedLabel(QLabel):
             self.foregroundRole(),
         )
         painter.end()
+
+
+class LayerRowDelegate(QStyledItemDelegate):
+    """Keep native selection/focus painting, but let LayerRow own the text."""
+
+    def paint(self, painter, option, index) -> None:
+        style_option = QStyleOptionViewItem(option)
+        self.initStyleOption(style_option, index)
+        # ForegroundRole transparency is overridden by the selected-text style.
+        # Keep DisplayRole for accessibility and remove text only from painting.
+        style_option.text = ""
+        widget = style_option.widget
+        style = widget.style() if widget is not None else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, style_option, painter, widget)
 
 
 class LayerRow(QWidget):

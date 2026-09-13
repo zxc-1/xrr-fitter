@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QAction, QBrush, QColor, QKeySequence
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
@@ -95,18 +95,6 @@ def _substance_text(material: api.MaterialSpec) -> str:
     """
     density = material.bulk_density_g_cm3
     return f"密度 {density:.{NM_DECIMALS}f}" if density is not None else _material_text(material)
-
-
-def _row_item(text: str) -> QTreeWidgetItem:
-    """一个条目，文本留着但不着墨。
-
-    每一行真正画出来的是 ``setItemWidget`` 放进去的 ``LayerRow``；条目自己的显示文本
-    由树的委托画在它底下，而行控件除半无限那两行外没有底色，委托那一份便从下面透出来，
-    和行自己的名字叠印。文本不能删——读屏器与按文本定位的测试都读它——所以只让它不着墨。
-    """
-    item = QTreeWidgetItem((text,))
-    item.setForeground(0, QBrush(QColor(0, 0, 0, 0)))
-    return item
 
 
 def _layer_detail(layer: api.LayerSpec) -> str:
@@ -218,6 +206,7 @@ class StructureEditor(QWidget):
     def _build_widgets(self) -> None:
         self.tree = ReorderableTree()
         self.tree.setObjectName("structureTree")
+        self.tree.setItemDelegate(rows.LayerRowDelegate(self.tree))
         # 设计稿 ``.stack`` 是一列 ``.lyr``：一行一层，没有列头。每行的内容由
         # ``LayerRow`` 画，树只剩「按顺序排、点一行选中、拖一行换位」这三件事。
         self.tree.setColumnCount(STRUCTURE_TREE_COLUMNS)
@@ -571,7 +560,7 @@ class StructureEditor(QWidget):
         roughness_a: float | None,
     ) -> QTreeWidgetItem:
         reading = "半无限" if roughness_a is not None else "SLD 0 · 半无限"
-        item = _row_item(name)
+        item = QTreeWidgetItem((name,))
         item.setData(0, Qt.ItemDataRole.UserRole, None)
         item.setData(0, ROW_SPEC, (theme.DATA_NEUTRAL, name, _medium_detail(material, roughness_a), reading))
         return item
@@ -579,14 +568,14 @@ class StructureEditor(QWidget):
     def _component_item(self, component: object, index: int) -> QTreeWidgetItem:
         label = naming.expert_name(component.name)
         if isinstance(component, api.PeriodicBlock):
-            item = _row_item(label)
+            item = QTreeWidgetItem((label,))
             detail = f"周期 ×{component.repeats} · {len(component.layers)} 层"
             if component.drift is not None:
                 item.setToolTip(0, _drift_tooltip(component.drift))
             for layer in component.layers:
                 item.addChild(self._layer_item(layer))
         elif isinstance(component, api.GradientLayerSpec):
-            item = _row_item(label)
+            item = QTreeWidgetItem((label,))
             detail = f"厚度 {_nm2(component.thickness_a)} · 粗糙 {_nm2(component.roughness_a)} · SLD 梯度"
         else:
             item = self._layer_item(component)
@@ -601,7 +590,7 @@ class StructureEditor(QWidget):
 
     def _layer_item(self, layer: api.LayerSpec) -> QTreeWidgetItem:
         label = naming.expert_name(layer.name)
-        item = _row_item(label)
+        item = QTreeWidgetItem((label,))
         if layer.transition is not None:
             item.setToolTip(0, _transition_text(layer.transition))
         # A block's children share their parent's single band, so they are left
