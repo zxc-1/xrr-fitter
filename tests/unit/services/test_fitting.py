@@ -429,9 +429,14 @@ def test_automatic_absorption_rejects_insufficient_gain() -> None:
     assert result is search
 
 
-def test_automatic_absorption_replaces_winner_and_preserves_stage_e_lineage() -> None:
+def _named_value(values, name):
+    return next(value for value in values if value.name == name)
+
+
+@pytest.mark.parametrize("skipped_stages", [(), ("C",)])
+def test_automatic_absorption_replaces_winner_and_preserves_stage_e_lineage(skipped_stages) -> None:
     problem = _automatic_problem()
-    search = _stage_e_search(problem)
+    search = replace(_stage_e_search(problem), skipped_stages=skipped_stages)
     baseline = search.best_candidate
     assert baseline is not None
     threshold = max(
@@ -453,19 +458,12 @@ def test_automatic_absorption_replaces_winner_and_preserves_stage_e_lineage() ->
         fit_search_provenance_sha256=fit_search_provenance_sha256,
     )
 
+    assert result.skipped_stages == skipped_stages
     winner = result.best_candidate
     assert winner is not None
-    imag_value = next(parameter.value for parameter in winner.parameters if parameter.name == "component.0.sld_imag_a2")
-    fixed = next(
-        definition
-        for definition in updated_prepared.problem.parameter_definitions
-        if definition.name == "component.0.sld_imag_a2"
-    )
-    setting = next(
-        value
-        for value in updated_prepared.updated_dataset.parameter_settings
-        if value.name == "component.0.sld_imag_a2"
-    )
+    imag_value = _named_value(winner.parameters, "component.0.sld_imag_a2").value
+    fixed = _named_value(updated_prepared.problem.parameter_definitions, "component.0.sld_imag_a2")
+    setting = _named_value(updated_prepared.updated_dataset.parameter_settings, "component.0.sld_imag_a2")
     assert (
         winner is not baseline,
         winner.candidate_id,
@@ -686,8 +684,10 @@ def test_fitting_composes_search_profile_recovery_and_analysis_in_order(
 ) -> None:
     value = _project(tmp_path)
     prepared = fitting.prepare_dataset_fit(value, "curve", value.master_seed)
-    initial_search = SimpleNamespace(best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None))
-    continued_search = object()
+    initial_search = SimpleNamespace(
+        best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None), terminated_early=False
+    )
+    continued_search = SimpleNamespace(terminated_early=False)
     decision = SimpleNamespace(
         parameter_name="component.0.thickness_a",
         unit_vector=np.array([0.25]),
@@ -724,7 +724,9 @@ def test_fitting_forwards_explicit_profile_names_to_analysis_request(
 ) -> None:
     value = _project(tmp_path)
     prepared = fitting.prepare_dataset_fit(value, "curve", value.master_seed)
-    search = SimpleNamespace(best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None))
+    search = SimpleNamespace(
+        best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None), terminated_early=False
+    )
     analyzed = final_fit_result()
     harness = _FittingHarness(search, None, search, analyzed)
     requested = (
@@ -769,7 +771,9 @@ def test_joint_fit_reports_finalizing_after_stage_e() -> None:
             updated_dataset=SimpleNamespace(checkpoint=None, parameter_priors=()),
         ),
     )
-    searches = (SimpleNamespace(best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None)),)
+    searches = (
+        SimpleNamespace(best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None), terminated_early=False),
+    )
     analyzed = (object(), object())
     events = []
 

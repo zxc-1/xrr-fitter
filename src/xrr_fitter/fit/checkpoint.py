@@ -116,6 +116,7 @@ def build_checkpoint(
     runtime_warnings: tuple[str, ...],
     stage_summaries: tuple[FitStageSummary, ...],
     joint_layout_fingerprint: str = "",
+    skipped_stages: tuple[str, ...] = (),
 ) -> FitCheckpoint:
     """Construct one coherent, identity-bound in-memory checkpoint."""
     identity = checkpoint_identity(problem)
@@ -131,4 +132,5 @@ def build_checkpoint(
         runtime_warnings=tuple(runtime_warnings),
         stage_summaries=tuple(stage_summaries),
         joint_layout_fingerprint=joint_layout_fingerprint,
+        skipped_stages=skipped_stages,
     )

@@ -316,7 +316,7 @@ def test_the_skip_probe_raises_stage_skipped_once_and_then_lets_the_run_continue
 
     cancellation = FakeToggle()
     skip = FakeToggle(initial=True)
-    probe = workers._probe(cancellation, None, skip)
+    probe = workers._pause_aware_probe(cancellation, None, skip)
 
     with pytest.raises(StageSkipped):
         probe()

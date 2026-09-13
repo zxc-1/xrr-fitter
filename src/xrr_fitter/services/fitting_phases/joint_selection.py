@@ -11,6 +11,7 @@ from xrr_fitter.model.analysis import FitResult
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
 from xrr_fitter.model.fitting import FitCheckpoint
 from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting, SharingRule
+from xrr_fitter.model.search_stages import search_terminated_early
 
 from .base import _scale_prior
 from .common import (
@@ -255,6 +256,9 @@ def _automatic_joint_result(
     result: FitResult,
     decision: object,
 ) -> AutomaticPreparedResult:
+    if search_terminated_early(result.skipped_stages):
+        reason = f"incomplete search: skipped stages {', '.join(result.skipped_stages)}"
+        return AutomaticPreparedResult(prepared, result, False, reason)
     reason = None if decision.passed else "; ".join(decision.reasons)
     if not decision.passed and not reason:
         reason = "automatic quality review required"
@@ -278,6 +282,8 @@ def _accepted_material_values(
     for rule in material_rules:
         member = rule.members[0]
         result = results_by_id[member.dataset_id]
+        if search_terminated_early(result.skipped_stages):
+            continue
         best = result.best_candidate
         if best is None or not best.valid:
             continue

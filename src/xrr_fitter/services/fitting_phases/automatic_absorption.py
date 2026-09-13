@@ -289,6 +289,7 @@ def _accepted_absorption_result(
         ),
         region_labels=search.region_labels,
         region_weights=search.region_weights,
+        skipped_stages=search.skipped_stages,
     )
     result = replace(
         result,

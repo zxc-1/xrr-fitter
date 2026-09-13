@@ -15,7 +15,7 @@ from xrr_fitter.fit.candidates import CandidateStart, best_candidate_index
 from xrr_fitter.fit.checkpoint import build_checkpoint
 from xrr_fitter.fit.local_search import StageSkipped
 from xrr_fitter.fit.resume import ResumePlan, validate_resume_checkpoint
-from xrr_fitter.fit.stage_schedule import reserve_child_seeds
+from xrr_fitter.fit.stage_schedule import committed_parent_summary, reserve_child_seeds
 from xrr_fitter.fit.stages import (
     StageOutcome,
     compile_coarse_problem,
@@ -56,6 +56,7 @@ class _SearchState:
     base_warnings: tuple[str, ...] = ()
     runtime_warnings: tuple[str, ...] = ()
     summaries: tuple[FitStageSummary, ...] = ()
+    skipped_stages: tuple[str, ...] = ()
 
     def append(self, outcome: StageOutcome) -> _SearchState:
         return _SearchState(
@@ -63,6 +64,14 @@ class _SearchState:
             self.base_warnings,
             self.runtime_warnings + outcome.warnings,
             self.summaries + (outcome.summary,),
+            self.skipped_stages,
+        )
+
+    def skip(self, stage: str) -> _SearchState:
+        return replace(
+            self,
+            runtime_warnings=self.runtime_warnings + (f"Stage {stage} skipped by user.",),
+            skipped_stages=self.skipped_stages + (stage,),
         )
 
 
@@ -112,23 +121,18 @@ def _state_from_resume(plan: ResumePlan, base_warnings: tuple[str, ...]) -> _Sea
         base_warnings,
         plan.runtime_warnings,
         plan.stage_summaries,
+        plan.skipped_stages,
     )
 
 
 def _stage_candidates(state: _SearchState, stage: str) -> tuple[FitCandidate, ...]:
-    summary = next((value for value in reversed(state.summaries) if value.stage == stage), None)
-    if summary is None:
-        # 这一阶段被跳过了。往下走的父代退回到最近一个真正跑完的阶段——跳过的语义是
-        # 「这一层的加工不要了」，不是「前面的成果一并作废」。
-        if not state.summaries:
-            return ()
-        summary = state.summaries[-1]
+    summary = committed_parent_summary(state.summaries, state.skipped_stages, stage)
     by_id = {candidate.candidate_id: candidate for candidate in state.candidates}
     return tuple(by_id[candidate_id] for candidate_id in summary.candidate_ids)
 
 
-def _consumed_seeds(stage: str, seeds: tuple[int, ...]) -> tuple[int, ...]:
-    return seeds if stage == "E" else seeds[:2]
+def _consumed_seeds(stage: str, seeds: tuple[int, ...], skipped_stages: tuple[str, ...]) -> tuple[int, ...]:
+    return seeds if stage == "E" and stage not in skipped_stages else seeds[:2]
 
 
 def _publish_checkpoint(
@@ -145,16 +149,19 @@ def _publish_checkpoint(
             request.problem,
             stage=stage,
             candidates=state.candidates,
-            child_seeds=_consumed_seeds(stage, seeds),
+            child_seeds=_consumed_seeds(stage, seeds, state.skipped_stages),
             runtime_warnings=state.runtime_warnings,
             stage_summaries=state.summaries,
+            skipped_stages=state.skipped_stages,
         )
     )
 
 
 def _result(request: FitSearchRequest, state: _SearchState, seeds: tuple[int, ...]) -> FitSearchResult:
-    eligible = _stage_candidates(state, "E")
-    eligible_ids = tuple(candidate.candidate_id for candidate in eligible)
+    eligible_ids = next(
+        (summary.candidate_ids for summary in reversed(state.summaries) if summary.stage == "E"),
+        None,
+    )
     result = FitSearchResult(
         parameter_definitions=request.problem.parameter_definitions,
         candidates=state.candidates,
@@ -164,6 +171,7 @@ def _result(request: FitSearchRequest, state: _SearchState, seeds: tuple[int, ..
         stage_summaries=state.summaries,
         region_labels=request.problem.region_labels,
         region_weights=request.problem.weights,
+        skipped_stages=state.skipped_stages,
     )
     return _seal_result(request.problem, result)
 
@@ -198,6 +206,7 @@ def _advance_stage_a(
         state.base_warnings,
         state.runtime_warnings + warnings,
         state.summaries + (summary,),
+        state.skipped_stages,
     )
     return state, starts
 
@@ -304,17 +313,13 @@ def run_fit_search(
             )
             state = state.append(outcome)
             perturbation_counts = outcome.perturbation_counts
-            _publish_checkpoint(request, state, stage, seeds, checkpoint)
         except StageSkipped:
-            # 跳过的是这一个阶段，不是这次搜索：作废它已算的部分，接着跑下一个。
-            # 但下一阶段得有父代才跑得动——阶段 A 被跳过时一个候选都还没有，这时
-            # 收工返回已有结果，而不是让阶段 B 抛「缺少起点」。
+            state = state.skip(stage)
             if not state.candidates:
                 break
-            # 扰动配额是上一阶段谱系的形状，跳过一层之后它对不上下一层的父代；清空
-            # 让下一阶段自己数，比带着一份过期的配额去校验要诚实。
+            # A skipped transition has no committed continuation allocation.
             perturbation_counts = ()
-            continue
+        _publish_checkpoint(request, state, stage, seeds, checkpoint)
     return _result(request, state, seeds)
 
 
@@ -422,6 +427,7 @@ def _replace_profile_stage(
         stage_summaries=summaries,
         region_labels=search_result.region_labels,
         region_weights=search_result.region_weights,
+        skipped_stages=search_result.skipped_stages,
     )
     return _seal_result(problem, result)
 
@@ -446,6 +452,7 @@ def _profile_checkpoint(
         child_seeds=search_result.child_seeds,
         runtime_warnings=_profile_runtime_warnings(problem, search_result),
         stage_summaries=search_result.stage_summaries,
+        skipped_stages=search_result.skipped_stages,
     )
 
 
@@ -489,7 +496,7 @@ def continue_profile_basin(
         parameter_name,
     )
     _raise_if_cancelled(cancelled)
-    if not _validated_profile_center(problem, search_result, center_unit):
+    if search_result.terminated_early or not _validated_profile_center(problem, search_result, center_unit):
         return search_result
     originals = _profile_stage_candidates(search_result)
     final_count = problem.config.final_seed_count

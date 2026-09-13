@@ -81,6 +81,7 @@ def test_fitting_forwards_persisted_parameter_priors_to_analysis_request(
     )
     search = SimpleNamespace(
         best_candidate=SimpleNamespace(objective=0.25, ranking_objective=None),
+        terminated_early=False,
     )
     analyzed = final_fit_result()
     harness = _FittingHarness(search, None, search, analyzed)

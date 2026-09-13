@@ -55,6 +55,7 @@ class FitPanel(QWidget):
         self._checkpoint_saved = False
         self._paused = False
         self._cancel_requested = False
+        self._skip_available = False
         self.controller = FitController(self)
         self.progress_view = ProgressView(self)
         # 检视器把它摆在自己那一段里（``inspectorLiveMetrics``），但喂它的是本面板的
@@ -143,11 +144,16 @@ class FitPanel(QWidget):
         self.controller.progress_changed.connect(self.progress_view.set_progress)
         self.controller.progress_changed.connect(self.live_metrics.set_progress)
         self.controller.progress_changed.connect(self._project_preview)
+        self.controller.progress_changed.connect(self._project_skip_state)
         self.controller.poll_interval_changed.connect(self.progress_view.set_refresh_interval_ms)
         self.controller.checkpoint_ready.connect(self._publish_checkpoint)
         self.controller.fit_finished.connect(self._publish_fit_result)
         self.controller.cancelled.connect(self._show_cancelled)
         self.controller.failed.connect(self._show_failure)
+
+    def _project_skip_state(self, progress: api.FitProgress) -> None:
+        self._skip_available = progress.stage in {"A", "B", "C", "D", "E"}
+        self._refresh_controls()
 
     def _project_preview(self, progress: api.FitProgress) -> None:
         """Forward preview curves at a bounded rate to avoid canvas flicker."""
@@ -318,6 +324,7 @@ class FitPanel(QWidget):
         self._show_status(messages.readiness_text(value.message), kind="warn")
 
     def _project_running_state(self, running: bool) -> None:
+        self._skip_available = False
         if not running:
             # The worker is done, so stop the live clock; the last rendered
             # elapsed/remaining values stay put instead of ticking on forever.
@@ -359,7 +366,7 @@ class FitPanel(QWidget):
         self.automatic_button.setEnabled(self._automatic_readiness.ready and not active)
         self.cancel_button.setEnabled(active)
         self.pause_button.setEnabled(active)
-        self.skip_button.setEnabled(active)
+        self.skip_button.setEnabled(active and self._skip_available and not self._cancel_requested)
         self.force_button.setEnabled(active)
         self._refresh_start_label()
 

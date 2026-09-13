@@ -28,6 +28,9 @@ def _automatic_failure_result(
     prepared: PreparedDatasetFit,
     search: FitSearchResult,
 ) -> AutomaticPreparedResult | None:
+    if search.terminated_early:
+        result = FitResult.from_incomplete_search(search)
+        return AutomaticPreparedResult(prepared, result, False, result.classification_evidence[0])
     winner = search.best_candidate
     if winner is None:
         return AutomaticPreparedResult(
@@ -102,7 +105,7 @@ def _automatic_profile_recovery(
     continue_profile_basin: Callable,
 ) -> FitSearchResult:
     candidate = search.best_candidate
-    if candidate is None:
+    if candidate is None or search.terminated_early:
         return search
     decision = recover_profile_basin(
         prepared.problem,

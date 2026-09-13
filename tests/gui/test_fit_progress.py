@@ -863,6 +863,7 @@ def test_the_skip_control_asks_the_worker_to_drop_the_current_stage(qtbot, tmp_p
     assert button.isEnabled() is False
 
     panel.start_fit()
+    panel.controller.progress_changed.emit(api.FitProgress("curve", "C", 0, 1, 1.0, "search"))
     assert button.isEnabled() is True
     button.click()
 

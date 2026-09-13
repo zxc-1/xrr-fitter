@@ -334,6 +334,7 @@ def fit_result_to_dict(value: FitResult | None) -> dict[str, object] | None:
         "region_weights": _real_array_to_list(value.region_weights),
         "uncertainty": _uncertainty_to_dict(value.uncertainty),
         "classification_evidence": list(value.classification_evidence),
+        **({"skipped_stages": list(value.skipped_stages)} if value.skipped_stages else {}),
     }
 
 
@@ -360,7 +361,7 @@ def fit_result_from_dict(value: object) -> FitResult | None:
         "region_weights",
         "uncertainty",
     }
-    payload = _mapping(value, required, "fit result", {"classification_evidence"})
+    payload = _mapping(value, required, "fit result", {"classification_evidence", "skipped_stages"})
     candidates = tuple(_candidate_from_dict(item) for item in _sequence(payload["candidates"], "fit candidates"))
     return FitResult(
         parameter_definitions=tuple(
@@ -380,6 +381,7 @@ def fit_result_from_dict(value: object) -> FitResult | None:
         region_weights=_real_array_from_list(payload["region_weights"]),
         uncertainty=_uncertainty_from_dict(payload["uncertainty"]),
         classification_evidence=_classification_evidence(payload),
+        skipped_stages=tuple(_sequence(payload.get("skipped_stages", []), "skipped stages")),
     )
 
 
@@ -401,6 +403,7 @@ def _checkpoint_to_dict(value: FitCheckpoint | None) -> dict[str, object] | None
             value.candidates,
         ),
         "joint_layout_fingerprint": value.joint_layout_fingerprint,
+        **({"skipped_stages": list(value.skipped_stages)} if value.skipped_stages else {}),
     }
 
 
@@ -423,7 +426,7 @@ def _checkpoint_from_dict(value: object) -> FitCheckpoint | None:
         value,
         required,
         "fit checkpoint",
-        {"joint_layout_fingerprint"},
+        {"joint_layout_fingerprint", "skipped_stages"},
     )
     candidates = tuple(_candidate_from_dict(item) for item in _sequence(payload["candidates"], "checkpoint candidates"))
     return FitCheckpoint(
@@ -438,4 +441,5 @@ def _checkpoint_from_dict(value: object) -> FitCheckpoint | None:
         runtime_warnings=tuple(_sequence(payload["runtime_warnings"], "runtime warnings")),
         stage_summaries=_stages_from_list(payload["stage_summaries"], candidates),
         joint_layout_fingerprint=payload.get("joint_layout_fingerprint", ""),
+        skipped_stages=tuple(_sequence(payload.get("skipped_stages", []), "skipped stages")),
     )

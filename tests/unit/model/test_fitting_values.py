@@ -192,7 +192,9 @@ def test_result_type_names_preserve_public_final_result_schema() -> None:
         "region_weights",
         "uncertainty",
         "classification_evidence",
+        "skipped_stages",
     ]
+    assert fields(analysis.FitResult)[-1].default == ()
 
 
 @pytest.mark.parametrize(
