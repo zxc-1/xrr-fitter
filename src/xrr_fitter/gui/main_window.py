@@ -400,7 +400,8 @@ class MainWindow(QMainWindow):
         self._require_idle("create a project")
         if self.document.is_dirty and not discard_unsaved:
             raise RuntimeError("unsaved project changes require explicit discard")
-        self.document.new()
+        with self.autosave.discard_after_replacement():
+            self.document.new()
 
     def open_project(
         self,
@@ -411,7 +412,8 @@ class MainWindow(QMainWindow):
         self._require_idle("open a project")
         if self.document.is_dirty and not discard_unsaved:
             raise RuntimeError("unsaved project changes require explicit discard")
-        self.document.open(path)
+        with self.autosave.discard_after_replacement():
+            self.document.open(path)
         self._offer_draft_recovery()
 
     def maybe_recover_draft(self, path: str | object) -> bool:
