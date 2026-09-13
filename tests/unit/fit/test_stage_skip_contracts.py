@@ -76,6 +76,30 @@ def test_early_skip_returns_only_committed_evidence(joint, stage) -> None:
         assert bool(result.candidates) == (joint and stage == "B")
 
 
+def test_joint_skip_before_stage_a_preserves_preparation_warnings() -> None:
+    problem = _joint_problem()
+    local_problems = tuple(
+        replace(local, warnings=("shared input warning", f"{dataset_id} input warning"))
+        for dataset_id, local in zip(problem.dataset_ids, problem.problems, strict=True)
+    )
+    problem = replace(problem, problems=local_problems)
+
+    def probe() -> bool:
+        raise StageSkipped("skip before evaluation")
+
+    results = run_joint_fit(JointFitRequest(problem), cancelled=probe)
+
+    assert len(results) == 2
+    for result in results:
+        assert result.candidates == ()
+        assert result.warnings == (
+            "shared input warning",
+            "left input warning",
+            "right input warning",
+            "Stage A skipped by user.",
+        )
+
+
 def test_locked_joint_still_consumes_skips_at_stage_boundaries() -> None:
     probe = _SkipAfterCheckpoint(("C", "D", "E"), joint=True)
     results = run_joint_fit(

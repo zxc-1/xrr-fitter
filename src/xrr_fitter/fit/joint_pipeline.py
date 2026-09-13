@@ -495,11 +495,15 @@ def _validate_joint_resume(
     return state, remaining
 
 
+def _problem_warnings(problem: JointFitProblem) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(warning for value in problem.problems for warning in value.warnings))
+
+
 def _fresh_state(
     problem: JointFitProblem,
     initial_unit_vector: np.ndarray | None = None,
 ) -> tuple[_JointState, np.ndarray]:
-    warnings = tuple(dict.fromkeys(warning for value in problem.problems for warning in value.warnings))
+    warnings = _problem_warnings(problem)
     initial = initial_joint_vector(problem) if initial_unit_vector is None else initial_unit_vector
     evaluation = evaluate_joint_vector(problem, initial)
     solved = _SolvedJoint(initial, evaluation, "declared_initial", 1)
@@ -563,7 +567,11 @@ def _initial_joint_run(
     try:
         _poll(cancelled)
     except StageSkipped:
-        state = _JointState(tuple(() for _ in request.problem.problems), (), ()).skip("A")
+        state = _JointState(
+            tuple(() for _ in request.problem.problems),
+            _problem_warnings(request.problem),
+            (),
+        ).skip("A")
         return state, None, ()
     state, initial = _fresh_state(request.problem, request.initial_unit_vector)
     _emit(

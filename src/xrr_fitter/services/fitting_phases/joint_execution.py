@@ -12,7 +12,7 @@ from xrr_fitter.model.fitting import (
     candidate_selection_objective,
 )
 from xrr_fitter.model.parameters import SharingRule
-from xrr_fitter.model.search_stages import search_terminated_early
+from xrr_fitter.model.progress import search_terminated_early
 
 from .common import (
     AutomaticPreparedResult,

@@ -11,7 +11,7 @@ from xrr_fitter.model.analysis import FitResult
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
 from xrr_fitter.model.fitting import FitCheckpoint
 from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting, SharingRule
-from xrr_fitter.model.search_stages import search_terminated_early
+from xrr_fitter.model.progress import search_terminated_early
 
 from .base import _scale_prior
 from .common import (
