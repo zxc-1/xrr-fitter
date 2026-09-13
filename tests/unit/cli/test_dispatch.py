@@ -107,7 +107,7 @@ def test_export_checks_sources_before_writing(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         commands.api,
         "export_result",
-        lambda project, output_dir, *, include_ort: (
+        lambda project, output_dir, *, formats: (
             calls.append("export"),
             _Manifest(),
         )[1],
@@ -144,7 +144,7 @@ def test_run_export_maps_expected_export_errors_to_input_error(export_error, mon
     monkeypatch.setattr(
         commands.api,
         "export_result",
-        lambda project, output_dir, *, include_ort: (_ for _ in ()).throw(export_error),
+        lambda project, output_dir, *, formats: (_ for _ in ()).throw(export_error),
     )
 
     with pytest.raises(Exception) as excinfo:
@@ -170,7 +170,7 @@ def test_export_errors_do_not_leak_tracebacks(monkeypatch, tmp_path, capsys) -> 
     monkeypatch.setattr(
         commands.api,
         "export_result",
-        lambda project, output_dir, *, include_ort: (_ for _ in ()).throw(ValueError("missing fitted result")),
+        lambda project, output_dir, *, formats: (_ for _ in ()).throw(ValueError("missing fitted result")),
     )
 
     assert cli_main.main(["export", str(project_path), str(tmp_path / "out")]) == exit_codes.INVALID_INPUT
@@ -179,7 +179,14 @@ def test_export_errors_do_not_leak_tracebacks(monkeypatch, tmp_path, capsys) -> 
     assert "Traceback" not in output.err
 
 
-def test_run_export_forwards_include_ort(monkeypatch, tmp_path, capsys) -> None:
+def test_run_export_translates_its_ort_flag_into_the_format_set(monkeypatch, tmp_path, capsys) -> None:
+    """``--ort`` stays a shell flag and becomes one more member of the format set.
+
+    The flag is the shape a shell user already scripted against, so it survives the
+    move to a format set; what must not survive is a second spelling of the default
+    tree. The command asks for :data:`api.DEFAULT_FORMATS` plus ORT, so a format added
+    to the default set reaches ``xrr-fitter export`` without touching this command.
+    """
     from xrr_fitter.cli import commands, exit_codes
 
     project_path = tmp_path / "p.json"
@@ -201,18 +208,18 @@ def test_run_export_forwards_include_ort(monkeypatch, tmp_path, capsys) -> None:
     monkeypatch.setattr(
         commands.api,
         "export_result",
-        lambda project, output_dir, *, include_ort: (
-            captured.update(include_ort=include_ort),
+        lambda project, output_dir, *, formats: (
+            captured.update(formats=formats),
             manifest,
         )[1],
     )
 
     assert cli_main.main(["export", str(project_path), str(tmp_path / "out")]) == exit_codes.SUCCESS
-    assert captured["include_ort"] is False
+    assert captured["formats"] == tuple(commands.api.DEFAULT_FORMATS)
     capsys.readouterr()
 
     assert cli_main.main(["export", str(project_path), str(tmp_path / "out"), "--ort"]) == exit_codes.SUCCESS
-    assert captured["include_ort"] is True
+    assert captured["formats"] == (*commands.api.DEFAULT_FORMATS, commands.api.ExportFormat.ORT)
     assert capsys.readouterr().out.splitlines() == [
         str(manifest.run_directory),
         f"manifest: {manifest.run_directory / record.path}",
@@ -237,7 +244,7 @@ def test_run_export_rejects_missing_manifest_record(monkeypatch, tmp_path) -> No
     monkeypatch.setattr(
         commands.api,
         "export_result",
-        lambda project, output_dir, *, include_ort: manifest,
+        lambda project, output_dir, *, formats: manifest,
     )
 
     with pytest.raises(commands.CommandError) as excinfo:

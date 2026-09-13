@@ -297,7 +297,7 @@ def _settings(
                 initial,
                 lower,
                 upper,
-                locked=override is None,
+                freedom=api.ParameterFreedom.from_locked(override is None),
             )
         )
     return tuple(values)

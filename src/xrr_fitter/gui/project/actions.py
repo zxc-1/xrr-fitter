@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from xrr_fitter.gui import theme
+from xrr_fitter.gui import status_bar, theme
 from xrr_fitter.gui.command_icons import command_icon
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.project import dialogs
@@ -28,31 +28,12 @@ class _CommandSpec:
     tooltip: str
 
 
+# 命令栏只摆设计稿六张帧都画着的这三颗。另存为 / 重载源 / 重链接源 一次都没上过货架，
+# 它们连同快捷键留在 文件 菜单（见 ``chrome._install_file_menu``）。
 BUTTON_SPECS = (
     _CommandSpec("新建", "newProjectButton", "new_project_dialog", "新建项目", "创建新的空项目"),
     _CommandSpec("打开", "openProjectButton", "open_project_dialog", "打开项目", "打开已有 XRR 项目"),
     _CommandSpec("保存", "saveProjectButton", "save_project_dialog", "保存项目", "保存当前 XRR 项目"),
-    _CommandSpec(
-        "另存为",
-        "saveAsProjectButton",
-        "save_project_as_dialog",
-        "项目另存为",
-        "将当前项目保存到新位置并重定位相对数据源",
-    ),
-    _CommandSpec(
-        "重载源",
-        "reloadSourceButton",
-        "reload_source_dialog",
-        "重新加载活动数据源",
-        "从当前路径重新读取活动数据集并核对哈希",
-    ),
-    _CommandSpec(
-        "重链接源",
-        "relinkSourceButton",
-        "relink_source_dialog",
-        "重新链接活动数据源",
-        "为活动数据集选择新源文件并核对哈希",
-    ),
 )
 
 ACTION_SPECS = (
@@ -61,6 +42,10 @@ ACTION_SPECS = (
     ("saveProjectAction", "保存项目", "save_project_dialog", QKeySequence.StandardKey.Save),
     ("saveAsProjectAction", "另存为", "save_project_as_dialog", QKeySequence.StandardKey.SaveAs),
 )
+
+# 设计稿帧① 底栏「源校验：<b>通过 ✓</b>」的取值。对勾跟着结论走而不是另画一个图标：
+# 这一段在状态栏里只占一个词的宽度，图标反而要额外一格。
+SOURCE_OK_TEXT = "通过 ✓"
 
 
 class ProjectActions(QWidget):
@@ -88,7 +73,8 @@ class ProjectActions(QWidget):
             button.setAccessibleName(spec.accessible_name)
             button.setToolTip(spec.tooltip)
             button.setProperty("commandBar", True)
-            button.setIcon(command_icon(spec.callback_name))
+            # 字形只挂在 ``_build_actions`` 建的那条 QAction 上：设计稿命令栏那三枚是
+            # ``.btn sm`` 纯文字格，图标留给菜单——那里没有并排的三个字来互相区分。
             button.clicked.connect(
                 lambda _checked=False, name=spec.callback_name: getattr(
                     self._owner,
@@ -121,10 +107,12 @@ class ProjectActions(QWidget):
             self._owner.addAction(action)
 
     def refresh(self, *_args) -> None:
+        """源校验状态。
+
+        重载源 / 重链接源 的可用性跟着活动数据集走，但那两条命令只在 文件 菜单里，
+        由 ``chrome.refresh_status`` 一处开关，不在这里重复一遍。
+        """
         dataset_id = self._document.active_dataset_id
-        enabled = dataset_id is not None
-        self._buttons["reloadSourceButton"].setEnabled(enabled)
-        self._buttons["relinkSourceButton"].setEnabled(enabled)
         if dataset_id is None:
             self._show_source_status("", "", kind="")
             return
@@ -132,12 +120,15 @@ class ProjectActions(QWidget):
         if warning:
             self._show_source_status(warning.splitlines()[0], warning, kind="error")
             return
-        self._show_source_status("源文件校验通过", "", kind="ok")
+        # 说明文字「源校验：」住在状态栏那一段里（见 ``status_bar``），所以这里只报结论。
+        self._show_source_status(SOURCE_OK_TEXT, "", kind="ok")
 
     def _show_source_status(self, text: str, tooltip: str, *, kind: str) -> None:
         self.source_status_label.setText(text)
         self.source_status_label.setToolTip(tooltip)
         theme.set_status_kind(self.source_status_label, kind)
+        # 这一段没有结论可报时整段该藏起来，而藏不藏是段自己的事——文字一变就让状态栏重算。
+        status_bar.sync(self._owner)
 
     def _may_replace_project(self) -> bool:
         return not self._document.is_dirty or self._owner._confirm_discard_changes()

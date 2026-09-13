@@ -11,7 +11,7 @@ from xrr_fitter.evaluation import EvaluationConstraintError, encode_physical_vec
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, FitEvaluationContext
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterDefinition, ParameterSetting
+from xrr_fitter.model.parameters import ParameterDefinition, ParameterFreedom, ParameterSetting
 from xrr_fitter.model.structure import InterfaceTransition, LayerSpec, StructureSpec, TransitionBranch
 from xrr_fitter.physics.geometry import expand_geometry, expand_structure_with_jacobian
 from xrr_fitter.physics.stack import expand_structure, rebuild_structure
@@ -39,7 +39,7 @@ def test_analytic_stack_roughness_failure_is_a_candidate_constraint() -> None:
             definition.initial,
             definition.initial if definition.name in locked else definition.lower,
             definition.initial if definition.name in locked else definition.upper,
-            locked=definition.name in locked or definition.locked,
+            freedom=ParameterFreedom.from_locked(definition.name in locked or definition.locked),
         )
         for definition in initial.parameter_definitions
     )
@@ -110,7 +110,7 @@ def _transition_setting(
             definition.initial,
             definition.initial,
             definition.initial,
-            locked=True,
+            freedom=ParameterFreedom.FIXED,
         )
     lower, upper = bounds.get(definition.name, (definition.lower, definition.upper))
     return ParameterSetting(
@@ -118,7 +118,7 @@ def _transition_setting(
         definition.initial,
         lower,
         upper,
-        locked=definition.locked,
+        freedom=ParameterFreedom.from_locked(definition.locked),
     )
 
 

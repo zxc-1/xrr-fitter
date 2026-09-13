@@ -92,6 +92,25 @@ def test_uncertainty_dialog_hosts_the_mcmc_controls(qtbot) -> None:
     assert panel.mcmc_config() == api.McmcConfig.standard(17)
 
 
+def test_uncertainty_dialog_hosts_the_evidence_view(qtbot) -> None:
+    """The dialog carries the evidence as well, or the four pages ship unreachable.
+
+    ``window_layout`` keeps the panel's ``secondary`` container out of the
+    inspector column and ``UncertaintyView`` lives in it, so a dialog holding only
+    the sampling controls would offer a place to start a chain and nowhere to read
+    what it said.
+    """
+    panel = _panel(qtbot, expert=True)
+    panel.set_secondary_visible(False)
+
+    dialog = panel.open_uncertainty_dialog()
+    qtbot.addWidget(dialog)
+
+    assert panel.uncertainty.window() is dialog
+    assert panel.uncertainty.isVisibleTo(dialog) is True
+    assert panel.uncertainty.pages.isVisibleTo(dialog) is True
+
+
 def _mcmc_report(**changes) -> api.McmcReport:
     values = {
         "config": api.McmcConfig(walkers=4, burn_in=2, production_steps=4),
@@ -414,3 +433,221 @@ def test_parameter_panel_opens_prior_dialog_with_definition_and_existing_prior(
     definition, prior = captured[0]
     assert definition.name == name
     assert prior == existing
+
+
+# -- G21 + G14: the four evidence pages --
+
+
+def _bands() -> api.SldUncertaintyBands:
+    """A degenerate band whose five faces are five constant levels.
+
+    A band test only needs the faces to be tellable apart on screen; keeping each
+    quantile flat means an assertion about which face was drawn does not also have
+    to restate a depth-dependent profile.
+    """
+    depth = np.linspace(0.0, 40.0, 4)
+    levels = (0.025, 0.16, 0.5, 0.84, 0.975)
+    real = np.tile(np.arange(len(levels), dtype=float)[:, None], (1, depth.size))
+    return api.SldUncertaintyBands(
+        depth_a=depth,
+        quantiles=levels,
+        real=real,
+        imaginary=real * 0.5,
+        align_label="基底界面",
+        sample_count=500,
+        total_samples=2000,
+        failure_rate=0.0,
+    )
+
+
+def _full_report(candidate_id: str = "candidate-a") -> api.UncertaintyReport:
+    """Owned evidence of all four kinds, so every page has something to draw."""
+    profile = api.ParameterProfile(
+        name="component.0.thickness_a",
+        values=np.array([30.0, 40.0, 50.0]),
+        objectives=np.array([0.30, 0.20, 0.32]),
+        lower_closed=True,
+        upper_closed=True,
+    )
+    return replace(
+        _uncertainty(candidate_id),
+        correlation_names=("component.0.thickness_a", "instrument.scale"),
+        correlation_matrix=np.array([[1.0, -0.65], [-0.65, 1.0]]),
+        profiles=(profile,),
+        sld_bands=_bands(),
+        mcmc=_mcmc_report(candidate_id=candidate_id),
+    )
+
+
+def _view(qtbot, report: api.UncertaintyReport | None = None):
+    """An ``UncertaintyView`` holding one candidate's evidence, already shown.
+
+    The pages draw on ``set_result``, so a case that reads artists needs the view
+    realized: a matplotlib canvas that never became visible defers its draw.
+    """
+    from xrr_fitter.gui.results.uncertainty import UncertaintyView
+
+    view = UncertaintyView()
+    qtbot.addWidget(view)
+    view.show()
+    if report is not None:
+        result = replace(_result(), uncertainty=report)
+        view.set_result(result, "candidate-a")
+    return view
+
+
+def test_uncertainty_view_carries_the_four_evidence_pages(qtbot) -> None:
+    """四种不确定度证据各占一页，读者不必离开这张卡去别处凑齐判读。
+
+    这张卡原先只有一个 ``QPlainTextEdit``：相关矩阵和可信带画在诊断 tab 组里，
+    Profile 和 MCMC 只剩几行文字，于是「这个厚度到底定没定住」要在两处之间来回对。
+    """
+    from xrr_fitter.gui.plots.posterior import UNCERTAINTY_PAGE_TITLES
+
+    view = _view(qtbot)
+    pages = view.pages
+
+    titles = tuple(pages.tabText(index) for index in range(pages.count()))
+    assert titles == UNCERTAINTY_PAGE_TITLES
+    # 逐字取设计稿帧⑤ 的 ``.canvas-top``（HTML L911）。第二页叫「Profile 似然」而不是
+    # 「参数剖面」：设计稿八处都用前者（帧⑤ 标题、左栏子管线那一步、画布内标题、能力对照
+    # 表），G22 的方法表 ``navigation/methods.py`` 也是，标签写成别的名字会让同一份证据在
+    # 导航里和画布里叫两个名。
+    assert UNCERTAINTY_PAGE_TITLES == ("相关矩阵", "Profile 似然", "SLD 可信带", "MCMC 后验")
+
+
+def test_the_evidence_text_stays_in_the_card_beside_the_pages(qtbot) -> None:
+    """加了四页图不等于把那段文字挤走：边界命中、失败率、归属都只在文字里说得清。"""
+    from PySide6.QtWidgets import QFrame, QPlainTextEdit
+
+    view = _view(qtbot, _full_report())
+
+    card = view.findChild(QFrame, "uncertaintyCard")
+    assert card.findChild(QPlainTextEdit, "uncertaintyEvidence") is not None
+    assert card.findChild(type(view.pages), "uncertaintyPages") is not None
+    assert "边界命中（可疑）：scale" in view.text()
+
+
+def test_each_page_draws_the_owned_evidence(qtbot) -> None:
+    """四页各自画出自己那份证据：矩阵有图像、剖面有曲线、可信带有填充、后验有直方。"""
+    view = _view(qtbot, _full_report())
+
+    correlation, profile, bands, posterior = view.page_figures()
+
+    assert any(axes.images for axes in correlation.axes), "相关矩阵没有画出图像"
+    assert any(axes.lines for axes in profile.axes), "剖面页没有画出曲线"
+    assert any(axes.collections for axes in bands.axes), "可信带页没有填充区"
+    assert any(axes.patches for axes in posterior.axes), "后验页没有直方"
+
+
+def test_the_profile_page_marks_where_the_interval_closed(qtbot) -> None:
+    """闭合阈值画成参考线，曲线才读得出区间在哪里收口。
+
+    ``lower_closed``/``upper_closed`` 是把目标函数同一个数比出来的；只画曲线不画那条
+    线，读者手里就只剩两个布尔值和一条看不出交点的曲线。这条线标「区间闭合阈值」而
+    不标 Δχ²=1，因为 ``robust_log_cost`` 下后者没有统计含义。
+
+    线画在阈值减掉这条曲线自己最优值的位置：纵轴是相对最优的增量（那件事归
+    ``tests/gui/test_profile_likelihood_readings.py`` 钉），照搬 profile 上发布的那个绝对目标值
+    会把线画到画面外。减完之后仍是扫描做过的那次比较，只是换成了同一个基准。
+    """
+    report = _full_report()
+    threshold = 0.25
+    profile = replace(report.profiles[0], objective_threshold=threshold)
+    view = _view(qtbot, replace(report, profiles=(profile,)))
+
+    figure = view.page_figures()[1]
+
+    increment = threshold - float(np.min(profile.objectives))
+    axes = next(item for item in figure.axes if item.lines)
+    reference = tuple(line for line in axes.lines if np.allclose(np.asarray(line.get_ydata(), dtype=float), increment))
+    assert len(reference) == 1, "剖面页没有画出闭合阈值参考线"
+    legend = axes.get_legend()
+    assert legend is not None
+    assert any("区间闭合阈值" in text.get_text() for text in legend.get_texts())
+
+
+def test_the_profile_page_omits_the_reference_line_without_a_threshold(qtbot) -> None:
+    """没有阈值就不画线：凭空补一条参考线等于替扫描编一个它没算过的数。"""
+    report = _full_report()
+    view = _view(qtbot, report)
+
+    figure = view.page_figures()[1]
+
+    assert report.profiles[0].objective_threshold is None
+    axes = next(item for item in figure.axes if item.lines)
+    assert len(axes.lines) == len(report.profiles)
+
+
+def test_the_pages_refuse_evidence_owned_by_another_candidate(qtbot) -> None:
+    """归属别的候选就四页全空：拿 candidate-b 的证据标在 candidate-a 上就是伪造。"""
+    view = _view(qtbot)
+    result = replace(_result(), uncertainty=_full_report("candidate-b"))
+    view.set_result(result, "candidate-a")
+
+    for figure in view.page_figures():
+        assert not any(axes.images for axes in figure.axes)
+        assert not any(axes.patches for axes in figure.axes)
+        assert not any(axes.collections for axes in figure.axes)
+
+
+def test_the_posterior_page_gives_every_parameter_its_own_panel(qtbot) -> None:
+    """每个采样参数一格，且每格三条分位线（P16/P50/P84）。
+
+    把两个参数叠在一格里，两条边缘分布的宽度就没法比；而只画中位数的话，
+    「定住了」和「先验宽度原样返回」在屏幕上看着一样。
+    """
+    report = _full_report()
+    view = _view(qtbot, report)
+    figure = view.page_figures()[3]
+
+    panels = tuple(axes for axes in figure.axes if axes.patches)
+    assert len(panels) == len(report.mcmc.parameter_names)
+
+    samples = np.asarray(report.mcmc.samples_physical, dtype=float)
+    for index, axes in enumerate(panels):
+        expected = np.quantile(samples[:, index], (0.16, 0.5, 0.84))
+        drawn = sorted(float(line.get_xdata()[0]) for line in axes.lines)
+        assert np.allclose(drawn, expected), axes.get_title()
+
+
+def test_the_posterior_page_says_so_when_no_sampling_was_run(qtbot) -> None:
+    """没跑过 MCMC 的报告，后验页要写明「没跑」而不是留一张空白坐标系。"""
+    view = _view(qtbot, replace(_full_report(), mcmc=None))
+    figure = view.page_figures()[3]
+
+    texts = tuple(text.get_text() for axes in figure.axes for text in axes.texts)
+    assert any("未运行" in text for text in texts), texts
+
+
+def test_clearing_the_result_also_clears_the_pages(qtbot) -> None:
+    """清结果时四页一起清：留着上一次拟合的矩阵会被读成这一次的证据。"""
+    view = _view(qtbot, _full_report())
+    view.clear_result("尚无拟合结果")
+
+    for figure in view.page_figures():
+        assert not any(axes.images for axes in figure.axes)
+        assert not any(axes.patches for axes in figure.axes)
+
+
+def test_the_inspector_states_how_many_resamples_the_bootstrap_asked_for(qtbot) -> None:
+    """设计稿帧⑤ 右栏「自助抽样」段的第一个读数是「重采样次数 200」，失败率排在它后面。
+
+    顺序不是排版偏好：失败率是个比例，先给基数才读得出到底丢了几次。这一段此前只报比例。
+    """
+    view = _view(qtbot, replace(_full_report(), bootstrap_sample_count=200))
+
+    text = view.text()
+    lines = text.splitlines()
+
+    assert "Bootstrap 重采样次数：200" in text
+    count_at = next(index for index, line in enumerate(lines) if "重采样次数" in line)
+    rate_at = next(index for index, line in enumerate(lines) if "失败率" in line)
+    assert count_at < rate_at
+
+
+def test_the_inspector_says_the_resample_count_is_unrecorded_when_it_is(qtbot) -> None:
+    """这个字段加进来之前存的工程文件不带次数，此时报「未记录」——报 0 会被读成一次都没抽。"""
+    view = _view(qtbot, _full_report())
+
+    assert "Bootstrap 重采样次数：未记录" in view.text()

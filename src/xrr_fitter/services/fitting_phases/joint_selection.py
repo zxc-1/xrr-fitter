@@ -10,7 +10,7 @@ from statistics import median
 from xrr_fitter.model.analysis import FitResult
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
 from xrr_fitter.model.fitting import FitCheckpoint
-from xrr_fitter.model.parameters import ParameterSetting, SharingRule
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting, SharingRule
 
 from .base import _scale_prior
 from .common import (
@@ -143,7 +143,7 @@ def _unlocked_joint_prepared(
                 physical[name],
                 definitions[name].lower,
                 definitions[name].upper,
-                locked=False,
+                freedom=ParameterFreedom.FREE,
             )
             for name in names_by_dataset.get(item.dataset_id, ())
         }
@@ -314,7 +314,7 @@ def _locked_material_prepared(
                 material_values[key],
                 definition.lower,
                 definition.upper,
-                locked=True,
+                freedom=ParameterFreedom.FIXED,
             )
     return _recompiled_automatic_prepared(
         isolated,

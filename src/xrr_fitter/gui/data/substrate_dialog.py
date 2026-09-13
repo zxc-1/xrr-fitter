@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from xrr_fitter.gui.accessibility import localize_standard_buttons
+
 
 class SubstrateDialog(QDialog):
     """Collect one explicit substrate token shared by a structure group."""
@@ -36,6 +38,7 @@ class SubstrateDialog(QDialog):
         self.error_label.setWordWrap(True)
         self.error_label.hide()
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        localize_standard_buttons(self.buttons, confirm="确定")
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         form = QFormLayout()

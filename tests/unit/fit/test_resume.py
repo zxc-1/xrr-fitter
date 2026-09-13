@@ -358,3 +358,56 @@ def test_resume_runs_only_the_remaining_suffix_and_matches_fresh_search(
 
     assert tuple(value.stage for value in resumed_checkpoints) == expected_suffix
     _assert_equivalent_results(fresh, resumed)
+
+
+def test_a_skip_request_ends_the_current_stage_and_moves_to_the_next() -> None:
+    """「跳过本阶段」在下一个取消探针处生效：这一阶段作废，搜索接着往下走。
+
+    探针本来就是求解器每到一个阶段边界都会问的那一句「要停了吗」。跳过复用它——探针
+    抛 ``StageSkipped`` 而不是返回 True，于是求解流程在同一批停车点上多了一个出口，
+    ``fit``/``model`` 里一个新的等待点也不必加。被跳过的阶段不留摘要：它没有跑完，
+    假装它跑完会让后面的阶段拿着一份不存在的候选往下算。
+    """
+    api = _pipeline_api()
+    problem = _problem(seed=811)
+    done: list[str] = []
+    skipped: list[str] = []
+
+    def probe() -> bool:
+        # B 一落盘就在 C 上按下 ⏭——这是读者会做的事：粗搜有结果了，不想再等这一层
+        # 加工，直接看下一层。
+        if "B" in done and not skipped:
+            skipped.append("C")
+            raise api.StageSkipped("skip stage")
+        return False
+
+    result = api.run_fit_search(
+        api.FitSearchRequest("curve", problem),
+        cancelled=probe,
+        checkpoint=lambda value: done.append(value.stage),
+    )
+
+    stages = [summary.stage for summary in result.stage_summaries]
+    assert skipped == ["C"]
+    assert "C" not in stages
+    assert "D" in stages and "E" in stages
+    # 跳过一个阶段不等于放弃这次搜索：后面的阶段照跑，结果照出。
+    assert result.best_candidate is not None
+
+
+def test_skipping_stage_a_ends_the_search_because_nothing_seeded_it() -> None:
+    """阶段 A 产出的是所有后续阶段的起点；跳过它就没有东西可继续了。
+
+    这时收工返回已有结果，而不是让阶段 B 抛「requires committed stage-A starts」——
+    读者按的是「跳过」，得到的不该是一条崩溃消息。
+    """
+    api = _pipeline_api()
+    problem = _problem(seed=821)
+
+    def probe() -> bool:
+        raise api.StageSkipped("skip stage")
+
+    result = api.run_fit_search(api.FitSearchRequest("curve", problem), cancelled=probe)
+
+    assert result.stage_summaries == ()
+    assert result.best_candidate is None

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from tests.unit.fit.problem_compilation_cases import *
 
+from xrr_fitter.model.parameters import ParameterDefinition
+
 
 def test_fit_dataset_preserves_and_deduplicates_input_and_problem_warnings() -> None:
     data = replace(prepared_data(size=72), warnings=("input-warning", "input-warning"))
@@ -22,7 +24,9 @@ def test_fit_dataset_preserves_and_deduplicates_input_and_problem_warnings() -> 
 def test_fit_dataset_supports_stages_with_no_free_parameters() -> None:
     problem = _problem()
     values = _initial_values(problem)
-    locked = tuple(ParameterSetting(name, value, value, value, locked=True) for name, value in values.items())
+    locked = tuple(
+        ParameterSetting(name, value, value, value, freedom=ParameterFreedom.FIXED) for name, value in values.items()
+    )
     no_free = compile_fit_problem(
         problem.data,
         problem.structure,
@@ -121,6 +125,44 @@ def test_plateau_free_problem_records_one_dedicated_inactive_reason() -> None:
     assert problem.scale_prior_center is None
     assert problem.scale_prior_reason
     assert problem.warnings.count(problem.scale_prior_reason) == 1
+
+
+def _folded_gear(name: str, setting: ParameterSetting) -> tuple[ParameterDefinition, bool]:
+    """把一条 setting 折进编译结果，取回那个量的定义和它是否还在变量表里。"""
+    problem = _problem(settings=(setting,))
+    definition = next(item for item in problem.parameter_definitions if item.name == name)
+    return definition, any(coordinate.name == name for coordinate in problem.variables)
+
+
+def test_range_only_keeps_the_declared_box_while_the_other_two_gears_replace_it() -> None:
+    """三档折进编译结果的方式各不相同，而「仅范围」是唯一不动搜索盒的那一档。
+
+    区间要是也当成盒子，服务层为它派生的那条 ``soft_range`` 先验就没有惩罚区了——先验一律
+    被截断到定义的上下限，区间和盒子重合时截断掉的正是「越界渐进受罚」那一段，剩下的就是盒
+    内等权，跟「自由」分毫不差。所以这一档只挪初值、保留声明的硬边界，让区间只以先验的形式
+    起作用；另外两档的区间本来就是硬边界，直接换掉上下限。
+    """
+    name = "component.0.thickness_a"
+    declared = next(item for item in _problem().parameter_definitions if item.name == name)
+    lower = declared.lower + 1.0
+    upper = lower + 30.0
+    initial = lower + 10.0
+
+    folded = {
+        freedom: _folded_gear(name, ParameterSetting(name, initial, lower, upper, freedom))
+        for freedom in ParameterFreedom
+    }
+
+    ranged, ranged_fitted = folded[ParameterFreedom.RANGE_ONLY]
+    freed, freed_fitted = folded[ParameterFreedom.FREE]
+    pinned, pinned_fitted = folded[ParameterFreedom.FIXED]
+    assert (ranged.lower, ranged.upper) == (declared.lower, declared.upper)
+    assert (freed.lower, freed.upper) == (lower, upper)
+    assert (pinned.lower, pinned.upper) == (lower, upper)
+    assert (ranged.initial, freed.initial, pinned.initial) == (initial, initial, initial)
+    # 「仅范围」和「自由」一样参与拟合，只有「固定」退出变量表。
+    assert (ranged.locked, freed.locked, pinned.locked) == (False, False, True)
+    assert (ranged_fitted, freed_fitted, pinned_fitted) == (True, True, False)
 
 
 def test_unit_upper_bound_decodes_to_a_strictly_legal_roughness() -> None:

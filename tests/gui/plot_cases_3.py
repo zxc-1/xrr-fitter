@@ -63,7 +63,7 @@ def test_nonactive_mask_update_does_not_switch_plot_dataset(qtbot) -> None:
     assert _artist_snapshot(panel) == before
 
 
-def test_persisted_dock_and_plot_tab_changes_mark_project_dirty(
+def test_persisted_column_and_plot_tab_changes_mark_project_dirty(
     qtbot,
     tmp_path,
 ) -> None:
@@ -79,14 +79,19 @@ def test_persisted_dock_and_plot_tab_changes_mark_project_dirty(
     assert window.document.project.ui_state.plot_tab_index == 1
     assert window.document.is_dirty is True
 
-    # Panel geometry now lives in the opaque dock state rather than splitter
-    # sizes, so rearranging a dock is what has to reach the project. The docks
-    # only exist on the expert surface, which the guided default hides.
+    # Column geometry is strongly typed state again, so a capture has to carry the
+    # live column widths into the project.  The three columns are pinned -- the
+    # design's grid gives only the canvas a ``1fr``, and the seams have no grip --
+    # so what has to reach the project is the geometry the shell holds, not a width
+    # a drag invented.  The columns are the expert surface, which the guided
+    # default hides.
     window.set_guidance_visible(False)
     QApplication.processEvents()
-    window.docks["resultsDock"].hide()
-    QApplication.processEvents()
-    assert window.document.project.ui_state.dock_state != ""
+    window._capture_workspace()
+    columns = tuple(window.workspace_splitter.sizes())
+
+    assert window.document.project.ui_state.workspace_splitter_sizes == columns
+    assert window.document.is_dirty is True
 
 
 @pytest.mark.parametrize(
@@ -264,12 +269,17 @@ def test_plot_panel_escape_cancels_only_from_panel_descendants(qtbot) -> None:
 
 
 def test_plot_panel_keyboard_activates_modes_and_canvases_are_accessible(qtbot) -> None:
+    """空格键要能在条上换模式——键盘用户不靠鼠标进这一档。
+
+    条上留着字形的是「范围」（设计稿的 ``▭``）；查看与掩膜搬进了条的右键菜单和 视图
+    菜单，键盘从那两处进。
+    """
     panel = _panel(qtbot)
-    button = panel.mode_buttons()["mask"]
+    button = panel.mode_buttons()["range"]
 
     qtbot.keyClick(button, Qt.Key.Key_Space)
 
-    assert panel.interaction_mode() == "mask"
+    assert panel.interaction_mode() == "range"
     # A live pane is its own addressable widget; an mpl view exposes one through
     # .canvas. build_tabs gives both the same name/description/focus contract.
     for key in panel.view_keys():

@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
-from xrr_fitter.gui.parameters.table import _uses_nm
+from xrr_fitter.gui.accessibility import localize_standard_buttons
+from xrr_fitter.gui.parameters.grouping import uses_nm
 
 # Per kind, the scalar labels in stored order. Unit annotations are added from
 # the current declaration, while arity and admissibility remain API concerns.
@@ -47,7 +48,7 @@ def _param_spin(name: str) -> QDoubleSpinBox:
 
 def _prior_uses_nm(definition: api.ParameterDefinition) -> bool:
     """Use nm only when the prior itself lives in a physical length space."""
-    return _uses_nm(definition) and definition.transform != "roughness_fraction"
+    return uses_nm(definition) and definition.transform != "roughness_fraction"
 
 
 def _quantity_unit(definition: api.ParameterDefinition) -> str:
@@ -127,6 +128,7 @@ class PriorDialog(QDialog):
         self.error_label.hide()
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.setObjectName("priorDialogButtons")
+        localize_standard_buttons(self.buttons, confirm="确定")
         self.buttons.accepted.connect(self._accept_fields)
         self.buttons.rejected.connect(self.reject)
         self.kind_select.currentTextChanged.connect(self._sync_fields)

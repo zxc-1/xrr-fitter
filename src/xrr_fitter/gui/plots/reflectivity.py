@@ -41,9 +41,7 @@ class ReflectivityPaneArrays:
     fit-dependent member empty so those panes clear rather than draw a bare data
     series as if it were a fit, matching the matplotlib placeholder state. The
     ``qz4_ylabel`` mirrors ``draw_qz4``'s dynamic axis label (it records the
-    scaling reference on overflow) and ``quality_caption`` mirrors the log/raw
-    ``J=… · 平均残差 …`` note, so the pg panes annotate identically; both are
-    ``None`` without a candidate.
+    scaling reference on overflow) and is ``None`` without a candidate.
     """
 
     log_angles: np.ndarray
@@ -57,7 +55,6 @@ class ReflectivityPaneArrays:
     qz4: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None
     residual: tuple[np.ndarray, np.ndarray] | None
     qz4_ylabel: str | None
-    quality_caption: str | None
 
 
 def validate_plot_data(data: api.PreparedData, mask: object) -> np.ndarray:
@@ -174,9 +171,8 @@ def prepare_project_plots(project: api.XrrProject) -> PreparedProjectPlots:
 def _quality_caption_text(candidate: object | None) -> str | None:
     """Compose the ``J=… · 平均残差 …`` note both backends annotate with.
 
-    Factoring the string here keeps the matplotlib ``_quality_caption`` overlay and
-    the pyqtgraph ``ReflectivityPaneArrays.quality_caption`` byte-identical, so the
-    parity test that compares them is really pinning one source of truth.
+    这行注解只留给 matplotlib 那条导出路径：导出的图是逐位比对的交付物，注解跟着走。
+    屏幕上的互动面板不再画它——设计稿把拟合质量归到状态栏和左栏管线里去了。
     """
     if candidate is None:
         return None
@@ -251,7 +247,7 @@ def draw_raw(
             np.asarray(candidate.model_normalized) * data.normalization,
             "--",
             color=theme.DATA_CANDIDATE,
-            label="当前候选模型",
+            label="当前拟合模型",
         )
     axes.set(title="原始数据与模型", xlabel="2θ (deg)", ylabel="原始强度")
     axes.legend()
@@ -268,10 +264,10 @@ def draw_log(
     axes.clear()
     angles = np.asarray(data.two_theta_deg, dtype=float)
     observed = np.maximum(np.asarray(data.intensity_normalized, dtype=float), data.r_floor)
-    axes.plot(angles, observed, "o", color=theme.DATA_OBSERVED, label="归一化数据")
+    axes.plot(angles, observed, "o", color=theme.DATA_OBSERVED, label="观测数据")
     if candidate is not None:
         model = np.maximum(np.asarray(candidate.model_normalized, dtype=float), data.r_floor)
-        axes.plot(angles, model, "--", color=theme.DATA_CANDIDATE, label="当前候选模型")
+        axes.plot(angles, model, "--", color=theme.DATA_CANDIDATE, label="当前拟合模型")
     axes.set(
         title="对数反射率",
         xlabel="2θ (deg)",
@@ -389,7 +385,6 @@ def reflectivity_pane_arrays(
             qz4=None,
             residual=None,
             qz4_ylabel=None,
-            quality_caption=None,
         )
     model_normalized = np.asarray(candidate.model_normalized, dtype=float)
     qz = np.asarray(candidate.qz_a_inv, dtype=float)
@@ -407,7 +402,6 @@ def reflectivity_pane_arrays(
         qz4=(data_qz, data_values, model_qz, model_values),
         residual=(qz, np.asarray(candidate.weighted_residuals, dtype=float)),
         qz4_ylabel=_qz4_axis_label(data_label, model_label),
-        quality_caption=_quality_caption_text(candidate),
     )
 
 
@@ -430,8 +424,8 @@ def draw_qz4(
     )
     axes = view.axes
     axes.clear()
-    axes.plot(data_qz, data_transform, "o", label="归一化数据")
-    axes.plot(model_qz, model_transform, "--", label="当前候选模型")
+    axes.plot(data_qz, data_transform, "o", label="观测数据")
+    axes.plot(model_qz, model_transform, "--", label="当前拟合模型")
     axis_label = _qz4_axis_label(ylabel, model_label)
     axes.set(title="qz⁴R 诊断变换（非拟合数据）", xlabel="qz (Å⁻¹)", ylabel=axis_label)
     axes.legend()

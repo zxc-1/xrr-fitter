@@ -305,6 +305,87 @@ def test_checkpoint_rejects_falsy_non_string_optional_fingerprint(field: str, va
         FitCheckpoint(**values)
 
 
+def test_fit_progress_solver_telemetry_defaults_to_absent() -> None:
+    """求解器没发布的量必须是 ``None``，不能是 0。
+
+    GUI 那四行指标（迭代次数/函数评估/接受率/步长）只能照抄 ``FitProgress``。若缺量默认
+    成 0，界面会把"没有这个读数"显示成"读数是零"——这正是 ``metrics.py`` 拒绝渲染这四行
+    的理由。默认 ``None`` 才让"不适用"可辨认。
+    """
+    progress = FitProgress("curve", "A", 2, 10, 1.5, "running")
+
+    assert progress.iteration is None
+    assert progress.nfev is None
+    assert progress.acceptance_rate is None
+    assert progress.step_size is None
+    assert progress.dataset_objectives is None
+
+
+def test_fit_progress_carries_solver_telemetry_through_pickle() -> None:
+    progress = FitProgress(
+        None,
+        "MCMC",
+        3,
+        8,
+        2.5,
+        "MCMC sampling",
+        iteration=3,
+        nfev=41,
+        acceptance_rate=0.25,
+        step_size=0.031,
+        dataset_objectives=(("a", 1.5), ("b", 3.5)),
+    )
+
+    restored = pickle.loads(pickle.dumps(progress))
+
+    assert restored == progress
+    assert restored.dataset_objectives == (("a", 1.5), ("b", 3.5))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    (
+        ("iteration", -1, "iteration"),
+        ("iteration", True, "iteration"),
+        ("nfev", -1, "nfev"),
+        ("nfev", 1.5, "nfev"),
+        ("acceptance_rate", -0.1, "acceptance_rate"),
+        ("acceptance_rate", 1.1, "acceptance_rate"),
+        ("acceptance_rate", float("nan"), "acceptance_rate"),
+        ("step_size", -1e-9, "step_size"),
+        ("step_size", float("nan"), "step_size"),
+        ("step_size", float("inf"), "step_size"),
+    ),
+)
+def test_fit_progress_rejects_impossible_solver_telemetry(field: str, value: object, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        FitProgress("curve", "A", 2, 10, 1.5, "running", **{field: value})
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        (("a", 1.0), ("", 2.0)),
+        (("a", float("nan")),),
+        ((("a", 1.0), ("a", 2.0))),
+        (("a",),),
+    ),
+)
+def test_fit_progress_rejects_malformed_dataset_objectives(value: object) -> None:
+    with pytest.raises(ValueError, match="dataset_objectives"):
+        FitProgress(None, "joint A", 2, 10, 1.5, "running", dataset_objectives=value)
+
+
+def test_fit_progress_owns_its_dataset_objectives_as_a_tuple() -> None:
+    """联合面板按这份名单画表，所以它不能是调用方还握着的那个 list。"""
+    pairs = [("a", 1.0), ("b", 2.0)]
+
+    progress = FitProgress(None, "joint A", 2, 10, 1.5, "running", dataset_objectives=pairs)
+    pairs.append(("c", 3.0))
+
+    assert progress.dataset_objectives == (("a", 1.0), ("b", 2.0))
+
+
 def test_confidence_thresholds_default_prior_conflict_sigmas_is_three() -> None:
     assert ConfidenceThresholds().prior_conflict_sigmas == 3.0
 

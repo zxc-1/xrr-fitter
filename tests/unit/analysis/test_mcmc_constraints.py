@@ -15,6 +15,7 @@ from xrr_fitter.model.analysis import McmcConfig
 from xrr_fitter.model.parameters import (
     ConstraintNode,
     ConstraintRule,
+    ParameterFreedom,
     ParameterReference,
     ParameterSetting,
 )
@@ -28,7 +29,7 @@ def _constrained_problem():
             definition.initial,
             definition.lower,
             definition.upper,
-            definition.locked,
+            ParameterFreedom.from_locked(definition.locked),
         )
         for definition in problem.parameter_definitions
     )

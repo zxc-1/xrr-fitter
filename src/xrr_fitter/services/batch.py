@@ -21,7 +21,7 @@ from xrr_fitter.model.analysis import ConfidenceClass, FitResult
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus, MeasurementPreset
 from xrr_fitter.model.fitting import FitProgress
 from xrr_fitter.model.operations import DatasetFitResult, ProjectFitResult
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 from xrr_fitter.model.project import ScalePriorState, XrrProject
 from xrr_fitter.model.structure import GradientLayerSpec, LayerSpec, PeriodicBlock
 from xrr_fitter.services.parallel import OrderedTaskRunner
@@ -579,7 +579,7 @@ def _winner_settings(
             values[definition.name],
             definition.lower,
             definition.upper,
-            locked=definition.locked,
+            freedom=ParameterFreedom.from_locked(definition.locked),
         )
         for definition in fit_result.parameter_definitions
     )

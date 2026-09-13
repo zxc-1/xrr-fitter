@@ -14,7 +14,7 @@ from xrr_fitter.fit.candidates import candidate_from_evaluation
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 
 
 def _joint_report(*, fixed: bool = False):
@@ -56,7 +56,7 @@ def _local_report():
             definition.initial,
             definition.lower,
             definition.upper,
-            locked=definition.name not in targets,
+            freedom=ParameterFreedom.from_locked(definition.name not in targets),
         )
         for definition in initial.parameter_definitions
     )

@@ -5,11 +5,15 @@ only formats copies for display: physical length evidence is shown in nm,
 MCMC diagnostics retain an explicit unavailable state, and every warning keeps
 the candidate identity that owns it.  No NumPy operation is needed at the GUI
 boundary because reports already expose immutable iterable arrays.
+
+The four evidence pages are drawn from those same reports, but Matplotlib and
+NumPy are confined to ``gui.plots`` by the dependency gate, so this module hosts
+a finished ``UncertaintyPages`` widget rather than plotting anything itself.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from math import isfinite
 
 from PySide6.QtCore import QSize
@@ -28,6 +32,8 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.plots.parameter_labels import label_map, short_label
+from xrr_fitter.gui.plots.posterior import UncertaintyPages
 
 CLASSIFICATION_LABELS = {
     "bootstrap_failure_rate": "Bootstrap 失败率超过阈值",
@@ -89,6 +95,13 @@ DISPLAY_UNITS = (
 EVIDENCE_LINE_FLOOR = 3
 EVIDENCE_LINE_CEILING = 12
 
+# 设计稿在相关矩阵旁给强相关配的判读。证据清单已经报了是哪一对、系数多少；缺的是这
+# 个数对读数方式的要求——纠缠的两个参数各自的 ±1σ 偏窄，要换 Profile 似然去读。措辞
+# 不点名具体参数，因为一次拟合可能有多对强相关，而这条要求对每一对都一样。
+CORRELATION_CALLOUT_TEXT = (
+    "⚠ <b>存在强相关参数：</b>纠缠的参数难以同时唯一确定，单看 ±1σ 会低估真实不确定度，需结合 Profile 似然判读。"
+)
+
 
 def _joined(values: object) -> str:
     return "、".join(str(value) for value in values)
@@ -124,14 +137,30 @@ def _profile_text(profile: object) -> str:
     return f"{profile.name}（下侧{lower}，上侧{upper}）"
 
 
-def _report_lines(report: object) -> list[str]:
-    boundaries = _joined_or(report.boundary_hits, "无")
-    correlations = (
-        _joined(f"{left}/{right}={value:.3g}" for left, right, value in report.strong_correlations) or "无强相关"
+def _correlation_text(report: object, definitions: Iterable[object]) -> str:
+    """强相关那一行，名字与同屏相关矩阵的刻度取自同一套短名。
+
+    两处讲的是同一件事：读者拿着这一行里的一对参数去矩阵上找那一格。一边写机器路径、另一边
+    写 ``d·ox``，中间就多了一次翻译，而它恰好发生在读者最需要相信「说的是同一对」的时候。
+    """
+    labels = label_map(definitions)
+    pairs = (
+        f"{labels.get(left, short_label(left))}/{labels.get(right, short_label(right))}={value:.3g}"
+        for left, right, value in report.strong_correlations
     )
+    return _joined(pairs) or "无强相关"
+
+
+def _report_lines(report: object, definitions: Iterable[object] = ()) -> list[str]:
+    boundaries = _joined_or(report.boundary_hits, "无")
+    correlations = _correlation_text(report, definitions)
     profiles = _joined(_profile_text(profile) for profile in report.profiles)
     intervals = _joined(_interval_text(item) for item in report.bootstrap_intervals)
+    # 次数排在失败率前面：失败率是个比例，先给基数才读得出丢了几次。0 是「这份报告存下来时
+    # 还没有这个字段」，报「未记录」而不是 0——0 会被读成一次都没抽。
+    resamples = report.bootstrap_sample_count or "未记录"
     lines = [
+        f"Bootstrap 重采样次数：{resamples}",
         f"Bootstrap 失败率：{report.bootstrap_failure_rate:.3g}",
         f"边界命中（可疑）：{boundaries}",
         f"先验冲突（信息）：{_joined_or(report.prior_conflicts, '无')}",
@@ -230,6 +259,38 @@ def _mcmc_lines(report: object, candidate_id: str) -> list[str]:
     return lines
 
 
+# 底栏采样那一段的两个阈值，照 ``analysis.mcmc.problem_mcmc_warnings`` 的判据抄：split-R̂
+# 到了 1.10 出一条警告，ESS 掉到 100 以下出另一条。GUI 层不许 import 那个模块（它带 numpy），
+# 所以这里镜像一份并注明出处——判据要改，改的是那边，这里跟着走。
+SPLIT_RHAT_LIMIT = 1.10
+EFFECTIVE_SAMPLE_FLOOR = 100.0
+
+
+def sampling_readings(result: object, candidate_id: str | None) -> tuple[str, str, str]:
+    """底栏采样那一段的两个读数与它们的颜色：``(split-R̂, ESS, kind)``。
+
+    设计稿帧⑤ 写作「split-R̂ <b style="color:var(--ok)">1.008</b> · ESS <b>1,240</b>」。报的
+    是全部参数里最坏的那一个——收敛这件事没有平均可言，一个参数没收敛，整条链就不能当收敛
+    用，所以 R̂ 取最大、ESS 取最小，与右栏证据那两行同一个口径。
+
+    证据的归属照 ``_mcmc_lines`` 的规矩：别的候选解的 MCMC 不是这条候选解的证据，宁可整段
+    空着（调用方会把段藏起来）也不借来一个读数。
+    """
+    report = None if result is None else result.uncertainty
+    mcmc = None if report is None else report.mcmc
+    if mcmc is None or candidate_id is None or mcmc.candidate_id != candidate_id:
+        return "", "", ""
+    rhats = _finite_values(mcmc.split_rhat)
+    sizes = _finite_values(mcmc.effective_sample_size)
+    if rhats is None or sizes is None:
+        return "", "", ""
+    worst_rhat = max(rhats)
+    worst_size = min(sizes)
+    converged = worst_rhat < SPLIT_RHAT_LIMIT and worst_size >= EFFECTIVE_SAMPLE_FLOOR
+    # 千位分隔照设计稿的「1,240」；R̂ 固定三位小数，免得 1.008 与 1.01 在同一段里跳宽。
+    return f"{worst_rhat:.3f}", f"{round(worst_size):,}", "ok" if converged else "warn"
+
+
 def _classification_lines(result: object) -> list[str]:
     return [f"分类证据：{CLASSIFICATION_LABELS.get(code, code)}（{code}）" for code in result.classification_evidence]
 
@@ -303,9 +364,24 @@ def _evidence_lines(result: object, candidate_id: str | None) -> list[str]:
             f"当前候选 {candidate_id} 暂无不确定度证据",
             f"现有证据属于 {owner}",
         ]
-    lines.extend([f"不确定度证据候选：{owner}", *_report_lines(report)])
+    lines.extend([f"不确定度证据候选：{owner}", *_report_lines(report, getattr(result, "parameter_definitions", ()))])
     lines.extend(_mcmc_lines(report, candidate_id))
     return lines
+
+
+def _has_owned_strong_correlation(result: object, candidate_id: str | None) -> bool:
+    """Whether the inspected candidate itself reported a strong correlation.
+
+    The ownership test is the same one the evidence lines apply: a report from
+    another candidate is not evidence about this one, so a caution drawn from it
+    would be describing a fit the user is not looking at.
+    """
+    if candidate_id is None:
+        return False
+    report = result.uncertainty
+    if report is None or report.candidate_id != candidate_id:
+        return False
+    return bool(report.strong_correlations)
 
 
 def _spin(
@@ -369,6 +445,9 @@ class McmcControls(QGroupBox):
                 label.setBuddy(control)
                 form.addWidget(label, row, column * 2)
                 form.addWidget(control, row, column * 2 + 1)
+            # QSS sets an explicit minimum below the native spin editor's hint.
+            # Keep the evidence pane from shrinking the input rows to that floor.
+            form.setRowMinimumHeight(row, max(control.minimumSizeHint().height() for _text, control in values))
         form.addLayout(buttons, 2, 0, 1, 4)
         form.setColumnStretch(1, 1)
         form.setColumnStretch(3, 1)
@@ -434,13 +513,52 @@ class UncertaintyView(QWidget):
         super().__init__(parent)
         self._warnings: tuple[str, ...] = ()
         self.setObjectName("uncertaintyView")
+        self.setAccessibleName("不确定度诊断")
         self.evidence = QPlainTextEdit()
         self.evidence.setObjectName("uncertaintyEvidence")
         self.evidence.setAccessibleName("候选解不确定度证据")
         self.evidence.setReadOnly(True)
+        self.correlation_callout = QLabel(CORRELATION_CALLOUT_TEXT)
+        self.correlation_callout.setObjectName("uncertaintyCorrelationCallout")
+        theme.set_status_kind(self.correlation_callout, "warn")
+        theme.mark_hint(self.correlation_callout)
+        self.correlation_callout.setWordWrap(True)
+        self.correlation_callout.hide()
+        self.pages = UncertaintyPages()
+        self._card, card_layout = theme.titled_card(
+            self, "uncertaintyCard", "不确定度证据", "仅列出选中候选解自有的诊断"
+        )
+        # Callout first because it comments on the correlation page it sits above;
+        # the prose last because it is the reading a viewer checks after seeing the
+        # shapes, not the thing they look at instead of them.
+        card_layout.addWidget(self.correlation_callout)
+        card_layout.addWidget(self.pages)
+        card_layout.addWidget(self.evidence)
+        self._header = (
+            self._card.findChild(QLabel, "uncertaintyCardTitle"),
+            self._card.findChild(QLabel, "uncertaintyCardSubtitle"),
+        )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.evidence)
+        layout.addWidget(self._card)
+
+    def _card_chrome(self) -> int:
+        """Height the headed card spends on everything that is not the evidence.
+
+        The evidence budget below is counted in text lines, and the header shares
+        the same widget height, so it has to be added on top of those lines rather
+        than taken out of them.  The evidence pages are counted the same way, and
+        the correlation callout also only while shown: uncounted, either would
+        arrive by clipping the report it comments on, since the evidence box is the
+        one flexible thing in the card.
+        """
+        layout = self._card.layout()
+        margins = layout.contentsMargins()
+        rows = sum(label.sizeHint().height() + layout.spacing() for label in self._header)
+        rows += self.pages.sizeHint().height() + layout.spacing()
+        if not self.correlation_callout.isHidden():
+            rows += self.correlation_callout.sizeHint().height() + layout.spacing()
+        return margins.top() + margins.bottom() + rows
 
     def sizeHint(self) -> QSize:
         """Ask for the evidence lines actually held, floored and capped.
@@ -454,18 +572,27 @@ class UncertaintyView(QWidget):
         spacing = self.evidence.fontMetrics().lineSpacing()
         blocks = self.evidence.document().blockCount()
         lines = min(max(blocks, EVIDENCE_LINE_FLOOR), EVIDENCE_LINE_CEILING)
-        return QSize(width, lines * spacing + 2 * self.evidence.frameWidth())
+        text = lines * spacing + 2 * self.evidence.frameWidth()
+        return QSize(width, text + self._card_chrome())
 
     def clear_evidence(self, message: str) -> None:
         self.evidence.setPlainText(message)
+        self.correlation_callout.hide()
 
     def clear_result(self, message: str) -> None:
         self._warnings = ()
         self.clear_evidence(message)
+        self.pages.clear_pages(message)
 
     def set_result(self, result: object, candidate_id: str | None) -> None:
         self._warnings = _warning_lines(result)
         self.evidence.setPlainText("\n".join(_evidence_lines(result, candidate_id)))
+        self.correlation_callout.setVisible(_has_owned_strong_correlation(result, candidate_id))
+        self.pages.set_result(result, candidate_id)
+
+    def page_figures(self) -> tuple[object, ...]:
+        """Each evidence page's figure, in tab order, for inspection and export."""
+        return self.pages.figures()
 
     def text(self) -> str:
         return self.evidence.toPlainText()

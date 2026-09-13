@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+from xrr_fitter.gui.accessibility import localize_standard_buttons
 
 # The amount field means a different physical quantity per drift law, so its
 # label follows the selected kind rather than staying a single fixed string.
@@ -47,6 +48,7 @@ def _number(name: str, minimum: float, value: float = 0.0) -> QDoubleSpinBox:
 def _buttons(name: str) -> QDialogButtonBox:
     buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
     buttons.setObjectName(name)
+    localize_standard_buttons(buttons, confirm="确定")
     return buttons
 
 

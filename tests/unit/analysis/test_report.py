@@ -51,7 +51,7 @@ from xrr_fitter.model.fitting import (
     FitStageSummary,
 )
 from xrr_fitter.model.instrument import InstrumentSpec, PhysicsDiagnostic
-from xrr_fitter.model.parameters import ParameterSetting, PriorSpec
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting, PriorSpec
 from xrr_fitter.model.provenance import (
     bootstrap_provenance_sha256,
     fit_search_provenance_sha256,
@@ -81,7 +81,7 @@ def _problem(*, thickness_a: float = 20.0):
             definition.initial,
             definition.lower,
             definition.upper,
-            locked=definition.name not in targets,
+            freedom=ParameterFreedom.from_locked(definition.name not in targets),
         )
         for definition in initial.parameter_definitions
     )
@@ -132,7 +132,7 @@ def _angle_offset_problem():
             definition.initial,
             definition.lower,
             definition.upper,
-            locked=definition.name != "instrument.angle_offset_deg",
+            freedom=ParameterFreedom.from_locked(definition.name != "instrument.angle_offset_deg"),
         )
         for definition in initial.parameter_definitions
     )
@@ -615,6 +615,51 @@ def test_build_report_allows_missing_lineage_for_legacy_candidate_double() -> No
     report = _api().build_uncertainty_report(problem, (legacy,), profile_names=())
 
     assert report.candidate_id is None
+
+
+def test_build_report_reads_the_requested_resample_count_off_the_bootstrap() -> None:
+    """报告要报得出「200 次里丢了 4%」，而 ``BootstrapResult`` 只带成功样本与失败率。
+
+    请求数原本只在 ``config.budget`` 里，但读数必须来自手上这份证据——调用方完全可以递进
+    一份用别的 ``sample_count`` 跑出来的 bootstrap，那时预算说的不是这份证据的数。所以从
+    「成功数 ÷（1 − 失败率）」反解；采样器保证 ``kept == count - failures``（见
+    ``_collect_bootstrap_samples`` 的两条 RuntimeError），这道算术是精确的而不是估计。
+    """
+    problem = _problem()
+    candidate = _candidate(problem, "E-0")
+    names = tuple(variable.name for variable in problem.variables)
+    bootstrap = BootstrapResult(names, np.zeros((192, len(names))), (), 0.04)
+
+    report = _api().build_uncertainty_report(problem, (candidate,), bootstrap=bootstrap)
+
+    assert report.bootstrap_sample_count == 200
+    assert report.bootstrap_performed is True
+
+
+def test_build_report_records_no_resample_count_without_a_bootstrap() -> None:
+    """没跑自助抽样就不能编一个次数出来：0 读作「未记录」，与 ``bootstrap_performed=False`` 自洽。"""
+    problem = _problem()
+    candidate = _candidate(problem, "E-0")
+
+    report = _api().build_uncertainty_report(problem, (candidate,), profile_names=())
+
+    assert report.bootstrap_sample_count == 0
+
+
+def test_build_report_survives_a_bootstrap_that_lost_every_sample() -> None:
+    """全军覆没时「÷（1 − 1.0）」会炸，而这种报告确实存在（跑过、一个样本没收住）。
+
+    次数在这一种情形下反解不出来，记 0（未记录）；跑没跑过仍由 ``bootstrap_performed`` 说。
+    """
+    problem = _problem()
+    candidate = _candidate(problem, "E-0")
+    names = tuple(variable.name for variable in problem.variables)
+    bootstrap = BootstrapResult(names, np.zeros((0, len(names))), (), 1.0)
+
+    report = _api().build_uncertainty_report(problem, (candidate,), bootstrap=bootstrap)
+
+    assert report.bootstrap_sample_count == 0
+    assert report.bootstrap_performed is True
 
 
 def test_build_report_selects_the_persisted_global_ranking_winner(

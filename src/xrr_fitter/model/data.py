@@ -9,9 +9,15 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from math import isfinite, pi
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 
 import numpy as np
+
+# 源文件第一列量的是什么角。模型原生轴是 ``two_theta_deg``，所以 ``"two_theta"``
+# 是「照原样读」，也是唯一向后兼容的默认；``"theta"`` 说的是那一列是入射角，导入时
+# ×2 归一到散射角。这是轴变换而非加性偏移，``import_angle_offset_deg`` 表达不了它。
+AngleConvention = Literal["two_theta", "theta"]
+ANGLE_CONVENTIONS = frozenset(get_args(AngleConvention))
 
 RESOLUTION_KINDS = frozenset(
     {
@@ -117,6 +123,33 @@ class DataColumnMapping:
 
 
 @dataclass(frozen=True, slots=True)
+class AngleConventionEvidence:
+    """What a source file itself says about the axis its angle column measures.
+
+    ``declared`` 是给回填用的开关：它为真，导入对话框才把角度约定那两档拨过去。所以它
+    不能只是一个布尔——判定依据（``header_line``，那一行表头原文）必须同时在手，否则用
+    户看见轴被改了却无从核对，而选错轴的代价是整段角度差一倍。反过来，不能定论时必须
+    给出 ``warning`` 说明为什么没敢改；此时 ``convention`` 只回落到 ``"two_theta"``，因
+    为那正是既有默认，猜错也只是维持现状，而猜成 ``"theta"`` 会让角度整段翻倍。
+    """
+
+    convention: AngleConvention
+    declared: bool
+    header_line: str | None
+    warning: str | None
+
+    def __post_init__(self) -> None:
+        if self.convention not in ANGLE_CONVENTIONS:
+            raise ValueError(f"angle_convention must be one of {sorted(ANGLE_CONVENTIONS)}")
+        if self.declared and self.header_line is None:
+            raise ValueError("a declared angle convention must carry the header_line it was read from")
+        if self.declared and self.warning is not None:
+            raise ValueError("a declared angle convention must not also carry a warning")
+        if not self.declared and self.warning is None:
+            raise ValueError("an undeclared angle convention must carry a warning saying why")
+
+
+@dataclass(frozen=True, slots=True)
 class DataSourceIdentity:
     """A source path bound to exact byte size and SHA-256 digest."""
 
@@ -181,6 +214,8 @@ def _validate_prepared_types(data: PreparedData) -> None:
 def _validate_prepared_scalars(data: PreparedData) -> None:
     if not isfinite(data.import_angle_offset_deg):
         raise ValueError("import_angle_offset_deg must be finite")
+    if data.angle_convention not in ANGLE_CONVENTIONS:
+        raise ValueError(f"unknown angle_convention: {data.angle_convention}")
     if not isfinite(data.normalization) or data.normalization <= 0.0:
         raise ValueError("normalization must be positive and finite")
     if not isfinite(data.r_floor) or data.r_floor <= 0.0:
@@ -235,6 +270,7 @@ class PreparedData:
     fit_ready: bool
     warnings: tuple[str, ...]
     column_mapping: DataColumnMapping
+    angle_convention: AngleConvention = "two_theta"
 
     def __post_init__(self) -> None:
         groups = _prepared_groups(self.source_row_groups)

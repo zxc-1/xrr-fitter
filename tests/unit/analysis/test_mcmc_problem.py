@@ -3,6 +3,32 @@ from __future__ import annotations
 from tests.unit.analysis.mcmc_cases import *
 
 
+def test_affine_sampler_reports_its_running_acceptance_rate_and_proposal_scale() -> None:
+    """采样器每一步都要报当前的接受率和平均提议步长。
+
+    这两个量只有采样器数得出来：接受率是 ``accepted/attempted`` 的整体累积，提议步长是
+    ``proposal - walker`` 的位移范数均值。终值虽然在 ``EnsembleSamples.acceptance_fraction``
+    里，但那是跑完才有的；界面要的是运行中的读数，所以必须走进度回调。
+    """
+    initial = np.linspace(0.45, 0.55, 12).reshape(6, 2)
+    config = McmcConfig(walkers=6, burn_in=2, production_steps=4)
+    events: list[tuple[int, int, float, float]] = []
+
+    samples = run_affine_invariant(
+        lambda value: -float(np.sum((value - 0.5) ** 2)),
+        initial,
+        config,
+        child_seed=315,
+        progress=lambda completed, total, rate, step: events.append((completed, total, rate, step)),
+    )
+
+    assert [(completed, total) for completed, total, _r, _s in events] == [(index, 6) for index in range(1, 7)]
+    assert all(0.0 <= rate <= 1.0 for _c, _t, rate, _s in events)
+    assert all(step > 0.0 for _c, _t, _r, step in events)
+    # 最后一次回调的接受率就是采样器最终报出来的那一个，不是另算的一份。
+    assert events[-1][2] == pytest.approx(float(np.mean(samples.acceptance_fraction)))
+
+
 def test_affine_sampler_reports_progress_and_honors_cancellation() -> None:
     initial = np.linspace(0.45, 0.55, 12).reshape(6, 2)
     config = McmcConfig(walkers=6, burn_in=2, production_steps=4)
@@ -12,7 +38,7 @@ def test_affine_sampler_reports_progress_and_honors_cancellation() -> None:
         initial,
         config,
         child_seed=315,
-        progress=lambda completed, total: events.append((completed, total)),
+        progress=lambda completed, total, _rate, _step: events.append((completed, total)),
     )
     assert events == [(index, 6) for index in range(1, 7)]
 
@@ -149,7 +175,7 @@ def test_problem_mcmc_maps_retained_samples_to_physical_space() -> None:
         candidate,
         config,
         child_seed=441,
-        progress=lambda completed, total: progress.append((completed, total)),
+        progress=lambda completed, total, _rate, _step: progress.append((completed, total)),
     )
     repeated = run_problem_mcmc(problem, candidate, config, child_seed=441)
 
@@ -189,7 +215,7 @@ def test_problem_mcmc_records_the_compiled_gradient_topology() -> None:
             definition.initial,
             definition.lower,
             definition.upper,
-            locked=definition.name != "component.0.thickness_a",
+            freedom=ParameterFreedom.from_locked(definition.name != "component.0.thickness_a"),
         )
         for definition in initial.parameter_definitions
     )

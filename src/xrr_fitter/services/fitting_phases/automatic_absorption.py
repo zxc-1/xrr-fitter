@@ -11,7 +11,7 @@ from xrr_fitter.model.fitting import (
     FitStageSummary,
     candidate_selection_objective,
 )
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 
 from .base import _scale_prior
 from .common import CancellationProbe, PreparedDatasetFit
@@ -32,7 +32,7 @@ def _automatic_absorption_problem(
                 values.get(definition.name, definition.initial),
                 definition.lower,
                 definition.upper,
-                locked=definition.locked if definition.constrained else False,
+                freedom=ParameterFreedom.from_locked(definition.locked if definition.constrained else False),
             )
             if definition.name in released or definition.constrained
             else ParameterSetting(
@@ -40,7 +40,7 @@ def _automatic_absorption_problem(
                 values.get(definition.name, definition.initial),
                 values.get(definition.name, definition.initial),
                 values.get(definition.name, definition.initial),
-                locked=True,
+                freedom=ParameterFreedom.FIXED,
             )
         )
         for definition in problem.parameter_definitions
@@ -69,7 +69,7 @@ def _fixed_absorption_problem(
             values[definition.name] if definition.name in fixed else definition.initial,
             definition.lower,
             definition.upper,
-            locked=(True if definition.name in fixed else definition.locked),
+            freedom=ParameterFreedom.from_locked(definition.name in fixed or definition.locked),
         )
         for definition in problem.parameter_definitions
     )
@@ -102,7 +102,7 @@ def _fixed_absorption_settings(
             values[setting.name],
             definition.lower,
             definition.upper,
-            locked=True,
+            freedom=ParameterFreedom.FIXED,
         )
 
     retained = tuple(updated(setting) for setting in prepared.updated_dataset.parameter_settings)
@@ -112,7 +112,7 @@ def _fixed_absorption_settings(
             values[definition.name],
             definition.lower,
             definition.upper,
-            locked=True,
+            freedom=ParameterFreedom.FIXED,
         )
         for definition in problem.parameter_definitions
         if definition.name in fixed and definition.name not in existing

@@ -467,7 +467,7 @@ fit_project(project, progress_callback, checkpoint_callback)
 run_mcmc(project, dataset_id, candidate_id, config, progress_callback)
 start_fit_job(project, checkpoint_path)
 start_mcmc_job(project, dataset_id, candidate_id, config)
-export_result(result, output_dir, *, include_ort=False)
+export_result(result, output_dir, *, formats=DEFAULT_FORMATS)
 ```
 
 `inspect_sources()` returns an ordered `ProjectValidation` without mutation;

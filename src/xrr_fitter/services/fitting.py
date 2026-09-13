@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from time import sleep as _sleep
 from types import SimpleNamespace
 
 from xrr_fitter.analysis import sld_bands as _bands
@@ -40,7 +41,7 @@ from xrr_fitter.fit.joint_sharing import (
 from xrr_fitter.fit.joint_sharing import (
     validate_sharing_rules as validate_compiled_sharing_rules,
 )
-from xrr_fitter.fit.local_search import SearchCancelled
+from xrr_fitter.fit.local_search import SearchCancelled, StageSkipped
 from xrr_fitter.fit.objective import evaluate_declared_initial, evaluate_vector
 from xrr_fitter.fit.parameters import (
     apply_parameter_settings,
@@ -77,6 +78,43 @@ from xrr_fitter.services.fitting_phases.common import (
     ProgressCallback,
 )
 from xrr_fitter.services.fitting_phases.sharing import automatic_sharing_rules
+
+# 暂停期间探针醒来查看的周期。取消要在这个量级内被听见，而不是等到下一个阶段边界。
+PAUSE_POLL_SECONDS = 0.05
+
+
+def pause_aware_probe(cancellation, pause, skip=None, *, sleep=_sleep):
+    """把「要停了吗」这个问句同时当成暂停的停车点。
+
+    求解器每到一个阶段边界就调用一次取消探针。暂停复用同一处：探针在暂停期间不返回，
+    醒来时先看取消——所以停止键在暂停中仍然有效，而 ``fit``/``model`` 里一个新的等待点
+    也不必加（那会动到按阶段指纹冻结的那些测试）。
+
+    住在这一层而不是 ``services.workers``：只有 ``services.fitting`` 被允许依赖 ``fit``，
+    而抛 ``StageSkipped`` 就是一次对 ``fit`` 的依赖。
+    """
+
+    def probe() -> bool:
+        while pause is not None and pause.is_set() and not cancellation.is_set():
+            sleep(PAUSE_POLL_SECONDS)
+        if cancellation.is_set():
+            # 停止压过跳过：跳过之后还有的跑，停止之后没有。
+            return True
+        if skip is not None and skip.is_set():
+            # ⏭ 只作废当前这一个阶段，所以开关是一次性的——留着它，下一个阶段一开始
+            # 又会被跳掉，读者按一次会连着丢好几层加工。
+            skip.clear()
+            raise StageSkipped("stage skipped by request")
+        return False
+
+    return probe
+
+
+def build_cancellation_probe(cancellation, pause, skip=None):
+    """两个开关都没有时就是原来的取消探针——单独跑一个 worker 的路径不受影响。"""
+    if pause is None and skip is None:
+        return cancellation.is_set
+    return pause_aware_probe(cancellation, pause, skip)
 
 
 def _validate_parameter_priors(definitions, priors) -> None:

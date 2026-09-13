@@ -28,23 +28,38 @@ class AccessibilitySpec:
     description: str = ""
 
 
+# The parameter table's numeric columns -- 初值, 下限, 上限 -- whose digits line up
+# only when they are flushed right. The name column now carries the unit and the
+# lock beside the quantity, and the prior column holds a phrase, so neither is a
+# number and neither is right-aligned.
+NUMERIC_PARAMETER_COLUMNS = (1, 2, 3)
+
+
 ACCESSIBILITY_SPECS = (
-    # Dock titles carry their own accessible names from window_layout; these
-    # specs describe the panels the docks contain.
+    # The columns and the inspector's section cards name themselves where they are
+    # built (window_layout._column, theme.titled_card), because a caption already
+    # drawn on screen is the label; these specs name the panels inside them.
     AccessibilitySpec("dataPanel", "数据与掩膜", "导入数据并管理拟合掩膜", "数据集、数据源和拟合范围"),
     AccessibilitySpec("structurePanel", "样品结构", "编辑活动数据集的样品结构", "样品层、周期块和氧化层建议"),
     AccessibilitySpec("structureEditor", "结构编辑", "编辑样品层和周期结构", "添加、删除和排序结构组件"),
     AccessibilitySpec("plotPanel", "反射率、SLD 与拟合诊断", "查看曲线和诊断图", "原始曲线、残差、SLD 和候选解诊断"),
     AccessibilitySpec("parametersPanel", "参数与共享", "编辑拟合参数和共享规则", "参数边界、专家设置和共享关系"),
-    AccessibilitySpec("parameterTable", "拟合参数与边界表", "逐行查看和编辑参数初值、边界、拟合状态与共享关系"),
+    AccessibilitySpec("parameterTable", "拟合参数与边界表", "逐行查看和编辑参数初值、边界、锁定状态与先验"),
     AccessibilitySpec("fitPanel", "拟合控制", "启动、取消和监视拟合", "批次模式、拟合进度和操作状态"),
     AccessibilitySpec("resultsPanel", "拟合结果", "查看候选解和不确定度", "候选解、证据和专家 MCMC"),
     AccessibilitySpec("newProjectButton", "新建项目", "创建新的空项目"),
     AccessibilitySpec("openProjectButton", "打开项目", "打开已有 XRR 项目"),
     AccessibilitySpec("saveProjectButton", "保存项目", "保存当前 XRR 项目"),
-    AccessibilitySpec("saveAsProjectButton", "项目另存为", "将当前项目保存到新位置并重定位相对数据源"),
-    AccessibilitySpec("reloadSourceButton", "重新加载活动数据源", "从当前路径重新读取活动数据集并核对哈希"),
-    AccessibilitySpec("relinkSourceButton", "重新链接活动数据源", "为活动数据集选择新源文件并核对哈希"),
+    # 另存为 / 重载源 / 重链接源 不在这份名单里：它们只在 文件 菜单，而菜单项自带
+    # 文本和快捷键，读屏从 QAction 就能念出来，没有需要补名字的控件。
+    # 数据集分区抬头右侧的 ＋。三条导入命令挂在它的菜单里，所以它的名字要说清「点开
+    # 是导入」而不是只念一个加号——读屏读到 "＋" 给不出这颗按钮做什么。
+    AccessibilitySpec(
+        "datasetAddButton",
+        "导入数据集",
+        "点击选择文件，展开可选文件夹或更换测量预设",
+        "导入 XRR 数据文件、文件夹，或更换测量预设",
+    ),
     AccessibilitySpec("importFilesButton", "导入文件", "选择一个或多个 XRR 数据文件并确认导入设置"),
     AccessibilitySpec("importFolderButton", "导入文件夹", "选择 XRR 数据文件夹并确认批量导入设置"),
     AccessibilitySpec("datasetTree", "数据集列表", "使用键盘选择活动数据集"),
@@ -65,13 +80,12 @@ ACCESSIBILITY_SPECS = (
     AccessibilitySpec("mcmcBurnIn", "MCMC burn-in 步数", "设置 MCMC burn-in 步数"),
     AccessibilitySpec("mcmcProduction", "MCMC production 步数", "设置 MCMC production 步数"),
     AccessibilitySpec("mcmcThin", "MCMC thinning 间隔", "设置 MCMC thinning 间隔"),
-    AccessibilitySpec("addLayerButton", "添加普通层", "在当前结构末尾添加普通层"),
-    AccessibilitySpec("addPeriodicBlockButton", "添加周期块", "在当前结构末尾添加周期块"),
-    AccessibilitySpec("removeComponentButton", "删除结构组件", "删除当前选中的结构组件"),
-    AccessibilitySpec("moveComponentUpButton", "上移结构组件", "将当前结构组件上移"),
-    AccessibilitySpec("moveComponentDownButton", "下移结构组件", "将当前结构组件下移"),
-    AccessibilitySpec("oxideSuggestionButton", "接受氧化层建议", "应用当前自然氧化层建议"),
-    AccessibilitySpec("oxideSuggestionRefuseButton", "忽略氧化层建议", "记录并隐藏当前氧化层建议"),
+    # 结构画布行头只剩设计稿画的三个按钮；删除 / 上移 / 下移 / 编辑基底 / 忽略建议改成
+    # 层行的右键菜单项，它们的读屏名与提示随 ``QAction`` 一起声明在 editor.py 里——
+    # ``QAction`` 不是 ``QWidget``，``findChild`` 与 ``setAccessibleName`` 这条路走不通。
+    AccessibilitySpec("addLayerButton", "添加层", "在当前结构末尾添加普通层"),
+    AccessibilitySpec("oxideSuggestionButton", "建议氧化层", "应用当前自然氧化层建议"),
+    AccessibilitySpec("addPeriodicBlockButton", "周期结构", "在当前结构末尾添加周期块"),
     AccessibilitySpec("twoThetaColumnEditor", "2θ 数据列", "设置 2θ 数据的列号"),
     AccessibilitySpec("intensityColumnEditor", "强度数据列", "设置强度数据的列号"),
     AccessibilitySpec("intensitySigmaEnabled", "启用强度不确定度列", "包含强度不确定度数据列"),
@@ -92,7 +106,6 @@ ACCESSIBILITY_SPECS = (
     AccessibilitySpec("resolutionDomainEditor", "分辨率域", "选择 q 或 θ 分辨率域"),
     AccessibilitySpec("columnMappingButton", "高级列映射", "为特殊多列源文件配置各数据列的含义"),
     AccessibilitySpec("emptyStateImportButton", "导入数据文件", "选择反射率数据文件并确认导入设置"),
-    AccessibilitySpec("datasetDetails", "活动数据集详情", "显示活动数据集的源文件、光路、仪器与校验摘要"),
     AccessibilitySpec("fitReadinessStatus", "拟合就绪状态", "显示当前一键拟合的就绪状态"),
     AccessibilitySpec("activeDatasetStatus", "活动数据集", "显示当前活动数据集名称"),
     AccessibilitySpec("mainToolbar", "主工具栏", "项目命令、拟合控制与导出入口"),
@@ -103,30 +116,46 @@ FOCUS_ORDER = (
     "newProjectButton",
     "openProjectButton",
     "saveProjectButton",
-    "saveAsProjectButton",
-    "reloadSourceButton",
-    "relinkSourceButton",
-    "importFilesButton",
-    "importFolderButton",
+    # The command bar's 引导↔专家 segment, which sits between the project commands
+    # and the import buttons on screen; the tab chain follows the same reading
+    # order so a keyboard user meets it where the eye does.
+    "workspaceModeGuided",
+    "workspaceModeExpert",
+    # 批量模式段，紧挨着模式段（实测 x=637/675 对 525/563）。它此前叫
+    # ``batchModeSelector``，是拟合卡里的一个下拉，所以在这份名单里排在参数表之后；
+    # 换成命令条上的分段后那个名字已经没有对应控件，而 setTabOrder 会静静跳过找不到
+    # 的名字——于是「参数表 → 一键拟合」中间少了一站，批量模式在键盘上根本到不了。
+    "batchModeIndependent",
+    "batchModeJoint",
+    # 数据集抬头的 ＋。这里此前列的是 importFilesButton 与 importFolderButton；它们
+    # 移进 ＋ 的菜单后就属于另一个窗口，而 setTabOrder 跨窗口是空操作——Qt 只打印一句
+    # 警告，于是「模式段 → 数据集树」这一段链子会静悄悄断掉。菜单里的三条命令由菜单
+    # 自己的方向键接管，这也是弹出菜单一贯的键盘走法。
+    "datasetAddButton",
     "datasetTree",
     "initializeStructureButton",
     "structureTree",
+    # The canvas reads as one row -- reflectivity tabs, spring, modebar -- so the
+    # tab bar comes before the buttons parked in its top-right corner slot.  The
+    # analysis group is a separate QTabWidget two panes further down, and follows
+    # the modebar rather than sharing a stop with it.  A single "diagnosticTabs"
+    # entry used to stand in for both, matching no widget at all, which quietly
+    # handed focus from the modebar to the inspector and left every diagnostic tab
+    # bar off the keyboard chain.
+    "reflectivityTabs",
     # The plot toolbar's own row, in the order it is read on screen. Listing
     # only the first button used to hand focus straight from it to the export
     # command, so a keyboard user could reach "查看" but never the range, mask,
-    # navigation or zoom controls sitting beside it.
-    "plotModeView",
-    "plotModeRange",
-    "plotModeMask",
+    # navigation or zoom controls sitting beside it.  设计稿把这一条收到四枚字形，
+    # 名字对不上任何控件的条目会被静默跳过（"diagnosticTabs" 就是这样断掉整条链的），
+    # 所以搬进右键菜单的那五条得从这里拿掉——菜单靠 Menu 键或 视图 菜单进，不占 tab 位。
     "plotNavPan",
     "plotNavZoom",
     "plotNavHome",
-    "plotZoomToRange",
-    "plotResetZoom",
-    "diagnosticTabs",
+    "plotModeRange",
+    "analysisTabs",
     "expertModeToggle",
     "parameterTable",
-    "batchModeSelector",
     "startFitButton",
     "cancelFitButton",
     "forceStopFitButton",
@@ -190,6 +219,37 @@ def _configure_dialog_buttons(root: QWidget) -> None:
                 button.setToolTip(name)
 
 
+def localize_standard_buttons(box: QDialogButtonBox, *, confirm: str | None = None) -> None:
+    """Write Chinese labels over Qt's built-in English standard buttons.
+
+    ``QDialogButtonBox`` takes its ``Ok``/``Cancel`` text from Qt's own
+    catalogue, and this application installs no ``QTranslator``, so the footer
+    of an otherwise Chinese dialog reads in English.  The accessible names were
+    already localized here; the visible labels need the same source of truth.
+
+    The box is passed in rather than discovered from the dialog: a footer is
+    localized where it is built, before it joins a layout, so a walk over the
+    dialog's children would find nothing at that moment.  ``confirm`` is named
+    per dialog because the mockup labels that button after the action it
+    performs; leaving it unset keeps a caller-owned label intact.
+
+    The confirm button is also promoted to primary so it reads as the natural
+    next step — the mockup marks it with an accent fill while Cancel stays
+    ghost/flat.
+    """
+    for standard, text in (
+        (QDialogButtonBox.StandardButton.Cancel, "取消"),
+        (QDialogButtonBox.StandardButton.Close, "关闭"),
+        (QDialogButtonBox.StandardButton.Ok, confirm),
+    ):
+        button = box.button(standard)
+        if button is not None and text:
+            button.setText(text)
+    ok_button = box.button(QDialogButtonBox.StandardButton.Ok)
+    if ok_button is not None:
+        ok_button.setProperty("primary", True)
+
+
 def _configure_beam_buttons(root: QWidget) -> None:
     names = {"单色": "单色光路", "混合 Kα": "混合 Kα 光路"}
     for button in root.findChildren(QRadioButton):
@@ -206,7 +266,7 @@ def _configure_parameter_tables(root: QWidget) -> None:
         blocker = QSignalBlocker(table)
         table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         for row in range(table.rowCount()):
-            for column in range(1, min(table.columnCount(), 5)):
+            for column in NUMERIC_PARAMETER_COLUMNS:
                 item = table.item(row, column)
                 if item is not None:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)

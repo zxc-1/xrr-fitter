@@ -114,6 +114,32 @@ def test_palette_survives_a_real_draw_that_clears_the_axes(qtbot, monkeypatch) -
     assert np.allclose(view.axes.yaxis.label.get_color(), expected.foreground)
 
 
+def test_the_diverging_hues_carry_residual_sign_the_same_way_in_both_themes() -> None:
+    """Which hue means overshoot cannot flip when the appearance changes.
+
+    The residual heatmap reads sign as colour, so a palette that put the warm
+    hue on the negative end in one theme would invert every residual on a theme
+    switch. Luminance cannot carry the sign here: a diverging scale saturates
+    both directions equally, which leaves the two ends within 1.2:1 of each
+    other. Hue direction is the contract instead, and each end still has to
+    clear the 3:1 WCAG asks of a graphical object against its own background.
+    """
+    for tokens in (theme.LIGHT_TOKENS, theme.DARK_TOKENS):
+        palette = theme.plot_palette(tokens)
+        negative, positive, middle = (
+            palette.diverging_neg,
+            palette.diverging_pos,
+            palette.diverging_mid,
+        )
+
+        assert negative[2] > negative[0], "the negative end reads cool"
+        assert positive[0] > positive[2], "the positive end reads warm"
+        # A midpoint leaning either way would hand a zero residual a sign.
+        assert max(middle[:3]) - min(middle[:3]) <= 0.1
+        assert _contrast(negative, palette.background) >= 3.0
+        assert _contrast(positive, palette.background) >= 3.0
+
+
 def test_empty_state_message_uses_the_palette_rather_than_a_fixed_grey(qtbot) -> None:
     from xrr_fitter.gui.plots.diagnostics import build_tabs, draw_empty
 

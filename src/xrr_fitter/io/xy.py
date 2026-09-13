@@ -6,7 +6,7 @@ the original bytes, raw rows, parse status, and derived row identities intact.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from math import ceil, isfinite, sqrt
 from pathlib import Path
@@ -14,6 +14,9 @@ from pathlib import Path
 import numpy as np
 
 from xrr_fitter.model.data import (
+    ANGLE_CONVENTIONS,
+    AngleConvention,
+    AngleConventionEvidence,
     BeamSpec,
     DataColumnMapping,
     PreparedData,
@@ -410,11 +413,14 @@ def _validated_request(
     beam: BeamSpec,
     import_angle_offset_deg: float,
     column_mapping: DataColumnMapping | None,
+    angle_convention: AngleConvention = "two_theta",
 ) -> DataColumnMapping:
     if not isinstance(beam, BeamSpec):
         raise TypeError("beam must be a BeamSpec")
     if not isfinite(import_angle_offset_deg):
         raise ValueError("import_angle_offset_deg must be finite")
+    if angle_convention not in ANGLE_CONVENTIONS:
+        raise ValueError(f"unknown angle_convention: {angle_convention}")
     mapping = column_mapping or DataColumnMapping()
     if not isinstance(mapping, DataColumnMapping):
         raise TypeError("column_mapping must be a DataColumnMapping or None")
@@ -427,6 +433,7 @@ def _prepare_xy(
     beam: BeamSpec,
     import_angle_offset_deg: float,
     mapping: DataColumnMapping,
+    angle_convention: AngleConvention = "two_theta",
 ) -> PreparedData:
     raw_rows = tuple(source_bytes.decode("utf-8-sig").splitlines())
     parsed = tuple(_numeric_columns(row) for row in raw_rows)
@@ -434,6 +441,11 @@ def _prepare_xy(
     start, end = _data_window(parseable, numeric, source_path)
     statuses, records = _collect_rows(parsed, parseable, start, end, mapping)
     merged = _merge_records(records, mapping)
+    if angle_convention == "theta":
+        # ×2 放在派生量之前，后面的 qz、分辨率、域校验就都作用在散射角上，和
+        # ``"two_theta"`` 走的是同一条计算路径。行分组按角度相等切，×2 是单调的，
+        # 不会改变分组结果。
+        merged = replace(merged, two_theta=merged.two_theta * 2.0)
     qz, normalized, normalization, r_floor, validation, ready, warnings = _derived_state(
         merged,
         beam.effective_wavelength_a,
@@ -455,6 +467,7 @@ def _prepare_xy(
         source_row_groups=merged.row_groups,
         beam=beam,
         import_angle_offset_deg=import_angle_offset_deg,
+        angle_convention=angle_convention,
         two_theta_deg=merged.two_theta,
         intensity_raw=merged.intensity,
         intensity_sigma_raw=intensity_sigma,
@@ -480,17 +493,24 @@ def read_xy_bytes(
     beam: BeamSpec,
     import_angle_offset_deg: float = 0.0,
     column_mapping: DataColumnMapping | None = None,
+    angle_convention: AngleConvention = "two_theta",
 ) -> PreparedData:
     """Parse already-bound source bytes through the authoritative importer."""
     if not isinstance(content, bytes):
         raise TypeError("content must be bytes")
-    mapping = _validated_request(beam, import_angle_offset_deg, column_mapping)
+    mapping = _validated_request(
+        beam,
+        import_angle_offset_deg,
+        column_mapping,
+        angle_convention,
+    )
     return _prepare_xy(
         Path(source_path),
         content,
         beam,
         import_angle_offset_deg,
         mapping,
+        angle_convention,
     )
 
 
@@ -499,14 +519,86 @@ def read_xy(
     beam: BeamSpec,
     import_angle_offset_deg: float = 0.0,
     column_mapping: DataColumnMapping | None = None,
+    angle_convention: AngleConvention = "two_theta",
 ) -> PreparedData:
     """Read one UTF-8 XRR curve and preserve every raw row and source byte hash."""
     source_path = Path(path)
-    mapping = _validated_request(beam, import_angle_offset_deg, column_mapping)
+    mapping = _validated_request(
+        beam,
+        import_angle_offset_deg,
+        column_mapping,
+        angle_convention,
+    )
     return _prepare_xy(
         source_path,
         source_path.read_bytes(),
         beam,
         import_angle_offset_deg,
         mapping,
+        angle_convention,
     )
+
+
+# 判定只取表头自己写的轴名。按数值范围猜（「上限小于 5° 大概是 θ」）会在半数真实文件上
+# 翻车——2θ 扫到 4° 收尾的薄膜曲线很常见，而猜错就是整段角度差一倍。
+# ``θ`` 组必须在剔除 ``2θ`` 组之后才搜：``theta`` 是 ``2theta`` 的子串。
+TWO_THETA_MARKERS = ("two_theta", "two theta", "twotheta", "2-theta", "2 theta", "2theta", "2θ", "tth", "2th")
+THETA_MARKERS = ("incident angle", "grazing angle", "alpha_i", "omega", "theta", "θ")
+
+
+def _axis_markers(row: str) -> tuple[bool, bool]:
+    """Whether one header row names the scattering axis and/or the incident axis."""
+    text = row.lower()
+    remainder = text
+    for marker in TWO_THETA_MARKERS:
+        remainder = remainder.replace(marker, " ")
+    return remainder != text, any(marker in remainder for marker in THETA_MARKERS)
+
+
+def _header_rows(rows: tuple[str, ...]) -> tuple[str, ...]:
+    """The rows ahead of the data block, by the reader's own definition of it.
+
+    A file whose data block never starts is all header here rather than an error:
+    the scan exists to be run *before* an import, so it has to answer for exactly
+    the files ``read_xy`` refuses.
+    """
+    parsed = tuple(_numeric_columns(row) for row in rows)
+    _, numeric = _row_flags(parsed, DataColumnMapping())
+    data_start = next(
+        (index for index in range(max(0, len(numeric) - 1)) if numeric[index] and numeric[index + 1]),
+        None,
+    )
+    return rows if data_start is None else rows[:data_start]
+
+
+def _axis_evidence(rows: tuple[str, ...]) -> tuple[str | None, bool, bool]:
+    """The first header row naming an axis, and which axes the header names at all.
+
+    两个布尔要分开数、不能合成一个「判定」：θ 与 2θ 同时出现是一种独立的答案（无法判定），
+    而不是「其中一个赢了」。
+    """
+    markers = tuple((row, *_axis_markers(row)) for row in rows)
+    named = tuple(row for row, scattering, incident in markers if scattering or incident)
+    return (
+        named[0] if named else None,
+        any(scattering for _, scattering, _ in markers),
+        any(incident for _, _, incident in markers),
+    )
+
+
+def scan_angle_convention(path: str | Path) -> AngleConventionEvidence:
+    """Read the angle axis a source file declares in its own header.
+
+    表头写了轴名才算证据，所以「说不清」有两种，都不定论：一行都没提到轴（``# angle
+    intensity`` 是最常见的一类），或者 θ 与 2θ 同时出现（θ、2θ、强度三列文件的头正是
+    这样，该读哪一列是列映射的事，这里答不了）。两种都回落到 ``"two_theta"``——既有默
+    认，猜错只是维持现状——并把理由带出去。
+    """
+    rows = tuple(Path(path).read_bytes().decode("utf-8-sig").splitlines())
+    named, scattering, incident = _axis_evidence(_header_rows(rows))
+    if named is None:
+        return AngleConventionEvidence("two_theta", False, None, "表头没有写角度轴")
+    if scattering and incident:
+        return AngleConventionEvidence("two_theta", False, named, "表头同时写了 θ 与 2θ，无法判定")
+    convention: AngleConvention = "two_theta" if scattering else "theta"
+    return AngleConventionEvidence(convention, True, named, None)

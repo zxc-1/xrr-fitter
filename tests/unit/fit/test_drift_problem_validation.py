@@ -15,7 +15,7 @@ from xrr_fitter.fit.objective import evaluate_declared_initial
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 from xrr_fitter.model.structure import DriftSpec, StructureSpec
 
 
@@ -68,7 +68,7 @@ def test_compile_rejects_parameter_setting_that_changes_periodic_topology(block)
         2.0,
         2.0,
         2.0,
-        locked=True,
+        freedom=ParameterFreedom.FIXED,
     )
 
     with pytest.raises(ValueError, match="locked integer topology"):

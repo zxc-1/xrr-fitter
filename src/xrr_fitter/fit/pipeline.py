@@ -11,8 +11,9 @@ from xrr_fitter.evaluation import (
     EvaluationConstraintError,
     evaluate_model,
 )
-from xrr_fitter.fit.candidates import best_candidate_index
+from xrr_fitter.fit.candidates import CandidateStart, best_candidate_index
 from xrr_fitter.fit.checkpoint import build_checkpoint
+from xrr_fitter.fit.local_search import StageSkipped
 from xrr_fitter.fit.resume import ResumePlan, validate_resume_checkpoint
 from xrr_fitter.fit.stages import (
     StageOutcome,
@@ -115,7 +116,13 @@ def _state_from_resume(plan: ResumePlan, base_warnings: tuple[str, ...]) -> _Sea
 
 
 def _stage_candidates(state: _SearchState, stage: str) -> tuple[FitCandidate, ...]:
-    summary = next(value for value in reversed(state.summaries) if value.stage == stage)
+    summary = next((value for value in reversed(state.summaries) if value.stage == stage), None)
+    if summary is None:
+        # 这一阶段被跳过了。往下走的父代退回到最近一个真正跑完的阶段——跳过的语义是
+        # 「这一层的加工不要了」，不是「前面的成果一并作废」。
+        if not state.summaries:
+            return ()
+        summary = state.summaries[-1]
     by_id = {candidate.candidate_id: candidate for candidate in state.candidates}
     return tuple(by_id[candidate_id] for candidate_id in summary.candidate_ids)
 
@@ -161,6 +168,90 @@ def _result(request: FitSearchRequest, state: _SearchState, seeds: tuple[int, ..
     return _seal_result(request.problem, result)
 
 
+# C 从 B 的候选出发、D 从 C 的，两者挑父代的算法也不同：B→C 要按谱系把扰动配额分下去，
+# C→D 是逐个续。摆成一张表而不是写成两层 ``if``，因为「哪一层的父代是哪一层」是这条流水线
+# 的形状，读者该一眼看到全部两条，而不是从分支里拼出来。
+LOCAL_STAGE_PARENTS = {
+    "C": ("B", stage_b_continuation),
+    "D": ("C", local_stage_continuation),
+}
+
+
+def _advance_stage_a(
+    request: FitSearchRequest,
+    state: _SearchState,
+    coarse_problem: object,
+    *,
+    progress: Callable[[FitProgress], None] | None,
+    cancelled: Callable[[], bool] | None,
+) -> tuple[_SearchState, tuple[CandidateStart, ...]]:
+    """阶段 A 独立于其余四段：它交出的是起点，不是候选，所以不走 ``state.append``。"""
+    starts, summary, warnings = run_stage_a(
+        request.problem,
+        request.dataset_id,
+        coarse_problem=coarse_problem,
+        progress=progress,
+        cancelled=cancelled,
+    )
+    state = _SearchState(
+        state.candidates,
+        state.base_warnings,
+        state.runtime_warnings + warnings,
+        state.summaries + (summary,),
+    )
+    return state, starts
+
+
+def _stage_outcome(
+    request: FitSearchRequest,
+    stage: str,
+    state: _SearchState,
+    *,
+    starts: tuple[CandidateStart, ...] | None,
+    seeds: tuple[int, ...],
+    perturbation_counts: tuple[int, ...],
+    progress: Callable[[FitProgress], None] | None,
+    cancelled: Callable[[], bool] | None,
+    task_runner: TaskRunner | None,
+) -> StageOutcome:
+    """B/C/D/E 各跑一段：都是「挑父代、产一批新候选」，只有父代从哪来不一样。"""
+    if stage == "B":
+        if starts is None:
+            raise RuntimeError("stage B requires committed stage-A starts")
+        return run_stage_b(
+            request.problem,
+            request.dataset_id,
+            starts,
+            seeds[:2],
+            progress=progress,
+            cancelled=cancelled,
+        )
+    if stage in LOCAL_STAGE_PARENTS:
+        parent_stage, continuation = LOCAL_STAGE_PARENTS[stage]
+        parents, counts = continuation(_stage_candidates(state, parent_stage), perturbation_counts)
+        return run_local_stage(
+            request.problem,
+            request.dataset_id,
+            stage,
+            parents,
+            perturbation_counts=counts,
+            progress=progress,
+            cancelled=cancelled,
+            task_runner=task_runner,
+        )
+    # 阶段 E 不带配额：final seeds 是给每个父代各来一遍，没有「这一支分几个」这回事。
+    parents, _counts = local_stage_continuation(_stage_candidates(state, "D"))
+    return run_stage_e(
+        request.problem,
+        request.dataset_id,
+        parents,
+        seeds[2:],
+        progress=progress,
+        cancelled=cancelled,
+        task_runner=task_runner,
+    )
+
+
 def run_fit_search(
     request: FitSearchRequest,
     *,
@@ -190,70 +281,40 @@ def run_fit_search(
     starts = None
     perturbation_counts: tuple[int, ...] = ()
     for stage in remaining:
-        if stage == "A":
-            starts, summary, warnings = run_stage_a(
-                request.problem,
-                request.dataset_id,
-                coarse_problem=coarse_problem,
-                progress=progress,
-                cancelled=cancelled,
-            )
-            state = _SearchState(
-                state.candidates,
-                state.base_warnings,
-                state.runtime_warnings + warnings,
-                state.summaries + (summary,),
-            )
-            continue
-        if stage == "B":
-            if starts is None:
-                raise RuntimeError("stage B requires committed stage-A starts")
-            outcome = run_stage_b(
-                request.problem,
-                request.dataset_id,
-                starts,
-                seeds[:2],
-                progress=progress,
-                cancelled=cancelled,
-            )
-            perturbation_counts = outcome.perturbation_counts
-        elif stage in {"C", "D"}:
-            parent_stage = "B" if stage == "C" else "C"
-            stage_candidates = _stage_candidates(state, parent_stage)
-            if stage == "C":
-                parents, counts = stage_b_continuation(
-                    stage_candidates,
-                    perturbation_counts,
+        try:
+            if stage == "A":
+                state, starts = _advance_stage_a(
+                    request,
+                    state,
+                    coarse_problem,
+                    progress=progress,
+                    cancelled=cancelled,
                 )
-            else:
-                parents, counts = local_stage_continuation(
-                    stage_candidates,
-                    perturbation_counts,
-                )
-            outcome = run_local_stage(
-                request.problem,
-                request.dataset_id,
+                continue
+            outcome = _stage_outcome(
+                request,
                 stage,
-                parents,
-                perturbation_counts=counts,
+                state,
+                starts=starts,
+                seeds=seeds,
+                perturbation_counts=perturbation_counts,
                 progress=progress,
                 cancelled=cancelled,
                 task_runner=task_runner,
             )
-        else:
-            parents, _counts = local_stage_continuation(_stage_candidates(state, "D"))
-            outcome = run_stage_e(
-                request.problem,
-                request.dataset_id,
-                parents,
-                seeds[2:],
-                progress=progress,
-                cancelled=cancelled,
-                task_runner=task_runner,
-            )
-        state = state.append(outcome)
-        perturbation_counts = outcome.perturbation_counts
-        _publish_checkpoint(request, state, stage, seeds, checkpoint)
+            state = state.append(outcome)
+            perturbation_counts = outcome.perturbation_counts
+            _publish_checkpoint(request, state, stage, seeds, checkpoint)
+        except StageSkipped:
+            # 跳过的是这一个阶段，不是这次搜索：作废它已算的部分，接着跑下一个。
+            # 但下一阶段得有父代才跑得动——阶段 A 被跳过时一个候选都还没有，这时
+            # 收工返回已有结果，而不是让阶段 B 抛「缺少起点」。
+            if not state.candidates:
+                break
+            # 扰动配额是上一阶段谱系的形状，跳过一层之后它对不上下一层的父代；清空
+            # 让下一阶段自己数，比带着一份过期的配额去校验要诚实。
+            perturbation_counts = ()
+            continue
     return _result(request, state, seeds)
 
 

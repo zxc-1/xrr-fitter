@@ -19,6 +19,7 @@ from shiboken6 import isValid
 from tests.support.model_cases import final_fit_result, fit_candidate, simple_structure
 
 import xrr_fitter.api as api
+from xrr_fitter.gui.window_layout import COLUMN_NAMES
 
 
 class _FakeJob:
@@ -100,7 +101,10 @@ EXPECTED_ACTIONS = {
 
 def _assert_workspace_layout(window) -> None:
     assert window.objectName() == "mainWindow"
-    assert len(window.docks) == 5
+    # The shell is the design's three fixed columns in one splitter; docks used to
+    # be counted here, and a count of five said nothing about which columns exist.
+    splitter = window.workspace_splitter
+    assert tuple(splitter.widget(index).objectName() for index in range(splitter.count())) == COLUMN_NAMES
     # Guidance opens first and shares the central slot with the plot; the expert
     # surface is what this workspace contract describes.
     window.set_guidance_visible(False)
@@ -165,11 +169,17 @@ def test_candidate_selection_updates_project_plot_and_export_state(
 
 def test_expert_mcmc_controls_remain_readable_at_documented_window_size(
     qtbot,
+    qapp,
+    request,
     tmp_path: Path,
 ) -> None:
+    from xrr_fitter.gui.application import create_application
     from xrr_fitter.gui.document import ProjectDocument
     from xrr_fitter.gui.main_window import MainWindow
 
+    previous_stylesheet = qapp.styleSheet()
+    request.addfinalizer(lambda: qapp.setStyleSheet(previous_stylesheet))
+    create_application([])
     project = api.set_expert_mode(_project(tmp_path), True)
     window = MainWindow(ProjectDocument(project))
     qtbot.addWidget(window)

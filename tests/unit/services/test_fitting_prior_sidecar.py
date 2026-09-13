@@ -35,7 +35,9 @@ def _density_problem():
             definition.initial,
             0.5 if definition.name == "component.0.density_scale" else definition.lower,
             1.1 if definition.name == "component.0.density_scale" else definition.upper,
-            locked=False if definition.name == "component.0.density_scale" else definition.locked,
+            freedom=api.ParameterFreedom.from_locked(
+                False if definition.name == "component.0.density_scale" else definition.locked
+            ),
         )
         for definition in initial.parameter_definitions
     )
@@ -147,14 +149,8 @@ def test_joint_analysis_deduplicates_shared_roughness_conflict_as_global_name() 
     assert all(local_name not in result.uncertainty.prior_conflicts for result in results)
 
 
-def test_mcmc_phase_overlays_priors_only_after_result_ownership_validation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    problem = _density_problem()
-    search = _stage_e_search(problem)
-    candidate = search.best_candidate
-    assert candidate is not None
-    uncertainty = api.UncertaintyReport(
+def _empty_uncertainty(candidate_id: str) -> api.UncertaintyReport:
+    return api.UncertaintyReport(
         correlation_names=(),
         correlation_matrix=np.empty((0, 0)),
         profiles=(),
@@ -164,8 +160,77 @@ def test_mcmc_phase_overlays_priors_only_after_result_ownership_validation(
         strong_correlations=(),
         systematic_residual=False,
         diagnostics=(),
-        candidate_id=candidate.candidate_id,
+        candidate_id=candidate_id,
     )
+
+
+def test_mcmc_phase_publishes_the_sampler_acceptance_rate_and_proposal_scale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """采样器报出的接受率与提议步长必须原样进 ``FitProgress``。
+
+    ``run_affine_invariant`` 是唯一数得出这两个量的地方，服务层只是把它们搬进进度事件。
+    ``nfev`` 留 ``None``：MCMC 每步每 walker 一次评估，没有 ``least_squares`` 那种独立的
+    函数评估计数可报，填上去就是编造。
+    """
+    problem = _density_problem()
+    search = _stage_e_search(problem)
+    candidate = search.best_candidate
+    assert candidate is not None
+    result = api.FitResult.from_search(
+        search,
+        confidence=api.ConfidenceClass.TRUSTED,
+        uncertainty=_empty_uncertainty(candidate.candidate_id),
+    )
+    dataset = replace(
+        dataset_project("curve", result=result),
+        structure=problem.structure,
+        instrument=problem.instrument,
+    )
+    prepared = fitting.PreparedDatasetFit("curve", 0, dataset, problem)
+    events: list[api.FitProgress] = []
+
+    monkeypatch.setattr(
+        operations_phase,
+        "inspect_sources",
+        lambda _project: SimpleNamespace(valid=True, issues=(), datasets=()),
+    )
+
+    def run_problem(_analysis_problem, _selected, _config, *, progress=None, **_kwargs):
+        progress(3, 8, 0.25, 0.031)
+        return _bands_mcmc_report(
+            np.full((8, len(problem.variables)), 1.0),
+            names=tuple(variable.name for variable in problem.variables),
+        )
+
+    operations_phase._run_mcmc(
+        project(dataset),
+        "curve",
+        candidate.candidate_id,
+        api.McmcConfig(walkers=6, burn_in=0, production_steps=2),
+        events.append,
+        None,
+        compile_dataset=lambda *_args, **_kwargs: prepared,
+        with_parameter_priors=fitting.with_parameter_priors,
+        run_problem_mcmc=run_problem,
+        sld_bands=lambda _structure, report, _wavelength: (None, report),
+    )
+
+    assert [(event.stage, event.completed, event.total) for event in events] == [("MCMC", 3, 8)]
+    assert events[0].iteration == 3
+    assert events[0].acceptance_rate == 0.25
+    assert events[0].step_size == 0.031
+    assert events[0].nfev is None
+
+
+def test_mcmc_phase_overlays_priors_only_after_result_ownership_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem = _density_problem()
+    search = _stage_e_search(problem)
+    candidate = search.best_candidate
+    assert candidate is not None
+    uncertainty = _empty_uncertainty(candidate.candidate_id)
     result = api.FitResult.from_search(
         search,
         confidence=api.ConfidenceClass.TRUSTED,

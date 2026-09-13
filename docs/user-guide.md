@@ -461,7 +461,11 @@ for dataset in fit_output.updated_project.datasets:
     )
 
 api.save_project(updated, path.with_name("single-layer-fitted.xrrproj.json"))
-manifest = api.export_result(updated, Path("exports"), include_ort=True)
+manifest = api.export_result(
+    updated,
+    Path("exports"),
+    formats=(*api.DEFAULT_FORMATS, api.ExportFormat.ORT),
+)
 print(manifest.run_directory)
 ```
 
@@ -470,12 +474,16 @@ print(manifest.run_directory)
 
 ## 11. 导出文件和语义
 
-`api.export_result(result, output_dir, *, include_ort=False)` 接受 fitted `XrrProject` 或
+`api.export_result(result, output_dir, *, formats=api.DEFAULT_FORMATS)` 接受 fitted `XrrProject` 或
 `ProjectFitResult`；后者先归一为 `updated_project`，持久
 `dataset.last_valid_result` 是 artifact source of truth。导出先完成 schema、
 result、source/TOCTOU 和 selected candidate preflight，才分配输出目录。
 
-每个 dataset 始终输出：
+`formats` 是 `api.ExportFormat` 的集合，成员为 `xlsx` / `json` / `png` / `ort` / `csv` /
+`svg`；`api.DEFAULT_FORMATS` 即 `(XLSX, JSON, PNG)`。空集合和拼错的格式名当场报
+`ValueError`，不会静默发一棵少产物的树。给定顺序和重复项都不进产物：产物按路径排序。
+
+每个 dataset 在默认集合下始终输出（`run_log.txt` 与格式选择无关，任何集合都关不掉它）：
 
 ```text
 fit_result.xlsx
@@ -486,8 +494,9 @@ residuals.png
 run_log.txt
 ```
 
-传入 `include_ort=True`（CLI 对应 `--ort`）时，每个 dataset 还会额外输出
-ORSO `fit_result.ort`；默认关闭时产物集合保持不变。
+`formats` 里加入 `api.ExportFormat.ORT`（CLI 对应 `--ort`）时，每个 dataset 还会额外输出
+ORSO `fit_result.ort`；同理 `CSV` 追加 `parameters.csv`，`SVG` 追加矢量
+`sld_profile.svg`。只给默认集合时产物集合与这三种格式尚未存在时逐位一致。
 
 `fit_result.xlsx` sheets 固定为：
 
@@ -574,7 +583,7 @@ start_fit_job(project, checkpoint_path)
 start_automatic_fit_job(project, import_batch_id, checkpoint_path)
 start_mcmc_job(project, dataset_id, candidate_id, config)
 summarize_automatic_results(project, import_batch_id)
-export_result(result, output_dir, *, include_ort=False)
+export_result(result, output_dir, *, formats=DEFAULT_FORMATS)
 ```
 
 `OperationJob` 提供只读 `pid`/`is_running` 以及 `poll()`、`cancel()`、

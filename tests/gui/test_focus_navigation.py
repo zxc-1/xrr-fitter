@@ -197,7 +197,7 @@ def test_parameter_candidate_refresh_updates_only_current_column_and_preserves_i
 
 
 def test_parameter_controls_expose_display_units_metadata_alignment_and_tab_focus(qtbot) -> None:
-    from xrr_fitter.gui.parameters.table import ParameterTable
+    from xrr_fitter.gui.parameters.table import FREEDOM_TOOLTIPS, ParameterTable
 
     module = _accessibility()
     table = ParameterTable()
@@ -216,8 +216,14 @@ def test_parameter_controls_expose_display_units_metadata_alignment_and_tab_focu
     qtbot.addWidget(table)
     module.configure_accessibility(table)
 
-    assert table.item(0, 4).text() == "nm"
-    assert table.item(0, 0).toolTip() == f"{definition.display_name}\n({definition.name})"
+    # The unit rides in the name cell the way the design writes it -- 厚度 d（nm）--
+    # rather than in a 44px column of its own, and 20 declared Å still reads nm.
+    assert table.item(0, 0).text() == "膜厚（nm）"
+    # 这一格还兼着三档的勾，所以悬停除了身份还得说清当前那一档：勾本身只画出来，不解释
+    # 自己表示什么，光看格子分不出 partial 档和「没勾上」。
+    assert table.item(0, 0).toolTip() == (
+        f"{definition.display_name}\n({definition.name})\n{FREEDOM_TOOLTIPS[api.ParameterFreedom.FREE]}"
+    )
     assert table.item(0, 1).textAlignment() & Qt.AlignmentFlag.AlignRight
     assert table.focusPolicy() & Qt.FocusPolicy.TabFocus
 
@@ -275,6 +281,27 @@ def test_shell_has_logical_keyboard_focus_order(qtbot) -> None:
     qtbot.keyClick(first, Qt.Key.Key_Tab)
 
     assert _has_focus(second)
+
+
+def test_focus_order_names_only_controls_the_window_really_has(qtbot) -> None:
+    """A stale name drops out of the tab chain without failing anything.
+
+    ``configure_focus_navigation`` skips every name it cannot find, so an entry
+    left behind by a rename costs no error and no warning -- it silently hands
+    focus from the entry before it straight to the entry after, and the control it
+    was meant to cover becomes unreachable in reading order.
+    """
+    from xrr_fitter.gui.main_window import MainWindow
+
+    module = _accessibility()
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.wait(1)
+
+    missing = [name for name in module.FOCUS_ORDER if window.findChild(QWidget, name) is None]
+
+    assert missing == []
 
 
 @pytest.mark.parametrize(

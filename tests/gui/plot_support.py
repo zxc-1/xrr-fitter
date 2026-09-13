@@ -33,18 +33,25 @@ from tests.support.model_cases import (
 
 import xrr_fitter.api as api
 from xrr_fitter.gui.plots.live import LiveReflectivityPlot
+from xrr_fitter.gui.plots.sld import (
+    CANDIDATE_REAL_LABEL,
+    NOMINAL_OVERLAY_LABEL,
+    SLD_DISPLAY_SCALE,
+)
 
 # The SLD profile left the tab bar for a permanent companion pane, so these are
-# the switchable diagnostic tabs only, with the log view leading.
+# the switchable diagnostic tabs only, with the log view leading.  The weighted
+# residual stayed: 设计稿 帧① 的 ``.tabs`` 第四段就是它，而它同时也是钉在 tab 组下面
+# 的那张卡——同一张卡在两处之间搬家，见 ``panel._sync_residual_home``。
 TAB_TITLES = (
     "对数反射率",
     "原始数据与模型",
-    "qz⁴R",
+    "qz⁴·R",
     "加权残差",
     "候选解比较",
     "残差热图",
     "参数热图",
-    "相关性与区间",
+    "不确定度",
     "批量趋势",
 )
 
@@ -114,10 +121,10 @@ def _is_live(view):
 # curve and the raw included points both ride the observed item, so several
 # labels collapse onto one attribute.
 PG_ITEM_BY_LABEL = {
-    "归一化数据": "observed_item",
+    "观测数据": "observed_item",
     "拟合点": "observed_item",
     "加权残差": "observed_item",
-    "当前候选模型": "model_item",
+    "当前拟合模型": "model_item",
     "排除点": "excluded_item",
     "零参考线": "reference_item",
     "搜索中模型": "preview_item",
@@ -203,9 +210,16 @@ def _artist_snapshot(panel):
             # curve plus the two annotations, which is what a redraw would change.
             lengths = tuple(
                 _pg_xy(getattr(view, attr))[0].size
-                for attr in ("observed_item", "model_item", "excluded_item", "reference_item", "preview_item")
+                for attr in (
+                    "observed_item",
+                    "model_item",
+                    "excluded_item",
+                    "reference_item",
+                    "clipped_item",
+                    "preview_item",
+                )
             )
-            snapshot.append((key, lengths, view.placeholder_text(), view.quality_caption_text()))
+            snapshot.append((key, lengths, view.placeholder_text(), view.fit_range_caption()))
         else:
             snapshot.append(
                 (
@@ -389,6 +403,9 @@ __all__ = (
     "isValid",
     "api",
     "LiveReflectivityPlot",
+    "CANDIDATE_REAL_LABEL",
+    "NOMINAL_OVERLAY_LABEL",
+    "SLD_DISPLAY_SCALE",
     "final_fit_result",
     "fit_candidate",
     "prepared_data",

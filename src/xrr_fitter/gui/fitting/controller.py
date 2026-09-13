@@ -22,13 +22,16 @@ class FitController(QObject):
     cancelled = Signal(str)
     failed = Signal(object)
     stopped = Signal()
+    # 画布顶栏那枚「实时刷新 · 每 N ms」报的是这个数。轮询会在长时间无事件时退到空闲
+    # 间隔，徽标只有跟着改口才不是一句与画面对不上的保证。
+    poll_interval_changed = Signal(int)
 
     def __init__(
         self,
         parent: QObject | None = None,
         *,
-        poll_interval_ms: int = 25,
-        idle_poll_interval_ms: int = 200,
+        poll_interval_ms: int = 250,
+        idle_poll_interval_ms: int = 1000,
         backoff_after_empty_polls: int = 8,
     ) -> None:
         super().__init__(parent)
@@ -129,10 +132,12 @@ class FitController(QObject):
             self._empty_polls = 0
             if self._timer.interval() != self._base_interval_ms:
                 self._timer.setInterval(self._base_interval_ms)
+                self.poll_interval_changed.emit(self._base_interval_ms)
             return
         self._empty_polls += 1
         if self._empty_polls >= self._backoff_after and self._timer.interval() != self._idle_interval_ms:
             self._timer.setInterval(self._idle_interval_ms)
+            self.poll_interval_changed.emit(self._idle_interval_ms)
 
     def _dispatch_batch(self, events: tuple[api.OperationEvent, ...]) -> None:
         """Project one frame per stage while preserving durable event order.
@@ -186,6 +191,20 @@ class FitController(QObject):
     def cancel(self) -> None:
         if self._job is not None:
             self._job.cancel()
+
+    def pause(self) -> None:
+        """让 worker 停在下一个阶段边界，已跑完的阶段与当前最优都留着。"""
+        if self._job is not None:
+            self._job.pause()
+
+    def resume(self) -> None:
+        if self._job is not None:
+            self._job.resume()
+
+    def skip_stage(self) -> None:
+        """作废当前这一个阶段，搜索接着往下跑。"""
+        if self._job is not None:
+            self._job.skip_stage()
 
     def force_stop(self) -> None:
         if self._job is not None:

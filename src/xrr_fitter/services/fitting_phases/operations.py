@@ -311,7 +311,10 @@ def _run_mcmc(
         candidate_id,
     )
 
-    def progress(completed: int, total: int) -> None:
+    def progress(completed: int, total: int, rate: float, scale: float) -> None:
+        # ``nfev`` stays absent: one MCMC step evaluates every walker once, so there
+        # is no separate function-evaluation count of the kind ``least_squares``
+        # reports. The step index is the iteration.
         if progress_callback is not None:
             progress_callback(
                 FitProgress(
@@ -321,6 +324,9 @@ def _run_mcmc(
                     total,
                     candidate.objective,
                     "MCMC sampling",
+                    iteration=completed,
+                    acceptance_rate=rate,
+                    step_size=scale,
                 )
             )
 

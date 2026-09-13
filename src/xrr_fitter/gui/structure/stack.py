@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
@@ -32,8 +32,22 @@ DEPTH_Y = 5  # vertical extent of the top face
 # at least a band tall enough to click and to carry a label.
 MIN_BAND_H = 14
 
-# Enough rows to seat the media plus a few components before the panel scrolls.
+# The height the diagram would like: enough that a thin layer beside a thick one
+# still shows the ratio rather than just clearing MIN_BAND_H.  It is a preference,
+# not a floor -- see `view_floor` for the height below which bands start vanishing.
 MIN_VIEW_H = 160
+
+
+def view_floor(structure: api.StructureSpec | None) -> int:
+    """The least height that still seats every band at a clickable size.
+
+    Reserving a flat height instead would charge a one-layer stack for bands it
+    does not have, and in a short pane that reservation comes out of the layer
+    list -- the diagram would keep room for nine bands while the list showing
+    the two real ones is pushed under the fold.
+    """
+    components = 0 if structure is None else len(structure.components)
+    return 2 * MEDIUM_BAND_H + components * MIN_BAND_H
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +60,15 @@ class Band:
     top: int
     height: int
     fill: str
+
+
+def component_fill(index: int) -> str:
+    """The data hue that stands for the component at `index`.
+
+    Shared with the tree so a row and its band agree on colour: the two views
+    state the same structure, and the swatch is the only thing pairing them.
+    """
+    return theme.DATA_SEQUENCE[index % len(theme.DATA_SEQUENCE)]
 
 
 def _component_thickness(component: object) -> float:
@@ -135,7 +158,7 @@ def stack_bands(structure: api.StructureSpec | None, height: int) -> tuple[Band,
     """Lay the structure out as bands from fronting down to backing."""
     if structure is None:
         return ()
-    usable = max(int(height), MIN_VIEW_H)
+    usable = max(int(height), view_floor(structure))
     components = list(structure.components)
     budget = usable - 2 * MEDIUM_BAND_H
     heights = _proportional_heights([_component_thickness(value) for value in components], budget)
@@ -151,7 +174,7 @@ def stack_bands(structure: api.StructureSpec | None, height: int) -> tuple[Band,
                 _component_detail(component),
                 cursor,
                 band_height,
-                theme.DATA_SEQUENCE[index % len(theme.DATA_SEQUENCE)],
+                component_fill(index),
             )
         )
         cursor += band_height
@@ -168,8 +191,10 @@ class StackView(QWidget):
         super().__init__(parent)
         self.setObjectName("structureStack")
         self.setAccessibleName("样品结构示意图")
-        self.setMinimumHeight(MIN_VIEW_H)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumHeight(view_floor(None))
+        # 纵向只是 ``Preferred``：同一张卡里层列表是内容会变长的那个，剩余高度该归它。
+        # 图给多了高度只是把同样的比例画大，列表给多了才多出一行看得见的层。
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
         self._structure: api.StructureSpec | None = None
@@ -177,13 +202,24 @@ class StackView(QWidget):
         self._hovered: int | None = None
         self._bands: tuple[Band, ...] = ()
 
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Ask for the comfortable height, not the floor.
+
+        Without a hint Qt falls back to the minimum, which now tracks the layer
+        count -- a two-layer stack would then be handed 64px and draw its ratio
+        in a strip too short to read.
+        """
+        return QSize(super().sizeHint().width(), MIN_VIEW_H)
+
     def load(self, structure: api.StructureSpec) -> None:
         self._structure = structure
+        self.setMinimumHeight(view_floor(structure))
         self._relayout()
 
     def clear(self) -> None:
         self._structure = None
         self._selected = None
+        self.setMinimumHeight(view_floor(None))
         self._relayout()
 
     def bands(self) -> tuple[Band, ...]:

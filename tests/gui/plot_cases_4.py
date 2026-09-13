@@ -60,6 +60,9 @@ def test_number_key_shortcuts_address_tabs_by_visible_position(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
     panel.set_expert_mode(True)
 
+    # Ordinal 4 is the fifth visible tab: four reflectivity views precede the
+    # analysis group -- 对数反射率 / 原始数据与模型 / qz⁴·R / 加权残差, the design's
+    # four ``.tabs`` segments.
     assert panel.select_visible_view(4) is True
     assert panel.current_view_key() == "candidates"
 
@@ -240,31 +243,44 @@ def test_plot_panel_release_disconnects_every_navigator(qtbot) -> None:
     assert all(canvas.toolbar is None for canvas in canvases)
 
 
-# Every plot control the user clicks -- the three modes, the three navigation
-# actions and the two one-shot zooms -- so a bare text button reads as "什么玩意"
-# rather than as a recognisable tool.
-PLOT_CONTROL_NAMES = (
-    "plotModeView",
-    "plotModeRange",
-    "plotModeMask",
+# 设计稿 ``.modebar`` 上的四枚字形：``✥ ⤢ ⌂ ▭``（平移 · 框选放大 · 复位 · 范围）。
+PLOT_BAR_NAMES = (
     "plotNavPan",
     "plotNavZoom",
     "plotNavHome",
-    "plotZoomToRange",
-    "plotResetZoom",
+    "plotModeRange",
 )
 
 
-def _control_glyph(button) -> bytes:
+def _plot_commands(panel) -> dict[str, object]:
+    """每一条用户会点的绘图命令：条上四枚，加搬进右键菜单的那五条。
+
+    「范围」只算一次——``▭`` 用 ``setDefaultAction`` 挂着菜单里那条同名 action，是一条
+    命令的两个入口；两处都数会让「字形互不相同」这一条测试假红。
+    """
+    commands: dict[str, object] = {name: panel.findChild(QToolButton, name) for name in PLOT_BAR_NAMES}
+    bar_action = panel.mode_actions()["range"]
+    for action in panel.toolbar.tool_actions():
+        if action.isSeparator() or action is bar_action:
+            continue
+        commands[action.text()] = action
+    return commands
+
+
+def _control_glyph(control) -> bytes:
     """The rendered 16px glyph, so two controls compare by what the eye sees."""
-    return bytes(button.icon().pixmap(16, 16).toImage().constBits())
+    return bytes(control.icon().pixmap(16, 16).toImage().constBits())
 
 
 def test_plot_controls_each_wear_an_icon(qtbot) -> None:
-    """The literal complaint: a graphical tool shows tools, not a wall of text."""
+    """The literal complaint: a graphical tool shows tools, not a wall of text.
+
+    菜单里那五条也带字形：同一批 ``QAction`` 还挂在 视图 菜单里，那里图标是读者辨认
+    命令的主要线索。
+    """
     panel = _panel(qtbot, data=prepared_data(size=4))
 
-    bare = [name for name in PLOT_CONTROL_NAMES if panel.findChild(QToolButton, name).icon().isNull()]
+    bare = [name for name, control in _plot_commands(panel).items() if control.icon().isNull()]
 
     assert bare == []
 
@@ -274,8 +290,8 @@ def test_plot_controls_wear_distinct_icons(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
 
     seen: dict[bytes, str] = {}
-    for name in PLOT_CONTROL_NAMES:
-        glyph = _control_glyph(panel.findChild(QToolButton, name))
+    for name, control in _plot_commands(panel).items():
+        glyph = _control_glyph(control)
         assert glyph not in seen, f"{name} 与 {seen[glyph]} 用了同一个图标"
         seen[glyph] = name
 
@@ -286,12 +302,13 @@ def test_plot_controls_show_the_glyph_alone(qtbot) -> None:
     Labels are what made the bar as wide as the panel; over the data they would
     curtain the curve the tool acts on.  The name is not lost, it moves to the
     tooltip and the accessible name, which is where peer charting tools keep it.
+    ``▭`` 的 ``text()`` 现在不空——它跟着菜单里那条 action，而菜单要用字；画不画字看的是
+    ``ToolButtonIconOnly``，所以这里问的是这个。
     """
     panel = _panel(qtbot, data=prepared_data(size=4))
 
-    for name in PLOT_CONTROL_NAMES:
+    for name in PLOT_BAR_NAMES:
         button = panel.findChild(QToolButton, name)
-        assert button.text() == ""
         assert button.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonIconOnly
         assert button.toolTip() != ""
         assert button.accessibleName() != ""
@@ -384,8 +401,25 @@ def test_plot_cursor_readout_reports_coordinates_under_the_pointer(qtbot) -> Non
     hovering = readout.text()
     assert any(character.isdigit() for character in hovering)
 
-    # Leaving the pane clears the coordinate and restores the standing hint, so a
-    # stale reading never lingers as if the pointer were still on the curve.
+    # Leaving the pane clears the coordinate back to the idle text, so a stale
+    # reading never lingers as if the pointer were still on the curve.
     raw.cursor_left.emit()
     assert readout.text() == idle
     assert hovering != idle
+
+
+def test_plot_cursor_readout_says_nothing_while_the_pointer_is_away(qtbot) -> None:
+    """设计稿在残差卡和状态栏之间没有任何一行常驻提示。
+
+    「将指针移到曲线上可读取坐标」是句说明书式的提示：它只在读者还没把指针放上去时
+    出现，而那恰恰是它最没用的时候——一放上去就被坐标顶掉。空着这条槽既守住了设计稿
+    的留白，也保住了行高，坐标出现时不会把下面的卡片顶一下。
+    """
+    from PySide6.QtWidgets import QLabel
+
+    panel = _panel(qtbot, data=prepared_data(size=4))
+    panel.select_view("raw")
+    readout = panel.findChild(QLabel, "plotCursorReadout")
+
+    assert readout is not None
+    assert readout.text() == ""

@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+from xrr_fitter.gui.accessibility import localize_standard_buttons
 from xrr_fitter.gui.document import ProjectDocument
 
 # The binary operators the builder can reduce with; leaf operands ("ref",
@@ -283,6 +284,7 @@ class ConstraintDialog(QDialog):
         self.error_label.hide()
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.setObjectName("constraintDialogButtons")
+        localize_standard_buttons(self.buttons, confirm="确定")
         self.buttons.accepted.connect(self._accept_fields)
         self.buttons.rejected.connect(self.reject)
         self._arrange()

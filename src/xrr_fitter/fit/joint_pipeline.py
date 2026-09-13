@@ -16,7 +16,7 @@ Both paths preserve the deterministic child-seed lineage.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -200,6 +200,22 @@ def _append_stage_e(
     )
 
 
+def _dataset_objectives(
+    problem: JointFitProblem,
+    valued: Sequence[object],
+) -> tuple[tuple[str, float], ...]:
+    """Pair every dataset id with the local objective already computed for it.
+
+    The joint evaluation keeps one member evaluation per dataset, and every stage
+    reads that list to project its candidates. Reporting the same numbers keeps the
+    breakdown identical to the projected candidates instead of risking a second,
+    separately computed set.
+    """
+    return tuple(
+        (dataset_id, float(value.objective)) for dataset_id, value in zip(problem.dataset_ids, valued, strict=True)
+    )
+
+
 def _emit(
     callback: Callable[[FitProgress], None] | None,
     stage: str,
@@ -207,9 +223,20 @@ def _emit(
     total: int,
     best: float,
     message: str,
+    objectives: tuple[tuple[str, float], ...] | None = None,
 ) -> None:
     if callback is not None:
-        callback(FitProgress(None, stage, completed, total, best, message))
+        callback(
+            FitProgress(
+                None,
+                stage,
+                completed,
+                total,
+                best,
+                message,
+                dataset_objectives=objectives,
+            )
+        )
 
 
 def _local_budget(problem: JointFitProblem) -> int:
@@ -238,7 +265,15 @@ def _append_solution(
         solved.evaluation.objective if solved.evaluation.valid and not solved.objective_increased else float("inf")
     )
     current_best = min(best, objective)
-    _emit(progress, stage, completed, total, current_best, f"joint {stage}")
+    _emit(
+        progress,
+        stage,
+        completed,
+        total,
+        current_best,
+        f"joint {stage}",
+        _dataset_objectives(problem, solved.evaluation.local_evaluations),
+    )
     return current_best
 
 
@@ -597,7 +632,15 @@ def run_joint_fit(
     state, initial, remaining = _initial_joint_run(request, seeds)
     if fresh:
         summary = state.summaries[0]
-        _emit(progress, "A", 1, 1, summary.best_objective, "joint A")
+        _emit(
+            progress,
+            "A",
+            1,
+            1,
+            summary.best_objective,
+            "joint A",
+            _dataset_objectives(request.problem, tuple(aligned[0] for aligned in state.candidates)),
+        )
     for stage in remaining:
         if stage == "E":
             state = _run_stage_e_prefix(

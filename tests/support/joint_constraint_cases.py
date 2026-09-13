@@ -12,6 +12,7 @@ from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
     ConstraintNode,
     ConstraintRule,
+    ParameterFreedom,
     ParameterReference,
     ParameterSetting,
 )
@@ -40,7 +41,7 @@ def local_problem(*, seed: int, size: int, scale_prior: bool = False):
             definition.initial,
             definition.lower if definition.name in free_names else definition.initial,
             definition.upper if definition.name in free_names else definition.initial,
-            locked=definition.name not in free_names,
+            freedom=ParameterFreedom.from_locked(definition.name not in free_names),
         )
         for definition in base.parameter_definitions
     )
@@ -125,7 +126,7 @@ def _roughness_problem(*, seed: int, size: int):
             definition.initial,
             free_bounds.get(definition.name, (definition.initial, definition.initial))[0],
             free_bounds.get(definition.name, (definition.initial, definition.initial))[1],
-            locked=definition.name not in free_bounds,
+            freedom=ParameterFreedom.from_locked(definition.name not in free_bounds),
         )
         for definition in base.parameter_definitions
     )

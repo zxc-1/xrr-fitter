@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
 
-from xrr_fitter.model.data import BeamSpec
+from xrr_fitter.model.data import ANGLE_CONVENTIONS, AngleConvention, BeamSpec
 from xrr_fitter.model.instrument import InstrumentSpec
 
 
@@ -60,6 +60,10 @@ class MeasurementPreset:
     beam: BeamSpec
     instrument: InstrumentSpec
     import_angle_offset_deg: float = 0.0
+    # 这台仪器输出的角度列量的是什么角，跟 ``import_angle_offset_deg`` 同属「导入时怎么
+    # 解释这一列」。约定是轴变换（``"theta"`` 时 ×2 归一到散射角），偏移是加性修正，两者
+    # 各自独立叠加。默认 ``"two_theta"`` 是既有行为，换默认值会让老项目重导时角度翻倍。
+    angle_convention: AngleConvention = "two_theta"
 
     def __post_init__(self) -> None:
         if not self.preset_id.strip():
@@ -70,6 +74,8 @@ class MeasurementPreset:
             raise TypeError("instrument must be InstrumentSpec")
         if not isfinite(self.import_angle_offset_deg):
             raise ValueError("import_angle_offset_deg must be finite")
+        if self.angle_convention not in ANGLE_CONVENTIONS:
+            raise ValueError(f"unknown angle_convention: {self.angle_convention}")
 
 
 @dataclass(frozen=True, slots=True)

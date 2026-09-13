@@ -172,6 +172,20 @@ def _validate_optional_sld_bands(value: SldUncertaintyBands | None) -> None:
         raise TypeError("sld_bands must be a SldUncertaintyBands")
 
 
+def _validate_bootstrap_sample_count(value: object, performed: bool) -> None:
+    """请求的重采样次数：非负整数，且没跑过时只能是 0。
+
+    最后那一条是防两个字段互相打脸：``bootstrap_performed=False`` 说的是「这一步没走」，
+    此时还报出个次数，界面读哪一个都会错。
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("bootstrap_sample_count must be int")
+    if value < 0:
+        raise ValueError("bootstrap_sample_count must be nonnegative")
+    if not performed and value:
+        raise ValueError("bootstrap_sample_count must be 0 when no bootstrap ran")
+
+
 class ConfidenceClass(StrEnum):
     """Persisted user-facing confidence categories."""
 
@@ -221,13 +235,21 @@ class ProfileBasinDecision:
 
 @dataclass(frozen=True, slots=True)
 class ParameterProfile:
-    """Profile coordinates, objective evidence, and closure flags."""
+    """Profile coordinates, objective evidence, and closure flags.
+
+    ``objective_threshold`` is the objective the scan compared against when it set
+    the two closure flags.  Publishing the flags without the number leaves a reader
+    with a curve and two booleans and no way to see where the crossing was, so the
+    threshold travels with the curve; it is ``None`` for a profile recorded before
+    the scan reported it.
+    """
 
     name: str
     values: np.ndarray
     objectives: np.ndarray
     lower_closed: bool
     upper_closed: bool
+    objective_threshold: float | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -238,6 +260,8 @@ class ParameterProfile:
             raise ValueError("profile values and objectives must have the same shape")
         if values.size == 0 or np.any(~np.isfinite(values)):
             raise ValueError("profile arrays contain invalid values")
+        if self.objective_threshold is not None and not isfinite(self.objective_threshold):
+            raise ValueError("profile objective threshold must be finite")
         object.__setattr__(self, "values", values)
         object.__setattr__(self, "objectives", objectives)
 
@@ -305,6 +329,9 @@ class UncertaintyReport:
     prior_conflicts: tuple[str, ...] = ()
     # Optional calibration metadata is validated without changing legacy reports.
     parameter_sigma: np.ndarray | None = None
+    # 请求的重采样次数——失败率的基数。缺了它「丢了 2%」读不出量级；0 读作「未记录」，
+    # 这个字段加进来之前存下的工程文件就是这样。
+    bootstrap_sample_count: int = 0
 
     def __post_init__(self) -> None:
         names = tuple(self.correlation_names)
@@ -326,6 +353,7 @@ class UncertaintyReport:
             raise ValueError("candidate_id must be a nonempty string or None")
         if not isinstance(self.bootstrap_performed, bool):
             raise TypeError("bootstrap_performed must be bool")
+        _validate_bootstrap_sample_count(self.bootstrap_sample_count, self.bootstrap_performed)
         _validate_optional_sld_bands(self.sld_bands)
         object.__setattr__(self, "diagnostics", diagnostics)
         object.__setattr__(self, "prior_conflicts", tuple(self.prior_conflicts))

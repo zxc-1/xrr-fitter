@@ -728,8 +728,18 @@ def _dense_basin_search(
     return None
 
 
+def _closure_threshold(setup: _Setup) -> float:
+    """The objective a side has to reach before the scan calls that side closed.
+
+    Named once because it is both the test the flags are decided by and the number
+    published on the profile; two spellings of it would let the reference line drawn
+    for a reader drift away from the comparison that actually set the flags.
+    """
+    return setup.center_objective + setup.delta
+
+
 def _closed_sides(setup: _Setup, units: np.ndarray, objectives: np.ndarray) -> tuple[bool, bool]:
-    threshold = setup.center_objective + setup.delta
+    threshold = _closure_threshold(setup)
     center = setup.center[setup.index]
     supported = np.isfinite(objectives) & (objectives >= threshold)
     return (
@@ -832,7 +842,14 @@ def _finish_profile_plan(
     if np.any(~np.isfinite(values)):
         raise ValueError("profile value_mapper returned a nonfinite value")
     lower_closed, upper_closed = _closed_sides(setup, units, objectives)
-    profile = ParameterProfile(setup.name, values, objectives, lower_closed, upper_closed)
+    profile = ParameterProfile(
+        setup.name,
+        values,
+        objectives,
+        lower_closed,
+        upper_closed,
+        _closure_threshold(setup),
+    )
     return profile, best_unit, best_objective, setup.delta
 
 

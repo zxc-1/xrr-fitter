@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from xrr_fitter.io.source import dataset_index, resolve_source_path
-from xrr_fitter.io.xy import read_xy, read_xy_bytes
+from xrr_fitter.io.xy import read_xy, read_xy_bytes, scan_angle_convention
 from xrr_fitter.model.automation import (
     AutomaticRole,
     AutomaticStatus,
@@ -40,6 +40,8 @@ from xrr_fitter.model.automation import (
     MeasurementPreset,
 )
 from xrr_fitter.model.data import (
+    AngleConvention,
+    AngleConventionEvidence,
     BeamSpec,
     DataColumnMapping,
     PreparedData,
@@ -116,9 +118,23 @@ def import_data(
     beam: BeamSpec,
     import_angle_offset_deg: float = 0.0,
     column_mapping: DataColumnMapping | None = None,
+    angle_convention: AngleConvention = "two_theta",
 ) -> PreparedData:
     """Import one source through the authoritative XY reader."""
-    return read_xy(path, beam, import_angle_offset_deg, column_mapping)
+    return read_xy(path, beam, import_angle_offset_deg, column_mapping, angle_convention)
+
+
+def detect_angle_convention(path: str | Path) -> AngleConventionEvidence:
+    """Report the angle axis a source declares, without importing it.
+
+    格式知识归 ``io``：表头长什么样、编码怎么解、数据区从哪一行开始，全项目只有一处说
+    法。这一行的价值是给 GUI 一个不跨层的入口——``gui`` 只准 import ``api``，而 ``api``
+    只转交 ``services``。
+
+    入口收路径而不是 ``PreparedData``：后者要求先用某个猜出来的约定成功解析一遍，才能
+    问「该用哪个约定」，顺序是颠倒的；点数不足、甚至读不出曲线的文件同样应该答得出轴。
+    """
+    return scan_angle_convention(path)
 
 
 def _dataset_id(project: XrrProject, stem: str) -> str:
@@ -244,6 +260,7 @@ def _from_prepared(
         beam=data.beam,
         import_angle_offset_deg=data.import_angle_offset_deg,
         column_mapping=data.column_mapping,
+        angle_convention=data.angle_convention,
         fit_mask=tuple(bool(value) for value in data.fit_mask),
         fit_range_two_theta_deg=_fit_range(data),
         structure=structure,
@@ -284,6 +301,7 @@ def _automatic_dataset(
         preview.preset.beam,
         preview.preset.import_angle_offset_deg,
         column_mapping,
+        preview.preset.angle_convention,
     )
     return _from_prepared(
         _dataset_id(project, row.dataset_id_stem),
@@ -331,6 +349,7 @@ def _import_preview_row(
             preview.preset.beam,
             preview.preset.import_angle_offset_deg,
             mappings.get(row.source_path),
+            preview.preset.angle_convention,
         )
         return _from_prepared(
             _dataset_id(project, row.dataset_id_stem),
@@ -435,6 +454,7 @@ def add_dataset(
     column_mapping: DataColumnMapping | None = None,
     import_angle_offset_deg: float = 0.0,
     beam: BeamSpec | None = None,
+    angle_convention: AngleConvention = "two_theta",
 ) -> XrrProject:
     """Import and append a dataset with a stable source-stem identifier."""
     if not isinstance(project, XrrProject):
@@ -452,6 +472,7 @@ def add_dataset(
         beam_value,
         import_angle_offset_deg,
         column_mapping,
+        angle_convention,
     )
     dataset = _from_prepared(
         _dataset_id(project, identifier_stem),
@@ -576,6 +597,7 @@ def _read_current(project: XrrProject, dataset: DatasetProject) -> PreparedData:
         dataset.beam,
         dataset.import_angle_offset_deg,
         dataset.column_mapping,
+        dataset.angle_convention,
     )
     if data.source_sha256 != dataset.source_sha256:
         raise ValueError(f"source changed for dataset {dataset.dataset_id}")
@@ -687,6 +709,7 @@ def _accepted_source_dataset(
         beam=dataset.beam,
         import_angle_offset_deg=dataset.import_angle_offset_deg,
         column_mapping=dataset.column_mapping,
+        angle_convention=dataset.angle_convention,
     )
     return index, replace(
         dataset,

@@ -2,40 +2,25 @@
 
 from __future__ import annotations
 
-from math import isfinite
-
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import QPainter, QPen
-from PySide6.QtWidgets import QListWidget, QListWidgetItem, QWidget
+from PySide6.QtWidgets import QFrame, QListWidget, QListWidgetItem, QWidget
 
-# An empty scrolling view reports a fixed 192px height regardless of content, and
-# three of those stacked in the result dock overflowed it while showing nothing.
-# The list asks for the rows it actually holds, floored so a short list still
-# reads as a list and capped so a long one yields to its own scrollbar.
+from xrr_fitter.gui.results.candidate_row import (
+    CANDIDATE_ROW_ROLE,
+    ROW_PAD_V_PX,
+    CandidateRowDelegate,
+    candidate_is_selectable,
+    candidate_row,
+)
+
+# 空列表的高度：Qt 给一张滚动视图的默认高是 192px，与内容无关，三张这样的列表叠在
+# 结果栏里就把它撑破了。有行的时候高度按行算（见 ``sizeHint``），一行都没有的时候留
+# 三行的位置，让那句「运行拟合后……」有地方写——占位文字挤在一行高里会被裁掉。
+#
+# 上限取消了：设计稿这一节是检视器那一栏的末段，整段展开，列表内再套一层滚动条会把
+# 末行藏在折叠线下，而这一栏本来就自己会滚。
 VISIBLE_ROW_FLOOR = 3
-VISIBLE_ROW_CEILING = 8
-
-
-def candidate_is_selectable(candidate: object) -> bool:
-    """Return whether a candidate may be recommended or sampled."""
-    ranking = getattr(candidate, "ranking_objective", None)
-    ranking_is_finite = ranking is None or isfinite(ranking)
-    return bool(
-        getattr(candidate, "valid", False)
-        and getattr(candidate, "stop_reason", "") != "early_eliminated"
-        and isfinite(getattr(candidate, "objective", float("inf")))
-        and ranking_is_finite
-    )
-
-
-def candidate_is_archived(candidate: object) -> bool:
-    ranking = getattr(candidate, "ranking_objective", None)
-    return bool(
-        getattr(candidate, "valid", False)
-        and getattr(candidate, "stop_reason", "") == "early_eliminated"
-        and isfinite(getattr(candidate, "objective", float("inf")))
-        and (ranking is None or isfinite(ranking))
-    )
 
 
 def candidate_is_mcmc_ready(candidate: object | None, result: object | None) -> bool:
@@ -89,6 +74,19 @@ def persisted_candidate_id(project: object, dataset_id: str) -> str | None:
     )
 
 
+def result_verdict(result: object) -> str | None:
+    """整份结果的判定，读成行与判定卡共用的那个字符串。
+
+    ``FitResult.confidence`` 是 ``ConfidenceClass``（``StrEnum``），行只认字符串——
+    ``theme.CONFIDENCE_GLYPHS`` 的键就是这几个字。旧存档里这个字段可能是空的，此时
+    返回 ``None``，被采信的那一行画空心圈（「还没测」），不是第五档可信度。
+    """
+    confidence = getattr(result, "confidence", None)
+    if confidence is None:
+        return None
+    return str(getattr(confidence, "value", confidence))
+
+
 class CandidateList(QListWidget):
     """Render every retained candidate without hiding archived evidence."""
 
@@ -99,23 +97,42 @@ class CandidateList(QListWidget):
         self._dataset_id: str | None = None
         self._result: object | None = None
         self._recommended_id: str | None = None
+        self._confidence: str | None = None
         self._inspection_result: object | None = None
         self._inspection_candidate_id: str | None = None
         self.setObjectName("candidateList")
         self.setAccessibleName("拟合候选解")
         self.setAccessibleDescription("用方向键在候选解之间切换，证据面板会随当前行更新")
         self.setToolTip("用方向键或点击切换候选解；证据面板随当前行更新")
-        self.setWordWrap(True)
+        # 换行关掉：DisplayRole 上挂的是那句散文，开着换行它会把一行撑成三四行高，而
+        # 这一行根本不画那句话（见 ``CandidateRowDelegate.sizeHint``）。
+        self.setWordWrap(False)
+        # 行与行之间的缝由委托算进行高。``setSpacing`` 四边都插，首行上方和末行下方于是
+        # 各多出一半，而设计稿这一段紧贴着上一节的横线开始。
+        self.setSpacing(0)
+        self.setViewportMargins(0, 0, 0, 0)
+        # 外框交给外层那张卡：这张列表本来就装在检视器的「候选解」一段里，自己再画一道
+        # 就是双线。样式表里那道通用 ``border`` 另由 ``#candidateList`` 抹掉。
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        # 整段展开，不自己滚：检视器那一栏会滚，列表内再套一层就把末行藏了。
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # 分段自绘。散文行留在 DisplayRole 上供读屏，画面按设计稿分段对齐。
+        self.setItemDelegate(CandidateRowDelegate(self))
         self.currentItemChanged.connect(self._current_item_changed)
 
     def sizeHint(self) -> QSize:
-        """Ask for the rows actually held, between the floor and the ceiling."""
+        """列表高就是它装的那几行，一像素不多。
+
+        不滚动就得把高度让给内容。留着 Qt 默认那份高度，检视器里这一段会先撑出一片空白；
+        按行算而每行的高由委托给出（字高 + 上下内边距 + 行间那道缝），所以这里只是把
+        ``sizeHintForRow`` 加起来——缝已经在里面了。
+        """
         width = super().sizeHint().width()
-        row_height = self.sizeHintForRow(0)
-        if row_height <= 0:
-            row_height = self.fontMetrics().lineSpacing()
-        rows = min(max(self.count(), VISIBLE_ROW_FLOOR), VISIBLE_ROW_CEILING)
-        return QSize(width, rows * row_height + 2 * self.frameWidth())
+        if self.count() == 0:
+            unit = self.fontMetrics().height() + 2 * ROW_PAD_V_PX
+            return QSize(width, VISIBLE_ROW_FLOOR * unit + 2 * self.frameWidth())
+        rows = sum(self.sizeHintForRow(row) for row in range(self.count()))
+        return QSize(width, rows + 2 * self.frameWidth())
 
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
@@ -146,6 +163,9 @@ class CandidateList(QListWidget):
     ) -> str | None:
         best = result.best_candidate
         self._recommended_id = None if best is None else best.candidate_id
+        # 判定属于整份结果，行上画的是「被采信的那一行的判定」——所以在这里读一次存起来，
+        # 后面切候选（``inspect``）时那枚 ● 不会因为焦点移开就没了。
+        self._confidence = result_verdict(result)
         inspection_is_current = (
             self._dataset_id == dataset_id
             and self._inspection_result is result
@@ -160,6 +180,7 @@ class CandidateList(QListWidget):
             result.candidates,
             selected_id=visible_id,
             recommended_id=self._recommended_id,
+            confidence=self._confidence,
         )
         return visible_id
 
@@ -173,6 +194,7 @@ class CandidateList(QListWidget):
             self._result.candidates,
             selected_id=candidate_id,
             recommended_id=self._recommended_id,
+            confidence=self._confidence,
         )
         return candidate
 
@@ -192,6 +214,7 @@ class CandidateList(QListWidget):
         self._dataset_id = None
         self._result = None
         self._recommended_id = None
+        self._confidence = None
         self.clear_inspection()
         self.clear_candidates()
 
@@ -201,29 +224,46 @@ class CandidateList(QListWidget):
         *,
         selected_id: str | None,
         recommended_id: str | None,
+        confidence: str | None = None,
     ) -> None:
         blocker = QSignalBlocker(self)
         self.clear()
         selected_row = -1
         for row, candidate in enumerate(candidates):
-            item = QListWidgetItem(
-                candidate_line(
-                    candidate,
-                    selected=candidate.candidate_id == selected_id,
-                    recommended=candidate.candidate_id == recommended_id,
-                )
-            )
+            selected = candidate.candidate_id == selected_id
+            recommended = candidate.candidate_id == recommended_id
+            line = candidate_line(candidate, selected=selected, recommended=recommended)
+            item = QListWidgetItem(line)
             item.setData(Qt.ItemDataRole.UserRole, candidate.candidate_id)
+            # 名字换成序号之后，求解器 ID 只剩这里一处出口：跟日志或存档对照时要拿得到
+            # ``E-13``，而序号是随这次结果的排序来的，换一次拟合就换一个含义。
+            item.setToolTip(line)
+            # 画面走分段自绘，可访问文本仍是上面那句散文：自绘接管的是排版，
+            # 不是信息量。
+            item.setData(
+                CANDIDATE_ROW_ROLE,
+                candidate_row(
+                    candidate,
+                    selected=selected,
+                    # 判定画在被采信的那一行上：整份结果只有一个判定，而它判的正是这个解。
+                    adopted=recommended,
+                    confidence=confidence,
+                    ordinal=row,
+                ),
+            )
             self.addItem(item)
-            if candidate.candidate_id == selected_id:
+            if selected:
                 selected_row = row
         self.setCurrentRow(selected_row)
         del blocker
+        # 行数变了高度就变了：这张列表按内容占高，不通知一次布局它还按上一份的行数占位。
+        self.updateGeometry()
 
     def clear_candidates(self) -> None:
         blocker = QSignalBlocker(self)
         self.clear()
         del blocker
+        self.updateGeometry()
 
     def candidate_count(self) -> int:
         return self.count()
