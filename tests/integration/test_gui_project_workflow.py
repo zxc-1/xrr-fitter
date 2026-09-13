@@ -170,6 +170,7 @@ def test_candidate_selection_updates_project_plot_and_export_state(
 def test_expert_mcmc_controls_remain_readable_at_documented_window_size(
     qtbot,
     qapp,
+    request,
     tmp_path: Path,
 ) -> None:
     from xrr_fitter.gui.application import create_application
@@ -177,41 +178,37 @@ def test_expert_mcmc_controls_remain_readable_at_documented_window_size(
     from xrr_fitter.gui.main_window import MainWindow
 
     previous_stylesheet = qapp.styleSheet()
-    try:
-        create_application([])
-        project = api.set_expert_mode(_project(tmp_path), True)
-        window = MainWindow(ProjectDocument(project))
-        qtbot.addWidget(window)
-        window.resize(1600, 900)
-        window.show()
-        qtbot.wait(1)
+    request.addfinalizer(lambda: qapp.setStyleSheet(previous_stylesheet))
+    create_application([])
+    project = api.set_expert_mode(_project(tmp_path), True)
+    window = MainWindow(ProjectDocument(project))
+    qtbot.addWidget(window)
+    window.resize(1600, 900)
+    window.show()
+    qtbot.wait(1)
 
-        # The controls live in an on-demand dialog rather than the analysis column,
-        # so readability is asserted where the user actually meets them.
-        dialog = window.result_panel.open_uncertainty_dialog()
-        qtbot.addWidget(dialog)
-        dialog.show()
-        qtbot.wait(1)
+    # The controls live in an on-demand dialog rather than the analysis column,
+    # so readability is asserted where the user actually meets them.
+    dialog = window.result_panel.open_uncertainty_dialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.wait(1)
 
-        controls = (
-            window.result_panel.walkers,
-            window.result_panel.burn_in,
-            window.result_panel.production,
-            window.result_panel.thin,
-            window.result_panel.mcmc_button,
-            window.result_panel.cancel_button,
-            window.result_panel.force_button,
-        )
-        assert all(widget.height() >= widget.minimumSizeHint().height() for widget in controls)
-        assert all(
-            widget.geometry().intersected(other.geometry()).isEmpty()
-            for index, widget in enumerate(controls)
-            for other in controls[index + 1 :]
-        )
-    finally:
-        # Restore while the widgets are alive, before pytest-qt closes them and
-        # schedules DeferredDelete during its teardown hook.
-        qapp.setStyleSheet(previous_stylesheet)
+    controls = (
+        window.result_panel.walkers,
+        window.result_panel.burn_in,
+        window.result_panel.production,
+        window.result_panel.thin,
+        window.result_panel.mcmc_button,
+        window.result_panel.cancel_button,
+        window.result_panel.force_button,
+    )
+    assert all(widget.height() >= widget.minimumSizeHint().height() for widget in controls)
+    assert all(
+        widget.geometry().intersected(other.geometry()).isEmpty()
+        for index, widget in enumerate(controls)
+        for other in controls[index + 1 :]
+    )
 
 
 def test_fit_completion_projects_result_and_updates_operation_actions(
