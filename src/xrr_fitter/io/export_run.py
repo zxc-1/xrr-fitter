@@ -228,7 +228,8 @@ def _record(root: Path, path: Path) -> ExportFileRecord:
 
 
 def _sync_file(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
+    access = os.O_RDONLY if path.is_dir() else os.O_RDWR
+    descriptor = os.open(path, access | getattr(os, "O_BINARY", 0))
     try:
         os.fsync(descriptor)
     finally:
@@ -239,7 +240,8 @@ def _sync_directory(path: Path) -> None:
     try:
         _sync_file(path)
     except OSError as error:
-        if error.errno not in UNSUPPORTED_DIRECTORY_FSYNC:
+        windows_permission_error = os.name == "nt" and error.errno in {errno.EACCES, errno.EPERM}
+        if error.errno not in UNSUPPORTED_DIRECTORY_FSYNC and not windows_permission_error:
             raise
 
 

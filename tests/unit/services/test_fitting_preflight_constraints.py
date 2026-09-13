@@ -80,6 +80,21 @@ def test_preflight_rejects_out_of_bounds_local_constraint_initial(
     assert readiness.message == f"constraint_out_of_bounds:{DENSITY}"
 
 
+def test_preflight_propagates_unexpected_runtime_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = _project(tmp_path)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("preflight programming error")
+
+    monkeypatch.setattr(fitting, "prepare_dataset_fit", fail)
+
+    with pytest.raises(RuntimeError, match="preflight programming error"):
+        fitting.preflight_fit(value)
+
+
 def test_preflight_rejects_out_of_bounds_joint_constraint_initial(
     tmp_path: Path,
 ) -> None:
@@ -230,6 +245,38 @@ def test_automatic_preflight_rejects_out_of_bounds_constraint_initial(
 
     assert readiness.ready is False
     assert readiness.message == f"constraint_out_of_bounds:{DENSITY}"
+
+
+def test_automatic_preflight_propagates_unexpected_runtime_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = _project(tmp_path)
+    dataset = replace(
+        value.datasets[0],
+        automation=DatasetAutomation(
+            import_batch_id="batch-1",
+            role=AutomaticRole.UNROUTED,
+            status=AutomaticStatus.PENDING,
+        ),
+    )
+    value = replace(
+        value,
+        datasets=(dataset,),
+        measurement_preset=MeasurementPreset(
+            "lab",
+            BeamSpec("monochromatic"),
+            InstrumentSpec(instrument_id="lab"),
+        ),
+    )
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("automatic preflight programming error")
+
+    monkeypatch.setattr(fitting, "prepare_dataset_fit", fail)
+
+    with pytest.raises(RuntimeError, match="automatic preflight programming error"):
+        fitting.preflight_automatic_fit(value)
 
 
 def test_automatic_preflight_rejects_stale_parameter_prior(

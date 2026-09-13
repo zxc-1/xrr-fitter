@@ -24,7 +24,7 @@ from xrr_fitter.evaluation import (
     problem_log_probability,
     values_by_name,
 )
-from xrr_fitter.model.analysis import EnsembleSamples, McmcConfig, McmcReport
+from xrr_fitter.model.analysis import EnsembleSamples, FitCandidate, McmcConfig, McmcReport
 from xrr_fitter.model.fitting import FitEvaluationContext
 from xrr_fitter.model.parameters import ParameterDefinition, ParameterPrior, PriorSpec
 
@@ -174,14 +174,14 @@ def _initial_walker_matrix(initial_walkers: np.ndarray) -> np.ndarray:
     return walkers
 
 
-def _validate_walker_geometry(walkers: np.ndarray, configured_count: object) -> None:
+def _validate_walker_geometry(walkers: np.ndarray, configured_count: int | np.integer) -> None:
     walker_count, dimension = walkers.shape
     valid = walker_count == configured_count and walker_count % 2 == 0 and walker_count >= 2 * dimension + 2
     if not valid:
         raise ValueError("walkers must be even and at least 2*nfree+2")
 
 
-def _validate_step_configuration(config: object) -> None:
+def _validate_step_configuration(config: McmcConfig) -> None:
     valid = (
         _valid_step(config.burn_in, 0)
         and _valid_step(config.production_steps, 4)
@@ -213,7 +213,7 @@ def _initial_log_probability(
 def _validated_initial_state(
     log_probability: Callable[[np.ndarray], float],
     initial_walkers: np.ndarray,
-    config: object,
+    config: McmcConfig,
     cancelled: Callable[[], bool] | None,
 ) -> tuple[np.ndarray, np.ndarray]:
     walkers = _initial_walker_matrix(initial_walkers)
@@ -239,7 +239,7 @@ def _update_group(
     active: np.ndarray,
     complement: np.ndarray,
     dimension: int,
-    config: object,
+    config: McmcConfig,
     rng: np.random.Generator,
     log_probability: Callable[[np.ndarray], float],
 ) -> None:
@@ -307,7 +307,7 @@ def run_affine_invariant(
     )
 
 
-def _validated_candidate(problem: object, candidate: object) -> np.ndarray:
+def _validated_candidate(problem: FitEvaluationContext, candidate: FitCandidate) -> np.ndarray:
     unit = np.asarray(candidate.unit_vector, dtype=float)
     valid = (
         unit.shape == (len(problem.variables),)

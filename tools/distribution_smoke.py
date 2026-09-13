@@ -61,7 +61,8 @@ def smoke_installed(
 
 def _install_environment(root: Path, lock_file: Path, runner: Runner) -> Path:
     environment = root.resolve()
-    venv.EnvBuilder(with_pip=True, clear=False).create(environment)
+    # Standalone macOS Python resolves libpython relative to its executable.
+    venv.EnvBuilder(with_pip=True, clear=False, symlinks=True).create(environment)
     python = environment / "bin" / "python"
     child = os.environ.copy()
     child.pop("PYTHONPATH", None)

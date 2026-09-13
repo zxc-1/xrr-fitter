@@ -40,6 +40,26 @@ def test_freeze_support_runs_before_any_command(monkeypatch) -> None:
     assert events == ["freeze", "dispatch"]
 
 
+def test_windows_stdio_is_reconfigured_for_utf8(monkeypatch) -> None:
+    class Stream:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, str]] = []
+
+        def reconfigure(self, **kwargs: str) -> None:
+            self.calls.append(kwargs)
+
+    stdout = Stream()
+    stderr = Stream()
+    monkeypatch.setattr(cli_main.os, "name", "nt")
+    monkeypatch.setattr(cli_main.sys, "stdout", stdout)
+    monkeypatch.setattr(cli_main.sys, "stderr", stderr)
+
+    cli_main._configure_stdio()
+
+    assert stdout.calls == [{"encoding": "utf-8", "errors": "backslashreplace"}]
+    assert stderr.calls == [{"encoding": "utf-8", "errors": "backslashreplace"}]
+
+
 def test_missing_project_file_is_an_input_error(tmp_path, capsys) -> None:
     missing = tmp_path / "absent.json"
 
@@ -323,6 +343,85 @@ def test_mcmc_invalid_candidate_maps_to_input_error_without_traceback(monkeypatc
     )
     output = capsys.readouterr()
     assert "invalid MCMC candidate: d1/c1" in output.err
+    assert "Traceback" not in output.err
+
+
+def test_fit_save_failure_maps_to_input_error_without_traceback(monkeypatch, tmp_path, capsys) -> None:
+    from types import SimpleNamespace
+
+    from xrr_fitter.cli import commands, exit_codes
+
+    project_path = tmp_path / "p.json"
+    project_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(commands.api, "load_project", lambda path: object())
+    monkeypatch.setattr(
+        commands.api,
+        "inspect_sources",
+        lambda project: commands.api.ProjectValidation(datasets=(), issues=()),
+    )
+    monkeypatch.setattr(
+        commands,
+        "_fit_result",
+        lambda project, arguments, sink: SimpleNamespace(
+            updated_project=object(),
+            warnings=(),
+            datasets=(),
+            cancelled=False,
+        ),
+    )
+    monkeypatch.setattr(
+        commands.api,
+        "save_project",
+        lambda project, path: (_ for _ in ()).throw(OSError("cannot write project")),
+    )
+
+    assert cli_main.main(["fit", str(project_path), "--output", str(tmp_path / "out.json")]) == exit_codes.INVALID_INPUT
+    output = capsys.readouterr()
+    assert "工程写回失败" in output.err
+    assert "cannot write project" in output.err
+    assert "Traceback" not in output.err
+
+
+def test_mcmc_save_failure_maps_to_input_error_without_traceback(monkeypatch, tmp_path, capsys) -> None:
+    from xrr_fitter.cli import commands, exit_codes
+
+    project_path = tmp_path / "p.json"
+    project_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(commands.api, "load_project", lambda path: object())
+    monkeypatch.setattr(
+        commands.api,
+        "inspect_sources",
+        lambda project: commands.api.ProjectValidation(datasets=(), issues=()),
+    )
+    monkeypatch.setattr(commands.api, "run_mcmc", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        commands.api,
+        "save_project",
+        lambda project, path: (_ for _ in ()).throw(OSError("cannot write MCMC project")),
+    )
+
+    assert (
+        cli_main.main(
+            [
+                "mcmc",
+                str(project_path),
+                "--dataset",
+                "d1",
+                "--candidate",
+                "c1",
+                "--walkers",
+                "4",
+                "--burn-in",
+                "0",
+                "--steps",
+                "10",
+            ]
+        )
+        == exit_codes.INVALID_INPUT
+    )
+    output = capsys.readouterr()
+    assert "工程写回失败" in output.err
+    assert "cannot write MCMC project" in output.err
     assert "Traceback" not in output.err
 
 

@@ -750,8 +750,10 @@ JSON 同时记录每阶段和总 `nfev`、bootstrap/profile 次数、状态及 r
 CI 使用确定性 work-count 断言，不因机器负载放宽搜索或恢复质量门槛；若数值门槛
 通过但墙钟超标，应单独报告 timing miss。
 
-`python tools/verify.py statistical` 是发布验收，不是一次 GUI 自动拟合的计时命令。
-它完整拟合 220 个合成 case，并为恢复指标构建 bootstrap 和所需的 profile 证据；
+`python tools/verify.py statistical` 是发布验收入口，不是一次 GUI 自动拟合的计时命令。
+默认不启动拟合：使用显式 `--statistical-results` 重验已有证据，或在获准新计算后传入
+`--compute-statistical`。新计算完整拟合 220 个合成 case，并为恢复指标构建 bootstrap
+和所需的 profile 证据；控制规则见[统计验收](architecture/statistical-verification.md)。
 这些 case 复用实际运行的编译模型、目标函数、解析 Jacobian、搜索和不确定度实现。
 GUI 普通自动路径则显式关闭 bootstrap，并只在质量证据触发时运行定向 profile，
 因此单次实际运行不应按 `statistical` 的总耗时估算。统计验收会把可用 CPU 在外层

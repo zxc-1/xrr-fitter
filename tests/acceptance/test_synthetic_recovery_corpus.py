@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from tests.statistical_gate import statistical_evidence as statistical_evidence
 from tests.support.synthetic_recovery import build_corpus, run_corpus
 
 EXPECTED_CATEGORIES = {
@@ -40,9 +41,7 @@ def test_corpus_definitions_are_complete_and_deterministic() -> None:
     assert observed == expected
 
 
-def test_synthetic_recovery_corpus_meets_approved_thresholds() -> None:
-    report = run_corpus(build_corpus())
-
+def _assert_complete_report(report) -> None:
     observed = (
         report.schema,
         report.status,
@@ -60,3 +59,10 @@ def test_synthetic_recovery_corpus_meets_approved_thresholds() -> None:
         (),
     )
     assert observed == expected
+
+
+def test_synthetic_recovery_corpus_meets_approved_thresholds(statistical_evidence) -> None:
+    report = run_corpus(build_corpus()) if statistical_evidence is None else statistical_evidence.evaluate()
+    _assert_complete_report(report)
+    if statistical_evidence is not None:
+        statistical_evidence.publish(report)

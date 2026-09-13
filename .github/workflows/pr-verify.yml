@@ -31,21 +31,26 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
       - name: Verify ${{ matrix.mode }}
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
         shell: bash
         run: |
           set -euo pipefail
-          python3.12 -c 'import platform, sys; assert sys.platform == "darwin" and platform.machine() == "arm64" and sys.version_info[:2] == (3, 12)'
-          python3.12 -m venv "$RUNNER_TEMP/venv"
-          PYTHON="$RUNNER_TEMP/venv/bin/python"
-          "$PYTHON" -m pip install pip==26.1.2
-          "$PYTHON" -m pip install -r requirements-macos-arm64-py312.lock
-          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
           if test "${{ matrix.mode }}" = gui; then
             QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py gui
           else
             "$PYTHON" tools/verify.py "${{ matrix.mode }}"
           fi
+      - name: Clean the owned macOS environment
+        if: ${{ always() && steps.python.outputs.job-root != '' }}
+        uses: ./.github/actions/cleanup-macos-python
+        with:
+          job-root: ${{ steps.python.outputs.job-root }}
 
   checkpoint:
     needs: [standard]

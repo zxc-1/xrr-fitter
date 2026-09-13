@@ -1,0 +1,174 @@
+name: statistical
+
+"on":
+  workflow_call:
+    inputs:
+      compute:
+        description: Explicitly authorize new fits on the first manual attempt only
+        type: boolean
+        required: false
+        default: false
+      producer:
+        description: Exact producer descriptor JSON for revalidation without new fits
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  preflight:
+    runs-on: macos-15
+    timeout-minutes: 60
+    outputs:
+      mode: ${{ steps.policy.outputs.mode }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
+      - name: Require explicit statistical execution policy
+        id: policy
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
+          COMPUTE: ${{ inputs.compute }}
+          PRODUCER: ${{ inputs.producer }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
+          "$PYTHON" tools/statistical_policy.py --compute "$COMPUTE" --producer-json "$PRODUCER" >> "$GITHUB_OUTPUT"
+      - name: Verify fast release prerequisites
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
+          QT_QPA_PLATFORM=offscreen "$PYTHON" tools/verify.py preflight --report-dir "$RUNNER_TEMP/statistical-preflight" --artifact-dir "$RUNNER_TEMP/statistical-preflight/artifacts" 2>&1 | tee "$RUNNER_TEMP/statistical-preflight.log"
+      - name: Clean the owned macOS environment
+        if: ${{ always() && steps.python.outputs.job-root != '' }}
+        uses: ./.github/actions/cleanup-macos-python
+        with:
+          job-root: ${{ steps.python.outputs.job-root }}
+      - name: Retain statistical preflight evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: statistical-preflight-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/statistical-preflight.log
+            ${{ runner.temp }}/statistical-preflight/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  shards:
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.mode == 'compute' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 }}
+    runs-on: macos-15
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
+      - name: Compute statistical shard
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
+          SHARD: ${{ matrix.shard }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
+          "$PYTHON" tools/check_hygiene.py --require-git-clean
+          PYTHONPATH="$GITHUB_WORKSPACE/src" "$PYTHON" tools/statistical_shards.py --compute --shard-index "$SHARD" --report-dir "$RUNNER_TEMP/statistical-shard-$SHARD" 2>&1 | tee "$RUNNER_TEMP/statistical-shard-$SHARD.log"
+          "$PYTHON" tools/check_hygiene.py --require-git-clean
+      - name: Clean the owned macOS environment
+        if: ${{ always() && steps.python.outputs.job-root != '' }}
+        uses: ./.github/actions/cleanup-macos-python
+        with:
+          job-root: ${{ steps.python.outputs.job-root }}
+      - name: Retain statistical shard evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: statistical-shard-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/statistical-shard-${{ matrix.shard }}/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Retain statistical shard log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: statistical-shard-log-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/statistical-shard-${{ matrix.shard }}.log
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  aggregate:
+    needs: [preflight, shards]
+    if: ${{ always() && needs.preflight.result == 'success' }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Download statistical shard evidence
+        if: ${{ inputs.producer == '' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: statistical-shard-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: ${{ runner.temp }}/statistical-inputs
+          merge-multiple: false
+      - name: Set up locked macOS Python
+        id: python
+        uses: ./.github/actions/setup-macos-python
+      - name: Verify complete statistical corpus
+        env:
+          PYTHON: ${{ steps.python.outputs.python }}
+          PRODUCER: ${{ inputs.producer }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PYTHON" = "${{ steps.python.outputs.python }}"
+          STATISTICAL_ARGS=(--statistical-results "$RUNNER_TEMP/statistical-inputs")
+          if test -n "$PRODUCER"; then
+            "$PYTHON" tools/statistical_handoff.py --producer-json "$PRODUCER" --report-dir "$RUNNER_TEMP/statistical-handoff"
+            STATISTICAL_ARGS=(--statistical-results "$RUNNER_TEMP/statistical-handoff/shards" --statistical-producer "$RUNNER_TEMP/statistical-handoff/producer.json")
+          fi
+          "$PYTHON" tools/verify.py statistical "${STATISTICAL_ARGS[@]}" --report-dir "$RUNNER_TEMP/statistical-aggregate" 2>&1 | tee "$RUNNER_TEMP/statistical-aggregate.log"
+      - name: Clean the owned macOS environment
+        if: ${{ always() && steps.python.outputs.job-root != '' }}
+        uses: ./.github/actions/cleanup-macos-python
+        with:
+          job-root: ${{ steps.python.outputs.job-root }}
+      - name: Retain statistical aggregation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: statistical-aggregate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/statistical-aggregate/statistical-evidence.json
+            ${{ runner.temp }}/statistical-aggregate.log
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

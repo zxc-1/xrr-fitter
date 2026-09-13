@@ -235,7 +235,7 @@ def test_release_rejects_bundle_replacement_between_distribution_and_identity(
 
     monkeypatch.setattr(module, "run_mode", run_mode)
     with pytest.raises(ValueError, match="report directory"):
-        module.run_release(root, report, artifacts)
+        module.run_release(root, report, artifacts, compute_statistical=True)
 
     assert ("identity-business",) not in calls
 

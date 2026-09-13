@@ -33,6 +33,23 @@ def _dataset(
     return DatasetArtifacts(dataset_id, (_producer(name, content),))
 
 
+def test_export_file_sync_uses_a_writable_handle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "artifact"
+    path.write_bytes(b"payload")
+    original_open = export_run.os.open
+    observed: list[int] = []
+
+    def capture_open(value, flags, *args):
+        observed.append(flags)
+        return original_open(value, flags, *args)
+
+    monkeypatch.setattr(export_run.os, "open", capture_open)
+    export_run._sync_file(path)
+
+    assert observed
+    assert observed[0] & os.O_RDWR
+
+
 def test_export_run_records_complete_relative_size_and_digest_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -361,14 +378,30 @@ def test_export_directory_fsync_suppresses_only_unsupported_errors(
     export_run._sync_directory(tmp_path)
 
 
+@pytest.mark.parametrize("error_number", (errno.EACCES, errno.EPERM))
+def test_export_directory_fsync_suppresses_windows_permission_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_number: int,
+) -> None:
+    monkeypatch.setattr(export_run.os, "name", "nt")
+    monkeypatch.setattr(
+        export_run,
+        "_sync_file",
+        lambda _path: (_ for _ in ()).throw(OSError(error_number, "permission denied")),
+    )
+
+    export_run._sync_directory(tmp_path)
+
+
 def test_export_directory_fsync_propagates_io_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        export_run.os,
-        "fsync",
-        lambda _descriptor: (_ for _ in ()).throw(OSError(errno.EIO, "fsync failed")),
+        export_run,
+        "_sync_file",
+        lambda _path: (_ for _ in ()).throw(OSError(errno.EIO, "fsync failed")),
     )
 
     with pytest.raises(OSError, match="fsync failed"):

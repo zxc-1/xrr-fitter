@@ -410,6 +410,22 @@ class FitResult:
         return type(self), _pickle_values(self)
 
     @classmethod
+    def failed(cls, message: str, point_count: int) -> FitResult:
+        """Build untrusted failure evidence aligned with the source point count."""
+        return cls(
+            parameter_definitions=(),
+            candidates=(),
+            best_index=None,
+            confidence=ConfidenceClass.UNTRUSTED,
+            warnings=(message,),
+            child_seeds=(),
+            stage_summaries=(),
+            region_labels=np.full(point_count, -1, dtype=int),
+            region_weights=np.zeros(point_count, dtype=float),
+            uncertainty=None,
+        )
+
+    @classmethod
     def from_search(
         cls,
         search_result: FitSearchResult,

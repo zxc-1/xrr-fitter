@@ -1,0 +1,17 @@
+{
+  "archive": {
+    "sha256": "71725b3d46aedcfcfea7097efb5b39a21d294190ec387a0823ed9dcb39934565",
+    "size": 1895376,
+    "url": "https://codeload.github.com/refnx/refnx/tar.gz/3d3808f66a14a8200eba020f8dff53f4d1e059bc"
+  },
+  "file_count": 303,
+  "files_sha256": "4ad0084565b2d00e1b62fa88404c949968665eb6941159b12cfa5ddd27f756f5",
+  "schema": "xrr-vcs-source-v1",
+  "scope": "git-archive",
+  "tree_oid": "866430f53634917beb1a00d5d56723b34f406d79",
+  "vcs": {
+    "commit": "3d3808f66a14a8200eba020f8dff53f4d1e059bc",
+    "name": "refnx",
+    "url": "https://github.com/refnx/refnx.git"
+  }
+}

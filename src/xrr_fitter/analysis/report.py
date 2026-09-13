@@ -38,11 +38,9 @@ from xrr_fitter.analysis.diagnostics import (
     residual_autocorrelation_flag,
 )
 from xrr_fitter.analysis.mcmc import prior_conflicts, with_parameter_priors
-from xrr_fitter.analysis.profiles import (
-    _evidence_focused_layout,
-    build_problem_profiles,
-    select_profile_names,
-)
+from xrr_fitter.analysis.profile_selection import evidence_focused_layout as _evidence_focused_layout
+from xrr_fitter.analysis.profile_selection import select_profile_names
+from xrr_fitter.analysis.profiles import build_problem_profiles
 from xrr_fitter.model.analysis import BootstrapResult, FitResult, UncertaintyReport
 from xrr_fitter.model.fitting import (
     FitEvaluationContext,

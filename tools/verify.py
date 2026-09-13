@@ -42,6 +42,13 @@ from verify_report import (  # noqa: E402
     _resolve_output_path,
     build_environment,
 )
+from verify_statistical import (  # noqa: E402
+    _require_option_scope,
+    _statistical_input_mode,
+    _statistical_producer_path,
+    _statistical_results_path,
+    _validate_statistical_permission,
+)
 
 Runner = Callable[..., object]
 
@@ -143,14 +150,22 @@ def run_mode(
     artifact_manifest: str | Path | None = None,
     approved_data_root: str | Path | None = None,
     capture_candidate: bool = False,
+    statistical_results: str | Path | None = None,
+    statistical_producer: str | Path | None = None,
+    compute_statistical: bool = False,
     expected_report_identity: DirectoryIdentity | None = None,
     runner: Runner = subprocess.run,
 ) -> None:
+    _validate_statistical_permission(name, statistical_results, compute_statistical, statistical_producer)
     root = Path(repo_root).resolve()
     report = _resolve_output_path(report_dir, "report directory")
     artifact = _resolve_output_path(artifact_dir, "artifact directory") if artifact_dir is not None else None
     manifest = _resolve_output_path(artifact_manifest, "artifact manifest") if artifact_manifest is not None else None
     approved = Path(approved_data_root).resolve() if approved_data_root is not None else None
+    results = _statistical_results_path(name, root, statistical_results)
+    producer = _statistical_producer_path(root, statistical_producer)
+    if name == "statistical":
+        mode = _statistical_input_mode(mode, results, producer)
     if expected_report_identity is not None:
         _require_same_directory(report, expected_report_identity, "report directory")
     report_anchor = _make_report_anchor(report)
@@ -164,6 +179,9 @@ def run_mode(
         manifest=manifest,
         approved=approved,
         capture_candidate=capture_candidate,
+        statistical_results=results,
+        statistical_producer=producer,
+        compute_statistical=compute_statistical,
         report_anchor=report_anchor,
         expected_report_identity=expected_report_identity,
         runner=runner,
@@ -195,8 +213,8 @@ def _validate_mode_inputs(
     _require_option_scope(
         artifact is not None,
         name,
-        {"distribution", "identity", "release"},
-        "artifact directory is only valid for distribution, identity, or release",
+        {"distribution", "identity", "release", "preflight"},
+        "artifact directory is only valid for distribution, identity, release, or preflight",
     )
     if name == "distribution" and artifact != report / "artifacts":
         raise ValueError("distribution artifact directory must equal report-dir/artifacts")
@@ -222,16 +240,6 @@ def _validate_mode_inputs(
     )
 
 
-def _require_option_scope(
-    active: bool,
-    name: str,
-    allowed_modes: set[str],
-    message: str,
-) -> None:
-    if active and name not in allowed_modes:
-        raise ValueError(message)
-
-
 def _run_special_mode(
     name: str,
     mode: Mode,
@@ -242,6 +250,9 @@ def _run_special_mode(
     manifest: Path | None,
     approved: Path | None,
     capture_candidate: bool,
+    statistical_results: Path | None,
+    statistical_producer: Path | None,
+    compute_statistical: bool,
     report_anchor: ReportAnchor,
     expected_report_identity: DirectoryIdentity | None,
     runner: Runner,
@@ -257,10 +268,21 @@ def _run_special_mode(
             runner=runner,
         )
         return True
-    if name == "release":
+    if name in {"release", "preflight"}:
         if artifact is None:
-            raise ValueError("release requires an artifact directory")
-        run_release(root, report, artifact, runner=runner)
+            raise ValueError(f"{name} requires an artifact directory")
+        if name == "preflight":
+            run_preflight(root, report, artifact, runner=runner)
+        else:
+            run_release(
+                root,
+                report,
+                artifact,
+                statistical_results=statistical_results,
+                statistical_producer=statistical_producer,
+                compute_statistical=compute_statistical,
+                runner=runner,
+            )
         return True
     if name == "identity":
         _run_isolated(
@@ -466,16 +488,22 @@ def _advance_release_report_identity(
     return identity
 
 
-def run_release(
+def _run_release_modes(
+    names: Sequence[str],
     repo_root: str | Path,
     report_dir: str | Path,
     artifact_dir: str | Path,
     *,
+    statistical_results: str | Path | None = None,
+    statistical_producer: str | Path | None = None,
+    compute_statistical: bool = False,
     runner: Runner = subprocess.run,
 ) -> None:
     root = Path(repo_root).resolve()
     report = _resolve_output_path(report_dir, "release report directory")
     artifact = _resolve_output_path(artifact_dir, "release artifact directory")
+    results = _statistical_results_path("release", root, statistical_results)
+    producer = _statistical_producer_path(root, statistical_producer)
     if artifact != report / "artifacts":
         raise ValueError("release artifact directory must equal report-dir/artifacts")
     if report.is_relative_to(root) or os.path.lexists(report):
@@ -483,10 +511,48 @@ def run_release(
     with tempfile.TemporaryDirectory(prefix="xrr-r23-release-gates-") as directory:
         scratch = Path(directory)
         report_identity: DirectoryIdentity | None = None
-        for name in RELEASE_ORDER:
+        for name in names:
             kwargs = _release_mode_kwargs(name, root, report, artifact, scratch, report_identity, runner)
+            if name == "statistical":
+                kwargs.update(statistical_results=results, compute_statistical=compute_statistical)
+                if producer is not None:
+                    kwargs["statistical_producer"] = producer
             run_mode(name, MODE_REGISTRY[name], **kwargs)
             report_identity = _advance_release_report_identity(name, report, report_identity)
+
+
+def run_release(
+    repo_root: str | Path,
+    report_dir: str | Path,
+    artifact_dir: str | Path,
+    *,
+    statistical_results: str | Path | None = None,
+    statistical_producer: str | Path | None = None,
+    compute_statistical: bool = False,
+    runner: Runner = subprocess.run,
+) -> None:
+    _validate_statistical_permission("release", statistical_results, compute_statistical, statistical_producer)
+    _run_release_modes(
+        RELEASE_ORDER,
+        repo_root,
+        report_dir,
+        artifact_dir,
+        statistical_results=statistical_results,
+        statistical_producer=statistical_producer,
+        compute_statistical=compute_statistical,
+        runner=runner,
+    )
+
+
+def run_preflight(
+    repo_root: str | Path,
+    report_dir: str | Path,
+    artifact_dir: str | Path,
+    *,
+    runner: Runner = subprocess.run,
+) -> None:
+    modes = tuple(name for name in RELEASE_ORDER if name != "statistical")
+    _run_release_modes(modes, repo_root, report_dir, artifact_dir, runner=runner)
 
 
 def _run_with_report(
@@ -496,6 +562,9 @@ def _run_with_report(
     artifact_manifest: Path | None = None,
     approved_data_root: Path | None = None,
     capture_candidate: bool = False,
+    statistical_producer: Path | None = None,
+    compute_statistical: bool = False,
+    statistical_results: Path | None = None,
 ) -> None:
     root = _repository_root()
     run_mode(
@@ -507,6 +576,9 @@ def _run_with_report(
         artifact_manifest=artifact_manifest,
         approved_data_root=approved_data_root,
         capture_candidate=capture_candidate,
+        statistical_results=statistical_results,
+        statistical_producer=statistical_producer,
+        compute_statistical=compute_statistical,
     )
 
 
@@ -518,6 +590,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact-manifest", type=Path)
     parser.add_argument("--approved-data-root", type=Path)
     parser.add_argument("--capture-candidate", action="store_true")
+    parser.add_argument("--statistical-producer", type=Path)
+    statistical = parser.add_mutually_exclusive_group()
+    statistical.add_argument("--statistical-results", type=Path)
+    statistical.add_argument("--compute-statistical", action="store_true", help="explicitly allow new corpus fits")
     return parser
 
 
@@ -532,15 +608,31 @@ REQUIRED_ARGUMENT_ERRORS = {
         "identity requires --report-dir, --artifact-dir, and --artifact-manifest",
     ),
     "release": (("report_dir", "artifact_dir"), "release requires --report-dir and --artifact-dir"),
+    "preflight": (("report_dir", "artifact_dir"), "preflight requires --report-dir and --artifact-dir"),
 }
 
 OPTION_SCOPE_ERRORS = (
+    (
+        "statistical_producer",
+        {"statistical", "release"},
+        "--statistical-producer is only valid with statistical or release",
+    ),
+    (
+        "compute_statistical",
+        {"statistical", "release"},
+        "--compute-statistical is only valid with statistical or release",
+    ),
+    (
+        "statistical_results",
+        {"statistical", "release"},
+        "--statistical-results is only valid with statistical or release",
+    ),
     ("capture_candidate", {"approved-data"}, "--capture-candidate is only valid with approved-data"),
     ("approved_data_root", {"approved-data"}, "--approved-data-root is only valid with approved-data"),
     (
         "artifact_dir",
-        {"distribution", "identity", "release"},
-        "--artifact-dir is only valid with distribution, identity, or release",
+        {"distribution", "identity", "release", "preflight"},
+        "--artifact-dir is only valid with distribution, identity, release, or preflight",
     ),
     ("artifact_manifest", {"identity"}, "--artifact-manifest is only valid with identity"),
 )
@@ -568,6 +660,9 @@ def _run_explicit(args: argparse.Namespace) -> int:
             args.artifact_manifest,
             args.approved_data_root,
             args.capture_candidate,
+            args.statistical_producer,
+            args.compute_statistical,
+            args.statistical_results,
         )
     except MissingApprovedEvidence as error:
         print(str(error), file=sys.stderr)
@@ -580,11 +675,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     _require_mode_arguments(args, parser)
     _validate_argument_scopes(args, parser)
+    try:
+        _validate_statistical_permission(
+            args.mode, args.statistical_results, args.compute_statistical, args.statistical_producer
+        )
+    except ValueError as error:
+        parser.error(str(error))
     if args.report_dir is not None:
         return _run_explicit(args)
     with tempfile.TemporaryDirectory(prefix=f"xrr-r23-{args.mode}-") as directory:
-        _run_with_report(args.mode, Path(directory))
-    return 0
+        args.report_dir = Path(directory)
+        return _run_explicit(args)
 
 
 if __name__ == "__main__":

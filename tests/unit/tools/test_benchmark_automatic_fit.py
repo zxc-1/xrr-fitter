@@ -36,17 +36,19 @@ def test_json_report_has_stable_schema(load_tool_module) -> None:
         profile_count=2,
         statuses=(("point-1", "passed"),),
         recovery_errors=(("point-1", 0.012),),
+        process_peak_rss_bytes=4096,
     )
 
     report = module.build_report("single", None, 1, (run,))
 
     assert report == {
-        "schema": "xrr-automatic-benchmark-v1",
+        "schema": "xrr-automatic-benchmark-v2",
         "mode": "single",
         "batch_size": None,
         "repeat": 1,
         "median_seconds": 1.25,
         "maximum_seconds": 1.25,
+        "maximum_process_peak_rss_bytes": 4096,
         "runs": [
             {
                 "case_id": "single",
@@ -58,10 +60,28 @@ def test_json_report_has_stable_schema(load_tool_module) -> None:
                 "profile_count": 2,
                 "status": {"point-1": "passed"},
                 "recovery_error": {"point-1": 0.012},
+                "process_peak_rss_bytes": 4096,
             }
         ],
     }
     assert json.loads(module.canonical_json(report)) == report
+
+
+@pytest.mark.parametrize(
+    ("raw", "platform", "expected"),
+    ((4096, "darwin", 4096), (4096, "linux", 4194304)),
+)
+def test_peak_rss_normalizes_platform_units(load_tool_module, raw, platform, expected) -> None:
+    module = load_tool_module("benchmark_automatic_fit")
+
+    assert module._rss_bytes(raw, platform) == expected
+
+
+def test_peak_rss_is_explicitly_unavailable_on_unsupported_platforms(load_tool_module, monkeypatch) -> None:
+    module = load_tool_module("benchmark_automatic_fit")
+    monkeypatch.setattr(module.sys, "platform", "win32")
+
+    assert module._process_peak_rss_bytes() is None
 
 
 def test_work_signature_requires_consistent_stage_total(load_tool_module) -> None:
