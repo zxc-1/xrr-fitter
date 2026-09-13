@@ -64,8 +64,11 @@ from xrr_fitter.model.parameters import (
     ParameterDefinition,
     ParameterValue,
 )
-from xrr_fitter.model.progress import FitProgress  # noqa: F401 -- re-exported via xrr_fitter.api
-from xrr_fitter.model.progress import normalize_skipped_stages, search_terminated_early
+from xrr_fitter.model.progress import (
+    FitProgress,  # noqa: F401 -- re-exported via xrr_fitter.api
+    normalize_skipped_stages,
+    search_terminated_early,
+)
 from xrr_fitter.model.slab_stack import SlabStack
 from xrr_fitter.model.structure import StructureSpec
 

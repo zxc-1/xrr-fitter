@@ -41,14 +41,14 @@ def _optional_count(value: int | None, field: str) -> None:
 def _optional_unit_fraction(value: float | None, field: str) -> None:
     if value is None:
         return
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.0 <= value <= 1.0:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not 0.0 <= value <= 1.0:
         raise ValueError(f"{field} must be a fraction within [0, 1]")
 
 
 def _optional_nonnegative(value: float | None, field: str) -> None:
     if value is None:
         return
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value) or value < 0.0:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not np.isfinite(value) or value < 0.0:
         raise ValueError(f"{field} must be a finite nonnegative float")
 
 
