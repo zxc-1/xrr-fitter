@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 
+from xrr_fitter.evaluation import EvaluationConstraintError
 from xrr_fitter.model.analysis import McmcConfig
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
 from xrr_fitter.model.fitting import FitProgress
@@ -105,7 +106,7 @@ def preflight_fit(
             initial_joint_vector=initial_joint_vector,
             evaluate_joint_vector=evaluate_joint_vector,
         )
-    except Exception as error:
+    except (OSError, ValueError, TypeError, KeyError, EvaluationConstraintError) as error:
         return FitReadiness(False, str(error) or type(error).__name__)
     return FitReadiness(True, "ready")
 
@@ -158,7 +159,7 @@ def preflight_automatic_fit(
                 prepared.updated_dataset.parameter_priors,
             )
             _require_valid_initial(evaluate_declared_initial(prepared.problem))
-    except Exception as error:
+    except (OSError, ValueError, TypeError, KeyError, EvaluationConstraintError) as error:
         return FitReadiness(False, str(error) or type(error).__name__)
     return FitReadiness(True, "ready")
 

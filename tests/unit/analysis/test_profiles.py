@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import replace
 from importlib import import_module
 from types import SimpleNamespace
@@ -426,6 +427,12 @@ def test_profile_selection_covers_all_small_problems_and_required_large_paramete
         "component.0.thickness_a",
         "component.0.density_scale",
     )
+
+
+def test_profile_selection_implementation_has_selection_ownership() -> None:
+    selection = import_module("xrr_fitter.analysis.profile_selection")
+
+    assert inspect.getsourcefile(selection.select_profile_names) == inspect.getsourcefile(selection)
 
 
 def test_profile_selection_treats_twelve_parameter_layout_as_evidence_focused() -> None:

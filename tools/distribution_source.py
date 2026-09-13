@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 from distribution_archive import canonicalize_sdist
 from distribution_manifest import git_oid, select_artifacts
 
-BUILD_VERSIONS = {"setuptools": "75.8.2", "wheel": "0.45.1"}
+BUILD_VERSIONS = {"setuptools": "83.0.0", "wheel": "0.46.2"}
 
 
 @dataclass(frozen=True, slots=True)

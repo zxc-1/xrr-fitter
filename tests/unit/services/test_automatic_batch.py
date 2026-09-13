@@ -1,4 +1,6 @@
+import inspect
 from dataclasses import replace
+from importlib import import_module
 from threading import Event
 from types import SimpleNamespace
 
@@ -173,6 +175,12 @@ def test_physical_signature_separates_backing_and_beam() -> None:
         batch.automatic_physical_signature(value, preset) for value in (first, different_backing, different_beam)
     }
     assert len(signatures) == 3
+
+
+def test_physical_signature_implementation_has_routing_ownership() -> None:
+    routing = import_module("xrr_fitter.services.batch_routing")
+
+    assert inspect.getsourcefile(routing.automatic_physical_signature) == inspect.getsourcefile(routing)
 
 
 def test_physical_signature_ignores_non_identity_material_properties() -> None:

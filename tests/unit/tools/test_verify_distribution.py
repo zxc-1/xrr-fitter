@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import subprocess
 import sys
 import tarfile
 import zipfile
@@ -82,6 +83,19 @@ xrr-fitter-cli = "xrr_fitter.cli.main:main"
     )
 
     assert "xrr_fitter-0.2.2.dist-info/entry_points.txt" in module._wheel_metadata(tmp_path)
+
+
+def test_distribution_archive_uses_exact_license_layout(tmp_path: Path, load_tool_module) -> None:
+    load_tool_module("verify_distribution")
+    module = sys.modules["distribution_archive"]
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "xrr-fitter"\nversion = "0.2.2"\nlicense = {file = "LICENSE"}\n',
+        encoding="utf-8",
+    )
+    root = "xrr_fitter-0.2.2.dist-info"
+    assert module._wheel_metadata(tmp_path) == {
+        f"{root}/{name}" for name in ("METADATA", "RECORD", "WHEEL", "top_level.txt", "licenses/LICENSE")
+    }
 
 
 def _canonical(value: object) -> bytes:
@@ -398,6 +412,32 @@ def test_installed_smoke_uses_only_absolute_venv_commands_and_isolated_environme
         assert child["PATH"] == ""
         assert "PYTHONPATH" not in child
         assert all(Path(child[name]).is_relative_to(resolved) for name in ("HOME", "XDG_CACHE_HOME", "MPLCONFIGDIR"))
+
+
+def test_smoke_environment_links_the_base_interpreter_before_running_pip(
+    tmp_path: Path,
+    load_tool_module,
+) -> None:
+    load_tool_module("verify_distribution")
+    module = sys.modules["distribution_smoke"]
+    lock = tmp_path / "requirements.lock"
+    lock.write_text("example==1\n", encoding="utf-8")
+    calls = []
+
+    def runner(args, **kwargs):
+        calls.append((args, kwargs))
+
+    environment = module._install_environment(tmp_path / "venv", lock, runner)
+
+    python = environment / "bin/python"
+    assert python.is_symlink(), "copying standalone Python breaks its relative libpython lookup"
+    result = subprocess.run((str(python), "-m", "pip", "--version"), check=True, capture_output=True, text=True)
+    assert "pip " in result.stdout
+    assert [args for args, _kwargs in calls] == [
+        (str(python), "-m", "pip", "install", "pip==26.1.2"),
+        (str(python), "-m", "pip", "install", "-r", str(lock.resolve())),
+    ]
+    assert all(kwargs["check"] is True for _args, kwargs in calls)
 
 
 def test_wheel_entry_points_must_exactly_match_declared_scripts(

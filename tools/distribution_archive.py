@@ -142,7 +142,7 @@ def _wheel_metadata(repository: Path) -> set[str]:
     if project.get("gui-scripts") or project.get("scripts"):
         result.add(f"{root}/entry_points.txt")
     if project.get("license"):
-        result.add(f"{root}/LICENSE")
+        result.add(f"{root}/licenses/LICENSE")
     return result
 
 

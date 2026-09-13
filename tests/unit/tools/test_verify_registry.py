@@ -54,6 +54,7 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
                 "tests/architecture/test_pr_verify_workflow.py",
                 "tests/architecture/test_windows_executable_workflow.py",
                 "tests/architecture/test_quality_gate.py",
+                "tests/architecture/test_macos_setup_action.py",
                 "tests/architecture/test_release_workflow.py",
                 "tests/architecture/test_removed_legacy_modules.py",
                 "-q",
@@ -68,6 +69,7 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
                 "tests/unit/physics",
                 "tests/unit/test_constraint_evaluation.py",
                 "tests/unit/test_constraint_roughness_matrix.py",
+                "tests/unit/test_core_type_contracts.py",
                 "tests/unit/test_evaluation.py",
                 "tests/unit/test_evaluation_dynamic_roughness.py",
                 "tests/unit/test_evaluation_gradients.py",
@@ -131,9 +133,9 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
         "distribution": (
             (
                 module.PYTHON,
-                "tools/lock_windows_environment.py",
-                "--verify",
-                "requirements-windows-x64-py312.lock",
+                "tools/locked_closure.py",
+                "--repo-root",
+                module.ROOT,
             ),
             (
                 module.PYTHON,
@@ -174,7 +176,41 @@ def _expected_registry(module) -> dict[str, tuple[tuple[str, ...], ...]]:
                 module.ARTIFACT_MANIFEST,
             ),
         ),
+        "coverage": (
+            (
+                module.PYTHON,
+                "tools/audit_reports.py",
+                "coverage",
+                "--repo-root",
+                module.ROOT,
+                "--report-dir",
+                f"{module.REPORT}/audit",
+            ),
+        ),
+        "typing": (
+            (
+                module.PYTHON,
+                "tools/audit_reports.py",
+                "typing",
+                "--repo-root",
+                module.ROOT,
+                "--report-dir",
+                f"{module.REPORT}/audit",
+            ),
+        ),
+        "advisories": (
+            (
+                module.PYTHON,
+                "tools/audit_reports.py",
+                "advisories",
+                "--repo-root",
+                module.ROOT,
+                "--report-dir",
+                f"{module.REPORT}/audit",
+            ),
+        ),
         "release": (),
+        "preflight": (),
     }
 
 

@@ -287,6 +287,15 @@ def test_child_seed_lineage_is_deterministic_and_order_independent() -> None:
     )
 
 
+def test_stage_schedule_owns_seed_and_resume_contracts() -> None:
+    import inspect
+
+    schedule = import_module("xrr_fitter.fit.stage_schedule")
+
+    assert inspect.getsourcefile(schedule.reserve_child_seeds) == inspect.getsourcefile(schedule)
+    assert inspect.getsourcefile(schedule.remaining_stages) == inspect.getsourcefile(schedule)
+
+
 def test_stage_graph_has_exact_a_through_e_order_and_resume_suffixes() -> None:
     api = _stages_api()
 

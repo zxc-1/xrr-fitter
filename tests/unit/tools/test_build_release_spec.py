@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-BUILD = ("setuptools==75.8.2", "wheel==0.45.1")
+BUILD = ("setuptools==83.0.0", "wheel==0.46.2")
 GENERATED_METADATA = (
     "PKG-INFO",
     "setup.cfg",
@@ -32,6 +32,24 @@ INPUT_FILES = (
 )
 
 
+def test_audited_build_and_test_toolchain_pins_are_exact(load_tool_module) -> None:
+    root = Path(__file__).resolve().parents[3]
+    payload = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    assert payload["build-system"]["requires"] == list(BUILD)
+    assert "pytest==9.0.3" in payload["project"]["optional-dependencies"]["test"]
+    assert load_tool_module("build_release_spec").EXPECTED_BUILD == BUILD
+    assert load_tool_module("distribution_source").BUILD_VERSIONS == {"setuptools": "83.0.0", "wheel": "0.46.2"}
+
+
+@pytest.mark.parametrize("platform", ("macos-arm64-py312", "windows-x64-py312"))
+def test_platform_locks_use_audited_build_tool_versions(platform: str) -> None:
+    root = Path(__file__).resolve().parents[3]
+    lines = (root / f"requirements-{platform}.lock").read_text(encoding="utf-8").splitlines()
+    assert set(BUILD) <= set(lines)
+    if platform == "macos-arm64-py312":
+        assert "pytest==9.0.3" in lines
+
+
 def _canonical(value: object) -> bytes:
     return (
         json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n"
@@ -40,7 +58,7 @@ def _canonical(value: object) -> bytes:
 
 def _pyproject_text() -> str:
     return """[build-system]
-requires = ["setuptools==75.8.2", "wheel==0.45.1"]
+requires = ["setuptools==83.0.0", "wheel==0.46.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -153,7 +171,7 @@ def test_calculation_binds_build_requirements_to_the_lock(
 @pytest.mark.parametrize(
     ("old", "new", "match"),
     (
-        ("setuptools==75.8.2", "setuptools==75.8.1", "pinned"),
+        ("setuptools==83.0.0", "setuptools==75.8.2", "pinned"),
         ("setuptools.build_meta", "hatchling.build", "backend"),
         ('dependencies = ["numpy>=2.0,<3"]', 'dependencies = "numpy>=2.0,<3"', "arrays"),
         ('test = ["pytest>=8.3,<9"]', 'test = "pytest>=8.3,<9"', "arrays"),
@@ -179,11 +197,11 @@ def test_pyproject_dependency_and_build_system_drift_is_rejected(
     ("content", "match"),
     (
         (b"numpy==2.1.3\npytest==8.3.5\n", "missing setuptools"),
-        (b"numpy==2.1.3\npytest==8.3.5\nsetuptools==75.8.2\nwheel==0.45.0\n", "wheel"),
-        (b"numpy==2.1.3\npytest==8.3.5\nsetuptools==75.8.2\nwheel>=0.45.1\n", "non-exact"),
-        (b"numpy ==2.1.3\npytest==8.3.5\nsetuptools==75.8.2\nwheel==0.45.1\n", "canonical"),
-        (b"numpy==2.1.3\r\npytest==8.3.5\r\nsetuptools==75.8.2\r\nwheel==0.45.1\r\n", "canonical"),
-        (b"numpy==2.1.3\npytest==8.3.5\nsetuptools==75.8.2\nwheel==0.45.1", "canonical"),
+        (b"numpy==2.1.3\npytest==8.3.5\nsetuptools==83.0.0\nwheel==0.45.1\n", "wheel"),
+        (b"numpy==2.1.3\npytest==8.3.5\nsetuptools==83.0.0\nwheel>=0.46.2\n", "non-exact"),
+        (b"numpy ==2.1.3\npytest==8.3.5\nsetuptools==83.0.0\nwheel==0.46.2\n", "canonical"),
+        (b"numpy==2.1.3\r\npytest==8.3.5\r\nsetuptools==83.0.0\r\nwheel==0.46.2\r\n", "canonical"),
+        (b"numpy==2.1.3\npytest==8.3.5\nsetuptools==83.0.0\nwheel==0.46.2", "canonical"),
         (b"not a requirement ???\n", "invalid"),
         (
             _lock_text("numpy[extra]==2.1.3", "pytest==8.3.5", *BUILD).encode(),

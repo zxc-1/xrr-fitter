@@ -9,7 +9,7 @@ import numpy as np
 from xrr_fitter.fit.candidates import candidate_from_evaluation, rank_candidate_indices
 from xrr_fitter.fit.checkpoint import checkpoint_identity
 from xrr_fitter.fit.objective import evaluate_vector
-from xrr_fitter.fit.stages import remaining_stages
+from xrr_fitter.fit.stage_schedule import remaining_stages
 from xrr_fitter.model.fitting import FitCandidate, FitCheckpoint, FitStageSummary
 
 

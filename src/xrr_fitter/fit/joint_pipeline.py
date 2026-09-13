@@ -50,7 +50,7 @@ from xrr_fitter.fit.joint_solvers import (
 )
 from xrr_fitter.fit.pipeline import FitSearchRequest, run_fit_search
 from xrr_fitter.fit.resume import validate_resume_checkpoint
-from xrr_fitter.fit.stages import reserve_child_seeds
+from xrr_fitter.fit.stage_schedule import reserve_child_seeds
 from xrr_fitter.model.fitting import (
     FitCandidate,
     FitCheckpoint,

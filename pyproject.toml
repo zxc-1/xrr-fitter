@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools==75.8.2", "wheel==0.45.1"]
+requires = ["setuptools==83.0.0", "wheel==0.46.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -31,7 +31,7 @@ xrr-fitter-cli = "xrr_fitter.cli.main:main"
 
 [project.optional-dependencies]
 test = [
-  "pytest==8.4.2",
+  "pytest==9.0.3",
   "pytest-qt==4.5.0",
   "openpyxl==3.1.5",
   "radon==6.0.1",
@@ -53,6 +53,44 @@ version = {attr = "xrr_fitter.version.__version__"}
 # that must not become a runtime requirement for library consumers.
 [tool.xrr.windows-packaging]
 requires = ["pyinstaller==6.21.0"]
+
+[tool.xrr.audit]
+requires = [
+  "coverage==7.16.0",
+  "mypy==2.3.1",
+  "pip-audit==2.10.1",
+  "scipy-stubs==1.18.0.0",
+  "pip==26.1.2",
+]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+follow_imports = "silent"
+check_untyped_defs = true
+disallow_untyped_defs = true
+show_error_codes = true
+files = [
+  "src/xrr_fitter/analysis/profile_selection.py",
+  "src/xrr_fitter/analysis/profile_tasks.py",
+  "src/xrr_fitter/fit/stage_schedule.py",
+  "src/xrr_fitter/fit/stages.py",
+  "src/xrr_fitter/services/batch.py",
+  "src/xrr_fitter/services/batch_publication.py",
+  "src/xrr_fitter/services/batch_routing.py",
+]
+
+[tool.coverage.run]
+branch = true
+parallel = true
+relative_files = true
+concurrency = ["multiprocessing", "thread"]
+patch = ["subprocess"]
+source = ["src/xrr_fitter"]
+omit = ["*/xrr_fitter/gui/*", "*/xrr_fitter/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

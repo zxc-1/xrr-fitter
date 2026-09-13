@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 from multiprocessing import freeze_support
+
+# The CLI owns only non-GUI rendering; select the non-Qt Matplotlib backend before
+# importing the command facade, which transitively loads export serializers.
+os.environ.setdefault("MPLBACKEND", "Agg")
 
 from xrr_fitter.cli import commands, exit_codes
 
@@ -15,6 +20,16 @@ HANDLERS = {
     "export": commands.run_export,
     "validate": commands.run_validate,
 }
+
+
+def _configure_stdio() -> None:
+    """Keep frozen Windows console output able to represent CLI messages."""
+    if os.name != "nt":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
 def _add_progress_flag(parser: argparse.ArgumentParser) -> None:
@@ -66,6 +81,7 @@ def _dispatch(arguments: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     """Enable frozen workers, parse arguments, and run one subcommand."""
     freeze_support()
+    _configure_stdio()
     parser = build_parser()
     arguments = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     if arguments.command is None:

@@ -55,6 +55,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/architecture/test_pr_verify_workflow.py",
                 "tests/architecture/test_windows_executable_workflow.py",
                 "tests/architecture/test_quality_gate.py",
+                "tests/architecture/test_macos_setup_action.py",
                 "tests/architecture/test_release_workflow.py",
                 "tests/architecture/test_removed_legacy_modules.py",
                 "-q",
@@ -71,6 +72,7 @@ MODE_REGISTRY: Mapping[str, Mode] = {
                 "tests/unit/physics",
                 "tests/unit/test_constraint_evaluation.py",
                 "tests/unit/test_constraint_roughness_matrix.py",
+                "tests/unit/test_core_type_contracts.py",
                 "tests/unit/test_evaluation.py",
                 "tests/unit/test_evaluation_dynamic_roughness.py",
                 "tests/unit/test_evaluation_gradients.py",
@@ -144,9 +146,9 @@ MODE_REGISTRY: Mapping[str, Mode] = {
         (
             (
                 PYTHON,
-                "tools/lock_windows_environment.py",
-                "--verify",
-                "requirements-windows-x64-py312.lock",
+                "tools/locked_closure.py",
+                "--repo-root",
+                ROOT,
             ),
             (
                 PYTHON,
@@ -190,7 +192,17 @@ MODE_REGISTRY: Mapping[str, Mode] = {
             ),
         )
     ),
+    "coverage": Mode(
+        ((PYTHON, "tools/audit_reports.py", "coverage", "--repo-root", ROOT, "--report-dir", f"{REPORT}/audit"),)
+    ),
+    "typing": Mode(
+        ((PYTHON, "tools/audit_reports.py", "typing", "--repo-root", ROOT, "--report-dir", f"{REPORT}/audit"),)
+    ),
+    "advisories": Mode(
+        ((PYTHON, "tools/audit_reports.py", "advisories", "--repo-root", ROOT, "--report-dir", f"{REPORT}/audit"),)
+    ),
     "release": Mode(()),
+    "preflight": Mode(()),
 }
 
 RELEASE_ORDER = (
