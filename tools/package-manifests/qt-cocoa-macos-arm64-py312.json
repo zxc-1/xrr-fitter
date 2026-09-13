@@ -1,0 +1,729 @@
+{
+  "pip_version": "26.1.2",
+  "python_version": "3.12",
+  "qt_version": "6.11.2",
+  "recipes": [
+    {
+      "path": "tools/qt-cocoa/NOTICE.txt",
+      "sha256": "984d6ad631667d781ac6c07ebaeaf980c04dc1165048648102497973566391b4"
+    },
+    {
+      "path": "tools/qt-cocoa/cocoa.pro",
+      "sha256": "61f752d24dea81c7dc1eb77e9a4f31bbc3535596a9fb2c4ec6344e6e7ae07f52"
+    },
+    {
+      "path": "tools/qt-cocoa/qcocoaresources.qrc",
+      "sha256": "12a6755c6401689d45c67963697cefa91f0499524a78af451facf4537d19edc6"
+    },
+    {
+      "path": "tools/qt-cocoa/ownership.patch",
+      "sha256": "8152e86d9e757349c384533f29bb4cc76534c37b69d18abd9d4b21c23fa7c6ce"
+    },
+    {
+      "path": "tools/qt-cocoa/ownership_regression.mm",
+      "sha256": "db9e9af0a2c74307b8825607aa0ee001f832e6c7ffdb3787931e11433600f21a"
+    },
+    {
+      "path": "tools/qt-cocoa/ownership_regression.pro",
+      "sha256": "75e91dee3b4456ab5dc4c4a3002895ae01013b5e20161151d328b00ae2b9494c"
+    }
+  ],
+  "schema": "xrr-qt-cocoa-inputs-v1",
+  "sdk": {
+    "filename": "qtbase-sdk-6.11.2.7z",
+    "sha256": "9592f84f7e26d532c5c56824d1da7c9214a766cb0a17beb5af71022bcfbcd271",
+    "size": 31039494,
+    "url": "https://download.qt.io/online/qtsdkrepository/mac_x64/desktop/qt6_6112/qt6_6112/qt.qt6.6112.clang_64/6.11.2-0-202608131016qtbase-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z"
+  },
+  "sources": [
+    {
+      "filename": "source-CMakeLists.txt",
+      "path": "CMakeLists.txt",
+      "sha256": "a9db43e46716c545d90ed947b7cea0c473757abd5a30d5968e4a23cb1c28ea21",
+      "size": 4589,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/CMakeLists.txt?h=v6.11.2"
+    },
+    {
+      "filename": "source-LICENSE.COCOA.txt",
+      "path": "LICENSE.COCOA.txt",
+      "sha256": "e9e5b9f66d21c0e88a4179525ab39cd8d7eac9af78a8404f322c32b0874783d5",
+      "size": 1501,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/LICENSE.COCOA.txt?h=v6.11.2"
+    },
+    {
+      "filename": "source-cocoa.json",
+      "path": "cocoa.json",
+      "sha256": "c16ef4a10c63b532d2f6cd6773d6927ec3d3c189acaf233f55723845258645d2",
+      "size": 28,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/cocoa.json?h=v6.11.2"
+    },
+    {
+      "filename": "source-main.mm",
+      "path": "main.mm",
+      "sha256": "dcfdd324944d1c721ef07f57f8141a4aeb79abe5824998f523d26498ddbe28c9",
+      "size": 1020,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/main.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoa_plugin_pch.h",
+      "path": "qcocoa_plugin_pch.h",
+      "sha256": "64507c96bad277f92d7495464f6ef41ab42698fd4be26cb52dc45b572d03fa61",
+      "size": 518,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoa_plugin_pch.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaaccessibility.h",
+      "path": "qcocoaaccessibility.h",
+      "sha256": "d23a49b1026a06c6e6340106fff9783638f0e2b521ab7bf6bdcec7becafd29a0",
+      "size": 2425,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaaccessibility.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaaccessibility.mm",
+      "path": "qcocoaaccessibility.mm",
+      "sha256": "c8de418b24155a8668d945cd774990e4570912d12b286f716f51949294aea90b",
+      "size": 16573,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaaccessibility.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaaccessibilityelement.h",
+      "path": "qcocoaaccessibilityelement.h",
+      "sha256": "3ab7fe5168e8a50d988938fd34dd323e628d143cb89b803103b74bafdbd1dbae",
+      "size": 984,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaaccessibilityelement.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaaccessibilityelement.mm",
+      "path": "qcocoaaccessibilityelement.mm",
+      "sha256": "1e1c3699f9de098a0c4979128ce8f43779976416ef3d41ca875073a2a4b26f27",
+      "size": 45117,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaaccessibilityelement.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaapplication.h",
+      "path": "qcocoaapplication.h",
+      "sha256": "455b52e7ef3e0095fba972028ac584d1bca1feabc41accd6a7e816c2b9947129",
+      "size": 828,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaapplication.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaapplication.mm",
+      "path": "qcocoaapplication.mm",
+      "sha256": "2870c21dd5f618e38656c2f800bf8bbd2beac531b8df85abaaf90a548296117d",
+      "size": 5229,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaapplication.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaapplicationdelegate.h",
+      "path": "qcocoaapplicationdelegate.h",
+      "sha256": "cb19e944fa1e774a32c90deb66b7abca063e5758969ffcb712cace538f1f0812",
+      "size": 1156,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaapplicationdelegate.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaapplicationdelegate.mm",
+      "path": "qcocoaapplicationdelegate.mm",
+      "sha256": "c1dcc9faee7dc11e3deaa2dd1159bf4af06dea2fb97dd3210486b2bbb479024f",
+      "size": 19641,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaapplicationdelegate.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoabackingstore.h",
+      "path": "qcocoabackingstore.h",
+      "sha256": "4fbb3cdfa1c015e7f823cb135e1a4439c027da390b2aab47a2a30899ff203073",
+      "size": 3066,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoabackingstore.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoabackingstore.mm",
+      "path": "qcocoabackingstore.mm",
+      "sha256": "de0a8f7638807f4f9c79d5374c32e7e5d032c2309c615f78ce39963e1059d97f",
+      "size": 26949,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoabackingstore.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaclipboard.h",
+      "path": "qcocoaclipboard.h",
+      "sha256": "f4643e73193e13990d4dbf2dc88b962e18b9df4a9b98a2f2612641a76359caa1",
+      "size": 1141,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaclipboard.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaclipboard.mm",
+      "path": "qcocoaclipboard.mm",
+      "sha256": "888c67251c3e06f80325e5cae5eb5b2f4e76a28e519ab8b6c1462b29689ae4ef",
+      "size": 2145,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaclipboard.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoacolordialoghelper.h",
+      "path": "qcocoacolordialoghelper.h",
+      "sha256": "568b3145ff616fc05d13880a002233a79dcee398ff62ed892d1f4f4bd83fdaa6",
+      "size": 789,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoacolordialoghelper.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoacolordialoghelper.mm",
+      "path": "qcocoacolordialoghelper.mm",
+      "sha256": "6f187dc9ee14dbe6784767ded2b6fe80afa7a9c39c78ee558ec785464865ea4d",
+      "size": 12316,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoacolordialoghelper.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoacursor.h",
+      "path": "qcocoacursor.h",
+      "sha256": "0eb5a9797b76a0a9b327ecdce009d9c528bdb9ea94ce071cd89b74d124865231",
+      "size": 1059,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoacursor.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoacursor.mm",
+      "path": "qcocoacursor.mm",
+      "sha256": "0187c94d628c4c8eb82adc83639bf3c268a7bc76ebd3571b2c18b51dc8840503",
+      "size": 13743,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoacursor.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoadrag.h",
+      "path": "qcocoadrag.h",
+      "sha256": "f38921412731ee75ae615f88143dbc023e7076f4dac098bd60214256b6497506",
+      "size": 1849,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoadrag.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoadrag.mm",
+      "path": "qcocoadrag.mm",
+      "sha256": "3c30d49eeb2555bd69f8cbd7756d1d1840682e9dd005ae883e3b5e2b487d0f28",
+      "size": 11297,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoadrag.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaeventdispatcher.h",
+      "path": "qcocoaeventdispatcher.h",
+      "sha256": "c0f37867bde3b7580b573f7cfc523715385970888062e4190c7285b8bcfc5b7f",
+      "size": 4826,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaeventdispatcher.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaeventdispatcher.mm",
+      "path": "qcocoaeventdispatcher.mm",
+      "sha256": "b9698e4bd356b0750205aba51283c5302947f09eed7e27ce6aa85aa7ea8ffb56",
+      "size": 41143,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaeventdispatcher.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoafiledialoghelper.h",
+      "path": "qcocoafiledialoghelper.h",
+      "sha256": "e1dafb63de804a32c3df1c6266378f107b2bbee80f9ee5ba3baefd1c1e8b4582",
+      "size": 1579,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoafiledialoghelper.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoafiledialoghelper.mm",
+      "path": "qcocoafiledialoghelper.mm",
+      "sha256": "2c0b46cdb938cbcca94259a658c9e6245fb9ca44c10fb11aa22956103d9cf619",
+      "size": 29337,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoafiledialoghelper.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoafontdialoghelper.h",
+      "path": "qcocoafontdialoghelper.h",
+      "sha256": "22e0f5622c98c6e562e7d13c8322ba0c1452d33b823676dbd382c728f9161185",
+      "size": 780,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoafontdialoghelper.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoafontdialoghelper.mm",
+      "path": "qcocoafontdialoghelper.mm",
+      "sha256": "0446e5518ee4c71277a45b487e7ee3dfa6b63100ba79024616683a8f4fbc4b5c",
+      "size": 11120,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoafontdialoghelper.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaglcontext.h",
+      "path": "qcocoaglcontext.h",
+      "sha256": "80c1ab3c416fc157bfca1aa7e3b900255c6cb7702c210108c448ef5ce7d700b0",
+      "size": 1964,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaglcontext.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaglcontext.mm",
+      "path": "qcocoaglcontext.mm",
+      "sha256": "87c336531221eac86f520add2b6c65307214b40ca08ab89e292d81ee1d7850a7",
+      "size": 23539,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaglcontext.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoahelpers.h",
+      "path": "qcocoahelpers.h",
+      "sha256": "a3dfada10c5adefddcb747727ff38fff206b6beb9c7f0ba1ccd1734794c784bc",
+      "size": 6866,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoahelpers.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoahelpers.mm",
+      "path": "qcocoahelpers.mm",
+      "sha256": "a53e1669e9f82dc485e0556a51b87917a5e3c117f936f7f0ded803ed47a0a6c3",
+      "size": 17142,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoahelpers.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoainputcontext.h",
+      "path": "qcocoainputcontext.h",
+      "sha256": "fe12e0683df86fa4c717a1c620abdb95083a4eac6a61bbcd37a979e84244b631",
+      "size": 964,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoainputcontext.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoainputcontext.mm",
+      "path": "qcocoainputcontext.mm",
+      "sha256": "9a1c01fbd1d38848cc111106fc8b98689cf4382687736a87188b26861b9d654c",
+      "size": 4852,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoainputcontext.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaintegration.h",
+      "path": "qcocoaintegration.h",
+      "sha256": "33b47aa17c948870e0123244071828c185725729710f6a563ebeaefc93436895",
+      "size": 4208,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaintegration.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaintegration.mm",
+      "path": "qcocoaintegration.mm",
+      "sha256": "cdbfe660aed8ff8d6e8942b222e891e68c07e8504e42659ccef0810e1a032916",
+      "size": 16794,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaintegration.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaintrospection.h",
+      "path": "qcocoaintrospection.h",
+      "sha256": "a86b93d15b97c71d5b9b47f5563c6d410f919a76f9015a21eab9f098b7b8968f",
+      "size": 582,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaintrospection.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaintrospection.mm",
+      "path": "qcocoaintrospection.mm",
+      "sha256": "778a4a52a9f8262af188d6a7a89d91d47efc53aa7e3de0074da487866addb8d3",
+      "size": 1972,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaintrospection.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoamenu.h",
+      "path": "qcocoamenu.h",
+      "sha256": "a541317c9f91eda0c48cf52606a7b2391052977f50882f47c7f06a61788a31a6",
+      "size": 2744,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoamenu.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoamenu.mm",
+      "path": "qcocoamenu.mm",
+      "sha256": "e0f31550967c0c8e7f7610f646d39f8a9e16af305d2e464932a7547e63b543d8",
+      "size": 16819,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoamenu.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoamenubar.h",
+      "path": "qcocoamenubar.h",
+      "sha256": "c31131e8cd08d1556e6bc6ccb6f57a702d2c586bb5b222758f430dfa7dde60c3",
+      "size": 1796,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoamenubar.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoamenubar.mm",
+      "path": "qcocoamenubar.mm",
+      "sha256": "bcdcc58d0756900311958dd487bc00bb63d4fe614813fc138114cee683186109",
+      "size": 16213,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoamenubar.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoamenuitem.h",
+      "path": "qcocoamenuitem.h",
+      "sha256": "e850f803ad82665dd9dbb823c6d79e437be2d4ff680a954352bd90755170abf4",
+      "size": 2951,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoamenuitem.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoamenuitem.mm",
+      "path": "qcocoamenuitem.mm",
+      "sha256": "cc7a0ae10dde6842aea0a45d01739e662833063c05376e1900ee35b8558ee071",
+      "size": 17134,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoamenuitem.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoamenuloader.h",
+      "path": "qcocoamenuloader.h",
+      "sha256": "d8cb9d1523afd956fa6fb67ef66f506645e86760f76437b480e664a3d6d02476",
+      "size": 1147,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoamenuloader.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoamenuloader.mm",
+      "path": "qcocoamenuloader.mm",
+      "sha256": "f61677df3eb507eabed111e06c15846382992ba03ac99e4765ba92e77093bb18",
+      "size": 10664,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoamenuloader.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoamessagedialog.h",
+      "path": "qcocoamessagedialog.h",
+      "sha256": "5fc65d12def08bb957257e303596c5ddc78d68c28740a08d7cb1016c7bcc0335",
+      "size": 996,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoamessagedialog.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoamessagedialog.mm",
+      "path": "qcocoamessagedialog.mm",
+      "sha256": "d392b357d8ddfd29eaf9a50e9c80a2698432b851d9b318d97fa6afa6e26b1181",
+      "size": 17187,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoamessagedialog.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoamimetypes.h",
+      "path": "qcocoamimetypes.h",
+      "sha256": "d0e63423865194b1009d65a169cdd3822853d60cf34f52a80fb075baba079cbd",
+      "size": 392,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoamimetypes.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoamimetypes.mm",
+      "path": "qcocoamimetypes.mm",
+      "sha256": "802a47b45fe564062dc6d7dce265fd4040035cc72ec50e1938689b2d82f8e952",
+      "size": 2744,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoamimetypes.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoanativeinterface.h",
+      "path": "qcocoanativeinterface.h",
+      "sha256": "6242b5445d11379bb74e6c840800d72d4e8cb84e15c367d0113eef8b51ec85a8",
+      "size": 2270,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoanativeinterface.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoanativeinterface.mm",
+      "path": "qcocoanativeinterface.mm",
+      "sha256": "e28e97414ae84e8e7fb7f637fe98c9186977b6e207edc8155038b8b7c12224f9",
+      "size": 4914,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoanativeinterface.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoansmenu.h",
+      "path": "qcocoansmenu.h",
+      "sha256": "1f134c4fe772baefe4372ed08c7bc1c2510b65b2afbdb89c8d411121ebafb67a",
+      "size": 1414,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoansmenu.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoansmenu.mm",
+      "path": "qcocoansmenu.mm",
+      "sha256": "8d5712cab9e6716618a3bcb26ad73a7e857f89b27b3ba9621b04d06c94075609",
+      "size": 9324,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoansmenu.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoascreen.h",
+      "path": "qcocoascreen.h",
+      "sha256": "d42d7e2708da20118099e065b98f501ea68170ebf015fcfc1b87f8d02769c461",
+      "size": 4366,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoascreen.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoascreen.mm",
+      "path": "qcocoascreen.mm",
+      "sha256": "0e93666ef718fc458ef9cc680948bf5877146764b90ce0141233720e2cc5374a",
+      "size": 34721,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoascreen.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaservices.h",
+      "path": "qcocoaservices.h",
+      "sha256": "fa314fa10b4d8335c19a354ce722052a1257e7f9bcf62e72c691d1c68a0cf454",
+      "size": 754,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaservices.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoaservices.mm",
+      "path": "qcocoaservices.mm",
+      "sha256": "3c721e2c92c35c204c4a698c717bf6cc7c5060f1339bd00101538e8b5a7b4893",
+      "size": 2014,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoaservices.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoasessionmanager.cpp",
+      "path": "qcocoasessionmanager.cpp",
+      "sha256": "6f40a1acaaa8ac7463ba4b41c4cb9f97811ff9930bbf25fb5028d1b649cf81fb",
+      "size": 1254,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoasessionmanager.cpp?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoasessionmanager.h",
+      "path": "qcocoasessionmanager.h",
+      "sha256": "dbaca68064b33b9f153cb7f18bfeddb5ab5c27b1c0528c379e728a391c697193",
+      "size": 1100,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoasessionmanager.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoasystemtrayicon.h",
+      "path": "qcocoasystemtrayicon.h",
+      "sha256": "7fd3aab54f4ad29244c2b12eb34b4dc1a9b83e2bb7f9825923848ca714e0c272",
+      "size": 1820,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoasystemtrayicon.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoasystemtrayicon.mm",
+      "path": "qcocoasystemtrayicon.mm",
+      "sha256": "2f66043db5b8e39c54abba149b3851c174c269d651de9cd92b5b97eb4ae509b6",
+      "size": 10761,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoasystemtrayicon.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoatheme.h",
+      "path": "qcocoatheme.h",
+      "sha256": "00c3a7ac56fa8cc80c18b295c539bc3ad82cef68f4bebb671ec9857da6962196",
+      "size": 2236,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoatheme.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoatheme.mm",
+      "path": "qcocoatheme.mm",
+      "sha256": "87506867c142f8f9bc21327618a5299156c9ba6b7f44102cc54d51a312eb5026",
+      "size": 24156,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoatheme.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoavulkaninstance.h",
+      "path": "qcocoavulkaninstance.h",
+      "sha256": "6f752ea35eee783e6036843c7dc804d5fc5f00ba0275469258fd3f6a80e48dce",
+      "size": 1234,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoavulkaninstance.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoavulkaninstance.mm",
+      "path": "qcocoavulkaninstance.mm",
+      "sha256": "d08abf38c548a01ec8d7a3317555b331d3f63df66d6a39f87e29ac1f9f53721e",
+      "size": 2513,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoavulkaninstance.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoawindow.h",
+      "path": "qcocoawindow.h",
+      "sha256": "3500c7a751cdd2ed75e08a2d0074316f4dca0d370adc61cb14026e8fa22f58ad",
+      "size": 10225,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoawindow.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoawindow.mm",
+      "path": "qcocoawindow.mm",
+      "sha256": "07a3b491cad43d82c26c71d27269b70210fee0d77e904177a768cc1385035508",
+      "size": 89407,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoawindow.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoawindowmanager.h",
+      "path": "qcocoawindowmanager.h",
+      "sha256": "20841faca741f31d34f9230f311739625abdf93142511042ff765934ca83b947",
+      "size": 646,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoawindowmanager.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qcocoawindowmanager.mm",
+      "path": "qcocoawindowmanager.mm",
+      "sha256": "6059351fef39c13af9d87230ac50fcf9c36f6b062e6dd6ccfc696a816892e13a",
+      "size": 2967,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qcocoawindowmanager.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qiosurfacegraphicsbuffer.h",
+      "path": "qiosurfacegraphicsbuffer.h",
+      "sha256": "3096d9652d94d5182f2f9493c62d809c327c5ee8fd71267926b98c44a782a5bf",
+      "size": 1223,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qiosurfacegraphicsbuffer.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qiosurfacegraphicsbuffer.mm",
+      "path": "qiosurfacegraphicsbuffer.mm",
+      "sha256": "4d9276f2730b14231384a526ff90cce073445cc07aecf487a94e9e2764f6c8f2",
+      "size": 5327,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qiosurfacegraphicsbuffer.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qmacclipboard.h",
+      "path": "qmacclipboard.h",
+      "sha256": "9df25d70b4f452652e52d02178c75d44a77ed17cad262278170fb8c8ca0ad56f",
+      "size": 2604,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qmacclipboard.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qmacclipboard.mm",
+      "path": "qmacclipboard.mm",
+      "sha256": "786e9f33f7d3b3e37b9410cb966e27756b9a55a90138e82eff6cc856c1436c13",
+      "size": 17822,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qmacclipboard.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qmultitouch_mac.mm",
+      "path": "qmultitouch_mac.mm",
+      "sha256": "c3cc01d8fa0a0f2164e79253ce1971d83e5144578b33df22be66654c9a75a6ad",
+      "size": 7930,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qmultitouch_mac.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qmultitouch_mac_p.h",
+      "path": "qmultitouch_mac_p.h",
+      "sha256": "975d10034cc5baae727680ec0e1b7d838459cb0dc04d79b220c661f5097fbaaa",
+      "size": 1828,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qmultitouch_mac_p.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnsview.h",
+      "path": "qnsview.h",
+      "sha256": "be93e82742ccfb4226704dac86902cbeeae4c4fe30ce634ddf0bf5fa9bcfd3a6",
+      "size": 1454,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnsview.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnsview.mm",
+      "path": "qnsview.mm",
+      "sha256": "6883236ea202ba304ed8b95f8fb5917b2034febcfe5ad9d66b189fe496637051",
+      "size": 14350,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnsview.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnsview_accessibility.mm",
+      "path": "qnsview_accessibility.mm",
+      "sha256": "b189b09837e2003ee48b7604dd51ed77bdd5420cdecaa48d28915aea4106bf43",
+      "size": 2012,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnsview_accessibility.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnsview_complextext.mm",
+      "path": "qnsview_complextext.mm",
+      "sha256": "aab2ec96496b9e87049c1ae5ac50501f2d7a88de9db5c0c2810fd81b9eca2a5a",
+      "size": 35614,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnsview_complextext.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnsview_dragging.mm",
+      "path": "qnsview_dragging.mm",
+      "sha256": "afedf1341bcbfc9a78ff78563f7ddfa208b4a5bf4946839d7588b7ee3ead9a3f",
+      "size": 11634,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnsview_dragging.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnsview_drawing.mm",
+      "path": "qnsview_drawing.mm",
+      "sha256": "b9eaf42d64ca552a70daec5f9c62308fa39293022017f7058fa56d23613ace51",
+      "size": 13509,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnsview_drawing.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnsview_gestures.mm",
+      "path": "qnsview_gestures.mm",
+      "sha256": "e032fbfef2f032820c6b3f64f54027443908187bb70221c39e1f4aa11d9cf577",
+      "size": 5752,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnsview_gestures.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnsview_keys.mm",
+      "path": "qnsview_keys.mm",
+      "sha256": "358cc52e19f220402250823c0638fb4024683966f525c85d547247e367685fa7",
+      "size": 14540,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnsview_keys.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnsview_menus.mm",
+      "path": "qnsview_menus.mm",
+      "sha256": "0b31ac11ef95027dba9ffd168f311dd3be6618b605df270f6db5f779a4ced264",
+      "size": 6425,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnsview_menus.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnsview_mouse.mm",
+      "path": "qnsview_mouse.mm",
+      "sha256": "b21bb1b8982d5a98be79b4ddf3768f223dba082edf526cd043653fc88da80465",
+      "size": 29891,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnsview_mouse.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnsview_tablet.mm",
+      "path": "qnsview_tablet.mm",
+      "sha256": "2e42a03a7ff924fd34d8bb11756a4eb90b945c1c8d09d10bd7d269ee10bb5fb9",
+      "size": 8086,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnsview_tablet.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnsview_touch.mm",
+      "path": "qnsview_touch.mm",
+      "sha256": "53ceb492643cf347cf0e09b209bca862392d0c403b399fa830f96e863a2fe8ca",
+      "size": 3646,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnsview_touch.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnswindow.h",
+      "path": "qnswindow.h",
+      "sha256": "5732b09683f01bc36a5e5ac55caab1ac96cf21d8f6cc606c1b3e750032a6c7b1",
+      "size": 1548,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnswindow.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnswindow.mm",
+      "path": "qnswindow.mm",
+      "sha256": "49013d00bf94db792656be6716a030baca7f433eee154d5cf1703bf3fcbfaf3a",
+      "size": 16052,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnswindow.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnswindowdelegate.h",
+      "path": "qnswindowdelegate.h",
+      "sha256": "af370356935dd6f8a2051087d0e1b8875e769b91d1a374c110ff04b65b6489de",
+      "size": 493,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnswindowdelegate.h?h=v6.11.2"
+    },
+    {
+      "filename": "source-qnswindowdelegate.mm",
+      "path": "qnswindowdelegate.mm",
+      "sha256": "4548a957fee1b6df80fa9dec3571bf14549da1460def606f21115a8ed788cee6",
+      "size": 3896,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qnswindowdelegate.mm?h=v6.11.2"
+    },
+    {
+      "filename": "source-qt_attribution.json",
+      "path": "qt_attribution.json",
+      "sha256": "27a435bfea96ca950f4a5ad6a82be7fe2a62bb4db0d8851e7a84fc5dce0c3ff3",
+      "size": 720,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/qt_attribution.json?h=v6.11.2"
+    },
+    {
+      "filename": "source-images__sizeallcursor.png",
+      "path": "images/sizeallcursor.png",
+      "sha256": "62727f1e7faf22904121c2bcfa3bcefaf5edfeba83f741eacb4eb676992d3646",
+      "size": 703,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/images/sizeallcursor.png?h=v6.11.2"
+    },
+    {
+      "filename": "source-images__spincursor.png",
+      "path": "images/spincursor.png",
+      "sha256": "0dc6eaef9e385f42b00dda43df1745c08c28245e664c3e806b4fa350c2d6409f",
+      "size": 748,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/images/spincursor.png?h=v6.11.2"
+    },
+    {
+      "filename": "source-images__waitcursor.png",
+      "path": "images/waitcursor.png",
+      "sha256": "212876b8c17ff9e49f1c2c757e293e11069a16384bb1be0334e04f93fad1bcf3",
+      "size": 724,
+      "url": "https://code.qt.io/cgit/qt/qtbase.git/plain/src/plugins/platforms/cocoa/images/waitcursor.png?h=v6.11.2"
+    }
+  ],
+  "target": "macos-arm64-py312",
+  "upstream_wheel": {
+    "filename": "pyside6_essentials-6.11.2-cp310-abi3-macosx_13_0_universal2.whl",
+    "name": "pyside6-essentials",
+    "sha256": "77795c145202e65a78d88f7cd409d186e3ba23d159bdb3ba2dcd159ae5e5f0d9",
+    "url": "https://files.pythonhosted.org/packages/6f/16/0b7ecf89ebada82ed0430be33809ff325761ece83104f8635b1bd101fcd0/pyside6_essentials-6.11.2-cp310-abi3-macosx_13_0_universal2.whl",
+    "version": "6.11.2"
+  },
+  "wheel_build": "1xrrcocoa",
+  "wheel_tag": "cp310-abi3-macosx_13_0_arm64"
+}

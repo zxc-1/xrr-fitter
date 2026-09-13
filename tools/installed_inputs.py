@@ -196,6 +196,23 @@ def _wheel_snapshots(inputs: list[WheelInput]) -> list[InstalledSnapshot]:
     return result
 
 
+def _qt_input(root, manifest, directory, report, bindings) -> WheelInput | None:
+    if manifest["target"] != "macos-arm64-py312":
+        if report is not None:
+            raise ValueError("Windows installed closure cannot accept macOS Qt evidence")
+        return None
+    if report is None:
+        raise ValueError("macOS installed closure requires Qt Cocoa build evidence")
+    from qt_cocoa_evidence import binding_paths, read_build
+
+    bindings.add(binding_paths(root, report))
+    qt = read_build(root, report, directory)
+    originals = [item for item in manifest["wheels"] if item["name"] == "pyside6-essentials"]
+    if originals != [qt["receipt"]["inputs"]["upstream_wheel"]]:
+        raise ValueError("Qt installed input differs from the ordinary upstream manifest")
+    return WheelInput(qt["path"], qt["record"], "qt-cocoa-source-build", True)
+
+
 def load_installation_inputs(
     root: Path,
     manifest_path: Path,
@@ -203,6 +220,7 @@ def load_installation_inputs(
     pip_wheel: Path,
     *,
     refnx_build: Path | None = None,
+    qt_build: Path | None = None,
     auxiliary_directory: Path | None = None,
 ):
     paths = {"ordinary-manifest": manifest_path, "bootstrap-lock": root / "tools/bootstrap-requirements.lock"}
@@ -211,8 +229,12 @@ def load_installation_inputs(
     bound.add(_platform_paths(root, refnx_build, auxiliary_directory))
     verify_wheels(wheel_directory, manifest["wheels"])
     ordinary = {item["name"]: item for item in manifest["wheels"]}
+    qt = _qt_input(root, manifest, wheel_directory, qt_build, bound)
     inputs = [
-        WheelInput(wheel_directory / item["filename"], item, "ordinary-manifest", True) for item in manifest["wheels"]
+        qt
+        if qt is not None and item["name"] == "pyside6-essentials"
+        else WheelInput(wheel_directory / item["filename"], item, "ordinary-manifest", True)
+        for item in manifest["wheels"]
     ]
     pip, bootstrap = _bootstrap_inputs(root, manifest["target"], pip_wheel, ordinary)
     inputs.append(pip)

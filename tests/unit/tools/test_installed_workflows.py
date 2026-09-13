@@ -82,7 +82,14 @@ def test_macos_inventory_is_only_an_audit_slice_and_precedes_audit_tool_installa
     assert index < _run_index(steps, "-r tools/audit-requirements.lock")
     _arguments(
         binding["run"],
-        ("tools/verify.py distribution", "--artifact-manifest", "--artifact-dir", "--refnx-build", "--pip-wheel"),
+        (
+            "tools/verify.py distribution",
+            "--artifact-manifest",
+            "--artifact-dir",
+            "--refnx-build",
+            "--pip-wheel",
+            '--qt-build "$JOB_ROOT/reports/qt-cocoa-build/build.json"',
+        ),
     )
     setup = (ROOT / ".github/actions/setup-macos-python/action.yml").read_text()
     assert "installed_sbom.py" not in setup

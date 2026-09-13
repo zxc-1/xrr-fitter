@@ -99,6 +99,8 @@ def expected_action():
                             "${{ steps.bootstrap.outputs.root }}/reports/",
                             "!${{ steps.bootstrap.outputs.root }}/reports/packages/wheels/**",
                             "!${{ steps.bootstrap.outputs.root }}/reports/refnx-inputs/inputs/**",
+                            "!${{ steps.bootstrap.outputs.root }}/reports/qt-cocoa-inputs/inputs/**",
+                            "!${{ steps.bootstrap.outputs.root }}/reports/qt-cocoa-build/wheels/**",
                         ),
                         "include-hidden-files": True,
                         "if-no-files-found": "error",

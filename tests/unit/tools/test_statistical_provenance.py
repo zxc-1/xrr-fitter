@@ -15,6 +15,13 @@ INPUTS = (
     "tools/package-manifests/macos-arm64-py312.json",
     "tools/package-manifests/refnx-source.json",
     "tools/package-manifests/refnx-build-macos-arm64-py312.json",
+    "tools/package-manifests/qt-cocoa-macos-arm64-py312.json",
+    "tools/qt-cocoa/ownership.patch",
+    "tools/qt-cocoa/cocoa.pro",
+    "tools/qt-cocoa/qcocoaresources.qrc",
+    "tools/qt-cocoa/ownership_regression.mm",
+    "tools/qt-cocoa/ownership_regression.pro",
+    "tools/qt-cocoa/NOTICE.txt",
 )
 WORKFLOW_KEYS = ("GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_SHA")
 
