@@ -178,7 +178,13 @@ def test_expert_mcmc_controls_remain_readable_at_documented_window_size(
     from xrr_fitter.gui.main_window import MainWindow
 
     previous_stylesheet = qapp.styleSheet()
-    request.addfinalizer(lambda: qapp.setStyleSheet(previous_stylesheet))
+
+    def restore_stylesheet() -> None:
+        # Like apply_theme, avoid repolishing every widget when nothing changed.
+        if qapp.styleSheet() != previous_stylesheet:
+            qapp.setStyleSheet(previous_stylesheet)
+
+    request.addfinalizer(restore_stylesheet)
     create_application([])
     project = api.set_expert_mode(_project(tmp_path), True)
     window = MainWindow(ProjectDocument(project))
