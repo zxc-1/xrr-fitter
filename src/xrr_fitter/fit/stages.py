@@ -801,7 +801,7 @@ def run_local_stage(
             cid: str,
             sidx: int,
             _completed: int = completed,
-        ) -> Callable[[np.ndarray], None]:
+        ) -> Callable[[np.ndarray, int, int, float | None], None]:
             #
             # Cb
             #
@@ -1065,7 +1065,7 @@ def _run_stage_e_locals(
     # Result positions retain start order so winner selection and nfev totals
     # are independent of worker completion timing.
 
-    def _make_e_local_cb(cid: str, sidx: int) -> Callable[[np.ndarray], None]:
+    def _make_e_local_cb(cid: str, sidx: int) -> Callable[[np.ndarray, int, int, float | None], None]:
         #
         # Cb
         #
