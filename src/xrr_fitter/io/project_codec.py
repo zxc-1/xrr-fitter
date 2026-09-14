@@ -140,11 +140,7 @@ def _oxide_from_dict(value: object) -> OxideDecision:
 
 
 SETTING_REQUIRED_FIELDS = frozenset({"name", "initial", "lower", "upper"})
-# 旧文件里第三态还不存在，自由度是一个 ``locked: bool``。两个键都收下，写出时只写 ``freedom``——
-# 版本号不动，因为这是一次「放宽」而不是「换形状」：v2 里必填的 ``locked`` 变成可选，旧 build
-# 写的文件依旧读得进来，而 FREE 这个默认值不落盘，既有项目照原样重写仍然逐位不变（与
-# ``angle_convention`` 的处理同一个理由）。
-SETTING_LEGACY_FIELDS = frozenset({"locked", "freedom"})
+SETTING_OPTIONAL_FIELDS = frozenset({"freedom"})
 
 
 def _setting_to_dict(value: ParameterSetting) -> dict[str, object]:
@@ -160,20 +156,13 @@ def _setting_to_dict(value: ParameterSetting) -> dict[str, object]:
 
 
 def _setting_freedom(payload: dict[str, object]) -> ParameterFreedom:
-    if "freedom" in payload:
-        if "locked" in payload:
-            raise ProjectSchemaError("parameter setting must not carry both freedom and locked")
-        raw = payload["freedom"]
-        if not isinstance(raw, str):
-            raise ProjectSchemaError("parameter setting freedom must be a string")
-        try:
-            return ParameterFreedom(raw)
-        except ValueError as error:
-            raise ProjectSchemaError(f"unsupported parameter setting freedom: {raw!r}") from error
-    legacy = payload.get("locked", False)
-    if not isinstance(legacy, bool):
-        raise ProjectSchemaError("parameter setting locked must be a boolean")
-    return ParameterFreedom.from_locked(legacy)
+    raw = payload.get("freedom", ParameterFreedom.FREE.value)
+    if not isinstance(raw, str):
+        raise ProjectSchemaError("parameter setting freedom must be a string")
+    try:
+        return ParameterFreedom(raw)
+    except ValueError as error:
+        raise ProjectSchemaError(f"unsupported parameter setting freedom: {raw!r}") from error
 
 
 def _setting_from_dict(value: object) -> ParameterSetting:
@@ -181,7 +170,7 @@ def _setting_from_dict(value: object) -> ParameterSetting:
         value,
         set(SETTING_REQUIRED_FIELDS),
         "parameter setting",
-        optional=set(SETTING_LEGACY_FIELDS),
+        optional=set(SETTING_OPTIONAL_FIELDS),
     )
     return ParameterSetting(
         name=payload["name"],

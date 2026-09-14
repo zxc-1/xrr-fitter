@@ -165,14 +165,14 @@ def _restored_setting(payload: dict[str, object]) -> ParameterSetting:
 
 
 def test_codec_omits_the_free_freedom_and_round_trips_the_other_two() -> None:
-    """``FREE`` 不落键，另外两档必须往返。
-
-    第三态是往 v2 里加的：默认那一档写进文件的话，既有项目重存一遍就不再逐位相同；而
-    ``fixed``/``range_only`` 掉了键会静默读成「自由」——拟合器于是去推一个读者钉死了的量，
-    或者把「优先待在这段区间内」整条丢掉，两种都不报错。
-    """
-    default_document = project_to_dict(_project_with_setting(ParameterFreedom.FREE))
+    """FREE 的规范编码省略默认键，FIXED / RANGE_ONLY 必须保留声明并完整往返。"""
+    free = _project_with_setting(ParameterFreedom.FREE)
+    default_document = project_to_dict(free)
     assert "freedom" not in default_document["datasets"][0]["parameter_settings"][0]
+    assert project_from_bytes(project_to_bytes(free)) == free
+
+    default_document["datasets"][0]["parameter_settings"][0]["freedom"] = "free"
+    assert _restored_setting(default_document).freedom is ParameterFreedom.FREE
 
     for freedom in (ParameterFreedom.FIXED, ParameterFreedom.RANGE_ONLY):
         pinned = _project_with_setting(freedom)
@@ -184,37 +184,39 @@ def test_codec_omits_the_free_freedom_and_round_trips_the_other_two() -> None:
         assert restored == pinned
 
 
-def test_old_setting_written_with_locked_decodes_into_the_matching_gear() -> None:
-    """旧文件里第三态还不存在，自由度是一个 ``locked: bool``——两个值都得落到对应那一档。
-
-    这个键在 v2 里原本是必填的，现在的写出路径不再产生它；把它读成「未知字段」会让此前
-    存下的每一份工程都打不开。
-    """
+@pytest.mark.parametrize("locked", [False, True])
+def test_setting_rejects_locked_in_current_schema(locked: bool) -> None:
     payload = project_to_dict(_project_with_setting(ParameterFreedom.FREE))
     stored = payload["datasets"][0]["parameter_settings"][0]
     assert "freedom" not in stored
-
-    stored["locked"] = True
-    assert _restored_setting(payload).freedom is ParameterFreedom.FIXED
-
-    stored["locked"] = False
     assert _restored_setting(payload).freedom is ParameterFreedom.FREE
 
-    stored.pop("locked")
-    assert _restored_setting(payload).freedom is ParameterFreedom.FREE
+    stored["locked"] = locked
+
+    with pytest.raises(ProjectSchemaError, match=r"extra=\['locked'\]"):
+        project_from_dict(payload)
 
 
-def test_a_setting_carrying_both_keys_is_refused_rather_than_silently_picking_one() -> None:
-    """两个键同时在的文件没法确定读者的本意，所以判坏而不是挑一个。
+@pytest.mark.parametrize("locked", [False, True])
+@pytest.mark.parametrize("freedom", list(ParameterFreedom))
+def test_a_setting_carrying_both_keys_is_refused_rather_than_silently_picking_one(
+    freedom: ParameterFreedom, locked: bool
+) -> None:
+    payload = project_to_dict(_project_with_setting(freedom))
+    stored = payload["datasets"][0]["parameter_settings"][0]
+    stored["freedom"] = freedom.value
+    stored["locked"] = locked
 
-    挑 ``freedom`` 会让一份 ``locked: true`` + ``freedom: "free"`` 的文件把钉死的量放开，
-    挑 ``locked`` 会让「仅范围」退成两态；两种都不报错，而这种文件只能是被手改或被两个
-    版本先后写过，本身就该拦下来。
-    """
+    with pytest.raises(ProjectSchemaError, match=r"extra=\['locked'\]"):
+        project_from_dict(payload)
+
+
+@pytest.mark.parametrize("freedom", [False, 1, 1.0, [], {}])
+def test_a_non_string_freedom_is_refused(freedom: object) -> None:
     payload = project_to_dict(_project_with_setting(ParameterFreedom.FIXED))
-    payload["datasets"][0]["parameter_settings"][0]["locked"] = True
+    payload["datasets"][0]["parameter_settings"][0]["freedom"] = freedom
 
-    with pytest.raises(ProjectSchemaError, match="both freedom and locked"):
+    with pytest.raises(ProjectSchemaError, match="parameter setting freedom must be a string"):
         project_from_dict(payload)
 
 
