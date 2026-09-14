@@ -215,6 +215,8 @@ def build_step(parent: QWidget, title: str, description: str, *, connected: bool
         # 会伸展的东西。线一撤，QVBoxLayout 里只剩一枚定尺圆点，剩余高度均分到它上下两侧，
         # 圆点被居中——设计稿的 ``align-items:flex-start`` 要的是顶边与标题齐平。补一段空白
         # 替线占住下方，六个点于是等距一列。
+        # A hidden connector must keep the same floor when text metrics are smaller.
+        dots.addSpacing(RAIL_MIN_H)
         dots.addStretch(1)
 
     row_layout.addLayout(dots)

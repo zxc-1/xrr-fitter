@@ -32,7 +32,7 @@ def _joint_layout(*names: str):
     )
 
 
-def _joint_view(qtbot, width: int, height: int):
+def _joint_view(qtbot, width: int, height: int, *, font_pixels: int | None = None):
     """按中栏的真实尺寸立起帧④ 的进度视图，并套上应用发货的那份样式表。
 
     ``fixture`` 不走 :func:`theme.apply_theme`，而横幅那一圈 ``padding: 10px 14px`` 只写在样式表
@@ -43,6 +43,10 @@ def _joint_view(qtbot, width: int, height: int):
 
     view = ProgressView()
     qtbot.addWidget(view)
+    if font_pixels is not None:
+        font = view.font()
+        font.setPixelSize(font_pixels)
+        view.setFont(font)
     view.setStyleSheet(theme.build_stylesheet(view.palette()))
     view.set_joint_layout(_joint_layout("curve-0", "curve-1", "curve-2"))
     view.resize(width, height)
@@ -72,7 +76,8 @@ def test_the_joint_banner_says_its_whole_sentence_on_screen(qtbot, width: int, h
     assert _cropped(banner) <= 4, f"横幅被裁 {_cropped(banner)}px：{banner.text()!r}"
 
 
-def test_the_progress_card_scrolls_when_it_outgrows_the_column(qtbot) -> None:
+@pytest.mark.parametrize("font_pixels", (6, 16))
+def test_the_progress_card_scrolls_when_it_outgrows_the_column(qtbot, font_pixels: int) -> None:
     """卡片比中栏高时靠滚动去够，而不是把卡里每一件按比例压扁。
 
     这张卡装的是横幅、四行文字和九行阶梯，加起来比 1400×900 的中栏还高。没有滚动容器时
@@ -80,12 +85,18 @@ def test_the_progress_card_scrolls_when_it_outgrows_the_column(qtbot) -> None:
     最不重要的那一件，是所有件。有了滚动容器，放不下的部分是「要滚一下才看见」，不再是
     「屏上永远读不到」。
     """
-    view = _joint_view(qtbot, *COLUMN_SIZES[0])
+    view = _joint_view(qtbot, *COLUMN_SIZES[0], font_pixels=font_pixels)
     scroll = view.findChild(QScrollArea, "fitProgressScroll")
 
     assert scroll is not None, "「总进度」卡没有放进可滚容器"
     card = scroll.widget()
     assert card is not None and card.objectName() == "fitProgressCard"
+    # Font/style metrics vary across hosts: explicitly give the card less than
+    # its measured floor, rather than assuming a 400px view always overflows.
+    chrome_height = view.height() - scroll.viewport().height()
+    view.resize(view.width(), min(view.height(), chrome_height + card.minimumSizeHint().height() - 1))
+    qtbot.waitUntil(lambda: scroll.viewport().height() < card.minimumSizeHint().height())
+    assert scroll.viewport().height() < card.minimumSizeHint().height()
     assert card.height() >= card.minimumSizeHint().height(), "卡片仍被压在它的最小高度以下"
     assert scroll.verticalScrollBar().maximum() > 0, "卡片高过视口，却滚不动"
     # 横向不滚：一栏的宽度是给定的预算，卡片该在这个宽度里排版，而不是靠左右拖动去读。

@@ -15,7 +15,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QDockWidget, QLabel, QSplitter, QWidget
 
 from xrr_fitter.gui import theme
-from xrr_fitter.gui.navigation.steps import STEP_PAD_V_PX
+from xrr_fitter.gui.navigation.steps import MARKER_CELL_PX, RAIL_MIN_H, STEP_PAD_V_PX, build_step
 
 PIPELINE_STEP_NAMES = ["数据", "结构", "参数", "拟合", "结果", "导出"]
 
@@ -214,3 +214,17 @@ def test_the_stepper_names_itself_above_its_first_step(qtbot) -> None:
     qtbot.waitExposed(window)
     first = window.pipeline_nav.step_rows()[0]
     assert heading.mapTo(window, heading.rect().bottomLeft()).y() <= first.mapTo(window, first.rect().topLeft()).y()
+
+
+def test_disconnected_step_keeps_the_rail_floor_with_compact_text(qtbot) -> None:
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    rows = []
+    for connected in (True, False):
+        parts = build_step(parent, "数据" if connected else "导出", "—", connected=connected)
+        # Model the compact text boxes that expose the hosted macOS layout gap.
+        parts.label.setFixedHeight(10)
+        parts.description.setFixedHeight(10)
+        rows.append(parts.row)
+    minimum = MARKER_CELL_PX + RAIL_MIN_H + 2 * STEP_PAD_V_PX
+    assert [row.sizeHint().height() for row in rows] == [minimum, minimum]
