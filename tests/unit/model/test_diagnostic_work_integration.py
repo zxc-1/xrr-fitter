@@ -16,7 +16,7 @@ from xrr_fitter.model.diagnostic_calibration import DiagnosticCalibration, Diagn
 from xrr_fitter.model.diagnostic_work import DiagnosticRefitWork, combine_refit_work
 from xrr_fitter.model.provenance import diagnostic_calibration_sha256
 
-_EMPTY_REFIT_WORK = DiagnosticRefitWork()
+EMPTY_REFIT_WORK = DiagnosticRefitWork()
 
 
 def _calibration(**changes):
@@ -41,7 +41,7 @@ def _calibration(**changes):
     return replace(result, provenance_sha256=diagnostic_calibration_sha256(result))
 
 
-def _failed_calibration(observed, null=_EMPTY_REFIT_WORK, *, attempted=16, successful=0):
+def _failed_calibration(observed, null=EMPTY_REFIT_WORK, *, attempted=16, successful=0):
     indices = range(successful, attempted) if attempted else (-1,)
     result = DiagnosticCalibration(
         "unavailable",

@@ -43,7 +43,7 @@ from xrr_fitter.model.diagnostic_work import (
 from xrr_fitter.model.evaluation import ModelEvaluation
 from xrr_fitter.model.fitting import FitEvaluationContext
 
-_EMPTY_REFIT_WORK = DiagnosticRefitWork()
+EMPTY_REFIT_WORK = DiagnosticRefitWork()
 
 
 def diagnostic_starts(initial: np.ndarray) -> tuple[np.ndarray, ...]:
@@ -67,7 +67,7 @@ class _RefitProblem:
     loss: Callable[[np.ndarray], np.ndarray]
 
 
-def _failed(reason: str, work: DiagnosticRefitWork = _EMPTY_REFIT_WORK) -> DiagnosticRefit:
+def _failed(reason: str, work: DiagnosticRefitWork = EMPTY_REFIT_WORK) -> DiagnosticRefit:
     return DiagnosticRefit(None, (), work.nfev, work.path_count, reason, work)
 
 
