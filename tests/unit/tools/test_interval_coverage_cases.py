@@ -14,6 +14,21 @@ import xrr_fitter.api as api
 TARGET = "component.0.thickness_a"
 
 
+def test_case_builder_declares_fixed_nuisance_parameters_with_current_api(load_tool_module, tmp_path):
+    module = load_tool_module("check_interval_coverage").cases
+    fixture, failure = None, None
+    try:
+        fixture = module.build_case(tmp_path, "poisson_low", 0)
+    except TypeError as error:
+        failure = str(error)
+
+    assert failure is None, f"Current-API case construction failed: {failure}"
+    assert fixture is not None
+    settings = fixture.project.datasets[0].parameter_settings
+    assert {item.freedom for item in settings if item.name != TARGET} == {api.ParameterFreedom.FIXED}
+    assert next(item for item in settings if item.name == TARGET).freedom is api.ParameterFreedom.FREE
+
+
 @pytest.mark.parametrize("group", ("gaussian_regular", "poisson_low", "poisson_regular", "shared_gaussian"))
 def test_real_fixture_uses_physics_truth_and_keeps_count_normalization_local(load_tool_module, tmp_path, group):
     module = load_tool_module("check_interval_coverage").cases

@@ -139,7 +139,9 @@ def _settings(project: api.XrrProject, dataset_id: str, scale: float) -> tuple[a
             setting = api.ParameterSetting(TARGET, INITIAL, *BOUNDS)
         else:
             initial = scale if definition.name == "instrument.scale" else definition.initial
-            setting = api.ParameterSetting(definition.name, initial, initial, initial, locked=True)
+            setting = api.ParameterSetting(
+                definition.name, initial, initial, initial, freedom=api.ParameterFreedom.FIXED
+            )
         settings.append(setting)
     return tuple(settings)
 
