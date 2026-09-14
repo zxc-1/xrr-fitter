@@ -149,21 +149,62 @@ def _ordinary_wheels(inventory: dict) -> list[dict]:
     return [item["wheel"] for item in packages if item["provenance"] == "ordinary-manifest"]
 
 
-def bind_ordinary_scope(inventory: dict, manifest: dict, pins: tuple[str, ...]) -> dict:
+def _qt_upstream_scope(inventory: dict, manifest: dict, receipt: dict | None) -> list[dict]:
+    derived = [item["wheel"] for item in inventory["packages"] if item["provenance"] == "qt-cocoa-source-build"]
+    if receipt is None:
+        if derived:
+            raise ValueError("Qt derived wheel requires bound build evidence")
+        return []
+    if (inventory["target"], manifest["target"]) != ("macos-arm64-py312", "macos-arm64-py312"):
+        raise ValueError("Qt advisory replacement requires the macOS target")
+    upstream = [item for item in manifest["wheels"] if item["name"] == "pyside6-essentials"]
+    if upstream != [receipt["inputs"]["upstream_wheel"]] or derived != [receipt["wheel"]]:
+        raise ValueError("Qt upstream or installed derived wheel bytes differ from the build receipt")
+    return [{"upstream": upstream[0], "derived": derived[0]}]
+
+
+def bind_ordinary_scope(inventory: dict, manifest: dict, pins: tuple[str, ...], qt_receipt: dict | None = None) -> dict:
     ordinary = _ordinary_wheels(inventory)
-    expected = sorted(manifest["wheels"], key=lambda item: item["name"])
+    locked = sorted(manifest["wheels"], key=lambda item: item["name"])
+    upstream = _qt_upstream_scope(inventory, manifest, qt_receipt)
+    replaced = {item["upstream"]["name"] for item in upstream}
+    expected = [item for item in locked if item["name"] not in replaced]
     if sorted(ordinary, key=lambda item: item["name"]) != expected:
         raise ValueError("installed ordinary wheel bytes differ from the strict manifest")
-    if sorted(pins) != sorted(f"{item['name']}=={item['version']}" for item in expected):
+    if sorted(pins) != sorted(f"{item['name']}=={item['version']}" for item in locked):
         raise ValueError("advisory pins differ from the installed ordinary wheel scope")
     return {
         "scanned": expected,
+        "upstream_advisory_only": upstream,
         "not_scanned": [
             {"wheel": item["wheel"], "provenance": item["provenance"]}
             for item in inventory["packages"]
             if item["provenance"] != "ordinary-manifest"
         ],
     }
+
+
+def _qt_scope_receipt(args, documents: dict, source: dict, bound: InputBindings):
+    if args.qt_build is None and args.wheel_dir is None:
+        return None, lambda: None
+    if args.qt_build is None or args.wheel_dir is None:
+        raise ValueError("Qt advisory binding requires both build evidence and original wheels")
+    if documents["inventory.json"]["target"] != "macos-arm64-py312":
+        raise ValueError("Qt advisory build evidence is only valid for macOS")
+    from qt_cocoa_evidence import binding_paths, read_build
+
+    paths = binding_paths(args.repo_root, args.qt_build)
+    bound.add(paths)
+    properties = _bom_properties(documents["installed.cdx.json"], source)
+    inputs = json_object(properties["xrr:inputs:sha256"].encode("utf-8"))
+    hashes = bound.hashes()
+    _require_fields(inputs, {name: hashes[name] for name in paths}, "Qt installed input")
+
+    def guard():
+        bound.guard()
+        return read_build(args.repo_root, args.qt_build, args.wheel_dir)["receipt"]
+
+    return guard(), guard
 
 
 def _audit_tool_pins(root: Path) -> dict[str, str]:
@@ -264,7 +305,8 @@ def bind_audit(args) -> dict:
             raise ValueError("unsupported installed advisory target")
         manifest_bound = InputBindings({"ordinary-manifest": root / f"tools/package-manifests/{target}.json"})
         manifest = validate_manifest(root, json_object(manifest_bound.contents["ordinary-manifest"]))
-        scope = bind_ordinary_scope(inventory, manifest, pins[target])
+        qt_receipt, qt_guard = _qt_scope_receipt(args, documents, source, manifest_bound)
+        scope = bind_ordinary_scope(inventory, manifest, pins[target], qt_receipt)
         receipt = {
             "schema": "xrr-artifact-audit-binding-v1",
             "state": "PASS",
@@ -281,6 +323,7 @@ def bind_audit(args) -> dict:
             "advisory_reports": advisory_bound.hashes(),
             "manifest_inputs": manifest_bound.hashes(),
         }
+        qt_guard()
         for bound in (installed_bound, advisory_bound, manifest_bound):
             bound.guard()
         if clean_head_identity(root) != identity or _input_identity(root) != inputs:
@@ -297,6 +340,8 @@ def bind_audit(args) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--qt-build", type=Path)
+    parser.add_argument("--wheel-dir", type=Path)
     for name in ("installed-report", "advisory-report", "report-dir"):
         parser.add_argument(f"--{name}", type=Path, required=True)
     args = parser.parse_args(argv)

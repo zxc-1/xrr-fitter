@@ -67,6 +67,14 @@ PyPI-release purl. The aggregate remains `incomplete`: the host interpreter,
 macOS loader and whole operating-system dependency closure are outside this
 byte audit. An ad-hoc signed Qt build is not a release/readiness authorization.
 
+The advisory bundle also takes `--qt-build` and the original `--wheel-dir`,
+rechecks the source derivative, and matches its build-input hashes to the
+installed SBOM. Ordinary installed wheels still require exact manifest bytes.
+The original Essentials version remains in the pinned advisory query but is
+reported separately as `upstream_advisory_only`; the derived wheel remains
+`not_scanned`. An upstream version advisory result is not a vulnerability scan
+of the modified native library.
+
 The README audits the dependency environment and canonical application artifact
 **before** installing the application wheel with `--no-deps`; this avoids falsely
 claiming the application's additional installed files belong to dependency

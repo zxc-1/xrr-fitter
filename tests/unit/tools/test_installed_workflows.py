@@ -111,6 +111,10 @@ def test_advisory_binding_keeps_artifact_and_installed_evidence_even_on_failure(
     assert len(binding) == 1
     assert binding[0]["if"] == "${{ matrix.audit == 'advisories' }}"
     assert '--advisory-report "$RUNNER_TEMP/audit-reports/audit"' in binding[0]["run"]
+    _arguments(
+        binding[0]["run"],
+        ('--qt-build "$JOB_ROOT/reports/qt-cocoa-build/build.json"', '--wheel-dir "$JOB_ROOT/reports/packages/wheels"'),
+    )
     upload = steps[-1]
     assert upload["if"] == "${{ always() }}"
     assert "reports/installed/" in upload["with"]["path"]

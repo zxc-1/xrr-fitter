@@ -63,7 +63,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$PYTHON" tools/audit_bundle.py --installed-report "$JOB_ROOT/reports/installed" --advisory-report "$RUNNER_TEMP/audit-reports/audit" --report-dir "$RUNNER_TEMP/audit-reports/binding"
+          "$PYTHON" tools/audit_bundle.py --qt-build "$JOB_ROOT/reports/qt-cocoa-build/build.json" --wheel-dir "$JOB_ROOT/reports/packages/wheels" --installed-report "$JOB_ROOT/reports/installed" --advisory-report "$RUNNER_TEMP/audit-reports/audit" --report-dir "$RUNNER_TEMP/audit-reports/binding"
       - name: Clean the owned macOS environment
         if: ${{ always() && steps.python.outputs.job-root != '' }}
         uses: ./.github/actions/cleanup-macos-python
