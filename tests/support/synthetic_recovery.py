@@ -18,6 +18,7 @@ from tests.support.synthetic_recovery_layer_cases import (
 from tests.support.synthetic_recovery_model import SyntheticCase
 from tests.support.synthetic_recovery_model_error_cases import _model_error_cases
 from tests.support.synthetic_recovery_runs import (
+    _CaseOutcome,
     _parallel_case_outcomes,
     _run_slow_ambiguous_corpus,
     _run_slow_model_error_corpus,
@@ -71,8 +72,21 @@ def _partition_cases(
 
 def run_corpus(cases: tuple[SyntheticCase, ...]) -> CorpusReport:
     values = _validated_cases(cases)
+    return validate_corpus_outcomes(values, _parallel_case_outcomes(values))
+
+
+def _validate_alignment(cases: tuple[SyntheticCase, ...], outcomes: tuple[_CaseOutcome, ...]) -> None:
+    if tuple(outcome.case_id for outcome in outcomes) != tuple(case.case_id for case in cases):
+        raise ValueError("synthetic worker outcomes must align with the complete corpus")
+
+
+def validate_corpus_outcomes(
+    cases: tuple[SyntheticCase, ...],
+    outcomes: tuple[_CaseOutcome, ...],
+) -> CorpusReport:
+    values = _validated_cases(cases)
+    _validate_alignment(values, outcomes)
     recovery, ambiguous, model_error = _partition_cases(values)
-    outcomes = _parallel_case_outcomes(values)
     recovery_outcomes = tuple(
         outcome
         for case, outcome in zip(values, outcomes, strict=True)

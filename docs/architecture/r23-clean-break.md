@@ -1,5 +1,10 @@
 # XRR R23 干净切断架构实施方案
 
+> 当前统计计算授权、冻结依赖闭包与跨运行证据重验规则以
+> [完整统计验收与分片证据](statistical-verification.md) 为准。
+> 本文历史命令中的无输入 statistical/release 入口现在默认拒绝计算；
+> 自动 push/tag/retry 不授权全量拟合，不能通过重跑掩盖缺失证据。
+
 ## 0. 2026-07-26 执行覆盖：软件先交付，真实数据由用户交付后验收
 
 本节记录用户在实施开始后的明确裁决，并在与本文后续条款冲突时优先。R23 的当前交付目标
@@ -29,6 +34,7 @@ GitHub Actions、`R23-final` tag 或 GitHub Release 的前置条件。
 
 ### 当前版本发布与 CI 约定（2026-08-06）
 
+- 完整 220-case 统计验收的调度与证据协议见 [完整统计验收与分片证据](statistical-verification.md)；分片不改变原科学门禁。
 - PR 只使用独立的 `pr-verify.yml`，运行在非 self-hosted 的隔离 runner；不得使用
   `pull_request_target` checkout 不可信 PR，也不得把 fork PR 放到现有 `xrr-ci` runner。
 - `verify.yml` 的 `main` push 只运行普通 quality/tools/unit/gui/integration/spawn/regression/

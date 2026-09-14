@@ -11,7 +11,7 @@ from xrr_fitter.fit.joint_pipeline import JointFitRequest, run_joint_fit
 from xrr_fitter.fit.joint_problem import compile_joint_problem
 from xrr_fitter.fit.pipeline import FitSearchRequest, run_fit_search
 from xrr_fitter.fit.problem import compile_fit_problem
-from xrr_fitter.model.parameters import ParameterReference, ParameterSetting, SharingRule
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterReference, ParameterSetting, SharingRule
 
 
 def _scale_problem(mode: str, size: int):
@@ -32,7 +32,9 @@ def _scale_problem(mode: str, size: int):
     settings = tuple(
         ParameterSetting(definition.name, 0.5, 0.1, 1.5)
         if definition.name == "instrument.scale"
-        else ParameterSetting(definition.name, definition.initial, definition.lower, definition.upper, locked=True)
+        else ParameterSetting(
+            definition.name, definition.initial, definition.lower, definition.upper, freedom=ParameterFreedom.FIXED
+        )
         for definition in baseline.parameter_definitions
     )
     config = _config(mode)

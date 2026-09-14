@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QLineEdit,
-    QPushButton,
 )
 
 import xrr_fitter.api as api
@@ -53,8 +52,8 @@ def _edit_backing(
     density: float,
     roughness_nm: float,
 ) -> None:
-    button = panel.findChild(QPushButton, "editBackingButton")
-    assert button is not None
+    action = panel.editor.edit_backing_action
+    assert action.isEnabled()
 
     def configure() -> None:
         dialog = QApplication.activeModalWidget()
@@ -69,7 +68,7 @@ def _edit_backing(
         )
 
     QTimer.singleShot(0, configure)
-    qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
+    action.trigger()
 
 
 def test_structure_editor_edits_backing_material_and_roughness(qtbot, tmp_path) -> None:

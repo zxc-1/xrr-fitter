@@ -20,7 +20,7 @@ from xrr_fitter.io.project_codec import project_from_bytes
 from xrr_fitter.io.xy import read_xy_bytes
 from xrr_fitter.model.data import with_fit_mask
 from xrr_fitter.model.fitting import FitConfig, SearchBudget
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 
 
 def _frozen_single_layer_problem():
@@ -50,7 +50,7 @@ def _frozen_single_layer_problem():
             definition.initial,
             definition.lower,
             definition.upper,
-            locked=definition.name != target,
+            freedom=ParameterFreedom.from_locked(definition.name != target),
         )
         for definition in base.parameter_definitions
     )
@@ -113,9 +113,11 @@ def _assert_frozen_candidates(result) -> None:
 
 
 def _assert_frozen_progress(progress) -> None:
+    # The 512 pool evaluations stay frozen; the separate review completion
+    # event prevents a Stage-B skip from being consumed inside Stage A.
     assert tuple(value.total for value in progress[-10:]) == (
-        512,
-        512,
+        513,
+        513,
         2,
         2,
         1,
@@ -126,8 +128,8 @@ def _assert_frozen_progress(progress) -> None:
         4,
     )
     assert tuple(value.message for value in progress[-10:]) == (
-        "processed initial candidate 511; physically rejected 0; invalid evaluations 0",
         "processed initial candidate 512; physically rejected 0; invalid evaluations 0",
+        "completed initial full-grid review and screening",
         "completed short differential evolution 1",
         "completed short differential evolution 2",
         "full-resolution density refinement",

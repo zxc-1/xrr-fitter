@@ -137,6 +137,7 @@ def _raced_source_ids(
                 dataset.beam,
                 dataset.import_angle_offset_deg,
                 dataset.column_mapping,
+                angle_convention=dataset.angle_convention,
                 noise_model=project.fit_config.noise_model,
             )
         except OSError:

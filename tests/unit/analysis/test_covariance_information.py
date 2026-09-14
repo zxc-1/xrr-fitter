@@ -17,7 +17,13 @@ from xrr_fitter.fit.joint_evaluation import evaluate_joint_vector, joint_inferen
 from xrr_fitter.fit.joint_problem import compile_joint_problem
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.io.codec_results import _uncertainty_from_dict, _uncertainty_to_dict
-from xrr_fitter.model.parameters import ConstraintNode, ConstraintRule, ParameterReference, ParameterSetting
+from xrr_fitter.model.parameters import (
+    ConstraintNode,
+    ConstraintRule,
+    ParameterFreedom,
+    ParameterReference,
+    ParameterSetting,
+)
 from xrr_fitter.services.fitting import _joint_point_evidence
 
 
@@ -101,7 +107,7 @@ def test_shared_physical_roughness_mapping_matches_finite_difference() -> None:
 def test_all_locked_parameters_have_empty_not_missing_covariance_and_roundtrip() -> None:
     initial = scale_problem("gaussian")
     settings = tuple(
-        ParameterSetting(value.name, value.initial, value.lower, value.upper, locked=True)
+        ParameterSetting(value.name, value.initial, value.lower, value.upper, freedom=ParameterFreedom.FIXED)
         for value in initial.parameter_definitions
     )
     problem = compile_fit_problem(initial.data, initial.structure, initial.instrument, initial.config, settings)

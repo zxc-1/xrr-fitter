@@ -42,7 +42,12 @@ from math import isfinite
 
 from xrr_fitter.model.analysis import FitResult, StructureEvidence
 from xrr_fitter.model.automation import DatasetAutomation, MeasurementPreset
-from xrr_fitter.model.data import BeamSpec, DataColumnMapping
+from xrr_fitter.model.data import (
+    ANGLE_CONVENTIONS,
+    AngleConvention,
+    BeamSpec,
+    DataColumnMapping,
+)
 from xrr_fitter.model.fitting import FitCheckpoint, FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.joint_bootstrap_provenance import (
@@ -152,15 +157,25 @@ class ProjectUiState:
     active_dataset_id: str | None = None
     selected_candidate_ids: tuple[tuple[str, str], ...] = ()
     expert_mode: bool = False
-    # Retained for backward compatibility with projects written before the
-    # dockable layout. ``dock_state`` supersedes them; these no longer drive
-    # the arrangement and are kept only so older files stay readable.
-    workspace_splitter_sizes: tuple[int, int, int] = (320, 680, 380)
-    left_splitter_sizes: tuple[int, int] = (280, 480)
+    # The three workspace columns and the navigation rail's two stacked lists.
+    # These drive the arrangement: a project always carries explicit widths, so
+    # the defaults here are what a never-dragged project opens at, and they are
+    # the design's own grid -- ``grid-template-columns:264px 1fr 340px`` against
+    # its 1320px reference width.  The GUI reads its column budgets back off this
+    # default rather than restating the numbers, because a restored width always
+    # wins over a computed one: a second copy of them would silently decide the
+    # layout the moment the two drifted.
+    workspace_splitter_sizes: tuple[int, int, int] = (264, 716, 340)
+    # Heights, not widths: the rail's list splitter is vertical, and both lists
+    # stretch equally, so equal values mean "share the rail's spare height".
+    left_splitter_sizes: tuple[int, int] = (360, 360)
     plot_tab_index: int = 0
     analysis_tab_index: int = 0
-    # Base64 of ``QMainWindow.saveState()``. Opaque and Qt-version dependent, so
-    # it is never interpreted here; an empty value means the default layout.
+    # Base64 of ``QMainWindow.saveState()``, written by the dockable build the
+    # fixed-column shell replaced.  Opaque and Qt-version dependent, so it was
+    # never interpreted here, and nothing consumes it any more; it stays in the
+    # schema only so projects that carry one still open, falling back to the
+    # column widths above.
     dock_state: str = ""
 
     def __post_init__(self) -> None:
@@ -210,6 +225,10 @@ class DatasetProject:
     display_name: str | None = None
     automation: DatasetAutomation = DatasetAutomation()
     parameter_priors: tuple[ParameterPrior, ...] = ()
+    # 导入时对角度列的解释。重读源文件核对哈希的那几条路径要照原样再解释一次，所以它
+    # 必须跟着数据集持久化；默认 ``"two_theta"`` 是既有行为，换默认值会让老项目重导时
+    # 角度翻倍。
+    angle_convention: AngleConvention = "two_theta"
 
     def __post_init__(self) -> None:
         _validate_dataset_header(self)
@@ -436,6 +455,8 @@ def _validate_dataset_header(dataset: DatasetProject) -> None:
         raise TypeError("instrument must be InstrumentSpec")
     if not isfinite(dataset.import_angle_offset_deg):
         raise ValueError("import_angle_offset_deg must be finite")
+    if dataset.angle_convention not in ANGLE_CONVENTIONS:
+        raise ValueError(f"unknown angle_convention: {dataset.angle_convention}")
 
 
 def _fit_mask(values: object) -> tuple[bool, ...]:

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.accessibility import localize_standard_buttons
 
 
 class StyledDialog(QDialog):
@@ -65,4 +66,5 @@ class StyledDialog(QDialog):
         self.button_box = QDialogButtonBox(buttons)
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
+        localize_standard_buttons(self.button_box, confirm="确定")
         root.addWidget(self.button_box, 0, Qt.AlignmentFlag.AlignRight)

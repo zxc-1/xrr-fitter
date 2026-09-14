@@ -11,7 +11,7 @@ from xrr_fitter.io.project_codec import project_from_bytes, project_to_bytes
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.fitting import ConfidenceThresholds, FitConfig, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterPrior, ParameterSetting, PriorSpec
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterPrior, ParameterSetting, PriorSpec
 from xrr_fitter.model.structure import (
     DriftSpec,
     GradientLayerSpec,
@@ -79,7 +79,7 @@ def _numpy_scalar_parameter_setting() -> ParameterSetting:
         initial=np.float32(24.0),
         lower=np.float64(2.0),
         upper=np.float32(48.0),
-        locked=True,
+        freedom=ParameterFreedom.FIXED,
     )
 
 

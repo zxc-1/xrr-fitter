@@ -16,10 +16,13 @@ def search_evidence_to_list(values: tuple[SearchEvidence, ...]) -> list[dict[str
 def _evidence_to_dict(value: SearchEvidence) -> dict[str, object]:
     payload = asdict(value)
     payload["reviews"] = [_review_to_dict(review) for review in payload["reviews"]]
+    payload["budget_allocations"] = list(payload["budget_allocations"])
     return payload
 
 
 def _review_to_dict(review: dict[str, object]) -> dict[str, object]:
+    for name in ("candidate_ids", "grid_points"):
+        review[name] = list(review[name])
     for name in ("coarse_objectives", "full_objectives"):
         review[name] = [cost if isfinite(cost) else None for cost in review[name]]
     return review

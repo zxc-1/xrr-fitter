@@ -30,6 +30,13 @@ def _load(path: str) -> api.XrrProject:
         raise CommandError(f"工程文件不合法：{error}", exit_codes.INVALID_INPUT) from error
 
 
+def _save_project_or_error(project: api.XrrProject, path: str | Path) -> None:
+    try:
+        api.save_project(project, path)
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        raise CommandError(f"工程写回失败：{error}", exit_codes.INVALID_INPUT) from error
+
+
 def _require_fresh_sources(project: api.XrrProject) -> None:
     validation = api.inspect_sources(project)
     if not validation.valid:
@@ -76,7 +83,7 @@ def run_fit(arguments) -> int:
     sink = _progress_sink(arguments.json_progress)
     result = _fit_result(project, arguments, sink)
     if arguments.output is not None:
-        api.save_project(result.updated_project, arguments.output)
+        _save_project_or_error(result.updated_project, arguments.output)
     for warning in result.warnings:
         print(warning, file=sys.stderr)
     return exit_codes.fit_exit_code(result)
@@ -113,7 +120,7 @@ def run_mcmc(arguments) -> int:
         )
     except (ValueError, TypeError, KeyError) as error:
         raise CommandError(f"MCMC 失败：{error}", exit_codes.INVALID_INPUT) from error
-    api.save_project(updated, arguments.output or arguments.project)
+    _save_project_or_error(updated, arguments.output or arguments.project)
     return exit_codes.SUCCESS
 
 
@@ -128,8 +135,13 @@ def run_export(arguments) -> int:
     """Publish an existing project's results atomically."""
     project = _load(arguments.project)
     _require_fresh_sources(project)
+    # ``--ort`` stays a flag on the command line -- that is the shape a shell user
+    # already scripted against -- and is translated here into the format set the API
+    # takes. The default set is spelled by the API rather than restated, so adding a
+    # default format never leaves this call publishing the older tree.
+    formats = (*api.DEFAULT_FORMATS, *((api.ExportFormat.ORT,) if arguments.ort else ()))
     try:
-        manifest = api.export_result(project, arguments.output_dir, include_ort=arguments.ort)
+        manifest = api.export_result(project, arguments.output_dir, formats=formats)
         record = _export_manifest_record(manifest)
     except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
         raise CommandError(f"结果导出失败：{error}", exit_codes.INVALID_INPUT) from error

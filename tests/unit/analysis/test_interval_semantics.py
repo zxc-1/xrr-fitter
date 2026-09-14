@@ -114,6 +114,21 @@ def test_profile_support_uses_the_recorded_threshold_for_coverage() -> None:
     assert profile_covers_value(probe, 0.5)
 
 
+def test_profile_publishes_actual_closure_threshold_not_a_sampled_minimum_estimate() -> None:
+    from xrr_fitter.analysis.profiles import profile_parameter
+
+    profile = profile_parameter(
+        lambda unit: float((unit[0] - 0.3) ** 2),
+        np.array([0.5]),
+        parameter_index=0,
+        objective_delta=0.01,
+        steps=11,
+    )
+
+    assert profile.objective_threshold == pytest.approx(0.05)
+    assert profile.objective_threshold > float(np.min(profile.objectives)) + profile.objective_delta
+
+
 @pytest.mark.parametrize("reason", ["prior", "boundary", "diagnostics"])
 def test_nonregular_likelihood_profile_withholds_formal_confidence(reason) -> None:
     problem = scale_problem("gaussian")

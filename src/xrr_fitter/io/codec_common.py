@@ -68,6 +68,7 @@ OPTIONAL_FIELDS = frozenset(
         "measurement_preset",
         "mcmc",
         "objective",
+        "objective_threshold",
         "ranking_objective",
         "reason",
         "resolution",

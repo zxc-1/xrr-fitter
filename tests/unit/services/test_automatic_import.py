@@ -246,3 +246,40 @@ def test_import_into_completed_joint_project_invalidates_previous_joint_results(
         dataset.last_valid_result is None and dataset.checkpoint is None for dataset in result.updated_project.datasets
     )
     assert original.datasets[0].last_valid_result is prior
+
+
+def test_batch_import_reads_the_angle_column_the_way_the_preset_declares(
+    tmp_path: Path,
+) -> None:
+    """约定跟着 ``MeasurementPreset`` 走，两条导入分支都得照它读。
+
+    ``import_angle_offset_deg`` 已经在 preset 里了——两者是同一类「这台仪器输出的角度列
+    该怎么解释」的声明，分开放会让批量导入只认得其中一半。掠射角源文件走一遍导入，得到
+    的散射角必须整段翻倍；同一份文件按 ``"two_theta"`` 读则原样。
+
+    两个文件覆盖 ``_import_preview_row`` 的两条分支：文件名带材料栈的走
+    ``_automatic_dataset``，不带的走无结构直读。
+    """
+    paths = (_curve(tmp_path / "P1 Zr.xy"), _curve(tmp_path / "bare_run.xy"))
+    incident = replace(_preset(), angle_convention="theta")
+
+    theta = import_dataset_batch(
+        new_project(),
+        preview_import_batch(paths, incident, import_batch_id="batch-theta"),
+    ).updated_project
+    plain = import_dataset_batch(
+        new_project(),
+        preview_import_batch(paths, _preset(), import_batch_id="batch-plain"),
+    ).updated_project
+
+    assert theta.measurement_preset.angle_convention == "theta"
+    assert [dataset.angle_convention for dataset in theta.datasets] == ["theta", "theta"]
+    assert [dataset.angle_convention for dataset in plain.datasets] == ["two_theta", "two_theta"]
+    for incident_dataset, plain_dataset in zip(theta.datasets, plain.datasets, strict=True):
+        assert incident_dataset.fit_range_two_theta_deg == tuple(
+            2.0 * value for value in plain_dataset.fit_range_two_theta_deg
+        )
+
+
+def test_the_default_preset_convention_stays_two_theta() -> None:
+    assert _preset().angle_convention == "two_theta"

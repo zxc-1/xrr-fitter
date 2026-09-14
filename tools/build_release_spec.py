@@ -30,7 +30,7 @@ if TOOL_DIRECTORY not in sys.path:
 from version_source import declared_project_version as _declared_project_version  # noqa: E402
 
 SCHEMA = "xrr-r23-release-spec-v1"
-EXPECTED_BUILD = ("setuptools==75.8.2", "wheel==0.45.1")
+EXPECTED_BUILD = ("setuptools==83.0.0", "wheel==0.46.2")
 INPUT_DIRECTORIES = ("docs", "examples", "src", "tests", "tools", "verification")
 INPUT_FILES = (
     "LICENSE",
@@ -309,7 +309,7 @@ def _expected_generated_metadata(payload: dict[str, object]) -> tuple[str, ...]:
 
 
 def _assert_build_environment() -> None:
-    expected = {"setuptools": "75.8.2", "wheel": "0.45.1"}
+    expected = {"setuptools": "83.0.0", "wheel": "0.46.2"}
     observed = {name: importlib.metadata.version(name) for name in expected}
     if observed != expected:
         raise ValueError(f"pinned build environment required: {observed}")

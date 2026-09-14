@@ -6,16 +6,36 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 import numpy as np
-from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QVBoxLayout, QWidget
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.plots import sld
 from xrr_fitter.gui.plots.diagnostics import COMPANION_SPEC, DiagnosticView
 
 # The selector labels are Chinese UI text; these are the matching algorithm keys
 # in the same order the combo box items are added.
 ALIGN_KEYS = ("backing", "surface")
 BatchTrends = tuple[tuple[str, ...], tuple[float, ...], tuple[float, ...]]
+
+SLD_CARD_SUBTITLE = "实时预览 · 界面手柄可拖拽"
+
+# (shape, colour role, caption), keyed by ``theme.build_legend``.  The captions
+# come from the drawing module so this row and the marks it explains cannot drift
+# apart; ``sld._draw_legend`` reads the same names back to keep the in-axes key
+# from repeating any of them.  Shapes differ per entry, so the key survives
+# greyscale and colour blindness.
+SLD_LEGEND_ENTRIES = (
+    ("line", "candidate", sld.CANDIDATE_REAL_LABEL),
+    ("box", "candidate", sld.INNER_BAND_LABEL),
+    ("dot", "accent", sld.INTERFACE_KEY_LABEL),
+)
+
+# The shortest SLD plot still worth drawing: a depth axis, its labels, and enough
+# vertical room to tell a step profile from a slope.  The pane's floor is this
+# plus whatever the card chrome asks for, so adding a header row pushes the floor
+# up instead of eating into the axes.
+MIN_SLD_PLOT_H = 120
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +68,15 @@ class SldViewState:
     selector_enabled: bool
 
 
+def build_sld_legend(parent: QWidget) -> QWidget:
+    """The key for the SLD pane, as a caption row above the plot.
+
+    Named ``sldCardLegend`` because it is one of the plot cards' keys: the marks
+    and the geometry are ``theme``'s, only the entries are this pane's.
+    """
+    return theme.build_legend(parent, "sldCardLegend", SLD_LEGEND_ENTRIES)
+
+
 def build_sld_companion_pane(
     parent: QWidget,
     views: dict[str, DiagnosticView],
@@ -59,16 +88,24 @@ def build_sld_companion_pane(
     pane.setObjectName("sldPane")
     pane.setAccessibleName(title)
     pane.setAccessibleDescription(description)
-    heading = QLabel(title, pane)
-    heading.setObjectName("sldPaneHeader")
-    heading.setProperty("sectionHeader", True)
-    toggle, selector, controls = build_sld_band_controls(pane, on_bands_toggled, on_align_changed)
+    # The card's own title replaces the former bare header label: two headings
+    # for one pane read as two sections.
+    card, body = theme.titled_card(pane, "sldCard", title, SLD_CARD_SUBTITLE)
+    toggle, selector, controls = build_sld_band_controls(card, on_bands_toggled, on_align_changed)
+    body.addWidget(build_sld_legend(card))
+    body.addLayout(controls)
+    body.addWidget(views[key].canvas, 1)
     layout = QVBoxLayout(pane)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(theme.SPACE_XS)
-    layout.addWidget(heading)
-    layout.addLayout(controls)
-    layout.addWidget(views[key].canvas, 1)
+    layout.addWidget(card, 1)
+    # The floor is derived, not counted: ask the assembled pane what its chrome
+    # needs and add a plot worth drawing.  A hand-written number goes stale the
+    # moment a header row is added, and the pane then honours the number by
+    # collapsing the axes instead of by growing.
+    canvas_floor = views[key].canvas.minimumSizeHint().height()
+    chrome = max(pane.minimumSizeHint().height() - canvas_floor, 0)
+    pane.setMinimumHeight(chrome + MIN_SLD_PLOT_H)
     return pane, toggle, selector
 
 

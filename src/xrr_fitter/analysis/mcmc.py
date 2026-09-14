@@ -24,7 +24,7 @@ from xrr_fitter.evaluation import (
     problem_log_probability,
     values_by_name,
 )
-from xrr_fitter.model.analysis import EnsembleSamples, McmcConfig, McmcReport
+from xrr_fitter.model.analysis import EnsembleSamples, FitCandidate, McmcConfig, McmcReport
 from xrr_fitter.model.fitting import FitEvaluationContext
 from xrr_fitter.model.parameters import ParameterDefinition, ParameterPrior, PriorSpec
 
@@ -174,14 +174,14 @@ def _initial_walker_matrix(initial_walkers: np.ndarray) -> np.ndarray:
     return walkers
 
 
-def _validate_walker_geometry(walkers: np.ndarray, configured_count: object) -> None:
+def _validate_walker_geometry(walkers: np.ndarray, configured_count: int | np.integer) -> None:
     walker_count, dimension = walkers.shape
     valid = walker_count == configured_count and walker_count % 2 == 0 and walker_count >= 2 * dimension + 2
     if not valid:
         raise ValueError("walkers must be even and at least 2*nfree+2")
 
 
-def _validate_step_configuration(config: object) -> None:
+def _validate_step_configuration(config: McmcConfig) -> None:
     valid = (
         _valid_step(config.burn_in, 0)
         and _valid_step(config.production_steps, 4)
@@ -213,7 +213,7 @@ def _initial_log_probability(
 def _validated_initial_state(
     log_probability: Callable[[np.ndarray], float],
     initial_walkers: np.ndarray,
-    config: object,
+    config: McmcConfig,
     cancelled: Callable[[], bool] | None,
 ) -> tuple[np.ndarray, np.ndarray]:
     walkers = _initial_walker_matrix(initial_walkers)
@@ -232,6 +232,21 @@ class _SamplerState:
     attempted: np.ndarray
     retained: list[np.ndarray]
     retained_log_probability: list[np.ndarray]
+    proposal_distance: float = 0.0
+    proposal_count: int = 0
+
+
+def sampler_telemetry(state: _SamplerState) -> tuple[float, float]:
+    """Return the running acceptance rate and mean proposal displacement.
+
+    Both are cumulative over the whole run so far. The proposal scale counts
+    rejected proposals too, because it describes how far the stretch move reaches,
+    not how far the chain travelled.
+    """
+    attempted = int(state.attempted.sum())
+    rate = 0.0 if attempted == 0 else float(state.accepted.sum()) / attempted
+    scale = 0.0 if state.proposal_count == 0 else state.proposal_distance / state.proposal_count
+    return rate, scale
 
 
 def _update_group(
@@ -239,7 +254,7 @@ def _update_group(
     active: np.ndarray,
     complement: np.ndarray,
     dimension: int,
-    config: object,
+    config: McmcConfig,
     rng: np.random.Generator,
     log_probability: Callable[[np.ndarray], float],
 ) -> None:
@@ -250,6 +265,8 @@ def _update_group(
         proposal = state.walkers[partner] + stretch * (state.walkers[index] - state.walkers[partner])
         proposal_logp = float(log_probability(proposal.copy()))
         state.attempted[index] += 1
+        state.proposal_distance += float(np.linalg.norm(proposal - state.walkers[index]))
+        state.proposal_count += 1
         if not isfinite(proposal_logp):
             continue
         # Keep the subtraction in Python scalar arithmetic.  NumPy scalars
@@ -268,10 +285,15 @@ def run_affine_invariant(
     initial_walkers: np.ndarray,
     config: McmcConfig,
     child_seed: int,
-    progress: Callable[[int, int], None] | None = None,
+    progress: Callable[[int, int, float, float], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> EnsembleSamples:
-    """Run the fixed two-half Goodman-Weare update schedule."""
+    """Run the fixed two-half Goodman-Weare update schedule.
+
+    ``progress`` receives ``(step, total_steps, acceptance_rate, proposal_scale)``.
+    The final ``acceptance_rate`` only exists once the run ends, so the running
+    value has to travel with progress for a live reading to be possible at all.
+    """
     walkers, log_values = _validated_initial_state(log_probability, initial_walkers, config, cancelled)
     state = _SamplerState(
         walkers,
@@ -296,7 +318,8 @@ def run_affine_invariant(
             state.retained.append(state.walkers.copy())
             state.retained_log_probability.append(state.log_probability.copy())
         if progress is not None:
-            progress(step + 1, total_steps)
+            rate, scale = sampler_telemetry(state)
+            progress(step + 1, total_steps, rate, scale)
     samples = np.asarray(state.retained, dtype=float)
     return EnsembleSamples(
         samples,
@@ -307,7 +330,7 @@ def run_affine_invariant(
     )
 
 
-def _validated_candidate(problem: object, candidate: object) -> np.ndarray:
+def _validated_candidate(problem: FitEvaluationContext, candidate: FitCandidate) -> np.ndarray:
     unit = np.asarray(candidate.unit_vector, dtype=float)
     valid = (
         unit.shape == (len(problem.variables),)
@@ -541,7 +564,7 @@ def run_problem_mcmc(
     config: McmcConfig,
     *,
     child_seed: int,
-    progress: Callable[[int, int], None] | None = None,
+    progress: Callable[[int, int, float, float], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> McmcReport:
     """Initialize, sample, and map one converged problem candidate."""

@@ -21,27 +21,32 @@ from functools import partial
 
 import numpy as np
 
+from xrr_fitter.analysis.bootstrap_samples import TaskRunner, run_tasks
 from xrr_fitter.analysis.profile_calibration import problem_profile_options
 from xrr_fitter.evaluation import (
     EvaluationConstraintError,
 )
 from xrr_fitter.model.analysis import ParameterProfile
+from xrr_fitter.model.evaluation import ModelEvaluation
 from xrr_fitter.model.fitting import FitEvaluationContext
 
+Vector = Callable[[np.ndarray], np.ndarray]
+System = Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]]
 
-def _problem_profile_plan(
+
+def _problem_profile_plan[Plan](
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
     name: str,
-    prepare_plan: Callable[..., object],
-    evaluate: Callable[..., object],
-    cache_callbacks: Callable[..., tuple[Callable, Callable]],
-    least_squares_system: Callable[..., tuple[np.ndarray, np.ndarray]],
-    least_squares_loss: Callable[..., object],
-    values_by_name: Callable[..., dict[str, float]],
+    prepare_plan: Callable[..., Plan],
+    evaluate: Callable[[FitEvaluationContext, np.ndarray], ModelEvaluation],
+    cache_callbacks: Callable[[System], tuple[Vector, Vector]],
+    least_squares_system: Callable[[FitEvaluationContext, np.ndarray], tuple[np.ndarray, np.ndarray]],
+    least_squares_loss: Callable[[FitEvaluationContext], Vector],
+    values_by_name: Callable[[FitEvaluationContext, np.ndarray], dict[str, float]],
     interval_options: dict[str, object],
     cancelled: Callable[[], bool] | None = None,
-) -> object:
+) -> Plan:
     """Bind one declared parameter to a prepared generic profile plan."""
     from xrr_fitter.analysis.binary_profiles import (
         binary_derived_profiles,
@@ -92,38 +97,36 @@ def _problem_profile_plan(
     )
 
 
-def _run_profile_tasks(
-    tasks: tuple[Callable[[], object], ...],
-    task_runner,
-) -> tuple[object, ...]:
-    """Execute one ordered phase and reject incomplete runner responses."""
-    results = tuple(task() for task in tasks) if task_runner is None else tuple(task_runner(tasks))
-    if len(results) != len(tasks):
-        raise RuntimeError("task runner returned an unexpected result count")
-    return results
+def _execute_profile_plans[Plan, Scan](
+    plans: tuple[Plan, ...],
+    scan_plan_direction: Callable[[Plan, int], Scan],
+    finish_plan: Callable[[Plan, tuple[Scan, Scan]], tuple[ParameterProfile, np.ndarray, float, float]],
+    task_runner: TaskRunner | None,
+) -> tuple[ParameterProfile, ...]:
+    """Run both directions before finalizing profiles in declaration order."""
+    direction_tasks = tuple(partial(scan_plan_direction, plan, direction) for plan in plans for direction in (-1, 1))
+    directional = run_tasks(direction_tasks, task_runner)
+    scans = tuple(zip(directional[::2], directional[1::2], strict=True))
+    finish_tasks = tuple(partial(finish_plan, plan, scan) for plan, scan in zip(plans, scans, strict=True))
+    finished = run_tasks(finish_tasks, task_runner)
+    return tuple(result[0] for result in finished)
 
 
-def _profile_direction_results(plans, scan_plan_direction, task_runner):
-    tasks = tuple(partial(scan_plan_direction, plan, direction) for plan in plans for direction in (-1, 1))
-    results = _run_profile_tasks(tasks, task_runner)
-    return tuple((results[2 * index], results[2 * index + 1]) for index in range(len(plans)))
-
-
-def build_problem_profiles(
+def build_problem_profiles[Plan, Scan](
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
     names: tuple[str, ...],
     *,
-    prepare_plan: Callable[..., object],
-    scan_plan_direction: Callable[[object, int], object],
-    finish_plan: Callable[[object, tuple[object, object]], object],
-    evaluate: Callable[..., object],
-    cache_callbacks: Callable[..., tuple[Callable, Callable]],
-    least_squares_system: Callable[..., tuple[np.ndarray, np.ndarray]],
-    least_squares_loss: Callable[..., object],
-    values_by_name: Callable[..., dict[str, float]],
+    prepare_plan: Callable[..., Plan],
+    scan_plan_direction: Callable[[Plan, int], Scan],
+    finish_plan: Callable[[Plan, tuple[Scan, Scan]], tuple[ParameterProfile, np.ndarray, float, float]],
+    evaluate: Callable[[FitEvaluationContext, np.ndarray], ModelEvaluation],
+    cache_callbacks: Callable[[System], tuple[Vector, Vector]],
+    least_squares_system: Callable[[FitEvaluationContext, np.ndarray], tuple[np.ndarray, np.ndarray]],
+    least_squares_loss: Callable[[FitEvaluationContext], Vector],
+    values_by_name: Callable[[FitEvaluationContext, np.ndarray], dict[str, float]],
     cancelled: Callable[[], bool] | None = None,
-    task_runner=None,
+    task_runner: TaskRunner | None = None,
     interval_options: dict[str, object] | None = None,
 ) -> tuple[ParameterProfile, ...]:
     """Build profiles through flattened direction and refinement task batches.
@@ -150,7 +153,4 @@ def build_problem_profiles(
         )
         for name in names
     )
-    scans = _profile_direction_results(plans, scan_plan_direction, task_runner)
-    finish_tasks = tuple(partial(finish_plan, plan, scan) for plan, scan in zip(plans, scans, strict=True))
-    finished = _run_profile_tasks(finish_tasks, task_runner)
-    return tuple(result[0] for result in finished)
+    return _execute_profile_plans(plans, scan_plan_direction, finish_plan, task_runner)

@@ -41,7 +41,12 @@ def test_missing_structure_message_keeps_dataset_identity() -> None:
     assert "has no structure" not in text
 
 
-def test_unknown_readiness_message_passes_through_verbatim() -> None:
+def test_a_readiness_message_that_is_already_chinese_passes_through_verbatim() -> None:
+    """已经是中文的消息照原样上屏——它不需要翻译，替它换一句分类结论只会丢掉信息。
+
+    分英文与中文两档，靠的是「这句话里有没有汉字」：GUI 自己构造的 readiness（拟合面板的
+    ``尚未检查拟合条件``）本来就是中文，而 API 报的诊断串一律是英文。
+    """
     messages = _messages()
 
     assert messages.readiness_text("结构尚未准备") == "结构尚未准备"
@@ -60,6 +65,50 @@ def test_missing_measurement_preset_message_is_localized() -> None:
 
     assert "预设" in text
     assert "measurement preset" not in text
+
+
+@pytest.mark.parametrize(
+    ("message", "fragment"),
+    (
+        ("current fit mask is not fit-ready", "范围"),
+        ("no runnable automatic datasets", "自动"),
+        ("automatic fit does not support cross-dataset constraints", "约束"),
+    ),
+)
+def test_the_preflight_verdicts_the_status_bar_shows_are_all_localized(message: str, fragment: str) -> None:
+    """这三句 preflight 都会走到底栏第一段，而那一段在设计稿五帧里一律是中文。
+
+    第一句最常撞上：把拟合角度范围拖窄到掩码里剩不下 30 点，``fit/problem.py`` 就抛
+    ``ValueError("current fit mask is not fit-ready")``，preflight 拿 ``str(error)`` 当消息，
+    30px 底栏于是写出一句英文。译文比原文多说了一句「怎么办」——原文只说「没就绪」，而读者
+    真正要知道的是把范围放回去。
+    """
+    messages = _messages()
+
+    text = messages.readiness_text(message)
+
+    assert fragment in text
+    assert text != message
+    # 译过之后屏上不该再留英文碎片：底栏那一段没有第二行可以放原文。
+    assert not any("a" <= character.lower() <= "z" for character in text), text
+
+
+def test_an_untranslated_english_verdict_does_not_reach_the_screen(caplog) -> None:
+    """没登记过的诊断串照原样上屏就等于把开放集合的英文接到设计稿的位置上。
+
+    ``preflight_fit`` 的兜底是 ``str(error)``——fit 编译栈里任意一个 ``ValueError`` 都能走到
+    这里，逐条登记永远追不上。所以这一档报分类结论，原文交给日志：屏上守住那一段的语言与
+    长度，专家要的原文仍取得回，而不是被静默丢掉。
+    """
+    import logging
+
+    messages = _messages()
+
+    with caplog.at_level(logging.DEBUG, logger="xrr_fitter.gui.messages"):
+        text = messages.readiness_text("walkers must stay even")
+
+    assert text == messages.UNKNOWN_READINESS_TEXT
+    assert "walkers must stay even" in caplog.text
 
 
 @pytest.mark.parametrize(

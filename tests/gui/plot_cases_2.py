@@ -271,12 +271,12 @@ def test_expert_projection_preserves_standard_selection_and_sld_canvas_state(qtb
 def test_tab_selection_survives_expert_mode_round_trips(qtbot) -> None:
     """No tab is mode-gated now, so a selection is never displaced."""
     panel = _panel(qtbot)
-    panel.select_view("residual")
+    panel.select_view("raw")
 
     panel.set_expert_mode(False)
-    assert panel.current_view_key() == "residual"
+    assert panel.current_view_key() == "raw"
     panel.set_expert_mode(True)
-    assert panel.current_view_key() == "residual"
+    assert panel.current_view_key() == "raw"
 
     panel.select_view("log")
     panel.set_expert_mode(False)
@@ -341,6 +341,14 @@ def test_main_window_projects_parameter_expert_mode_to_sld_visibility(
     qtbot,
     tmp_path,
 ) -> None:
+    """结构那一步的剖面两种模式下都在，专家开关不再是它的闸。
+
+    设计稿帧③（专家 · 结构编辑）的画布就是层堆叠加 SLD 剖面这两张卡，而
+    ``STEP_PLOT_PANES`` 里这一步的画布也只有 ``sld`` 一段。再压一层「显示高级选项」——
+    出厂是关的——默认装机走到结构那一步会拿到一整块空白画布，而这一步的全部看点就是
+    「改一层，剖面当场跟着动」。剖面归不归高级选项管，在没有步骤作用域的裸面板上仍然
+    有效（见 ``plot_cases_4`` 与 ``plot_cases_5`` 的同名契约）。
+    """
     from xrr_fitter.gui.document import ProjectDocument
     from xrr_fitter.gui.main_window import MainWindow
 
@@ -348,7 +356,8 @@ def test_main_window_projects_parameter_expert_mode_to_sld_visibility(
     qtbot.addWidget(window)
     pane = window.plot_panel.sld_pane
 
-    assert pane.isVisibleTo(window.plot_panel) is False
+    assert window.plot_panel.canvas_pane_keys() == ("sld",)
+    assert pane.isVisibleTo(window.plot_panel) is True
     window.parameters_panel.set_expert_mode(True)
     assert pane.isVisibleTo(window.plot_panel) is True
 
@@ -385,54 +394,56 @@ def test_plot_panel_reset_zoom_restores_autoscale(qtbot) -> None:
 
 
 def test_plot_toolbar_zoom_button_focuses_views_and_reset_restores(qtbot) -> None:
-    from PySide6.QtWidgets import QToolButton
+    """缩放到拟合范围 / 恢复完整视图 搬进条的右键菜单后，做的事一样。
 
+    设计稿的 ``.modebar`` 只有四枚字形，这两条不在其中；它们仍是同一批 ``QAction``，
+    从菜单触发和从前点按钮走的是同一条信号。
+    """
     panel = _panel(qtbot, data=prepared_data(size=4))
     panel.show_range(0.8, 1.2)
-    zoom = panel.toolbar.findChild(QToolButton, "plotZoomToRange")
-    reset = panel.toolbar.findChild(QToolButton, "plotResetZoom")
+    zoom = panel.toolbar.zoom_to_range_action
+    reset = panel.toolbar.reset_zoom_action
 
-    zoom.click()
+    zoom.trigger()
     assert _view_xrange(panel.view("raw")) == (0.8, 1.2)
     # Zooming is an action, not a mode: the active mode is left untouched.
     assert panel.interaction_mode() == "view"
 
-    reset.click()
+    reset.trigger()
     restored = _view_xrange(panel.view("raw"))
     assert restored[0] < 0.8 and restored[1] > 1.2
 
 
-def _quality_captions(panel, key):
-    """The quality caption drawn on one view, if it carries one."""
-    view = panel.view(key)
-    if _is_live(view):
-        text = view.quality_caption_text()
-        return (text,) if text and "J=" in text else ()
-    return tuple(text.get_text() for text in view.axes.texts if "J=" in text.get_text())
+def _plot_texts(view):
+    """互动面板画在图里的每一段文字。"""
+    import pyqtgraph as pg
+
+    return tuple(item.toPlainText() for item in view.plot_item.scene().items() if isinstance(item, pg.TextItem))
 
 
-def test_data_and_model_views_caption_the_fit_quality_they_are_showing(qtbot) -> None:
-    """A curve overlay alone does not say how well it agrees with the data.
+def test_interactive_views_leave_the_fit_quality_to_the_status_bar(qtbot) -> None:
+    """设计稿把 J 放在状态栏和左栏管线上，图里不再有那行 ``J=… · 平均残差 …``。
 
     The saved objective must name its noise model and residual units. The GUI
     does not invent another fit statistic by averaging a display array.
+    互动面板上有十字光标读数、拟合窗口说明、±1σ 说明三处文字，右下角再压一行拟合
+    质量，读者要同时盯四处；而 J 是整份结果的属性，不是某一张图的，重复在四张图上
+    只会让「哪张图的 J」变成一个不该存在的问题。matplotlib 的导出图仍旧带这行字，
+    那是逐位不变的交付物，与屏幕上的排布无关。
     """
     data = prepared_data(size=4)
     candidate = _candidate(data, objective=0.25, log_residuals_decades=np.full(4, 0.1))
     panel = _panel(qtbot, data=data, result=final_fit_result(candidate))
 
-    for key in ("log", "raw"):
-        caption = _quality_captions(panel, key)
-        assert len(caption) == 1, f"{key} view carries no quality caption"
-        assert "J=0.25" in caption[0]
-        assert "robust_log" in caption[0]
-        assert "decade" in caption[0]
-        assert "平均残差" not in caption[0]
+    for key in ("log", "raw", "qz4", "residual"):
+        view = panel.view(key)
+        if not _is_live(view):
+            continue
+        assert not [text for text in _plot_texts(view) if "J=" in text], f"{key} view still captions J"
 
 
 def test_quality_caption_stays_off_the_views_until_a_candidate_exists(qtbot) -> None:
     """Prepared data with no fit has no quality to report, so nothing is claimed."""
     panel = _panel(qtbot, data=prepared_data(size=4))
-
     for key in ("log", "raw"):
-        assert _quality_captions(panel, key) == ()
+        assert not [text for text in _plot_texts(panel.view(key)) if "J=" in text]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -12,6 +13,7 @@ from xrr_fitter.io.export_plots import (
     parameter_trends_png,
     residuals_png,
     sld_profile_png,
+    sld_profile_svg,
 )
 from xrr_fitter.io.export_run import (
     ArtifactProducer,
@@ -32,11 +34,20 @@ from xrr_fitter.io.export_tables import (
 from xrr_fitter.io.orso import orso_bytes
 from xrr_fitter.io.project_codec import project_to_bytes
 from xrr_fitter.io.source import resolve_source_path
-from xrr_fitter.model.export import ExportFileRecord, ExportManifest
+from xrr_fitter.io.source import validate_sources as inspect_sources
+from xrr_fitter.model.analysis import ConfidenceClass, FitResult
+from xrr_fitter.model.export import (
+    DEFAULT_FORMATS,
+    ExportFileRecord,
+    ExportFormat,
+    ExportManifest,
+    ExportPlan,
+    normalize_export_formats,
+)
+from xrr_fitter.model.fitting import FitCandidate
 from xrr_fitter.model.operations import ProjectFitResult
 from xrr_fitter.model.project import DatasetProject, XrrProject
 from xrr_fitter.services.datasets import _prepared_current, service_seed_branches
-from xrr_fitter.services.projects import inspect_sources
 from xrr_fitter.services.structures import suggest_oxide_layers
 
 
@@ -151,52 +162,146 @@ def _snapshot_project(project: XrrProject) -> XrrProject:
     return replace(project, datasets=datasets, base_directory=None)
 
 
-def _dataset_artifacts(context: DatasetExportData, *, include_ort: bool) -> DatasetArtifacts:
-    files = [
-        ArtifactProducer("fit_result.xlsx", lambda: dataset_workbook_bytes(context)),
-        ArtifactProducer("fit_result.json", lambda: dataset_json_bytes(context)),
-        ArtifactProducer("parameters.csv", lambda: parameters_csv_bytes(context)),
-        ArtifactProducer("fit_overview.png", lambda: fit_overview_png(context)),
-        ArtifactProducer("sld_profile.png", lambda: sld_profile_png(context)),
-        ArtifactProducer("residuals.png", lambda: residuals_png(context)),
-        ArtifactProducer("run_log.txt", lambda: run_log_bytes(context)),
-    ]
-    if include_ort:
+def _dataset_artifacts(
+    context: DatasetExportData,
+    *,
+    formats: frozenset[ExportFormat],
+) -> DatasetArtifacts:
+    files: list[ArtifactProducer] = []
+    if ExportFormat.XLSX in formats:
+        files.append(ArtifactProducer("fit_result.xlsx", lambda: dataset_workbook_bytes(context)))
+    if ExportFormat.JSON in formats:
+        files.append(ArtifactProducer("fit_result.json", lambda: dataset_json_bytes(context)))
+    if ExportFormat.PNG in formats:
+        files.extend(
+            (
+                ArtifactProducer("fit_overview.png", lambda: fit_overview_png(context)),
+                ArtifactProducer("sld_profile.png", lambda: sld_profile_png(context)),
+                ArtifactProducer("residuals.png", lambda: residuals_png(context)),
+            )
+        )
+    # 运行日志不挂在任何格式上：它记的是这次发布本身（用了哪些源、哪个候选解），换一种
+    # 渲染格式并不改变这件事，选不选格式也不该关掉这条记录。
+    files.append(ArtifactProducer("run_log.txt", lambda: run_log_bytes(context)))
+    if ExportFormat.CSV in formats:
+        files.append(ArtifactProducer("parameters.csv", lambda: parameters_csv_bytes(context)))
+    if ExportFormat.SVG in formats:
+        files.append(ArtifactProducer("sld_profile.svg", lambda: sld_profile_svg(context)))
+    if ExportFormat.ORT in formats:
         files.append(ArtifactProducer("fit_result.ort", lambda: orso_bytes(context)))
     return DatasetArtifacts(context.dataset.dataset_id, tuple(files))
 
 
 def _root_artifacts(
     contexts: tuple[DatasetExportData, ...],
+    *,
+    formats: frozenset[ExportFormat],
 ) -> tuple[ArtifactProducer, ...]:
-    values = [
-        ArtifactProducer(
-            "compatibility_summary.xlsx",
-            lambda: compatibility_workbook_bytes(contexts),
-        )
-    ]
-    if len(contexts) > 1:
-        values.extend(
-            (
-                ArtifactProducer("batch_summary.xlsx", lambda: batch_workbook_bytes(contexts)),
-                ArtifactProducer("parameter_trends.png", lambda: parameter_trends_png(contexts)),
+    values: list[ArtifactProducer] = []
+    if ExportFormat.XLSX in formats:
+        values.append(
+            ArtifactProducer(
+                "compatibility_summary.xlsx",
+                lambda: compatibility_workbook_bytes(contexts),
             )
         )
+    batch = len(contexts) > 1
+    if batch and ExportFormat.XLSX in formats:
+        values.append(ArtifactProducer("batch_summary.xlsx", lambda: batch_workbook_bytes(contexts)))
+    if batch and ExportFormat.PNG in formats:
+        values.append(ArtifactProducer("parameter_trends.png", lambda: parameter_trends_png(contexts)))
     return tuple(values)
+
+
+def _run_stages(results: tuple[FitResult, ...]) -> tuple[str, ...]:
+    ordered: dict[str, None] = {}
+    for result in results:
+        for summary in result.stage_summaries:
+            ordered.setdefault(summary.stage, None)
+    return tuple(ordered)
+
+
+def _weakest_confidence(results: tuple[FitResult, ...]) -> ConfidenceClass:
+    # ``ConfidenceClass`` declares its members from strongest to weakest, so the
+    # declaration position is the severity order; a batch is only as trustworthy
+    # as its least trustworthy published dataset.
+    severity = tuple(ConfidenceClass)
+    return max((result.confidence for result in results), key=severity.index)
+
+
+def _replayable(selected: tuple[FitCandidate, ...]) -> bool:
+    # ``fit.stages`` hands out ``seed_index`` by ``enumerate(child_seeds)``, and
+    # Stage-B archives deliberately overwrite it with -1. Publishing such a
+    # candidate leaves no seed to replay the run from.
+    return all(candidate.seed_index >= 0 for candidate in selected)
+
+
+def _described(
+    manifest: ExportManifest,
+    project: XrrProject,
+    contexts: tuple[DatasetExportData, ...],
+) -> ExportManifest:
+    """Describe the run that produced an already published manifest.
+
+    Publication cannot know these conclusions, and they deliberately stay out of
+    the on-disk ``export_manifest.json``: the published bytes remain unchanged
+    while the returned record explains where they came from.
+    """
+    return replace(
+        manifest,
+        mode=project.batch_mode,
+        stages=_run_stages(tuple(context.result for context in contexts)),
+        confidence=_weakest_confidence(tuple(context.result for context in contexts)),
+        reproducible=_replayable(tuple(context.selected for context in contexts)),
+    )
+
+
+def describe_export_plan(result: XrrProject | ProjectFitResult) -> ExportPlan:
+    """State the conclusions an export run would reach, before anything is published.
+
+    The dialog has to preview ``mode``/``stages``/``confidence``/``reproducible``
+    while the user is still choosing formats and a destination. Recomputing them in
+    the GUI would fork the derivation, so this reaches the same three helpers that
+    ``_described`` uses on the way out. Every value comes from the project itself:
+    no source data is loaded and no bytes are written.
+    """
+    project = _project(result)
+    if not project.datasets:
+        raise ValueError("project has no datasets")
+    selected_ids = _selected_ids(project)
+    results: list[FitResult] = []
+    selected: list[FitCandidate] = []
+    for dataset in project.datasets:
+        fit_result = dataset.last_valid_result
+        if fit_result is None:
+            raise ValueError(f"dataset {dataset.dataset_id} has no fit result")
+        results.append(fit_result)
+        selected.append(_selected_candidate(dataset, selected_ids.get(dataset.dataset_id)))
+    return ExportPlan(
+        dataset_ids=tuple(dataset.dataset_id for dataset in project.datasets),
+        mode=project.batch_mode,
+        stages=_run_stages(tuple(results)),
+        confidence=_weakest_confidence(tuple(results)),
+        reproducible=_replayable(tuple(selected)),
+    )
 
 
 def export_result(
     result: XrrProject | ProjectFitResult,
     output_dir: str | Path,
     *,
-    include_ort: bool = False,
+    formats: Sequence[ExportFormat] = DEFAULT_FORMATS,
 ) -> ExportManifest:
     """Validate, serialize, then atomically publish one complete export run.
 
-    ``include_ort`` opts each dataset directory into an additional
-    ``fit_result.ort`` artifact; left ``False`` the published tree is byte-for-byte
-    identical to a run without ORSO support.
+    ``formats`` selects which renderings the run contains; it is a set, so the order it
+    is given in does not reach the published tree. Left at :data:`DEFAULT_FORMATS` the
+    tree is byte-for-byte identical to a run from before ORT, CSV and SVG existed.
+    Provenance -- ``run_log.txt``, the project snapshot, the manifest -- is published
+    whatever the selection, because it records the publication rather than a rendering
+    of the result.
     """
+    selected = normalize_export_formats(formats)
     project = _project(result)
     if not project.datasets:
         raise ValueError("project has no datasets")
@@ -208,9 +313,10 @@ def export_result(
         sha256(snapshot).hexdigest(),
     )
     contexts = _contexts(project, project_reference)
-    datasets = tuple(_dataset_artifacts(context, include_ort=include_ort) for context in contexts)
+    datasets = tuple(_dataset_artifacts(context, formats=selected) for context in contexts)
     root_files = (
         ArtifactProducer(PROJECT_SNAPSHOT_PATH, lambda: snapshot),
-        *_root_artifacts(contexts),
+        *_root_artifacts(contexts, formats=selected),
     )
-    return publish_export_run(output_dir, datasets, root_files)
+    manifest = publish_export_run(output_dir, datasets, root_files)
+    return _described(manifest, project, contexts)

@@ -20,10 +20,12 @@ from tests.support.model_cases import (
 from xrr_fitter.io.export_plots import (
     BAND_PAIRS,
     PNG_SOFTWARE,
+    SVG_HASHSALT,
     fit_overview_png,
     parameter_trends_png,
     residuals_png,
     sld_profile_png,
+    sld_profile_svg,
 )
 from xrr_fitter.io.export_tables import DatasetExportData, ExportReplayIdentity
 from xrr_fitter.model.analysis import SldUncertaintyBands, UncertaintyReport
@@ -550,3 +552,50 @@ def test_sld_profile_png_renders_cjk_caption_without_missing_glyphs(caplog) -> N
     assert payload.startswith(b"\x89PNG\r\n\x1a\n")
     assert not [warning for warning in caught if "Glyph" in str(warning.message)]
     assert "glyph" not in caplog.text.lower()
+
+
+def test_sld_profile_svg_is_deterministic_vector_output_without_a_timestamp() -> None:
+    # Matplotlib's SVG backend is nondeterministic on two independent axes: it
+    # writes the wall clock into the RDF ``<dc:date>`` block, and it derives
+    # clip-path/marker element ids from a random salt. Both must be pinned or a
+    # re-export of the same fit would publish different bytes.
+    context = _context()
+    before = tuple(Gcf.get_all_fig_managers())
+
+    first = sld_profile_svg(context)
+    second = sld_profile_svg(context)
+
+    assert first == second
+    assert first.startswith(b"<?xml")
+    assert b"<svg " in first
+    assert b"<dc:date>" not in first
+    assert tuple(Gcf.get_all_fig_managers()) == before
+
+
+def test_sld_profile_svg_ignores_a_process_global_hash_salt() -> None:
+    # The salt has to be pinned *inside* the renderer's style isolation. Setting
+    # it beforehand does not survive ``rc_context(rc=rcParamsDefault)``, so a
+    # renderer that trusted the ambient rcParams would emit drifting element ids.
+    context = _context()
+    expected = sld_profile_svg(context)
+
+    with matplotlib.rc_context({"svg.hashsalt": "drifting-salt"}):
+        observed = sld_profile_svg(context)
+
+    assert observed == expected
+    assert isinstance(SVG_HASHSALT, str)
+    assert SVG_HASHSALT != ""
+
+
+def test_sld_profile_svg_draws_the_same_bands_as_its_png_sibling() -> None:
+    # The band *label* is a useless probe here: ``bands.caption()`` quotes the same
+    # "16–84%" text, so the label survives even when no band is drawn at all. Count
+    # the translucent fill primitives instead -- two quantile pairs times real and
+    # imaginary, plus the two legend swatches.
+    banded = _context_with_bands()
+
+    payload = sld_profile_svg(banded)
+
+    assert payload == sld_profile_svg(banded)
+    assert payload.count(b"fill-opacity") == 2 * len(BAND_PAIRS) + len(BAND_PAIRS)
+    assert sld_profile_svg(_context()).count(b"fill-opacity") == 0

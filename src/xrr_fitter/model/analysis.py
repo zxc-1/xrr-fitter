@@ -258,6 +258,11 @@ class UncertaintyReport:
         ):
             raise ValueError("bootstrap summary must agree with sampling evidence")
 
+    @property
+    def bootstrap_sample_count(self) -> int:
+        """The actual attempted refits, including failures, from the sampling record."""
+        return 0 if self.bootstrap_evidence is None else self.bootstrap_evidence.attempted_count
+
     def _validate_owned_bootstrap(self) -> None:
         evidence = self.bootstrap_evidence
         if evidence is not None and (self.parameter_members is not None or evidence.joint_owner_sha256 is not None):
@@ -312,6 +317,11 @@ class UncertaintyReport:
         return None if self.covariance_evidence is None else self.covariance_evidence.matrix
 
 
+def _validate_incomplete_result(search: FitSearchResult, confidence: ConfidenceClass, uncertainty: object) -> None:
+    if search.terminated_early and (confidence != ConfidenceClass.UNTRUSTED or uncertainty is not None):
+        raise ValueError("incomplete skipped search must be untrusted and have no uncertainty")
+
+
 def _search_result_fields() -> tuple[str, ...]:
     return (
         "parameter_definitions",
@@ -322,6 +332,7 @@ def _search_result_fields() -> tuple[str, ...]:
         "stage_summaries",
         "region_labels",
         "region_weights",
+        "skipped_stages",
     )
 
 
@@ -340,6 +351,7 @@ class FitResult:
     region_weights: np.ndarray
     uncertainty: UncertaintyReport | None
     classification_evidence: tuple[str, ...] = ()
+    skipped_stages: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # Reconstruct the fitting-only value so the flat public schema shares
@@ -353,11 +365,13 @@ class FitResult:
             stage_summaries=self.stage_summaries,
             region_labels=self.region_labels,
             region_weights=self.region_weights,
+            skipped_stages=self.skipped_stages,
         )
         if not isinstance(self.confidence, ConfidenceClass):
             raise TypeError("confidence must be ConfidenceClass")
         if self.uncertainty is not None and not isinstance(self.uncertainty, UncertaintyReport):
             raise TypeError("uncertainty must be UncertaintyReport or None")
+        _validate_incomplete_result(search_result, self.confidence, self.uncertainty)
         evidence = tuple(self.classification_evidence)
         if any(not isinstance(value, str) or not value for value in evidence):
             raise ValueError("classification_evidence must contain nonempty strings")
@@ -367,6 +381,34 @@ class FitResult:
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)
+
+    @classmethod
+    def failed(cls, message: str, point_count: int) -> FitResult:
+        """Build untrusted failure evidence aligned with the source point count."""
+        return cls(
+            parameter_definitions=(),
+            candidates=(),
+            best_index=None,
+            confidence=ConfidenceClass.UNTRUSTED,
+            warnings=(message,),
+            child_seeds=(),
+            stage_summaries=(),
+            region_labels=np.full(point_count, -1, dtype=int),
+            region_weights=np.zeros(point_count, dtype=float),
+            uncertainty=None,
+        )
+
+    @classmethod
+    def from_incomplete_search(cls, search_result: FitSearchResult) -> FitResult:
+        """Publish retained evidence without claiming completed uncertainty."""
+        if not search_result.terminated_early:
+            raise ValueError("search was not terminated by a stage skip")
+        return cls.from_search(
+            search_result,
+            confidence=ConfidenceClass.UNTRUSTED,
+            uncertainty=None,
+            classification_evidence=(f"incomplete search: skipped stages {', '.join(search_result.skipped_stages)}",),
+        )
 
     @classmethod
     def from_search(

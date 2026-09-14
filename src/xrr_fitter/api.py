@@ -27,8 +27,8 @@ from xrr_fitter.model.automation import (
     LayerUniformitySummary,
     MeasurementPreset,
 )
-from xrr_fitter.model.data import BeamSpec, DataColumnMapping, PreparedData
-from xrr_fitter.model.export import ExportManifest
+from xrr_fitter.model.data import AngleConventionEvidence, BeamSpec, DataColumnMapping, PreparedData
+from xrr_fitter.model.export import DEFAULT_FORMATS, ExportFormat, ExportManifest, ExportPlan
 from xrr_fitter.model.fitting import FitConfig, FitProgress
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.operations import (
@@ -43,6 +43,7 @@ from xrr_fitter.model.parameters import (
     ConstraintRule,
     JointFitLayout,
     ParameterDefinition,
+    ParameterFreedom,
     ParameterPrior,
     ParameterReference,
     ParameterSetting,
@@ -72,6 +73,7 @@ from xrr_fitter.model.structure import (
 )
 from xrr_fitter.services.datasets import (
     add_dataset,
+    detect_angle_convention,
     import_data,
     import_dataset_batch,
     preview_import_batch,
@@ -84,7 +86,7 @@ from xrr_fitter.services.datasets import (
 from xrr_fitter.services.datasets import (
     set_instrument as _set_instrument,
 )
-from xrr_fitter.services.exports import export_result
+from xrr_fitter.services.exports import describe_export_plan, export_result
 from xrr_fitter.services.fitting import (
     _reconcile_parameter_sidecars,
     fit_automatically,
@@ -166,6 +168,7 @@ def set_instrument(
 
 
 __all__ = (
+    "AngleConventionEvidence",
     "AutomaticDatasetSummary",
     "AutomaticLayerResult",
     "AutomaticResultSummary",
@@ -175,11 +178,14 @@ __all__ = (
     "ConfidenceClass",
     "ConstraintNode",
     "ConstraintRule",
+    "DEFAULT_FORMATS",
     "DataColumnMapping",
     "DatasetAutomation",
     "DatasetProject",
     "DriftSpec",
+    "ExportFormat",
     "ExportManifest",
+    "ExportPlan",
     "FitConfig",
     "FitProgress",
     "FitReadiness",
@@ -203,6 +209,7 @@ __all__ = (
     "OxideDecision",
     "OxideSuggestion",
     "ParameterDefinition",
+    "ParameterFreedom",
     "ParameterPrior",
     "ParameterProfile",
     "ParameterReference",
@@ -229,8 +236,10 @@ __all__ = (
     "add_dataset",
     "analyze_structure",
     "clear_fit_results",
+    "describe_export_plan",
     "describe_joint_layout",
     "describe_parameters",
+    "detect_angle_convention",
     "export_result",
     "fit_project",
     "fit_automatically",

@@ -9,10 +9,12 @@ structure is actually legible.
 
 from __future__ import annotations
 
+from PySide6.QtWidgets import QTabBar
 from tests.gui.plot_support import *  # noqa: F403
 from tests.support.model_cases import simple_structure as _simple_structure
 
 from xrr_fitter.gui.theme import build_stylesheet
+from xrr_fitter.gui.window_layout import CANVAS_COLUMN_FLOOR
 
 
 def _aligned_bands(label: str, marker: float = 0.0):
@@ -145,7 +147,7 @@ def test_log_view_is_the_default_selection(qtbot) -> None:
     assert panel.current_view_key() == "log"
 
 
-def test_remaining_tabs_keep_their_order_after_sld_leaves(qtbot) -> None:
+def test_remaining_tabs_keep_their_order_after_the_companions_leave(qtbot) -> None:
     panel = _panel(qtbot)
 
     assert panel.tab_keys() == (
@@ -162,38 +164,50 @@ def test_remaining_tabs_keep_their_order_after_sld_leaves(qtbot) -> None:
 
 
 def test_every_tab_reads_in_full_at_the_documented_window_width(qtbot) -> None:
-    """No diagnostic may hide behind a scroll arrow or an ellipsis at 1280.
+    """No diagnostic may hide behind a scroll arrow or an ellipsis in the design's canvas column.
 
-    Qt's default answer to nine labels wanting more room than the stack has is to
-    park the overflow behind scroll arrows, and a diagnostic a user never sees is
-    one they will not know exists.  Turning the arrows off is only half an
-    answer: at the general 12px tab padding the labels then elide down to two
-    characters, where 加权残差 / 残差热图 / 参数热图 all read as the same trimmed
-    stub.  The narrower padding this bar asks for buys back the characters, so
-    the contract is the strong one -- every label drawn whole.
+    Qt's default answer to more labels than the row has room for is to park the
+    overflow behind scroll arrows, and a diagnostic a user never sees is one they
+    will not know exists.  Turning the arrows off is only half an answer: the
+    labels then elide down to two characters, where 加权残差 / 残差热图 /
+    参数热图 all read as the same trimmed stub.  What buys the characters back is
+    that the nine views split across two rows -- 反射率四段 above, 分析五段 below --
+    so the contract is the strong one: every label drawn whole.
+
+    Measured on the two flat bars ``canvas_tab_group`` puts in the ``.canvas-top``
+    rows, which is what the reader sees; each ``QTabWidget``'s own bar is hidden
+    (``canvas_top`` 那句 ``pages.tabBar().hide()``) and never laid out, so its
+    zero width makes every tab "overflow" a bar nobody draws.  The width is the
+    design's canvas column rather than a literal, so it follows
+    ``MINIMUM_SHELL_WIDTH`` if the shell ever narrows.
 
     Qt elides exactly when a tab's rect is narrower than its size hint, so
     ``rect >= hint`` is the assertion for "drawn without an ellipsis", and it
     implies the weaker "inside the bar" check it replaces.
     """
-    panel = _panel(qtbot, data=prepared_data(size=4))
+    data = prepared_data(size=4)
+    # 分析那五段只在有结果时露面，而它是九段里最长的一行；没有结果就只量到四段。
+    panel = _panel(qtbot, data=data, result=_result(data))
     # _panel builds the widget directly, bypassing apply_theme, so the padding
     # rule under test would not otherwise be in play.
     panel.setStyleSheet(build_stylesheet(panel.palette()))
     panel.show()
     qtbot.waitExposed(panel)
-    panel.resize(568, 600)
+    panel.resize(CANVAS_COLUMN_FLOOR, 600)
     qtbot.wait(20)
 
-    bar = panel.tabs.tabBar()
-    assert bar.usesScrollButtons() is False
-    assert bar.elideMode() == Qt.TextElideMode.ElideRight
-    assert bar.width() <= 568, "the bar got more room than the documented layout leaves it"
-    for index in range(bar.count()):
-        label = bar.tabText(index)
-        rect = bar.tabRect(index)
-        assert rect.x() + rect.width() <= bar.width(), f"tab {label!r} overflows the bar"
-        assert rect.width() >= bar.tabSizeHint(index).width(), f"tab {label!r} is drawn elided"
+    for name in ("reflectivityCanvasTabs", "analysisCanvasTabs"):
+        bar = panel.findChild(QTabBar, name)
+        assert bar is not None, name
+        assert bar.isVisibleTo(panel) is True, f"{name} 没露面，量到的就不是读者看见的那条"
+        assert bar.usesScrollButtons() is False
+        assert bar.elideMode() == Qt.TextElideMode.ElideRight
+        assert bar.width() <= CANVAS_COLUMN_FLOOR, f"{name} got more room than the documented layout leaves it"
+        for index in range(bar.count()):
+            label = bar.tabText(index)
+            rect = bar.tabRect(index)
+            assert rect.x() + rect.width() <= bar.width(), f"tab {label!r} overflows the bar"
+            assert rect.width() >= bar.tabSizeHint(index).width(), f"tab {label!r} is drawn elided"
 
 
 def test_each_tab_names_itself_in_full_through_its_tooltip(qtbot) -> None:
@@ -225,6 +239,9 @@ def test_number_shortcuts_cover_every_remaining_tab(qtbot) -> None:
     panel = _panel(qtbot, data=prepared_data(size=4))
     keys = [shortcut.key() for shortcut in panel.view_shortcuts]
 
+    # Nine tabs, nine keys: only the SLD profile is a companion pane that is
+    # always on screen and so needs no key.  加权残差 is a tab of the design's own
+    # ``.tabs`` strip, so it does get one.
     assert len(keys) == 9
     assert keys[0] == QKeySequence("Alt+1")
     assert keys[8] == QKeySequence("Alt+9")
@@ -236,6 +253,20 @@ def test_selecting_sld_as_a_tab_is_rejected(qtbot) -> None:
 
     with pytest.raises(KeyError, match="sld"):
         panel.select_view("sld")
+
+
+def test_selecting_the_residual_as_a_tab_selects_the_designs_fourth_tab(qtbot) -> None:
+    """设计稿 帧① 的 ``.tabs`` 第四段就是「加权残差」，所以它是可以被点名的。
+
+    这张卡同时还钉在 tab 组下面——两处是同一张卡在搬家（见 ``panel._sync_residual_home``），
+    所以点名它不是「拿伴随面板当 tab 用」这种笔误，而是切到它自己那一页。
+    """
+    panel = _panel(qtbot)
+
+    panel.select_view("residual")
+
+    assert panel.current_view_key() == "residual"
+    assert panel.reflectivity_tabs.tabText(panel.reflectivity_tabs.currentIndex()) == "加权残差"
 
 
 def test_sld_band_toggle_is_disabled_without_sampling(qtbot) -> None:
@@ -276,13 +307,43 @@ def test_sld_band_x_matches_curve_x_scale(qtbot) -> None:
 
 
 def test_sld_band_legends_use_en_dashes(qtbot) -> None:
+    """区间用连接号「–」而不是减号「-」：后者读起来像「16 减 84」。
+
+    两条带的名字只有一处源头（``BAND_PAIRS``），卡片色标和轴内图例都从那里取字，所以
+    盯住源头就同时盯住了两个出口。内带由色标那一行说（轴里因此不重复），外带色标说不到，
+    还得留在轴内图例里——不然图上多出一片阴影却没人交代它是什么。
+    """
+    from xrr_fitter.gui.plots.sld import BAND_PAIRS
+
     panel = _panel(qtbot, data=prepared_data(size=4), bands=_zero_width_bands())
     labels = tuple(text.get_text() for text in panel.view("sld").axes.get_legend().get_texts())
 
-    assert "16–84%" in labels
-    assert "2.5–97.5%" in labels
-    assert "16-84%" not in labels
-    assert "2.5-97.5%" not in labels
+    names = tuple(label for *_, label in BAND_PAIRS)
+    assert names == ("16–84% 不确定带", "2.5–97.5% 不确定带")
+    assert not any("-" in name for name in names)
+    assert "2.5–97.5% 不确定带" in labels
+
+
+def test_sld_credible_bands_are_painted_in_the_candidate_hue(qtbot) -> None:
+    """帧③把不确定带定为候选橙 (#D55E00) 阴影，仅以透明度区分内外带。
+
+    band 填充此前不传 ``color``，颜色随 axes 轮转（且随对比候选数量前移而漂移），
+    四个填充可能落到四种互不相干的轮转色，与设计稿的单一橙色阴影不符。这里把
+    锚点钉死：每个 band 填充的 RGB 必须等于 ``theme.DATA_CANDIDATE``，与轮转色和
+    叠加的其他候选数量无关。
+    """
+    from matplotlib.colors import to_rgba
+
+    from xrr_fitter.gui import theme
+
+    panel = _panel(qtbot, data=prepared_data(size=4), bands=_zero_width_bands())
+    axes = panel.view("sld").axes
+    expected = to_rgba(theme.DATA_CANDIDATE)[:3]
+
+    faces = [collection.get_facecolor() for collection in axes.collections]
+    assert faces, "未绘制任何 band 填充"
+    for face in faces:
+        assert np.allclose(face[0][:3], expected), f"band 填充色 {face[0][:3]} != 候选橙 {expected}"
 
 
 def test_surface_aligned_bands_survive_show_range_redraw(qtbot, tmp_path, monkeypatch) -> None:
@@ -533,7 +594,9 @@ def test_sld_pane_draws_nominal_structure_and_interface_handles(qtbot, tmp_path)
     axes = panel.view("sld").axes
     labels = {line.get_label() for line in axes.lines}
 
-    assert "结构标称 实部" in labels
+    # 没有拟合结果时，这条标称就是读者正在编辑的那条剖面，名字随之是「当前 SLD 剖面」；
+    # 叫「结构标称」得等它旁边真有一条拟合出来的曲线可比。
+    assert CANDIDATE_REAL_LABEL in labels
     # A single film gives exactly one draggable interface, at its backing side.
     handles = [line for line in axes.lines if line.get_label() == "_interface_0"]
     assert len(handles) == 1
@@ -547,6 +610,51 @@ def test_sld_interface_handles_stay_out_of_the_legend(qtbot, tmp_path) -> None:
     labels = () if legend is None else tuple(text.get_text() for text in legend.get_texts())
 
     assert all(not label.startswith("_interface_") for label in labels)
+
+
+def _named_curves(panel) -> tuple[str, ...]:
+    """剖面图上有名字的那几条线，手柄（``_`` 开头）不算。"""
+    labels = (str(line.get_label()) for line in panel.view("sld").axes.lines)
+    return tuple(label for label in labels if not label.startswith("_"))
+
+
+def test_the_structure_step_draws_the_stack_being_edited_not_last_round(qtbot, tmp_path) -> None:
+    """设计稿帧③ 的图区里只有一条剖面、它的带和那几个手柄。
+
+    结构这一步画布上半是层堆叠，改一层下半当场跟着动——跟着动的只可能是标称结构那条线，
+    上一轮的拟合候选不会因为改了一层而变。把候选画在这儿（连它的虚部、以及折进图例的
+    「其他候选 实部 ×N」那一行）等于在读者刚改过的结构下面摆一张上一轮的图，和反射率、
+    残差在这一步退场是同一个理由；那个图例框还正好压在剖面上，而卡片抬头下面那排色标
+    （``sld_state.SLD_LEGEND_ENTRIES``）已经把这三个记号说过一遍了。
+    """
+    panel, _result_value = _projected_sld_panel(qtbot, tmp_path)
+    data = prepared_data(size=4)
+    rivals = tuple(
+        _candidate(data, f"candidate-{suffix}", objective=0.3 + index * 0.05) for index, suffix in enumerate(("b", "c"))
+    )
+    panel.set_result(final_fit_result(_candidate(data), *rivals), "candidate-a")
+
+    panel.set_step_scope(1)
+
+    assert _named_curves(panel) == (CANDIDATE_REAL_LABEL,)
+    assert panel.view("sld").axes.get_legend() is None
+    # 手柄还在：卡片副标题写着「界面手柄可拖拽」，而手柄只从标称结构上长出来。
+    assert any(str(line.get_label()) == "_interface_0" for line in panel.view("sld").axes.lines)
+
+
+def test_stepping_back_from_the_result_redraws_the_profile(qtbot, tmp_path) -> None:
+    """从「结果」回到「结构」去再加一层，图区当场换成正在编辑的那条剖面。
+
+    换步只改可见性、不重画的话，回到结构这一步看到的还是结果态那张图；而它不会跟着层堆叠
+    动，读者改完一层图上没有任何反应。
+    """
+    panel, _result_value = _projected_sld_panel(qtbot, tmp_path)
+    panel.set_step_scope(4)
+    assert "SLD 虚部" in _named_curves(panel)
+
+    panel.set_step_scope(1)
+
+    assert _named_curves(panel) == (CANDIDATE_REAL_LABEL,)
 
 
 def test_sld_interface_drag_edits_layer_thickness(qtbot, tmp_path) -> None:
@@ -564,8 +672,12 @@ def test_sld_interface_drag_edits_layer_thickness(qtbot, tmp_path) -> None:
 
 
 def _nominal_level_at(axes, depth_nm: float) -> float:
-    """Sample the nominal real SLD the pane draws at a depth, in A^-2."""
-    nominal = next(line for line in axes.lines if line.get_label() == "结构标称 实部")
+    """Sample the profile the pane draws at a depth, in the pane's own 10^-6 A^-2.
+
+    Handles are compared against this rather than against the structure's own
+    numbers, so a change to the display scale moves both sides together.
+    """
+    nominal = next(line for line in axes.lines if line.get_label() == CANDIDATE_REAL_LABEL)
     depths = np.asarray(nominal.get_xdata(), dtype=float)
     levels = np.asarray(nominal.get_ydata(), dtype=float)
     return float(levels[int(np.argmin(np.abs(depths - float(depth_nm))))])
@@ -627,7 +739,7 @@ def test_sld_level_drag_leaves_a_gradient_stack_alone(qtbot, tmp_path) -> None:
     axes = panel.view("sld").axes
     labels = [line.get_label() for line in axes.lines]
 
-    assert "结构标称 实部" in labels
+    assert CANDIDATE_REAL_LABEL in labels
     assert not [label for label in labels if label.startswith("_level_")]
     assert not [label for label in labels if label.startswith("_interface_")]
 

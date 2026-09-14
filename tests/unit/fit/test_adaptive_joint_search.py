@@ -43,7 +43,7 @@ from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.io.codec_results import _checkpoint_from_dict, _checkpoint_to_dict
 from xrr_fitter.model.fitting import FitConfig, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterReference, ParameterSetting, SharingRule
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterReference, ParameterSetting, SharingRule
 
 SHARED_PARAMETER = "component.0.density_scale"
 
@@ -64,7 +64,7 @@ def _joint_member(size, config, locked):
                 definition.initial,
                 definition.lower if free else definition.initial,
                 definition.upper if free else definition.initial,
-                locked=not free,
+                freedom=ParameterFreedom.from_locked(not free),
             )
         )
     return compile_fit_problem(base.data, base.structure, base.instrument, base.config, tuple(settings))

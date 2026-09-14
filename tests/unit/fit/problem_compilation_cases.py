@@ -38,7 +38,7 @@ from xrr_fitter.io.xy import read_xy_bytes
 from xrr_fitter.model.data import BeamSpec, DataColumnMapping
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec, resolution_to_sigma_q
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
     LayerSpec,
@@ -126,7 +126,7 @@ def _periodic_structure() -> StructureSpec:
 def _theta_resolution_problem():
     return _problem(
         instrument=InstrumentSpec(footprint_mode="none", resolution_domain="theta"),
-        settings=(ParameterSetting("instrument.sigma_theta_deg", 0.01, 0.0, 0.05, locked=False),),
+        settings=(ParameterSetting("instrument.sigma_theta_deg", 0.01, 0.0, 0.05, freedom=ParameterFreedom.FREE),),
         seed=18,
     )
 
@@ -135,7 +135,7 @@ def _periodic_jacobian_problem():
     return _problem(
         structure=_periodic_structure(),
         instrument=InstrumentSpec(footprint_mode="none"),
-        settings=(ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, locked=True),),
+        settings=(ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, freedom=ParameterFreedom.FIXED),),
         seed=19,
     )
 
@@ -154,7 +154,7 @@ def _linear_background_jacobian_problem():
         instrument=InstrumentSpec(footprint_mode="none", background_kind="linear"),
         settings=(
             ParameterSetting("instrument.linear_background_per_a_inv", 0.0, -0.01, 0.01),
-            ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, locked=True),
+            ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, freedom=ParameterFreedom.FIXED),
         ),
         seed=20,
     )
@@ -166,7 +166,7 @@ def _powerlaw_background_jacobian_problem():
         settings=(
             ParameterSetting("instrument.powerlaw_background_amplitude", 1e-7, 0.0, 1e-6),
             ParameterSetting("instrument.powerlaw_background_exponent", 2.5, 1.0, 4.0),
-            ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, locked=True),
+            ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, freedom=ParameterFreedom.FIXED),
         ),
         seed=21,
     )
@@ -187,7 +187,7 @@ def _direct_sld_jacobian_problem():
         settings=(
             ParameterSetting("component.0.sld_real_a2", 60e-6, 30e-6, 90e-6),
             ParameterSetting("component.0.sld_imag_a2", 2e-6, 0.5e-6, 4e-6),
-            ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, locked=True),
+            ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, freedom=ParameterFreedom.FIXED),
         ),
         seed=22,
     )
@@ -208,7 +208,7 @@ def _direct_backing_jacobian_problem():
         settings=(
             ParameterSetting("backing.sld_real_a2", 30e-6, 10e-6, 90e-6),
             ParameterSetting("backing.sld_imag_a2", 1e-6, 0.0, 4e-6),
-            ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, locked=True),
+            ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, freedom=ParameterFreedom.FIXED),
         ),
         seed=28,
     )
@@ -239,7 +239,7 @@ def _gradient_jacobian_problem():
             ParameterSetting("component.0.upper_sld_imag_a2", 0.5e-6, 0.1e-6, 2e-6),
             ParameterSetting("component.0.lower_sld_real_a2", 55e-6, 40e-6, 70e-6),
             ParameterSetting("component.0.lower_sld_imag_a2", 2e-6, 0.5e-6, 4e-6),
-            ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, locked=True),
+            ParameterSetting("instrument.relative_sigma", 0.0, 0.0, 0.0, freedom=ParameterFreedom.FIXED),
         ),
         seed=23,
     )
@@ -304,6 +304,7 @@ __all__ = [
     "InstrumentSpec",
     "LayerSpec",
     "MaterialSpec",
+    "ParameterFreedom",
     "ParameterSetting",
     "PeriodicBlock",
     "PurePosixPath",

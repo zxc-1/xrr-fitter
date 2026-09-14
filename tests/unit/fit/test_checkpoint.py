@@ -17,6 +17,7 @@ from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
     ConstraintNode,
     ConstraintRule,
+    ParameterFreedom,
     ParameterReference,
     ParameterSetting,
     PriorSpec,
@@ -151,7 +152,7 @@ def test_checkpoint_parameter_fingerprint_binds_lock_and_bounds() -> None:
             definition.initial,
             definition.initial if definition.name == target.name else definition.lower,
             definition.initial if definition.name == target.name else definition.upper,
-            locked=definition.name == target.name or definition.locked,
+            freedom=ParameterFreedom.from_locked(definition.name == target.name or definition.locked),
         )
         for definition in problem.parameter_definitions
     )

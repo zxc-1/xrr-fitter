@@ -10,12 +10,12 @@ from xrr_fitter.evaluation import encode_physical_vector
 from xrr_fitter.fit.adaptive_grid import next_budget_lineage
 from xrr_fitter.fit.candidates import best_candidate_index, bounded_perturbations
 from xrr_fitter.fit.problem import compile_stage_problem
-from xrr_fitter.model.fitting import FitCandidate, SearchAllocation, SearchEvidence
+from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext, SearchAllocation, SearchEvidence
 
 
 @dataclass(frozen=True, slots=True)
 class LocalStageSetup:
-    problem: object
+    problem: FitEvaluationContext
     starts: tuple[np.ndarray, ...]
     seed: int
 
@@ -32,7 +32,7 @@ def optimizer_evidence(
     return SearchEvidence(origin, seed, (), (allocation,), solved.stop_reason)
 
 
-def local_stage_seed(problem: object, stage: str, cluster_index: int) -> int:
+def local_stage_seed(problem: FitEvaluationContext, stage: str, cluster_index: int) -> int:
     return int(
         np.random.SeedSequence([problem.config.master_seed, ord(stage), cluster_index]).generate_state(
             1, dtype=np.uint64
@@ -40,7 +40,12 @@ def local_stage_seed(problem: object, stage: str, cluster_index: int) -> int:
     )
 
 
-def local_stage_setups(problem, stage, parents, counts) -> tuple[LocalStageSetup, ...]:
+def local_stage_setups(
+    problem: FitEvaluationContext,
+    stage: str,
+    parents: tuple[FitCandidate, ...],
+    counts: tuple[int, ...],
+) -> tuple[LocalStageSetup, ...]:
     if any(isinstance(count, bool) or not isinstance(count, (int, np.integer)) or count < 0 for count in counts):
         raise ValueError("local perturbation counts must be nonnegative integers")
     pool = int(sum(counts))

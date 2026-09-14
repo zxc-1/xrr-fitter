@@ -60,6 +60,7 @@ from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
     ConstraintNode,
     ConstraintRule,
+    ParameterFreedom,
     ParameterReference,
     ParameterSetting,
     SharingRule,
@@ -101,7 +102,11 @@ def _problem(*, size=64, seed=73, locked=False, missing=False, minimum=80, per_p
         else:
             settings.append(
                 ParameterSetting(
-                    definition.name, definition.initial, definition.initial, definition.initial, locked=True
+                    definition.name,
+                    definition.initial,
+                    definition.initial,
+                    definition.initial,
+                    freedom=ParameterFreedom.FIXED,
                 )
             )
     return compile_fit_problem(data, base.structure, base.instrument, config, tuple(settings))

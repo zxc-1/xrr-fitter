@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
+from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 import xrr_fitter.api as api
 
@@ -63,8 +63,10 @@ def test_main_window_open_project_surfaces_hash_mismatch_and_blocks_fit(
     assert "源文件已变化" in warning
     assert dataset.source_sha256 in warning
     assert api.inspect_sources(window.document.project).datasets[0].actual_sha256 in warning
-    assert window.findChild(QPushButton, "reloadSourceButton").isEnabled()
-    assert window.findChild(QPushButton, "relinkSourceButton").isEnabled()
+    # 两条恢复命令住在 文件 菜单（命令栏按设计稿只摆 新建/打开/保存），可用性跟着活动
+    # 数据集走，所以校验失败时要看的是菜单项而不是按钮。
+    assert window.chrome_actions["reloadSourceAction"].isEnabled()
+    assert window.chrome_actions["relinkSourceAction"].isEnabled()
 
 
 def test_reload_dialog_confirms_old_path_expected_and_actual_hash_before_commit(

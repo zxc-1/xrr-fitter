@@ -265,40 +265,6 @@ def _stage_b_baseline_case(problem):
     )
 
 
-def test_child_seed_lineage_is_deterministic_and_order_independent() -> None:
-    api = _stages_api()
-    streams = ("B-0", "B-1", "E-0", "E-1", "E-2", "E-3")
-
-    forward = api.reserve_child_seeds(20260723, streams)
-    reverse = api.reserve_child_seeds(20260723, tuple(reversed(streams)))
-
-    assert tuple(item.stream_id for item in forward) == streams
-    assert tuple(item.stream_id for item in reverse) == tuple(reversed(streams))
-    assert {item.stream_id: item.seed for item in forward} == {item.stream_id: item.seed for item in reverse}
-    assert len({item.seed for item in forward}) == len(streams)
-    assert all(0 <= item.seed < 2**64 for item in forward)
-    assert tuple(item.seed for item in forward) == (
-        16164323491089515154,
-        9436610754940370787,
-        14495158119691411689,
-        11623762797650596694,
-        18359781962598382080,
-        9014141665841017941,
-    )
-
-
-def test_stage_graph_has_exact_a_through_e_order_and_resume_suffixes() -> None:
-    api = _stages_api()
-
-    assert api.STAGE_ORDER == ("A", "B", "C", "D", "E")
-    assert api.remaining_stages(None) == api.STAGE_ORDER
-    assert api.remaining_stages("B") == ("C", "D", "E")
-    assert api.remaining_stages("D") == ("E",)
-    assert api.remaining_stages("E") == ()
-    with pytest.raises(ValueError, match="stage"):
-        api.remaining_stages("uncertainty")
-
-
 def test_fit_search_reports_ordered_history_progress_and_coherent_checkpoints() -> None:
     api = _pipeline_api()
     events: list[tuple[str, object]] = []

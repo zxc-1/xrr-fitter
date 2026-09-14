@@ -509,7 +509,11 @@ def best_candidate_index(
 #
 # Materially improves
 #
-def materially_improves(problem: object, incumbent: FitCandidate, candidate: FitCandidate) -> bool:
+def materially_improves(
+    problem: FitEvaluationContext,
+    incumbent: FitCandidate,
+    candidate: FitCandidate | ModelEvaluation,
+) -> bool:
     thresholds = problem.config.confidence
     required = max(
         thresholds.equivalent_cost_fraction * abs(incumbent.objective),

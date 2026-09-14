@@ -35,6 +35,9 @@ from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext, FitSear
 
 POST_FREEZE_OMITTED_DEFAULTS: dict[tuple[str, str], object] = {
     ("ParameterDefinition", "constrained"): False,
+    ("FitCheckpoint", "skipped_stages"): (),
+    ("FitSearchResult", "skipped_stages"): (),
+    ("FitResult", "skipped_stages"): (),
 }
 
 
@@ -162,6 +165,8 @@ def fit_search_provenance_sha256(
 ) -> str:
     """Bind a complete fitting result graph to one evaluation context."""
     payload = _dataclass_payload(result, frozenset({"provenance_sha256"}))
+    if not result.skipped_stages:
+        payload.pop("skipped_stages")
     result_identity: dict[str, object] = {"result": payload}
     if joint_layout_fingerprint is not None:
         result_identity["joint_layout_fingerprint"] = joint_layout_fingerprint

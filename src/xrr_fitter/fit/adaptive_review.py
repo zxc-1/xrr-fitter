@@ -10,14 +10,14 @@ import numpy as np
 from xrr_fitter.fit.adaptive_grid import grid_levels, initial_grid_points, review_candidate_indices, should_promote
 from xrr_fitter.fit.candidates import candidate_from_evaluation
 from xrr_fitter.fit.feature_grid import feature_grid_indices
-from xrr_fitter.fit.global_search import downsample_prepared_data
+from xrr_fitter.fit.global_search import GlobalSearchResult, downsample_prepared_data
 from xrr_fitter.fit.joint_constraint_compilation import definitions_by_reference
 from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.fit.objective import evaluate_vector
-from xrr_fitter.model.fitting import GridReview, SearchAllocation, SearchEvidence
+from xrr_fitter.model.fitting import FitEvaluationContext, GridReview, SearchAllocation, SearchEvidence
 
 
-def compile_grid_problem(problem: object, max_points: int) -> object:
+def compile_grid_problem(problem: FitEvaluationContext, max_points: int) -> FitEvaluationContext:
     """Subset observations while preserving full-data priors, regions, and mass."""
     indices = feature_grid_indices(problem.data, max_points)
     if len(indices) == np.count_nonzero(problem.data.fit_mask):
@@ -35,7 +35,7 @@ def compile_grid_problem(problem: object, max_points: int) -> object:
     )
 
 
-def single_grid_contexts(problem: object) -> tuple[object, ...]:
+def single_grid_contexts(problem: FitEvaluationContext) -> tuple[FitEvaluationContext, ...]:
     minimum = initial_grid_points(problem.data)
     return tuple(
         compile_grid_problem(problem, level)
@@ -273,7 +273,15 @@ def _review_cost(evaluate, level: int, unit: np.ndarray, cancelled) -> float:
     return float(evaluate(level, unit))
 
 
-def review_single_population(problem, solved, origin: str, seed: int, max_nfev: int, *, cancelled=None):
+def review_single_population(
+    problem: FitEvaluationContext,
+    solved: GlobalSearchResult,
+    origin: str,
+    seed: int,
+    max_nfev: int,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[tuple[np.ndarray, ...], SearchEvidence]:
     """Rank a DE trace by full objective before selecting local-refinement starts."""
     contexts = single_grid_contexts(problem)
     population = np.asarray(solved.population, dtype=float)

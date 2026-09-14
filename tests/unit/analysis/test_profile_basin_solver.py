@@ -11,7 +11,7 @@ from tests.unit.analysis.covariance_cases import scale_problem
 from xrr_fitter.analysis import profiles
 from xrr_fitter.evaluation import encode_physical_vector, evaluate_model, least_squares_loss
 from xrr_fitter.fit.problem import compile_fit_problem
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 
 
 def _problem(mode="robust_log"):
@@ -22,7 +22,7 @@ def _problem(mode="robust_log"):
             item.initial,
             item.lower,
             item.upper,
-            locked=item.name not in {"component.0.thickness_a", "instrument.scale"},
+            freedom=ParameterFreedom.from_locked(item.name not in {"component.0.thickness_a", "instrument.scale"}),
         )
         for item in base.parameter_definitions
     )

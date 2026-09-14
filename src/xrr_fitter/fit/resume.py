@@ -9,7 +9,7 @@ import numpy as np
 from xrr_fitter.fit.candidates import candidate_from_evaluation, rank_candidate_indices
 from xrr_fitter.fit.checkpoint import checkpoint_identity
 from xrr_fitter.fit.objective import evaluate_vector
-from xrr_fitter.fit.stages import remaining_stages
+from xrr_fitter.fit.stage_schedule import remaining_stages
 from xrr_fitter.model.fitting import FitCandidate, FitCheckpoint, FitStageSummary
 
 
@@ -21,6 +21,7 @@ class ResumePlan:
     candidates: tuple[FitCandidate, ...]
     runtime_warnings: tuple[str, ...]
     stage_summaries: tuple[FitStageSummary, ...]
+    skipped_stages: tuple[str, ...] = ()
 
 
 def _validate_identity(
@@ -55,10 +56,26 @@ def _expected_stage_prefix(stage: str, *, joint: bool) -> tuple[str, ...]:
     return order[: order.index(stage) + 1]
 
 
+def _completed_stage_prefix(checkpoint: FitCheckpoint, *, joint: bool) -> tuple[str, ...]:
+    prefix = _expected_stage_prefix(checkpoint.stage, joint=joint)
+    skipped = set(checkpoint.skipped_stages)
+    if not skipped.issubset(set(prefix) - {"A", "B"}):
+        raise ValueError("resume checkpoint skip records are outside the resumable stage prefix")
+    observed = tuple(summary.stage for summary in checkpoint.stage_summaries)
+    # A joint E summary can describe the committed part of a skipped ensemble.
+    if joint and "E" in observed:
+        skipped.discard("E")
+    return tuple(stage for stage in prefix if stage not in skipped)
+
+
 def _validate_history(checkpoint: FitCheckpoint, *, joint: bool) -> None:
     observed = tuple(summary.stage for summary in checkpoint.stage_summaries)
-    if observed != _expected_stage_prefix(checkpoint.stage, joint=joint):
+    if observed != _completed_stage_prefix(checkpoint, joint=joint):
         raise ValueError("resume checkpoint history has a missing or reordered stage")
+    _validate_candidate_order(checkpoint, joint=joint)
+
+
+def _validate_candidate_order(checkpoint: FitCheckpoint, *, joint: bool) -> None:
     expected_ids = tuple(
         candidate_id
         for summary in checkpoint.stage_summaries
@@ -202,6 +219,27 @@ def _validate_summaries(checkpoint: FitCheckpoint, *, joint: bool) -> None:
         offset = stop
 
 
+def _final_seed_ids(checkpoint: FitCheckpoint) -> tuple[str, ...]:
+    summary = next((value for value in checkpoint.stage_summaries if value.stage == "E"), None)
+    if summary is None:
+        return ()
+    if not summary.candidate_ids:
+        raise ValueError("joint resume Stage-E summary cannot describe an empty seed prefix")
+    return summary.candidate_ids
+
+
+def _joint_seed_prefix(checkpoint: FitCheckpoint, reserved: tuple[int, ...]) -> tuple[int, ...]:
+    if checkpoint.stage != "E":
+        return reserved[:1]
+    final_ids = _final_seed_ids(checkpoint)
+    expected_ids = tuple(f"E-{index}" for index in range(len(final_ids)))
+    if len(final_ids) > len(reserved) - 1 or final_ids != expected_ids:
+        raise ValueError("joint resume Stage-E candidates must form a child seed prefix")
+    if "E" in checkpoint.skipped_stages and len(final_ids) >= len(reserved) - 1:
+        raise ValueError("joint resume cannot skip an already completed stage E")
+    return reserved[: len(final_ids) + 1]
+
+
 def _validate_seeds(
     checkpoint: FitCheckpoint,
     reserved_child_seeds: tuple[int, ...],
@@ -210,15 +248,10 @@ def _validate_seeds(
 ) -> tuple[int, ...]:
     reserved = tuple(reserved_child_seeds)
     if joint:
-        expected = reserved[:1]
-        if checkpoint.stage == "E":
-            final_ids = checkpoint.stage_summaries[-1].candidate_ids
-            expected_ids = tuple(f"E-{index}" for index in range(len(final_ids)))
-            if len(final_ids) > len(reserved) - 1 or final_ids != expected_ids:
-                raise ValueError("joint resume Stage-E candidates must form a child seed prefix")
-            expected = reserved[: len(final_ids) + 1]
+        expected = _joint_seed_prefix(checkpoint, reserved)
     else:
-        expected = reserved if checkpoint.stage == "E" else reserved[:2]
+        completed_final = checkpoint.stage == "E" and "E" not in checkpoint.skipped_stages
+        expected = reserved if completed_final else reserved[:2]
     consumed = tuple(checkpoint.child_seeds)
     if consumed != expected:
         raise ValueError("resume checkpoint child seed count or order mismatch")
@@ -249,4 +282,5 @@ def validate_resume_checkpoint(
         candidates,
         checkpoint.runtime_warnings,
         checkpoint.stage_summaries,
+        checkpoint.skipped_stages,
     )

@@ -114,6 +114,18 @@ def _joint_prior_conflicts(
     return tuple(variable.name for variable in problem.global_variables if variable.name in conflicts)
 
 
+def _require_aligned_skips(searches: tuple[object, ...]) -> None:
+    if any(search.skipped_stages != searches[0].skipped_stages for search in searches[1:]):
+        raise ValueError("joint skipped stages are not aligned")
+
+
+def _incomplete_joint_results(searches: tuple[object, ...]) -> tuple[FitResult, ...] | None:
+    _require_aligned_skips(searches)
+    if searches and searches[0].terminated_early:
+        return tuple(FitResult.from_incomplete_search(search) for search in searches)
+    return None
+
+
 def _analyze_joint_searches(
     problem: object,
     searches: tuple[object, ...],
@@ -127,6 +139,9 @@ def _analyze_joint_searches(
     bootstrap: Callable | None = None,
     bootstrap_owner: Callable | None = None,
 ) -> tuple[FitResult, ...]:
+    incomplete = _incomplete_joint_results(searches)
+    if incomplete is not None:
+        return incomplete
     candidate_ids = _joint_final_ids(searches)
     candidate_maps = _joint_candidate_maps(searches)
     vectors = joint_candidate_vectors(

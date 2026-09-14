@@ -25,7 +25,7 @@ from xrr_fitter.fit.objective import evaluate_declared_initial
 from xrr_fitter.fit.problem import compile_fit_problem, compile_stage_problem
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterDefinition, ParameterSetting
+from xrr_fitter.model.parameters import ParameterDefinition, ParameterFreedom, ParameterSetting
 from xrr_fitter.model.structure import (
     InterfaceTransition,
     LayerSpec,
@@ -103,7 +103,7 @@ def test_transition_thickness_lower_bound_covers_declared_width() -> None:
 
 
 def test_transition_thickness_setting_cannot_reopen_values_below_width() -> None:
-    settings = (ParameterSetting("component.0.thickness_a", 20.0, 2.0, 45.0, locked=False),)
+    settings = (ParameterSetting("component.0.thickness_a", 20.0, 2.0, 45.0, freedom=ParameterFreedom.FREE),)
 
     with pytest.raises(ValueError, match="过渡.*厚度"):
         _problem(_transition_structure(), settings)
@@ -174,14 +174,14 @@ def test_declared_transition_width_boundary_is_a_valid_initial_candidate() -> No
 
 
 def test_unlocking_transition_roughness_is_rejected_at_compile_time() -> None:
-    settings = (ParameterSetting("component.0.roughness_a", 3.0, 0.0, 10.0, locked=False),)
+    settings = (ParameterSetting("component.0.roughness_a", 3.0, 0.0, 10.0, freedom=ParameterFreedom.FREE),)
 
     with pytest.raises(ValueError, match="过渡"):
         _problem(_transition_structure(), settings)
 
 
 def test_locking_transition_roughness_at_nonzero_is_rejected() -> None:
-    settings = (ParameterSetting("component.0.roughness_a", 3.0, 3.0, 3.0, locked=True),)
+    settings = (ParameterSetting("component.0.roughness_a", 3.0, 3.0, 3.0, freedom=ParameterFreedom.FIXED),)
 
     with pytest.raises(ValueError, match="过渡"):
         _problem(_transition_structure(), settings)

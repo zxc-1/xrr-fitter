@@ -71,7 +71,9 @@ def test_compile_stage_problem_releases_the_exact_stage_parameter_groups() -> No
 
 
 def test_compile_stage_problem_locks_current_values_and_preserves_user_locks() -> None:
-    problem = _problem(settings=(ParameterSetting("instrument.scale", 1.25, 1.25, 1.25, locked=True),))
+    problem = _problem(
+        settings=(ParameterSetting("instrument.scale", 1.25, 1.25, 1.25, freedom=ParameterFreedom.FIXED),)
+    )
     values = _initial_values(problem)
     values.update(
         {

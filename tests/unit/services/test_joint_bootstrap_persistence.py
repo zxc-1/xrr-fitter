@@ -44,7 +44,11 @@ def _project_inputs(root):
         prepared = fitting.prepare_dataset_fit(value, identifier, 17)
         settings = tuple(
             api.ParameterSetting(
-                item.name, item.initial, item.lower, item.upper, locked=item.name != "instrument.scale"
+                item.name,
+                item.initial,
+                item.lower,
+                item.upper,
+                freedom=api.ParameterFreedom.from_locked(item.name != "instrument.scale"),
             )
             for item in prepared.problem.parameter_definitions
         )

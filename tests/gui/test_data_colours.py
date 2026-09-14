@@ -20,6 +20,7 @@ be chosen per fill.
 from __future__ import annotations
 
 import pytest
+from PySide6.QtGui import QColor
 
 from xrr_fitter.gui import theme
 
@@ -118,3 +119,30 @@ def test_label_colour_actually_switches_rather_than_favouring_one_end() -> None:
     chosen = {theme.band_label_colour(fill) for fill in theme.DATA_SEQUENCE}
 
     assert len(chosen) == 2
+
+
+def _canvas_backgrounds() -> tuple[str, str]:
+    """两块画布的底色，取的是画板调色板自己声明的背景。"""
+    return tuple(
+        QColor.fromRgbF(*palette.background).name() for palette in (theme.LIGHT_PLOT_PALETTE, theme.DARK_PLOT_PALETTE)
+    )
+
+
+@pytest.mark.parametrize("background", _canvas_backgrounds())
+def test_fit_window_caption_stays_readable_on_either_canvas(background: str) -> None:
+    """拟合窗口那行字画在带子上，可带子只有 16% 不透明度，底色实际是画布本身。
+
+    所以它不能照设计稿写死一支暗琥珀：#8A6D00 在白画布上有 4.91:1，挪到深色画布
+    (#1E1F22) 只剩 3.38:1，正文字号读不下来。这行字得跟画布走，跟 band_label_colour
+    跟填充走是同一回事——只是这里的「底」是画布，不是不透明的填充。
+    """
+    assert _contrast(theme.range_label_colour(background), background) >= WCAG_TEXT_MIN
+
+
+def test_fit_window_caption_switches_ends_rather_than_favouring_one() -> None:
+    """两端各有出处：亮底用设计稿那支暗琥珀，暗底改用范围色本身（7.36:1）。"""
+    light, dark = _canvas_backgrounds()
+
+    assert theme.range_label_colour(light) == theme.RANGE_LABEL_ON_LIGHT
+    assert theme.range_label_colour(dark) == theme.RANGE_LABEL_ON_DARK
+    assert theme.RANGE_LABEL_ON_LIGHT != theme.RANGE_LABEL_ON_DARK

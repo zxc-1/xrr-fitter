@@ -30,6 +30,7 @@ parameter uncertainty.
 
 - Python 3.12 (`>=3.12,<3.13`)
 - macOS on Apple Silicon (arm64)
+- Apple Command Line Tools or Xcode (Clang, macOS SDK, `make`, `codesign`)
 
 Runtime dependencies (numpy, scipy, periodictable, pandas, xlsxwriter,
 matplotlib, orsopy, jsonschema, PySide6) are declared in `pyproject.toml` and
@@ -37,15 +38,27 @@ pinned in `requirements-macos-arm64-py312.lock`.
 
 ## Installation
 
+Run the following command from a **clean Git checkout**. It creates an owned
+external environment, builds and tests the Qt Cocoa fix, installs the verified
+local dependency wheels, and installs the canonical application wheel without
+resolving dependencies again. It prints the environment activation command.
+
 ```bash
-python3.12 -m venv "${TMPDIR:-/tmp}/xrr-fitter-venv"
-source "${TMPDIR:-/tmp}/xrr-fitter-venv/bin/activate"
-pip install -r requirements-macos-arm64-py312.lock
-pip install .
+bash -c 'set -euo pipefail; export PYTHONDONTWRITEBYTECODE=1 RUNNER_TEMP="${TMPDIR:-/tmp}"; JOB_ROOT=$(mktemp -d "$RUNNER_TEMP/xrr-macos-local.XXXXXXXX"); printf "Job: %s\n" "$JOB_ROOT"; python3.12 -m venv "$JOB_ROOT/venv"; python3.12 tools/macos_environment.py own --job-root "$JOB_ROOT"; PYTHON="$JOB_ROOT/venv/bin/python"; "$PYTHON" -m pip --isolated install --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r tools/bootstrap-requirements.lock; "$PYTHON" -m pip --isolated install --force-reinstall --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r tools/bootstrap-requirements.lock; CACHE_DIGEST=$("$PYTHON" tools/macos_environment.py key --trust-domain trusted | sed -n "s/^digest=//p"); "$PYTHON" tools/macos_environment.py setup --job-root "$JOB_ROOT" --cache-dir "$RUNNER_TEMP/xrr-macos-input-cache/$CACHE_DIGEST" --trust-domain trusted; "$PYTHON" tools/verify.py distribution --report-dir "$JOB_ROOT/reports/distribution" --artifact-dir "$JOB_ROOT/reports/distribution/artifacts"; "$PYTHON" tools/installed_sbom.py --manifest tools/package-manifests/macos-arm64-py312.json --wheel-dir "$JOB_ROOT/reports/packages/wheels" --pip-wheel "$JOB_ROOT/reports/refnx-inputs/inputs/pip-26.1.2-py3-none-any.whl" --refnx-build "$JOB_ROOT/reports/refnx-build/build.json" --qt-build "$JOB_ROOT/reports/qt-cocoa-build/build.json" --artifact-manifest "$JOB_ROOT/reports/distribution/artifact-manifest.json" --artifact-dir "$JOB_ROOT/reports/distribution/artifacts" --report-dir "$JOB_ROOT/reports/installed"; "$PYTHON" -m pip --isolated install --no-index --no-deps "$JOB_ROOT"/reports/distribution/artifacts/*.whl; printf "Activate: source %q\n" "$JOB_ROOT/venv/bin/activate"'
 ```
 
-Keep the environment outside the checkout: the repository hygiene gate rejects
-generated `.venv`/`venv` directories even when Git ignores them.
+- Python dependencies remain pinned, including PySide6/Qt **6.11.2**. macOS uses
+  a distinctly build-tagged arm64 Essentials wheel; installing the raw PyPI
+  wheel instead would discard the Cocoa accessibility fix.
+- The first run downloads pinned source/SDK/wheel inputs. Later runs reuse only
+  verified original inputs and rebuild the native derivatives. Build stages are
+  disposable; the printed job directory retains installation and audit reports.
+- Keep environments and artifacts outside the checkout. Choose a persistent
+  external `TMPDIR` when the environment must survive temporary-directory cleanup.
+  The repository hygiene gate rejects generated `.venv`/`venv` directories.
+
+See [the macOS Qt build contract](docs/macos-qt-cocoa.md) for provenance,
+verification boundaries and patch maintenance.
 
 ## Usage
 
@@ -128,8 +141,11 @@ evidence and residual units rather than recomputing uncertainty.
 
 ## Development
 
+The verified installation above already includes the locked test tools. Activate
+that environment before running the repository commands; no editable install is
+needed by the verifier.
+
 ```bash
-pip install -e '.[test]'
 python tools/verify.py MODE      # quality | tools | unit | gui | integration | ...
 python tools/check_radon.py      # complexity policy
 ```

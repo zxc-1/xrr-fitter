@@ -10,6 +10,8 @@ disk means the previous session ended uncleanly and is worth offering back.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -66,6 +68,19 @@ class AutosaveController(QObject):
     def discard_draft(self) -> None:
         """Delete the draft once a real save has superseded it."""
         draft = self.draft_path()
+        if draft is not None:
+            draft.unlink(missing_ok=True)
+
+    @contextmanager
+    def discard_after_replacement(self) -> Iterator[None]:
+        """Retire the outgoing dirty draft only after an approved replacement.
+
+        Capture its path before the document changes. A failed open or project
+        projection must leave recovery intact; a different target's draft must
+        remain available for its own recovery decision.
+        """
+        draft = self.draft_path() if self._document.is_dirty else None
+        yield
         if draft is not None:
             draft.unlink(missing_ok=True)
 

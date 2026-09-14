@@ -9,7 +9,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -17,7 +16,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QToolButton,
     QTreeWidget,
+    QWidget,
 )
 from tests.integration.test_gui_synthetic_xy_workflow import (
     _configure_import,
@@ -96,11 +97,28 @@ def _import_filename_batch(window) -> None:
     assert project.datasets[0].structure == project.datasets[1].structure
 
 
+def _select_pipeline_step(window, title: str) -> None:
+    QTest.mouseClick(
+        window.findChild(QWidget, f"pipelineStep_{title}"),
+        Qt.MouseButton.LeftButton,
+    )
+    QApplication.processEvents()
+
+
 def _select_joint_mode(window) -> None:
-    selector = window.findChild(QComboBox, "batchModeSelector")
-    selector.setCurrentIndex(selector.findData("joint"))
+    # 批量模式从拟合卡里的下拉换成了命令条上的分段控件（``batchModeSelector`` 已不存在），
+    # 而那一段跟着画布走：只有画布上画着反射率曲线时它才在栏上（见 ``chrome._sync_command_bar``
+    # 与 ``_canvas_shows_reflectivity``）。导入完成后左栏已经走到「参数」，画布是 SLD 剖面，
+    # 栏上没有这一段，此时点那一半按钮是点在一个 disabled 控件上——Qt 会静默丢掉这次点击。
+    # 所以先点回「数据」那一步让反射率回到画布，再点分段的「联合」，走的仍是用户的那条路；
+    # 选完点回原来停的那一步，后面的层编辑与参数锁定就从导入后的同一状态继续。
+    nav = window.pipeline_nav
+    resume_title = nav.step_titles()[nav.current_step_index()]
+    _select_pipeline_step(window, "数据")
+    window.findChild(QToolButton, "batchModeJoint").click()
     QApplication.processEvents()
     assert window.document.project.batch_mode == "joint"
+    _select_pipeline_step(window, resume_title)
 
 
 def _exercise_recoverable_layer_dialog(window) -> None:
@@ -160,8 +178,8 @@ def _exercise_recoverable_layer_dialog(window) -> None:
         if tree.topLevelItem(row).text(0) == "validation-layer"
     )
     tree.setCurrentItem(target)
-    remove = window.findChild(QPushButton, "removeComponentButton")
-    QTest.mouseClick(remove, Qt.MouseButton.LeftButton)
+    # 删除是层行的右键菜单项：它作用在树的当前行上，所以选中之后直接触发这条命令。
+    window.structure_panel.editor.remove_action.trigger()
     QApplication.processEvents()
     assert _component_names(window) == (
         ("Zr", "Si", "Si3N4", "SiO2 native oxide"),

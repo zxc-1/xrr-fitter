@@ -15,12 +15,14 @@ from tests.support.model_cases import dataset_project, final_fit_result, fit_can
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.document import ProjectDocument
-from xrr_fitter.gui.plots.diagnostics import DiagnosticView
+from xrr_fitter.gui.plots.diagnostics import DiagnosticView, _axes
+from xrr_fitter.gui.plots.parameter_labels import short_labels
 from xrr_fitter.gui.plots.sld import draw_uncertainty
 from xrr_fitter.gui.results.inference_text import interval_metadata
 from xrr_fitter.gui.results.panel import ResultsPanel
 from xrr_fitter.gui.results.uncertainty import McmcControls, UncertaintyView
 from xrr_fitter.model.bootstrap import BootstrapResult
+from xrr_fitter.model.inference import CovarianceEvidence
 
 PARAMETER_NAMES = (
     "component.0.thickness_a",
@@ -64,6 +66,8 @@ def _report(kind):
         None,
         (),
         candidate_id="candidate-a",
+        covariance_evidence=CovarianceEvidence(PARAMETER_NAMES, np.eye(8), "gaussian_known_sigma", 8),
+        parameter_sigma=np.ones(8),
         bootstrap_performed=bootstrap is not None,
         bootstrap_evidence=bootstrap,
     )
@@ -72,7 +76,7 @@ def _report(kind):
 def _render(report):
     figure = Figure(figsize=(10, 5), dpi=100, layout="constrained")
     canvas = FigureCanvasAgg(figure)
-    left, _right = figure.subplots(1, 2)
+    left = _axes(figure, "uncertainty")
     view = DiagnosticView(figure, canvas, left)
     draw_uncertainty(view, SimpleNamespace(uncertainty=report), "candidate-a")
     canvas.draw()
@@ -91,7 +95,9 @@ def _annotation_artists(axes):
     artists = list(axes.texts)
     legend = axes.get_legend()
     if legend is not None:
-        artists.extend((legend, legend.get_title(), *legend.get_texts()))
+        artists.extend((legend, *legend.get_texts()))
+        if legend.get_title().get_text():
+            artists.append(legend.get_title())
     return artists
 
 
@@ -129,7 +135,8 @@ def test_multi_parameter_summary_has_readable_nonoverlapping_text(rendered):
     axes = view.figure.axes[1]
     renderer = view.canvas.get_renderer()
     assert axes.bbox.width >= 0.25 * view.figure.bbox.width
-    assert axes.bbox.height >= 0.5 * view.figure.bbox.height
+    allocation = axes.get_subplotspec().get_position(view.figure)
+    assert axes.bbox.height >= 0.5 * allocation.height * view.figure.bbox.height
     for artist in _annotation_artists(axes):
         _assert_inside(axes.bbox, artist.get_window_extent(renderer))
         if hasattr(artist, "get_fontsize"):
@@ -143,23 +150,20 @@ def test_multi_parameter_summary_has_readable_nonoverlapping_text(rendered):
 def test_multi_parameter_summary_keeps_all_profile_curves(rendered):
     report, view = rendered
     axes = view.figure.axes[1]
-    summary = _annotation_text(axes)
     assert len(axes.lines) == len(report.profiles)
-    for line, profile in zip(axes.lines, report.profiles, strict=True):
-        assert profile.name in line.get_label()
-        np.testing.assert_array_equal(line.get_ydata(), profile.objectives)
+    labels = short_labels(tuple(profile.name for profile in report.profiles), ())
+    for line, profile, label in zip(axes.lines, report.profiles, labels, strict=True):
+        assert label in line.get_label()
+        np.testing.assert_array_equal(line.get_ydata(), profile.objectives - np.min(profile.objectives))
     if report.profiles:
-        shown = len(axes.get_legend().get_texts())
-        assert f"{shown}/{len(report.profiles)}" in summary
-        assert "全部曲线已绘制" in summary
-        assert summary.count("loss_support") == 1
+        assert len(axes.get_legend().get_texts()) == len(report.profiles)
 
 
 def test_multi_parameter_summary_links_to_complete_preserved_evidence(rendered, qtbot):
     report, view = rendered
-    summary = _annotation_text(view.figure.axes[1])
-    assert "完整逐参数证据" in summary
-    assert "结果面板的证据文本" in summary
+    # The current layout keeps the graph uncluttered and puts complete metadata
+    # in the owned evidence view, reachable from the read-only evidence action.
+    assert "95%" not in _annotation_text(view.figure.axes[1])
     full_text = _full_evidence_text(qtbot, report)
     for profile in report.profiles:
         assert profile.name in full_text
@@ -169,15 +173,15 @@ def test_multi_parameter_summary_links_to_complete_preserved_evidence(rendered, 
         assert all(name in full_text for name, _lower, _upper in report.bootstrap_intervals)
 
 
-def test_multi_parameter_bootstrap_summary_shows_saved_sampling_evidence(rendered):
+def test_multi_parameter_bootstrap_summary_shows_saved_sampling_evidence(rendered, qtbot):
     report, view = rendered
-    summary = _annotation_text(view.figure.axes[1])
+    summary = _full_evidence_text(qtbot, report)
     if report.bootstrap_evidence is None:
-        assert "Bootstrap" not in summary
+        assert "Bootstrap：未执行" in summary
     else:
         assert "400/400" in summary
-        assert "失败率：0" in summary
-        assert f"区间参数：{len(report.bootstrap_intervals)}" in summary
+        assert "Bootstrap 失败率：0" in summary
+        assert all(name in summary for name, _lower, _upper in report.bootstrap_intervals)
         assert "95%" in summary
 
 
@@ -210,8 +214,6 @@ def test_nonuniform_profile_metadata_is_not_one_shared_calibration(qtbot, kind):
     view = _render(report)
     try:
         summary = _annotation_text(view.figure.axes[1])
-        assert "元数据因参数而异" in summary
-        assert "完整逐参数证据" in summary
         assert "95%" not in summary
         full_text = _full_evidence_text(qtbot, report)
         for profile in report.profiles:
@@ -237,18 +239,20 @@ def _assert_body_evidence_is_visible(panel, report):
     assert evidence is panel.uncertainty.evidence
     assert evidence.isVisibleTo(panel)
     assert evidence.accessibleName() == "候选解不确定度证据"
-    assert panel.layout().indexOf(panel.uncertainty) > panel.layout().indexOf(panel.clear_button) >= 0
+    assert (
+        panel.secondary.layout().indexOf(panel.uncertainty) > panel.secondary.layout().indexOf(panel.clear_button) >= 0
+    )
     text = evidence.toPlainText()
     assert all(name in text for name in report.correlation_names)
     assert "[0.08, 0.12] nm" in text
     assert "[0.8, 1.2]" in text
 
 
-def _assert_mcmc_dialog_does_not_own_body_evidence(panel):
+def _assert_dialog_keeps_the_same_owned_evidence(panel):
     dialog = panel.open_uncertainty_dialog()
     assert dialog.findChild(McmcControls) is panel.mcmc_group
-    assert dialog.findChild(QPlainTextEdit, "uncertaintyEvidence") is None
-    assert panel.uncertainty.evidence.isVisibleTo(panel)
+    assert dialog.findChild(QPlainTextEdit, "uncertaintyEvidence") is panel.uncertainty.evidence
+    assert panel.uncertainty.evidence.isVisibleTo(dialog)
 
 
 @pytest.mark.parametrize("expert_mode", (False, True), ids=("ordinary", "expert"))
@@ -259,9 +263,8 @@ def test_evidence_pointer_names_the_real_results_body_in_both_modes(qtbot, exper
     try:
         _assert_body_evidence_is_visible(panel, report)
         assert panel.uncertainty_button.isVisibleTo(panel) is expert_mode
-        _assert_mcmc_dialog_does_not_own_body_evidence(panel)
+        _assert_dialog_keeps_the_same_owned_evidence(panel)
         summary = _annotation_text(view.figure.axes[1])
-        assert "结果面板的证据文本" in summary
         assert panel.uncertainty_button.text() not in summary
     finally:
         view.figure.clear()

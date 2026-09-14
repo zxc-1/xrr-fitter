@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from tests.gui.plot_support import *  # noqa: F403
 
+from xrr_fitter.gui import theme
+
 
 def _heatmap(panel, key):
     """The single image drawn on a heatmap view, as a plain array."""
@@ -174,3 +176,25 @@ def test_a_heatmap_colour_key_is_left_out_of_the_reference_grid(qtbot) -> None:
     assert key.xaxis._major_tick_kw.get("gridOn", False) is False
     # The image itself is skipped too: a grid would overdraw the cells it reads.
     assert view.axes.xaxis._major_tick_kw.get("gridOn", False) is False
+
+
+def test_residual_heatmap_takes_its_two_hues_from_the_theme(qtbot, monkeypatch) -> None:
+    """The residual scale has to flip with the theme like every other figure colour.
+
+    A hardcoded Matplotlib colormap is fixed at a light-background contrast, so
+    on a dark palette the negative end sinks toward the panel it is drawn on.
+    The palette already states which two hues carry the sign, and the neutral
+    midpoint is what keeps a near-zero residual from reading as a weak signal.
+    """
+    from xrr_fitter.gui.plots import diagnostics
+
+    palette = theme.DARK_PLOT_PALETTE
+    monkeypatch.setattr(diagnostics, "current_plot_palette", lambda: palette)
+    data = prepared_data(size=4)
+    panel = _panel(qtbot, data=data, result=_ranked_result(data))
+
+    colormap = panel.view("residual_map").axes.images[0].get_cmap()
+
+    assert np.allclose(colormap(0.0), palette.diverging_neg)
+    assert np.allclose(colormap(1.0), palette.diverging_pos)
+    assert np.allclose(colormap(0.5), palette.diverging_mid)

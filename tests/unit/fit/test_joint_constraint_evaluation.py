@@ -22,6 +22,7 @@ from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
     ConstraintNode,
     ConstraintRule,
+    ParameterFreedom,
     ParameterReference,
     ParameterSetting,
 )
@@ -104,7 +105,7 @@ def _angle_offset_problem(*, seed: int, size: int, free: bool, background_bounds
             definition.initial,
             definition.initial,
             definition.initial,
-            locked=True,
+            freedom=ParameterFreedom.FIXED,
         )
 
     settings = tuple(setting(definition) for definition in base.parameter_definitions)
@@ -186,7 +187,7 @@ def test_cross_dataset_constraint_jacobian_overflow_degrades_without_warning() -
                 definition.initial,
                 definition.lower if definition.name == free_name else definition.initial,
                 definition.upper if definition.name == free_name else definition.initial,
-                locked=definition.name != free_name,
+                freedom=ParameterFreedom.from_locked(definition.name != free_name),
             )
             for definition in base.parameter_definitions
         )
@@ -315,7 +316,7 @@ def _locked_roughness_problem(*, seed: int, size: int, roughness_initial: float 
                 initial,
                 lower,
                 upper,
-                locked=True,
+                freedom=ParameterFreedom.FIXED,
             )
         )
     return compile_fit_problem(
@@ -379,7 +380,7 @@ def test_cross_roughness_constraint_empty_target_domain_is_an_invalid_candidate(
                         thickness,
                         thickness,
                         thickness,
-                        locked=True,
+                        freedom=ParameterFreedom.FIXED,
                     )
                 )
             elif definition.name == ROUGHNESS_NAME:
@@ -398,7 +399,7 @@ def test_cross_roughness_constraint_empty_target_domain_is_an_invalid_candidate(
                         definition.initial,
                         definition.initial,
                         definition.initial,
-                        locked=True,
+                        freedom=ParameterFreedom.FIXED,
                     )
                 )
         return compile_fit_problem(
@@ -609,7 +610,7 @@ def test_dataset_local_constraints_keep_the_direct_joint_jacobian_path(
                 definition.initial,
                 definition.lower,
                 definition.upper,
-                definition.locked,
+                ParameterFreedom.from_locked(definition.locked),
             )
             for definition in left.parameter_definitions
         ),

@@ -56,6 +56,7 @@ from xrr_fitter.model.parameters import (
     MAX_CONSTRAINT_DEPTH,
     ConstraintNode,
     ConstraintRule,
+    ParameterFreedom,
     ParameterPrior,
     ParameterReference,
     ParameterSetting,
@@ -138,13 +139,57 @@ def _oxide_from_dict(value: object) -> OxideDecision:
     return OxideDecision(**_mapping(value, fields, "oxide decision"))
 
 
+SETTING_REQUIRED_FIELDS = frozenset({"name", "initial", "lower", "upper"})
+# 旧文件里第三态还不存在，自由度是一个 ``locked: bool``。两个键都收下，写出时只写 ``freedom``——
+# 版本号不动，因为这是一次「放宽」而不是「换形状」：v2 里必填的 ``locked`` 变成可选，旧 build
+# 写的文件依旧读得进来，而 FREE 这个默认值不落盘，既有项目照原样重写仍然逐位不变（与
+# ``angle_convention`` 的处理同一个理由）。
+SETTING_LEGACY_FIELDS = frozenset({"locked", "freedom"})
+
+
 def _setting_to_dict(value: ParameterSetting) -> dict[str, object]:
-    return {field: getattr(value, field) for field in value.__dataclass_fields__}
+    payload: dict[str, object] = {
+        "name": value.name,
+        "initial": value.initial,
+        "lower": value.lower,
+        "upper": value.upper,
+    }
+    if value.freedom is not ParameterFreedom.FREE:
+        payload["freedom"] = value.freedom.value
+    return payload
+
+
+def _setting_freedom(payload: dict[str, object]) -> ParameterFreedom:
+    if "freedom" in payload:
+        if "locked" in payload:
+            raise ProjectSchemaError("parameter setting must not carry both freedom and locked")
+        raw = payload["freedom"]
+        if not isinstance(raw, str):
+            raise ProjectSchemaError("parameter setting freedom must be a string")
+        try:
+            return ParameterFreedom(raw)
+        except ValueError as error:
+            raise ProjectSchemaError(f"unsupported parameter setting freedom: {raw!r}") from error
+    legacy = payload.get("locked", False)
+    if not isinstance(legacy, bool):
+        raise ProjectSchemaError("parameter setting locked must be a boolean")
+    return ParameterFreedom.from_locked(legacy)
 
 
 def _setting_from_dict(value: object) -> ParameterSetting:
-    fields = set(ParameterSetting.__dataclass_fields__)
-    return ParameterSetting(**_mapping(value, fields, "parameter setting"))
+    payload = _mapping(
+        value,
+        set(SETTING_REQUIRED_FIELDS),
+        "parameter setting",
+        optional=set(SETTING_LEGACY_FIELDS),
+    )
+    return ParameterSetting(
+        name=payload["name"],
+        initial=payload["initial"],
+        lower=payload["lower"],
+        upper=payload["upper"],
+        freedom=_setting_freedom(payload),
+    )
 
 
 def _sharing_to_dict(value: SharingRule) -> dict[str, object]:
@@ -288,12 +333,16 @@ def _measurement_preset_to_dict(
 ) -> dict[str, object] | None:
     if value is None:
         return None
-    return {
+    payload: dict[str, object] = {
         "preset_id": value.preset_id,
         "beam": _beam_to_dict(value.beam),
         "instrument": _instrument_to_dict(value.instrument),
         "import_angle_offset_deg": value.import_angle_offset_deg,
     }
+    # 只在非默认值时写出：R22 之前的项目文件里没有这个键，照原样重写它们才逐位不变。
+    if value.angle_convention != "two_theta":
+        payload["angle_convention"] = value.angle_convention
+    return payload
 
 
 def _measurement_preset_from_dict(value: object) -> MeasurementPreset | None:
@@ -303,12 +352,14 @@ def _measurement_preset_from_dict(value: object) -> MeasurementPreset | None:
         value,
         {"preset_id", "beam", "instrument", "import_angle_offset_deg"},
         "measurement preset",
+        {"angle_convention"},
     )
     return MeasurementPreset(
         preset_id=payload["preset_id"],
         beam=_beam_from_dict(payload["beam"]),
         instrument=_instrument_from_dict(payload["instrument"]),
         import_angle_offset_deg=payload["import_angle_offset_deg"],
+        angle_convention=payload.get("angle_convention", "two_theta"),
     )
 
 
@@ -379,6 +430,9 @@ def _dataset_to_dict(value: DatasetProject) -> dict[str, object]:
         payload["parameter_priors"] = [_parameter_prior_to_dict(item) for item in value.parameter_priors]
     if value.display_name != value.dataset_id:
         payload["display_name"] = value.display_name
+    # 只在非默认值时写出：R22 之前的项目文件里没有这个键，照原样重写它们才逐位不变。
+    if value.angle_convention != "two_theta":
+        payload["angle_convention"] = value.angle_convention
     return payload
 
 
@@ -405,7 +459,12 @@ def _dataset_fields() -> set[str]:
 
 
 def _dataset_from_dict(value: object) -> DatasetProject:
-    payload = _mapping(value, _dataset_fields(), "dataset", {"display_name", "parameter_priors"})
+    payload = _mapping(
+        value,
+        _dataset_fields(),
+        "dataset",
+        {"display_name", "parameter_priors", "angle_convention"},
+    )
     return DatasetProject(
         dataset_id=payload["dataset_id"],
         source_path=payload["source_path"],
@@ -437,6 +496,7 @@ def _dataset_from_dict(value: object) -> DatasetProject:
             _parameter_prior_from_dict(item)
             for item in _sequence(payload.get("parameter_priors", []), "parameter priors")
         ),
+        angle_convention=payload.get("angle_convention", "two_theta"),
     )
 
 

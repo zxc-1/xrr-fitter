@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTableWidget
 
 import xrr_fitter.api as api
+from xrr_fitter.gui.parameters.table import CONSTRAINT_DRIVEN_TOOLTIP, PRIOR_COLUMN
 
 AIR = api.MaterialSpec("Air", None, None, 0.0j)
 SI = api.MaterialSpec("Si", "Si", 2.329)
@@ -45,6 +46,15 @@ def _panel(qtbot, tmp_path):
 
 
 def test_parameter_table_shows_required_fields(qtbot, tmp_path) -> None:
+    """Five columns, because a 340px inspector cannot hold seven.
+
+    单位 and 锁定 were columns of their own and each cost 44px to show a 25px
+    glyph, which is a tenth of the column the design gives the whole inspector.
+    They now ride in the name cell exactly where the design puts them --
+    ``密度 ρ <span class="lock on">`` in frame ①'s grid and ``厚度 d（nm）`` in
+    frame ③'s field editor -- so the four columns that carry digits keep their
+    width.
+    """
     panel = _panel(qtbot, tmp_path)
     table = panel.findChild(QTableWidget, "parameterTable")
 
@@ -54,8 +64,6 @@ def test_parameter_table_shows_required_fields(qtbot, tmp_path) -> None:
         "初值",
         "下限",
         "上限",
-        "单位",
-        "锁定",
         "先验",
     ]
     assert "component.0.thickness_a" in panel.row_names
@@ -76,7 +84,7 @@ def test_length_parameters_display_nm_but_emit_angstrom_settings(
         initial=4.5,
         lower=2.0,
         upper=10.0,
-        locked=False,
+        freedom=api.ParameterFreedom.FREE,
     )
 
     setting = panel.document.project.datasets[0].parameter_settings[0]
@@ -95,11 +103,44 @@ def test_user_edit_in_parameter_table_commits_display_value_and_lock(
     row = panel.row_names.index(name)
 
     table.item(row, 1).setText("4.5")
-    table.item(row, 5).setCheckState(Qt.CheckState.Checked)
+    table.item(row, 0).setCheckState(Qt.CheckState.Checked)
 
     setting = next(value for value in panel.document.project.datasets[0].parameter_settings if value.name == name)
     assert setting.initial == pytest.approx(45.0)
     assert setting.locked is True
+
+
+def test_name_cell_check_walks_all_three_gears_and_redisplays_each_one(
+    qtbot,
+    tmp_path,
+) -> None:
+    """名字格那个勾走满三档，每一档都存成对应的 ``freedom``，刷新之后还停在原处。
+
+    第三档没有自己的列，它就是这个勾的半选态；``ItemIsUserTristate`` 不在，点击只在两态之间
+    翻，「仅范围」从参数表里根本点不出来——而这张表是唯一逐行可见的入口，读者会以为这个量只有
+    开关两种状态。回显同样要成立：档位只存在 setting 里，映射不回勾的话，刚点出来的「仅范围」
+    会在下一次刷新时画成「自由」，而拟合器按的仍是仅范围。
+    """
+    panel = _panel(qtbot, tmp_path)
+    table = panel.findChild(QTableWidget, "parameterTable")
+    name = "component.0.thickness_a"
+    row = panel.row_names.index(name)
+    assert table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserTristate
+
+    walked = []
+    # 从声明那一档（自由）出发把一圈走完，最后一步回到自由——原地设同一个值不会发信号，
+    # 所以起手先点半选。
+    for state in (Qt.CheckState.PartiallyChecked, Qt.CheckState.Checked, Qt.CheckState.Unchecked):
+        table.item(row, 0).setCheckState(state)
+
+        setting = next(value for value in panel.document.project.datasets[0].parameter_settings if value.name == name)
+        walked.append((setting.freedom, table.item(row, 0).checkState()))
+
+    assert walked == [
+        (api.ParameterFreedom.RANGE_ONLY, Qt.CheckState.PartiallyChecked),
+        (api.ParameterFreedom.FIXED, Qt.CheckState.Checked),
+        (api.ParameterFreedom.FREE, Qt.CheckState.Unchecked),
+    ]
 
 
 def test_parameter_commit_routes_only_through_set_parameter_settings(
@@ -132,7 +173,7 @@ def test_parameter_commit_routes_only_through_set_parameter_settings(
         initial=setting.initial,
         lower=setting.lower,
         upper=setting.upper,
-        locked=False,
+        freedom=api.ParameterFreedom.FREE,
     )
 
     assert calls == [(original, "sample", (setting,))]
@@ -157,7 +198,7 @@ def test_parameter_failure_preserves_project_table_and_signal(
     )
 
     with pytest.raises(ValueError, match="settings rejected"):
-        panel.set_parameter(name, initial=2.0, lower=0.1, upper=10.0, locked=False)
+        panel.set_parameter(name, initial=2.0, lower=0.1, upper=10.0, freedom=api.ParameterFreedom.FREE)
 
     assert panel.document.project is before
     assert panel.display_values(name) == before_values
@@ -175,7 +216,7 @@ def test_parameter_refresh_and_noop_commit_preserve_exact_setting_bytes(
         initial=definition.initial,
         lower=definition.lower,
         upper=definition.upper,
-        locked=definition.locked,
+        freedom=api.ParameterFreedom.from_locked(definition.locked),
     )
     persisted = panel.document.project
     setting = persisted.datasets[0].parameter_settings[0]
@@ -187,7 +228,7 @@ def test_parameter_refresh_and_noop_commit_preserve_exact_setting_bytes(
         initial=setting.initial,
         lower=setting.lower,
         upper=setting.upper,
-        locked=setting.locked,
+        freedom=setting.freedom,
     )
 
     assert changed is False
@@ -244,7 +285,7 @@ def test_reset_parameter_removes_override_and_restores_default(qtbot, tmp_path) 
     name = "component.0.thickness_a"
 
     # Establish a user override, then confirm it is persisted.
-    panel.set_display_parameter(name, initial=6.0, lower=2.0, upper=10.0, locked=True)
+    panel.set_display_parameter(name, initial=6.0, lower=2.0, upper=10.0, freedom=api.ParameterFreedom.FIXED)
     assert any(value.name == name for value in panel.document.project.datasets[0].parameter_settings)
 
     # Resetting drops the persisted setting so the declared default reasserts.
@@ -280,21 +321,27 @@ def _table(qtbot, *definitions: api.ParameterDefinition):
 
 
 def test_empty_prior_column_yields_its_surplus_to_the_name_column(qtbot) -> None:
-    # Most projects configure no priors, leaving column 6 blank.  A blank column
-    # that still absorbs surplus width steals it from the name column, which then
-    # elides the parameter names down to an unreadable "幂律背..." stub -- and the
-    # two distinct power-law background parameters then render identically.
+    # Most projects configure no priors, leaving the last column blank.  A blank
+    # column that still absorbs surplus width steals it from the name column, which
+    # then elides the parameter names down to an unreadable "幂律背..." stub -- and
+    # the two distinct power-law background parameters then render identically.
+    #
+    # These three are declared dimensionless (an amplitude, an exponent and a
+    # relative sigma), so their names carry no ``（unit）`` suffix -- which is what
+    # the measurement below is about: the name alone, not a unit riding with it.
     definitions = (
-        _definition("instrument.background.power_law_amplitude", display_name="幂律背景幅值 B₂"),
-        _definition("instrument.background.power_law_exponent", display_name="幂律背景指数 p"),
-        _definition("instrument.resolution.relative_sigma", display_name="相对分辨率 σq/q"),
+        _definition("instrument.background.power_law_amplitude", display_name="幂律背景幅值 B₂", unit=""),
+        _definition("instrument.background.power_law_exponent", display_name="幂律背景指数 p", unit=""),
+        _definition("instrument.resolution.relative_sigma", display_name="相对分辨率 σq/q", unit=""),
     )
     table = _table(qtbot, *definitions)
-    table.resize(380, 200)  # the width parametersDock actually gets on screen
+    table.show()
+    table.resize(380, 200)
+    qtbot.waitUntil(lambda: table.viewport().width() > 0, timeout=1000)
 
     # An empty column has no content to show, so it must not hold a share of the
     # width comparable to the names it is starving.
-    assert table.columnWidth(6) < table.columnWidth(0) / 2
+    assert table.columnWidth(PRIOR_COLUMN) < table.columnWidth(0) / 2
     assert table.columnWidth(0) >= table.sizeHintForColumn(0)
 
 
@@ -306,27 +353,31 @@ def test_populated_prior_column_does_not_starve_the_name_column(qtbot) -> None:
         _definition(
             "instrument.background.power_law_amplitude",
             display_name="幂律背景幅值 B₂",
+            unit="",
             prior=api.PriorSpec("soft_range", (1.0, 9.0, 0.5)),
         ),
         _definition(
             "instrument.background.power_law_exponent",
             display_name="幂律背景指数 p",
+            unit="",
             prior=api.PriorSpec("normal", (2.0, 0.3)),
         ),
     )
     table = _table(qtbot, *definitions)
+    table.show()
     table.resize(380, 200)
+    qtbot.waitUntil(lambda: table.viewport().width() > 0, timeout=1000)
 
     assert table.columnWidth(0) >= table.sizeHintForColumn(0)
     # Nothing is lost: the full summary stays reachable on the cell itself.
-    assert "soft_range" in table.item(0, 6).toolTip()
+    assert "soft_range" in table.item(0, PRIOR_COLUMN).toolTip()
 
 
 def test_prior_column_header_and_readonly(qtbot) -> None:
     table = _table(qtbot, _definition("component.0.thickness_a"))
 
-    assert table.horizontalHeaderItem(6).text() == "先验"
-    prior_cell = table.item(0, 6)
+    assert table.horizontalHeaderItem(PRIOR_COLUMN).text() == "先验"
+    prior_cell = table.item(0, PRIOR_COLUMN)
     assert prior_cell is not None
     assert not (prior_cell.flags() & Qt.ItemFlag.ItemIsEditable)
 
@@ -343,8 +394,8 @@ def test_prior_column_renders_summary(qtbot) -> None:
     without_prior = _definition("instrument.scale.other", unit="1", initial=1.0, lower=0.5, upper=1.5)
     table = _table(qtbot, with_prior, without_prior)
 
-    assert "normal" in table.item(0, 6).text()
-    assert table.item(1, 6).text() == ""
+    assert "normal" in table.item(0, PRIOR_COLUMN).text()
+    assert table.item(1, PRIOR_COLUMN).text() == ""
 
 
 def test_prior_column_respects_nm_toggle(qtbot) -> None:
@@ -356,7 +407,7 @@ def test_prior_column_respects_nm_toggle(qtbot) -> None:
     )
     table = _table(qtbot, definition)
 
-    text = table.item(0, 6).text()
+    text = table.item(0, PRIOR_COLUMN).text()
     assert "4" in text
     assert "40" not in text
 
@@ -372,20 +423,22 @@ def test_roughness_fraction_prior_summary_remains_an_unscaled_fraction(qtbot) ->
     )
     table = _table(qtbot, definition)
 
-    assert table.item(0, 6).text() == "normal(μ=0.5, σ=0.1)"
+    assert table.item(0, PRIOR_COLUMN).text() == "normal(μ=0.5, σ=0.1)"
 
 
 def test_constraint_driven_row_locks_value_columns_and_check(qtbot) -> None:
     driven = _definition("component.0.thickness_a", constrained=True)
     table = _table(qtbot, driven)
 
-    # 初值/下限/上限 join the always-read-only display-name/unit columns: a
+    # 初值/下限/上限 join the always-read-only name and 先验 columns: a
     # constraint-driven value is computed, so the user may not type over it.
-    for column in (0, 1, 2, 3, 4):
+    for column in (0, 1, 2, 3, PRIOR_COLUMN):
         assert not (table.item(0, column).flags() & Qt.ItemFlag.ItemIsEditable)
-    # The lock checkbox degrades to a read-only indicator: still visible and
-    # selectable, no longer user-checkable, and annotated with the reason.
-    locked = table.item(0, 5)
+    # The lock degrades to a read-only indicator: still visible and selectable,
+    # no longer user-checkable, and annotated with the reason.  It lives in the
+    # name cell now, so those are the flags of the cell that also carries the
+    # parameter's name.
+    locked = table.item(0, 0)
     assert locked.flags() & Qt.ItemFlag.ItemIsEnabled
     assert locked.flags() & Qt.ItemFlag.ItemIsSelectable
     assert not (locked.flags() & Qt.ItemFlag.ItemIsUserCheckable)
@@ -430,13 +483,14 @@ def test_unconstrained_row_matches_head_editability(qtbot) -> None:
     # Value columns stay editable exactly as before the constraint feature.
     for column in (1, 2, 3):
         assert table.item(0, column).flags() & Qt.ItemFlag.ItemIsEditable
-    # Display-name and unit columns remain read-only, unchanged from HEAD.
-    for column in (0, 4):
+    # The name and 先验 columns remain read-only, unchanged from HEAD.
+    for column in (0, PRIOR_COLUMN):
         assert not (table.item(0, column).flags() & Qt.ItemFlag.ItemIsEditable)
-    # The lock cell keeps its interactive checkbox and carries no tooltip.
-    locked = table.item(0, 5)
+    # The name cell keeps its interactive lock checkbox, and says nothing about a
+    # constraint -- it still carries the identifying tooltip every name cell has.
+    locked = table.item(0, 0)
     assert locked.flags() & Qt.ItemFlag.ItemIsUserCheckable
-    assert locked.toolTip() == ""
+    assert CONSTRAINT_DRIVEN_TOOLTIP not in locked.toolTip()
 
 
 def test_computed_bound_shows_few_digits_and_keeps_full_value_reachable(qtbot) -> None:
@@ -462,7 +516,9 @@ def test_editing_one_cell_persists_untouched_bounds_at_full_precision(
     name = "component.0.roughness_a"
 
     # Give the row a bound that does not survive six significant digits.
-    panel.set_display_parameter(name, initial=0.3, lower=0.037167741227456, upper=2.0, locked=False)
+    panel.set_display_parameter(
+        name, initial=0.3, lower=0.037167741227456, upper=2.0, freedom=api.ParameterFreedom.FREE
+    )
     row = panel.row_names.index(name)
 
     # Touch only the initial value; the two bounds are left exactly as rendered.
@@ -559,8 +615,12 @@ def test_group_caption_is_not_mistaken_for_a_parameter(qtbot, tmp_path) -> None:
         caption = table.item(row, 0)
         assert not (caption.flags() & Qt.ItemFlag.ItemIsEditable)
         assert not (caption.flags() & Qt.ItemFlag.ItemIsSelectable)
+        # The lock shares column 0 with the caption now, so a caption has to leave
+        # CheckStateRole unset: setting it to Unchecked would draw an empty box
+        # beside 表面氧化层 · SiO₂ and invite a click that locks nothing.
+        assert caption.data(Qt.ItemDataRole.CheckStateRole) is None, row
         # The numeric columns hold nothing to edit or commit.
-        for column in (1, 2, 3, 5):
+        for column in (1, 2, 3, PRIOR_COLUMN):
             assert table.item(row, column) is None, (row, column)
     # Captions stay out of the declaration projection entirely.
     assert len(panel.visible_definitions) == table.rowCount() - len(captions)
@@ -590,6 +650,112 @@ def test_single_group_is_left_uncaptioned(qtbot) -> None:
 
     assert _group_rows(table) == {}
     assert table.rowCount() == 2
+
+
+def test_the_parameter_grid_has_no_row_number_gutter(qtbot, tmp_path) -> None:
+    """``<table class="grid">`` numbers nothing down its left edge.
+
+    Qt shows a vertical header by default, and here it measured 35px of a 213px
+    viewport -- a sixth of the table spent restating an ordinal the design does not
+    draw and that no other surface refers to.  Rows are addressed by the parameter
+    name in column 0, which is the same identifier the commit path reads.
+    """
+    panel = _panel(qtbot, tmp_path)
+    table = panel.findChild(QTableWidget, "parameterTable")
+
+    assert table.verticalHeader().isVisible() is False
+
+
+def test_the_lock_is_a_glyph_in_the_name_cell_not_a_column_of_its_own(qtbot) -> None:
+    """Frame ① draws ``<td>密度 ρ <span class="lock on"></span></td>``.
+
+    The lock was a 44px column carrying one checkbox, which is the widest thing on
+    the table per pixel of information.  In the design it is a glyph inside the
+    name cell, and a table item's own check indicator is exactly that: it sits at
+    the head of the cell, before the text, and is clicked in place.
+    """
+    unlocked = _definition("component.0.thickness_a")
+    locked = _definition("component.0.roughness_a", locked=True)
+    table = _table(qtbot, unlocked, locked)
+
+    assert "锁定" not in [table.horizontalHeaderItem(column).text() for column in range(table.columnCount())]
+    assert table.item(0, 0).checkState() == Qt.CheckState.Unchecked
+    assert table.item(1, 0).checkState() == Qt.CheckState.Checked
+    assert table.item(0, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable
+    # A lock is toggled by clicking the box, never by typing into the name.
+    assert not (table.item(0, 0).flags() & Qt.ItemFlag.ItemIsEditable)
+
+
+def test_the_unit_rides_with_the_quantity_it_measures(qtbot) -> None:
+    """Frame ③ writes ``<label>厚度 d（nm）</label>``, not a 单位 column.
+
+    A unit column held at most four characters and cost 44px to do it; the design
+    never gives the unit a column of its own, in either the read-only grid or the
+    field editor.  Fullwidth parens are the design's own punctuation.
+
+    A dimensionless declaration gets no parenthetical at all: frame ① renders its
+    unit cell as ``—``, and ``（）`` around nothing would read as a missing value
+    rather than as an absent dimension.
+    """
+    length = _definition("component.0.thickness_a")  # declared in Å, displayed in nm
+    angle = _definition("instrument.offset", unit="°")
+    dimensionless = _definition("instrument.scale", unit="")
+    table = _table(qtbot, length, angle, dimensionless)
+    # Two groups means captions, so physical rows and declarations no longer line
+    # up; row_names is what keeps an index honest.
+    rows = {name: index for index, name in enumerate(table.row_names)}
+
+    assert "单位" not in [table.horizontalHeaderItem(column).text() for column in range(table.columnCount())]
+    assert table.item(rows["component.0.thickness_a"], 0).text().endswith("（nm）")
+    assert table.item(rows["instrument.offset"], 0).text().endswith("（°）")
+    assert "（" not in table.item(rows["instrument.scale"], 0).text()
+
+
+def test_a_captioned_row_does_not_repeat_its_owners_name(qtbot, tmp_path) -> None:
+    """Frame ①'s grouprow carries the owner; its rows carry only the quantity.
+
+    ``<tr class="grouprow"><td colspan="4">表面氧化层 · SiO₂</td></tr>`` is followed
+    by ``<td>厚度 d</td>``, not by ``<td>表面氧化层 厚度 d</td>``.  The declarations
+    arrive prefixed -- a layer named film contributes "film 厚度" -- so once the
+    caption above says film, the prefix is spent width restating it on every row.
+
+    基底那一行不是靠剥前缀短下来的：声明写的是「基底连接界面粗糙度」，一个整词，没有前缀
+    可剥（剥「基底」二字会剩下「连接界面粗糙度」）。它读成「粗糙度 σ」靠的是整名改写
+    （``grouping.ROW_ALIASES``），因为上一行的分组行已经说明这是哪一处界面。全名仍在悬停
+    提示里，改写没有把「哪一处」丢掉。
+    """
+    panel = _grouped_panel(qtbot, tmp_path)
+    table = panel.findChild(QTableWidget, "parameterTable")
+    captions = _group_rows(table)
+
+    assert "film" in captions.values(), captions
+    thickness = panel.row_names.index("component.0.thickness_a")
+    text = table.item(thickness, 0).text()
+    assert not text.startswith("film"), text
+    assert "厚度" in text
+    # Nothing is lost: the tooltip still identifies the row in full.
+    assert "film" in table.item(thickness, 0).toolTip()
+
+    backing = panel.row_names.index("backing.roughness_a")
+    assert table.item(backing, 0).text().startswith("粗糙度 σ"), table.item(backing, 0).text()
+    assert "基底连接界面粗糙度" in table.item(backing, 0).toolTip()
+
+
+def test_an_uncaptioned_table_keeps_its_names_whole(qtbot) -> None:
+    """With one group there is no caption to carry the owner, so nothing is stripped.
+
+    ``_row_layout`` emits no captions for a single group, and a row whose owner is
+    named nowhere above it has to name it itself.
+    """
+    table = _table(
+        qtbot,
+        _definition("component.0.thickness_a", display_name="film 厚度"),
+        _definition("component.0.roughness_a", display_name="film 粗糙度"),
+    )
+
+    assert _group_rows(table) == {}
+    assert table.item(0, 0).text() == "film 厚度 d（nm）"
+    assert table.item(1, 0).text() == "film 粗糙度 σ（nm）"
 
 
 def test_initial_column_wears_a_value_position_delegate(qtbot) -> None:
@@ -671,3 +837,58 @@ def test_value_position_delegate_paints_both_bar_and_barless_rows(qtbot) -> None
     pixmap = table.grab()
 
     assert not pixmap.isNull()
+
+
+def test_a_long_name_elides_instead_of_wrapping_past_its_row(qtbot) -> None:
+    """名字放不下时省略，不许换行——行高是单行的，第二行会被裁掉。
+
+    ``QTableView`` 默认开启 wordWrap，所以「入射侧 粗糙度」在窄下来的参数列里折成
+    两行，而行高仍按单行算，截图里第二行只剩半个字。同列的其他单元格却是省略号，
+    两种行为混在一张表里。这里量渲染需要的行高，而不是相信默认值。
+    """
+    table = _table(qtbot, _definition("component.0.roughness_a", display_name="入射侧 粗糙度"))
+    table.resize(340, 200)
+    table.setColumnWidth(0, 60)
+
+    assert table.sizeHintForRow(0) <= table.rowHeight(0), (table.sizeHintForRow(0), table.rowHeight(0))
+
+
+def test_a_reload_keeps_the_reader_on_the_same_quantity(qtbot) -> None:
+    """重填之后当前行还停在同一个量上——按名字认，不按行号认。
+
+    改一格数、锁一个量都会让整张表重填，而重填把当前行清成 -1。跟着当前行走的东西
+    （设计稿帧③ 的抬头「参数化 · 厚度 d」和它下面那三档）于是在每一次编辑之后归零：
+    改完一个数想接着改它的档位，得先回表里把同一行再点一次。
+
+    行号不能用：重填的原因往往正是行的构成变了（换数据集、切高级选项），第 n 行装的
+    会是另一份声明。名字标识的是量本身，位置变了也还是它。
+
+    这里拿两个仪器量来换位置，而不是厚度和粗糙度：``grouping.QUANTITY_ORDER`` 会把同一
+    归属下的厚度排到粗糙度前面，交换入参根本换不动行号，断言就成了永真。仪器那两个量
+    都不在那份次序里，同一名次下保留入参顺序，交换于是真的把行换了过来。
+    """
+    first = _definition("instrument.angle_offset_deg", display_name="入射角零点偏移", unit="°")
+    second = _definition("instrument.footprint_spill_angle_deg", display_name="足迹满斑角 θ_fp", unit="°")
+    table = _table(qtbot, first, second)
+    table.setCurrentCell(1, 0)
+    assert table.current_name() == "instrument.footprint_spill_angle_deg"
+
+    table.load((second, first), expert_mode=True)
+
+    assert table.current_name() == "instrument.footprint_spill_angle_deg"
+    assert table.currentRow() == 0
+
+
+def test_a_quantity_that_is_gone_leaves_no_current_row(qtbot) -> None:
+    """读者点的那个量不在了，就没有当前行——而不是把光标落到顶上那一行。
+
+    落到顶上会让跟着走的抬头改口说另一个量，而它读起来和「读者自己点了这一行」一模一样。
+    """
+    first = _definition("component.1.thickness_a", display_name="厚度")
+    second = _definition("component.1.roughness_a", display_name="粗糙度")
+    table = _table(qtbot, first, second)
+    table.setCurrentCell(1, 0)
+
+    table.load((first,), expert_mode=True)
+
+    assert table.current_name() is None

@@ -1,0 +1,5 @@
+<RCC><qresource prefix="/qt-project.org/mac/cursors">
+<file>images/sizeallcursor.png</file>
+<file>images/spincursor.png</file>
+<file>images/waitcursor.png</file>
+</qresource></RCC>

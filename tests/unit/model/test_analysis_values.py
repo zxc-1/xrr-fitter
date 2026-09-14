@@ -63,6 +63,24 @@ def test_analysis_arrays_are_copied_read_only_and_shape_checked() -> None:
         ParameterProfile("bad", np.ones(2), np.ones(3), True, True)
 
 
+def test_profile_carries_the_objective_that_closed_its_interval() -> None:
+    """A profile curve without its closure threshold cannot be read as an interval.
+
+    The scan decides ``lower_closed``/``upper_closed`` by comparing objectives to one
+    number; publishing the flags but not the number leaves a reader with a curve, two
+    booleans, and no way to see where the crossing was.
+    """
+    values, objectives = np.array([1.0, 2.0, 3.0]), np.array([3.0, 2.0, 3.0])
+
+    open_ended = ParameterProfile("thickness", values, objectives, True, True)
+    closed = ParameterProfile("thickness", values, objectives, True, True, objective_threshold=2.5)
+
+    assert open_ended.objective_threshold is None
+    assert closed.objective_threshold == 2.5
+    with pytest.raises(ValueError, match="objective threshold"):
+        ParameterProfile("thickness", values, objectives, True, True, objective_threshold=float("nan"))
+
+
 def test_uncertainty_report_rejects_empty_candidate_owner() -> None:
     report = UncertaintyReport(
         correlation_names=(),
@@ -82,6 +100,55 @@ def test_uncertainty_report_rejects_empty_candidate_owner() -> None:
     assert report.bootstrap_performed is False
     with pytest.raises(TypeError, match="bootstrap_performed"):
         replace(report, bootstrap_performed=1)
+
+
+def _bare_report() -> UncertaintyReport:
+    """一份不带任何证据的报告，给只考字段校验的用例用。"""
+    return UncertaintyReport(
+        correlation_names=(),
+        correlation_matrix=np.empty((0, 0)),
+        profiles=(),
+        bootstrap_intervals=(),
+        bootstrap_failure_rate=0.0,
+        boundary_hits=(),
+        strong_correlations=(),
+        systematic_residual=False,
+        diagnostics=(),
+    )
+
+
+def test_uncertainty_report_derives_resample_count_from_actual_sampling_evidence() -> None:
+    """A display counter cannot diverge from successful and failed refit records."""
+    report = _bare_report()
+    assert report.bootstrap_sample_count == 0
+    sampling = bootstrap_evidence((("x", 0.0, 1.0),), failure_rate=0.01)
+    report = replace(
+        report,
+        correlation_names=sampling.parameter_names,
+        correlation_matrix=np.eye(1),
+        bootstrap_intervals=sampling.intervals,
+        bootstrap_failure_rate=sampling.failure_rate,
+        bootstrap_performed=True,
+        bootstrap_evidence=sampling,
+    )
+    assert report.bootstrap_sample_count == 400
+    assert report.bootstrap_evidence.successful_samples == 396
+    with pytest.raises(TypeError, match="bootstrap_sample_count"):
+        replace(report, bootstrap_sample_count=200)
+
+
+def test_a_report_that_ran_no_bootstrap_cannot_claim_resamples() -> None:
+    """没跑过自助抽样又报出次数，是两个字段互相打脸——界面读哪一个都会错。
+
+    ``bootstrap_performed=False`` 说的是「这一步没走」，此时唯一自洽的次数是 0。
+    """
+    unperformed = replace(_bare_report(), bootstrap_performed=False)
+
+    assert unperformed.bootstrap_sample_count == 0
+    with pytest.raises(TypeError, match="bootstrap_sample_count"):
+        replace(unperformed, bootstrap_sample_count=200)
+    with pytest.raises(ValueError, match="requires sampling evidence"):
+        replace(unperformed, bootstrap_performed=True)
 
 
 def test_parameter_profile_preserves_nan_objective_evidence() -> None:

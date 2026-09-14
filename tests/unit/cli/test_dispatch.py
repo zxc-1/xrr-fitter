@@ -40,6 +40,26 @@ def test_freeze_support_runs_before_any_command(monkeypatch) -> None:
     assert events == ["freeze", "dispatch"]
 
 
+def test_windows_stdio_is_reconfigured_for_utf8(monkeypatch) -> None:
+    class Stream:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, str]] = []
+
+        def reconfigure(self, **kwargs: str) -> None:
+            self.calls.append(kwargs)
+
+    stdout = Stream()
+    stderr = Stream()
+    monkeypatch.setattr(cli_main.os, "name", "nt")
+    monkeypatch.setattr(cli_main.sys, "stdout", stdout)
+    monkeypatch.setattr(cli_main.sys, "stderr", stderr)
+
+    cli_main._configure_stdio()
+
+    assert stdout.calls == [{"encoding": "utf-8", "errors": "backslashreplace"}]
+    assert stderr.calls == [{"encoding": "utf-8", "errors": "backslashreplace"}]
+
+
 def test_missing_project_file_is_an_input_error(tmp_path, capsys) -> None:
     missing = tmp_path / "absent.json"
 
@@ -107,7 +127,7 @@ def test_export_checks_sources_before_writing(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         commands.api,
         "export_result",
-        lambda project, output_dir, *, include_ort: (
+        lambda project, output_dir, *, formats: (
             calls.append("export"),
             _Manifest(),
         )[1],
@@ -144,7 +164,7 @@ def test_run_export_maps_expected_export_errors_to_input_error(export_error, mon
     monkeypatch.setattr(
         commands.api,
         "export_result",
-        lambda project, output_dir, *, include_ort: (_ for _ in ()).throw(export_error),
+        lambda project, output_dir, *, formats: (_ for _ in ()).throw(export_error),
     )
 
     with pytest.raises(Exception) as excinfo:
@@ -170,7 +190,7 @@ def test_export_errors_do_not_leak_tracebacks(monkeypatch, tmp_path, capsys) -> 
     monkeypatch.setattr(
         commands.api,
         "export_result",
-        lambda project, output_dir, *, include_ort: (_ for _ in ()).throw(ValueError("missing fitted result")),
+        lambda project, output_dir, *, formats: (_ for _ in ()).throw(ValueError("missing fitted result")),
     )
 
     assert cli_main.main(["export", str(project_path), str(tmp_path / "out")]) == exit_codes.INVALID_INPUT
@@ -179,7 +199,14 @@ def test_export_errors_do_not_leak_tracebacks(monkeypatch, tmp_path, capsys) -> 
     assert "Traceback" not in output.err
 
 
-def test_run_export_forwards_include_ort(monkeypatch, tmp_path, capsys) -> None:
+def test_run_export_translates_its_ort_flag_into_the_format_set(monkeypatch, tmp_path, capsys) -> None:
+    """``--ort`` stays a shell flag and becomes one more member of the format set.
+
+    The flag is the shape a shell user already scripted against, so it survives the
+    move to a format set; what must not survive is a second spelling of the default
+    tree. The command asks for :data:`api.DEFAULT_FORMATS` plus ORT, so a format added
+    to the default set reaches ``xrr-fitter export`` without touching this command.
+    """
     from xrr_fitter.cli import commands, exit_codes
 
     project_path = tmp_path / "p.json"
@@ -201,18 +228,18 @@ def test_run_export_forwards_include_ort(monkeypatch, tmp_path, capsys) -> None:
     monkeypatch.setattr(
         commands.api,
         "export_result",
-        lambda project, output_dir, *, include_ort: (
-            captured.update(include_ort=include_ort),
+        lambda project, output_dir, *, formats: (
+            captured.update(formats=formats),
             manifest,
         )[1],
     )
 
     assert cli_main.main(["export", str(project_path), str(tmp_path / "out")]) == exit_codes.SUCCESS
-    assert captured["include_ort"] is False
+    assert captured["formats"] == tuple(commands.api.DEFAULT_FORMATS)
     capsys.readouterr()
 
     assert cli_main.main(["export", str(project_path), str(tmp_path / "out"), "--ort"]) == exit_codes.SUCCESS
-    assert captured["include_ort"] is True
+    assert captured["formats"] == (*commands.api.DEFAULT_FORMATS, commands.api.ExportFormat.ORT)
     assert capsys.readouterr().out.splitlines() == [
         str(manifest.run_directory),
         f"manifest: {manifest.run_directory / record.path}",
@@ -237,7 +264,7 @@ def test_run_export_rejects_missing_manifest_record(monkeypatch, tmp_path) -> No
     monkeypatch.setattr(
         commands.api,
         "export_result",
-        lambda project, output_dir, *, include_ort: manifest,
+        lambda project, output_dir, *, formats: manifest,
     )
 
     with pytest.raises(commands.CommandError) as excinfo:
@@ -323,6 +350,85 @@ def test_mcmc_invalid_candidate_maps_to_input_error_without_traceback(monkeypatc
     )
     output = capsys.readouterr()
     assert "invalid MCMC candidate: d1/c1" in output.err
+    assert "Traceback" not in output.err
+
+
+def test_fit_save_failure_maps_to_input_error_without_traceback(monkeypatch, tmp_path, capsys) -> None:
+    from types import SimpleNamespace
+
+    from xrr_fitter.cli import commands, exit_codes
+
+    project_path = tmp_path / "p.json"
+    project_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(commands.api, "load_project", lambda path: commands.api.new_project())
+    monkeypatch.setattr(
+        commands.api,
+        "inspect_sources",
+        lambda project: commands.api.ProjectValidation(datasets=(), issues=()),
+    )
+    monkeypatch.setattr(
+        commands,
+        "_fit_result",
+        lambda project, arguments, sink: SimpleNamespace(
+            updated_project=object(),
+            warnings=(),
+            datasets=(),
+            cancelled=False,
+        ),
+    )
+    monkeypatch.setattr(
+        commands.api,
+        "save_project",
+        lambda project, path: (_ for _ in ()).throw(OSError("cannot write project")),
+    )
+
+    assert cli_main.main(["fit", str(project_path), "--output", str(tmp_path / "out.json")]) == exit_codes.INVALID_INPUT
+    output = capsys.readouterr()
+    assert "工程写回失败" in output.err
+    assert "cannot write project" in output.err
+    assert "Traceback" not in output.err
+
+
+def test_mcmc_save_failure_maps_to_input_error_without_traceback(monkeypatch, tmp_path, capsys) -> None:
+    from xrr_fitter.cli import commands, exit_codes
+
+    project_path = tmp_path / "p.json"
+    project_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(commands.api, "load_project", lambda path: object())
+    monkeypatch.setattr(
+        commands.api,
+        "inspect_sources",
+        lambda project: commands.api.ProjectValidation(datasets=(), issues=()),
+    )
+    monkeypatch.setattr(commands.api, "run_mcmc", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        commands.api,
+        "save_project",
+        lambda project, path: (_ for _ in ()).throw(OSError("cannot write MCMC project")),
+    )
+
+    assert (
+        cli_main.main(
+            [
+                "mcmc",
+                str(project_path),
+                "--dataset",
+                "d1",
+                "--candidate",
+                "c1",
+                "--walkers",
+                "4",
+                "--burn-in",
+                "0",
+                "--steps",
+                "10",
+            ]
+        )
+        == exit_codes.INVALID_INPUT
+    )
+    output = capsys.readouterr()
+    assert "工程写回失败" in output.err
+    assert "cannot write MCMC project" in output.err
     assert "Traceback" not in output.err
 
 

@@ -32,7 +32,7 @@ from xrr_fitter.evaluation import encode_physical_vector, least_squares_system
 from xrr_fitter.fit.joint_problem import compile_joint_problem
 from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.fit.problem import compile_fit_problem
-from xrr_fitter.model.parameters import ParameterReference, ParameterSetting, SharingRule
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterReference, ParameterSetting, SharingRule
 
 
 def _compiled_prior_context(kind, tau):
@@ -48,7 +48,9 @@ def _compiled_prior_context(kind, tau):
     data = prepared_data(size=theta.size, two_theta_deg=2 * theta, intensity_raw=counts)
     config = replace(base.config, scale_prior_enabled=True, scale_prior_tau_decades=tau)
     settings = tuple(
-        ParameterSetting(value.name, value.initial, value.lower, value.upper, locked=value.locked)
+        ParameterSetting(
+            value.name, value.initial, value.lower, value.upper, freedom=ParameterFreedom.from_locked(value.locked)
+        )
         for value in base.parameter_definitions
     )
     problem = compile_fit_problem(data, base.structure, base.instrument, config, settings)

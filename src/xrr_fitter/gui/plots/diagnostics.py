@@ -16,14 +16,21 @@ import numpy as np
 from matplotlib import font_manager
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.text import Text
 from matplotlib.ticker import AutoMinorLocator, FixedLocator, LogFormatter
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QTabWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QTabWidget, QVBoxLayout, QWidget
 
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.noise import residual_label
 from xrr_fitter.gui.plots.live import LiveReflectivityPlot
+
+# χ²ᵥ 只算一遍。残差卡的抬头和右栏判定卡的指标行读的是同一个数，两处各自实现会在某天
+# 一处改了自由度口径而另一处没改时，让同一屏出现两个「约化 χ²ᵥ」。判定卡先有这个函数，
+# 所以它留在原处（``gui.results`` 不引用 ``gui.plots``，这条边不成环）。
+from xrr_fitter.gui.results.verdict import free_parameter_count, reduced_chi_squared
 
 # The switchable diagnostic tabs, in display order. The log view leads because
 # reflectivity spans several decades: on a linear axis everything below the
@@ -32,12 +39,12 @@ from xrr_fitter.gui.plots.live import LiveReflectivityPlot
 TAB_SPECS = (
     ("log", "对数反射率", "查看仅应用显示下限的归一化反射率"),
     ("raw", "原始数据与模型", "查看存储角度、原始强度、拟合点和排除点"),
-    ("qz4", "qz⁴R", "查看当前候选 qz 网格上的 qz 四次方诊断"),
+    ("qz4", "qz⁴·R", "查看当前候选 qz 网格上的 qz 四次方诊断"),
     ("residual", "加权残差", "查看当前候选发布的全长加权残差"),
     ("candidates", "候选解比较", "比较全部保留候选及其审计状态"),
     ("residual_map", "残差热图", "按候选逐行比较加权残差，定位共同失配的 q 区间"),
     ("parameter_map", "参数热图", "按候选逐行比较归一化参数值，查看结构解的分歧"),
-    ("uncertainty", "相关性与区间", "查看当前候选拥有的相关和区间证据"),
+    ("uncertainty", "不确定度", "查看当前候选的参数相关矩阵、参数剖面与区间证据"),
     ("trend", "批量趋势", "查看多个数据集的厚度和周期趋势"),
 )
 
@@ -46,7 +53,21 @@ TAB_SPECS = (
 # pane that stays on screen whichever diagnostic tab is selected.
 COMPANION_SPEC = ("sld", "SLD 深度剖面", "查看当前候选的实部和虚部 SLD")
 
-VIEW_SPECS = (*TAB_SPECS, COMPANION_SPEC)
+# The weighted residual is both: 设计稿 帧① 的 ``.tabs`` 里有「加权残差」这一段，而
+# ``.canvas-body`` 同时钉着那张残差卡。两处指的是同一张图——两条曲线铺在四个数量级上，
+# 残差都已经出结构了还读作吻合，所以残差是它上面那一段的校验，不该要求读者离开那一段才
+# 看得到；而它同时也值得单独占满画布放大来看。一个控件只有一个父件，所以这张卡在 tab 页与
+# splitter 那一格之间搬家（见 ``panel._sync_residual_home``），永远只画一遍。
+RESIDUAL_KEY = "residual"
+
+# 「加权残差」这一页的正文就是那张搬来搬去的残差卡，所以 ``build_tabs`` 给它建一个空壳；
+# 壳留在 tab 里不动，卡才好在两处之间来回。
+RESIDUAL_TAB_HOST_NAME = "plotResidualTabHost"
+
+COMPANION_SPECS = (COMPANION_SPEC,)
+COMPANION_KEYS = (COMPANION_SPEC[0],)
+
+VIEW_SPECS = (*TAB_SPECS, *COMPANION_SPECS)
 
 # The four interactive reflectivity panes render live through pyqtgraph
 # (LiveReflectivityPlot); every other view stays matplotlib. build_tabs keys on
@@ -55,12 +76,68 @@ VIEW_SPECS = (*TAB_SPECS, COMPANION_SPEC)
 # draw_* path while the live dict takes the show_* path.
 LIVE_PANE_KEYS = ("log", "raw", "qz4", "residual")
 
-# The two semantic groups that split the nine diagnostic tabs into two stacked
-# QTabWidgets.  The reflectivity group holds the interactive pyqtgraph panes
-# showing curve agreement; the analysis group holds the static matplotlib views
-# answering comparative and statistical questions.
+# The two semantic groups that split the switchable diagnostic tabs into two
+# stacked QTabWidgets.  The reflectivity group holds the interactive pyqtgraph
+# panes showing curve agreement; the analysis group holds the static matplotlib
+# views answering comparative and statistical questions.
 REFLECTIVITY_KEYS = ("log", "raw", "qz4", "residual")
 ANALYSIS_KEYS = ("candidates", "residual_map", "parameter_map", "uncertainty", "trend")
+
+# 残差卡第二句在还没有拟合结果时的说法。写「尚未拟合」而不是把判读那一句留空：空着的
+# 副标题会读成「这次拟合没有可说的」，而实际是还没有一次拟合可读。
+RESIDUAL_UNFITTED_TEXT = "尚未拟合"
+# χ²ᵥ 算不出来时（残差全是拟合窗口外的 nan，或 ν ≤ 0）只报这一句，不补一个默认数字。
+RESIDUAL_CHI_UNAVAILABLE_TEXT = "χ²ᵥ 不可用"
+
+# The plot-card header for each reflectivity pane: a title naming both axes in
+# full, and a note on what the pane does to the data.  A pg pane can fit only an
+# axis width of text, so it carries no in-plot title of its own; the card header
+# spans the pane and is where the reading is spelled out.
+PLOT_CARD_SPECS = {
+    "log": ("反射率 R vs 入射角 2θ", "归一化"),
+    "raw": ("原始强度 vs 存储角度", "拟合点与排除点"),
+    "qz4": ("qz⁴·R vs 散射矢量 qz", "抑制菲涅尔衰减 · 非拟合数据"),
+    "residual": ("加权残差 vs 散射矢量 qz", RESIDUAL_UNFITTED_TEXT),
+}
+
+# 数据集名只冠在画数据的那三张卡上。残差卡的第二句写这次拟合的判读（χ²ᵥ 与有无系统性
+# 结构），不是「屏幕上是哪条曲线」——那个名字同一屏已经出现三遍了。
+DATASET_PREFIXED_CARDS = ("log", "raw", "qz4")
+
+# The residual card is a strip, not a second full plot: it reads as a band around
+# zero, and every pixel it takes comes off the curve it is judging.
+MIN_RESIDUAL_PLOT_H = 96
+
+# What each pane actually draws, as ``(shape, colour role, caption)`` entries for
+# ``theme.build_legend``.  These are read off ``live.py``'s managed items rather
+# than copied from the mockup: the fit window lands only on the log and raw panes
+# (``panel._draw_range``) and the clipped glyph only on the log pane, so keying
+# either one elsewhere would name a mark that never appears there.  The two glyph
+# entries carry their mark in the caption and so ask for no swatch.
+PLOT_CARD_LEGENDS = {
+    "log": (
+        ("dot", "observed", "观测数据"),
+        ("dash", "candidate", "当前拟合模型"),
+        ("box", "range", "拟合窗口"),
+        ("plain", "neutral", "▽ 截断点（低于本底）"),
+    ),
+    "raw": (
+        ("dot", "observed", "拟合点"),
+        ("dash", "candidate", "当前拟合模型"),
+        ("box", "range", "拟合窗口"),
+        ("plain", "neutral", "✕ 掩膜排除点"),
+    ),
+    "qz4": (
+        ("dot", "observed", "诊断变换数据"),
+        ("dash", "candidate", "当前拟合模型"),
+    ),
+    "residual": (
+        ("dot", "observed", "(数据−模型)/σ"),
+        # 残差已经除过 σ，所以那条浅带是能直接读的绝对刻度；图例给它一个名字，否则读者
+        # 只知道背景比别处浅一块。零参考线不进图例：一条穿过零的实线不需要解释。
+        ("box", "observed", "±1σ 区间"),
+    ),
+}
 
 DIAGNOSTIC_LABELS = {
     "gauss_hermite_unconverged": "Gauss-Hermite 积分未收敛",
@@ -236,8 +313,13 @@ def draw_empty(view: DiagnosticView, title: str, message: str = "暂无可用数
 
 
 def _axes(figure: Figure, key: str) -> object:
+    """建这只 tab 的绘图区；不确定度那只要两张，上下叠。
+
+    并肩排会把两张图各压到半栏宽，而上面那张是方阵——半栏宽的方阵留给刻度、图例和 colorbar
+    的余地只剩一百多像素。设计稿把它们排成两张各占满栏宽的卡，形状按那个来。
+    """
     if key == "uncertainty":
-        correlation, profile = figure.subplots(1, 2)
+        correlation, profile = figure.subplots(2, 1)
         profile.set_title("参数剖面与区间")
         return correlation
     return figure.subplots()
@@ -253,6 +335,28 @@ def current_plot_palette() -> theme.PlotPalette:
     force a palette onto that matplotlib path.
     """
     return theme.current_plot_palette()
+
+
+# An odd number of levels, so the lookup table holds a true middle index and the
+# neutral hue lands on zero rather than a step past it.
+DIVERGING_LEVELS = 257
+
+
+def diverging_colormap() -> LinearSegmentedColormap:
+    """A signed colour scale built from the palette's two diverging hues.
+
+    Matplotlib's built-in diverging maps are fixed at a light-background
+    contrast, so on the dark palette the negative end sinks toward the panel it
+    is drawn on. The neutral midpoint is what keeps a near-zero value from
+    reading as a weak signal of one sign. Resolved per draw, like every other
+    figure colour, so an appearance change reaches it on the next repaint.
+    """
+    palette = current_plot_palette()
+    return LinearSegmentedColormap.from_list(
+        "xrr_diverging",
+        (palette.diverging_neg, palette.diverging_mid, palette.diverging_pos),
+        N=DIVERGING_LEVELS,
+    )
 
 
 def apply_figure_palette(figure: Figure) -> theme.PlotPalette:
@@ -324,18 +428,171 @@ def _configure_tab_bar(tabs: QTabWidget) -> None:
     tab_bar.setElideMode(Qt.TextElideMode.ElideRight)
 
 
+def plot_card_subtitle(key: str, dataset_id: str | None) -> str:
+    """The plot card's caption: the active dataset, then what the pane shows.
+
+    The dataset leads because the card sits in the middle column while the name of
+    the active dataset is chosen in the left one; a reader comparing two exports
+    otherwise has to look across the window to answer "whose curve is this?".
+    With no dataset loaded there is nothing to name, so only the note remains
+    rather than a placeholder standing in for one.
+
+    残差卡不冠这个名字（见 ``DATASET_PREFIXED_CARDS``）：它的第二句是这次拟合的判读，
+    由 ``residual_card_subtitle`` 写。
+    """
+    note = PLOT_CARD_SPECS[key][1]
+    if dataset_id is None or key not in DATASET_PREFIXED_CARDS:
+        return note
+    return f"{dataset_id} · {note}"
+
+
+def _residual_metric_text(result: object, candidate: object) -> str:
+    if candidate.noise_model != "gaussian":
+        return f"J={candidate.objective:.4g} · {candidate.noise_model} · {residual_label(candidate)}"
+    chi_squared = reduced_chi_squared(candidate.weighted_residuals, free_parameter_count(result))
+    return RESIDUAL_CHI_UNAVAILABLE_TEXT if chi_squared is None else f"χ²ᵥ = {chi_squared:.3g}"
+
+
+def residual_card_subtitle(result: object | None, candidate: object | None) -> str:
+    """Only Gaussian residuals support χ²ᵥ; an unavailable diagnostic is not negative."""
+    if result is None or candidate is None:
+        return RESIDUAL_UNFITTED_TEXT
+    text = _residual_metric_text(result, candidate)
+    if text == RESIDUAL_CHI_UNAVAILABLE_TEXT:
+        return text
+    report = result.uncertainty
+    if report is None or report.candidate_id not in (None, candidate.candidate_id):
+        return text
+    clause = {
+        None: "系统性残差：未执行/不可用",
+        False: "无系统性结构",
+        True: "检出系统性结构",
+    }[report.systematic_residual]
+    return f"{text} · {clause}"
+
+
+def _plot_card(canvas: QWidget, key: str) -> QFrame:
+    """Wrap one reflectivity pane in the design's titled plot card and key.
+
+    The tab label and this title are not redundant: the label is a switch and has
+    to stay short enough for four of them to share a row, while the header has the
+    pane's full width and so can name both axes.  The key goes between them, above
+    the axes, because it explains marks that pyqtgraph's in-plot legend cannot --
+    the fit window and the clipped-point glyph are overlays, not curves.
+    """
+    name = f"plotCard:{key}"
+    card, body = theme.titled_card(None, name, PLOT_CARD_SPECS[key][0], plot_card_subtitle(key, None))
+    legend = (
+        _residual_legend(card)
+        if key == RESIDUAL_KEY
+        else theme.build_legend(card, f"{name}Legend", PLOT_CARD_LEGENDS[key])
+    )
+    body.addWidget(legend)
+    body.addWidget(canvas, 1)
+    return card
+
+
+def _residual_legend(card: QWidget) -> QWidget:
+    """Keep the Gaussian reference key independently hideable without rebuilding the pane."""
+    legend = QWidget(card)
+    legend.setObjectName("plotCard:residualLegend")
+    row = QHBoxLayout(legend)
+    row.setContentsMargins(0, 0, 0, 0)
+    observed, band = PLOT_CARD_LEGENDS[RESIDUAL_KEY]
+    observed_key = theme.build_legend(legend, "residualObservedLegend", (observed,))
+    label = next(label for label in observed_key.findChildren(QLabel) if label.text())
+    label.setObjectName("residualEvidenceLegendLabel")
+    row.addWidget(observed_key)
+    row.addWidget(theme.build_legend(legend, "residualSigmaLegend", (band,)))
+    return legend
+
+
+def _apply_residual_legend(root: QWidget, candidate: object | None) -> None:
+    label = root.findChild(QLabel, "residualEvidenceLegendLabel")
+    band = root.findChild(QWidget, "residualSigmaLegend")
+    if label is None or band is None:
+        return
+    gaussian = candidate is not None and candidate.noise_model == "gaussian"
+    text = "加权残差" if candidate is None else residual_label(candidate)
+    label.setText("(数据−模型)/σ" if gaussian else text)
+    band.setVisible(gaussian)
+
+
+def _residual_tab_host() -> QWidget:
+    """「加权残差」这一页的空壳，等那张唯一的残差卡搬进来。
+
+    壳本身不画任何东西：它存在的理由是让 tab 有一页可切，而正文由 ``panel`` 在切页时把
+    ``plotCard:residual`` 挪进来提供。没有这层壳，就得把卡直接 ``addTab`` 进去，卡也就
+    从此归 tab 所有，钉在 splitter 下半段的那一格便再也拿不到它。
+    """
+    host = QWidget()
+    host.setObjectName(RESIDUAL_TAB_HOST_NAME)
+    layout = QVBoxLayout(host)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+    return host
+
+
+def residual_tab_host(reflectivity_tabs: QTabWidget) -> QWidget:
+    """反射率 tab 组里那一页空壳。"""
+    host = reflectivity_tabs.widget(REFLECTIVITY_KEYS.index(RESIDUAL_KEY))
+    assert host is not None and host.objectName() == RESIDUAL_TAB_HOST_NAME
+    return host
+
+
+def build_residual_companion_pane(views: dict[str, DiagnosticView | LiveReflectivityPlot]) -> QFrame:
+    """The residual as a card that can live either in its tab or beneath the tabs.
+
+    It is the same plot card the tabbed views wear -- the residual did not stop
+    being one of them, it stopped being reachable only by leaving another.  The
+    floor is derived the way the SLD pane's is: ask the assembled card what its
+    header, key and margins need, then add a strip of plot worth reading.  A
+    hand-written total goes stale the moment a row is added to the header, and
+    the card then honours it by collapsing the axes instead of by growing.
+    """
+    card = _plot_card(views[RESIDUAL_KEY], RESIDUAL_KEY)
+    canvas_floor = views[RESIDUAL_KEY].minimumSizeHint().height()
+    chrome = max(card.minimumSizeHint().height() - canvas_floor, 0)
+    card.setMinimumHeight(chrome + MIN_RESIDUAL_PLOT_H)
+    return card
+
+
+def apply_plot_card_captions(
+    root: QWidget,
+    dataset_id: str | None,
+    result: object | None = None,
+    candidate: object | None = None,
+) -> None:
+    """Rewrite every reflectivity card's caption: dataset for three, verdict for one.
+
+    The caption is rewritten in place rather than rebuilt: the card holds a live pg
+    pane whose interaction state (the fit-range item, the current zoom) would be
+    discarded along with the widget.
+    """
+    _apply_residual_legend(root, candidate)
+    for key in PLOT_CARD_SPECS:
+        caption = root.findChild(QLabel, f"plotCard:{key}Subtitle")
+        if caption is None:
+            continue
+        text = residual_card_subtitle(result, candidate) if key == RESIDUAL_KEY else plot_card_subtitle(key, dataset_id)
+        caption.setText(text)
+        caption.setToolTip(text)
+
+
 def build_tabs() -> tuple[QTabWidget, QTabWidget, dict[str, DiagnosticView | LiveReflectivityPlot]]:
-    """Build two stacked tab groups and the companion SLD view.
+    """Build two stacked tab groups and the SLD companion view.
 
     The reflectivity group holds the four interactive pyqtgraph panes that show
     curve agreement; the analysis group holds the five static matplotlib views
     answering comparative and statistical questions.  Each group is a separate
-    QTabWidget so both can be visible simultaneously.
+    QTabWidget so both can be visible simultaneously.  The residual and SLD panes
+    are built here too but left unparented, for the caller to place beside the
+    tabs rather than inside them.
     """
     reflectivity_tabs = QTabWidget()
     reflectivity_tabs.setObjectName("reflectivityTabs")
     reflectivity_tabs.setAccessibleName("反射率诊断")
-    reflectivity_tabs.setToolTip("切换对数反射率、原始数据、qz⁴R 和加权残差视图")
+    reflectivity_tabs.setToolTip("切换对数反射率、原始数据、qz⁴·R 和加权残差视图")
     _configure_tab_bar(reflectivity_tabs)
 
     analysis_tabs = QTabWidget()
@@ -358,10 +615,16 @@ def build_tabs() -> tuple[QTabWidget, QTabWidget, dict[str, DiagnosticView | Liv
         canvas.setAccessibleDescription(description)
         canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         views[key] = view
-        if key == COMPANION_SPEC[0]:
+        if key in COMPANION_KEYS:
             continue
         target = reflectivity_tabs if key in REFLECTIVITY_KEYS else analysis_tabs
-        index = target.addTab(canvas, title)
+        if key == RESIDUAL_KEY:
+            page: QWidget = _residual_tab_host()
+        elif key in PLOT_CARD_SPECS:
+            page = _plot_card(canvas, key)
+        else:
+            page = canvas
+        index = target.addTab(page, title)
         target.setTabToolTip(index, f"{title} — {description}")
     return reflectivity_tabs, analysis_tabs, views
 

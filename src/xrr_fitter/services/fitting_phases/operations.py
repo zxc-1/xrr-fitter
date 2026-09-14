@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 
+from xrr_fitter.evaluation import EvaluationConstraintError
 from xrr_fitter.io.source import validate_sources as inspect_sources
 from xrr_fitter.model.analysis import McmcConfig
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
@@ -105,7 +106,7 @@ def preflight_fit(
             initial_joint_vector=initial_joint_vector,
             evaluate_joint_vector=evaluate_joint_vector,
         )
-    except Exception as error:
+    except (OSError, ValueError, TypeError, KeyError, EvaluationConstraintError) as error:
         return FitReadiness(False, str(error) or type(error).__name__)
     return FitReadiness(True, "ready")
 
@@ -158,7 +159,7 @@ def preflight_automatic_fit(
                 prepared.updated_dataset.parameter_priors,
             )
             _require_valid_initial(evaluate_declared_initial(prepared.problem))
-    except Exception as error:
+    except (OSError, ValueError, TypeError, KeyError, EvaluationConstraintError) as error:
         return FitReadiness(False, str(error) or type(error).__name__)
     return FitReadiness(True, "ready")
 
@@ -311,7 +312,10 @@ def _run_mcmc(
         candidate_id,
     )
 
-    def progress(completed: int, total: int) -> None:
+    def progress(completed: int, total: int, rate: float, scale: float) -> None:
+        # ``nfev`` stays absent: one MCMC step evaluates every walker once, so there
+        # is no separate function-evaluation count of the kind ``least_squares``
+        # reports. The step index is the iteration.
         if progress_callback is not None:
             progress_callback(
                 FitProgress(
@@ -321,6 +325,9 @@ def _run_mcmc(
                     total,
                     candidate.objective,
                     "MCMC sampling",
+                    iteration=completed,
+                    acceptance_rate=rate,
+                    step_size=scale,
                 )
             )
 

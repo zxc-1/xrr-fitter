@@ -14,7 +14,7 @@ from xrr_fitter.analysis.diagnostics import build_residual_evidence
 from xrr_fitter.evaluation import evaluate_model
 from xrr_fitter.fit.problem import compile_fit_problem, recompile_resampled_problem
 from xrr_fitter.model.diagnostic_calibration import DiagnosticRefit
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 
 
 def _engine():
@@ -31,7 +31,7 @@ def _locked_problem(*, seed=17, count=99, mode="poisson"):
             0.5 if item.name == "instrument.scale" else item.initial,
             item.lower,
             item.upper,
-            locked=True,
+            freedom=ParameterFreedom.FIXED,
         )
         for item in original.parameter_definitions
     )

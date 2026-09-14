@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from math import exp, isfinite
 
-from PySide6.QtCore import QRectF, QSignalBlocker, Qt
+from PySide6.QtCore import QRectF, QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QHeaderView,
@@ -15,8 +15,19 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
+from xrr_fitter.gui.parameters.grouping import (
+    caption_text,
+    display_scale,
+    row_layout,
+    uses_nm,
+)
 
-HEADERS = ("参数", "初值", "下限", "上限", "单位", "锁定", "先验")
+# Aliased because the table publishes a ``display_unit(name)`` method of its own,
+# which resolves a name through the visible declarations rather than taking one.
+from xrr_fitter.gui.parameters.grouping import display_unit as parameter_display_unit
+from xrr_fitter.gui.parameters.grouping import row_name as parameter_row_name
+
+HEADERS = ("参数", "初值", "下限", "上限", "先验")
 # Editable numeric columns: initial, lower, upper.
 VALUE_COLUMNS = (1, 2, 3)
 # Significant digits shown for a numeric cell.  A computed bound such as
@@ -33,42 +44,67 @@ EXACT_VALUE_ROLE = Qt.ItemDataRole.UserRole + 1
 # GenX marks parameters that have hit their limits.  Left unset (None) when the
 # bounds have no width, so a pinned parameter draws no misleading bar.
 VALUE_POSITION_ROLE = Qt.ItemDataRole.UserRole + 3
-# Per-column width policy.  Sizing every column to its contents clipped 单位 and
-# 锁定 outright, so one column has to absorb the surplus dock width.  That column
-# is the name: it carries the longest text and is the one a user reads to tell
-# rows apart.  Letting 先验 stretch as well split the surplus evenly between them,
-# and since most projects configure no priors at all, a blank column then held
-# half the width while the names elided to stubs -- 幂律背景幅值 B₂ and
-# 幂律背景指数 p both rendered as "幂律背..." and became indistinguishable.
+# Per-column width policy.  The three numeric columns render DISPLAY_SIGNIFICANT
+# digits of a computed limit and are sized to that, so one column has to absorb the
+# surplus dock width.  That column is the name: it carries the longest text, and now
+# also the lock and the unit, and is the one a user reads to tell rows apart.
+# Letting 先验 stretch as well split the surplus evenly between them, and since most
+# projects configure no priors at all, a blank column then held half the width while
+# the names elided to stubs -- 幂律背景幅值 B₂ and 幂律背景指数 p both rendered as
+# "幂律背..." and became indistinguishable.
+#
+# The name column is Interactive rather than Stretch because Stretch has no floor to
+# give it; ``_apply_name_width`` reproduces the surplus-absorbing behaviour and adds
+# the floor NAME_MIN_WIDTH_FRACTION documents.  The three bounds are Interactive for
+# the mirror-image reason: ``ResizeToContents`` sized them to the widest limit any row
+# happened to hold and would not give a pixel back, so ``_apply_bounds_widths`` sizes
+# them to the same hint and caps it.
 COLUMN_RESIZE_MODES = (
-    QHeaderView.ResizeMode.Stretch,
-    QHeaderView.ResizeMode.ResizeToContents,
-    QHeaderView.ResizeMode.ResizeToContents,
-    QHeaderView.ResizeMode.ResizeToContents,
-    QHeaderView.ResizeMode.ResizeToContents,
-    QHeaderView.ResizeMode.ResizeToContents,
+    QHeaderView.ResizeMode.Interactive,
+    QHeaderView.ResizeMode.Interactive,
+    QHeaderView.ResizeMode.Interactive,
+    QHeaderView.ResizeMode.Interactive,
     QHeaderView.ResizeMode.Interactive,
 )
-PRIOR_COLUMN = 6
+PRIOR_COLUMN = 4
+# Floor under the name column's share of the viewport.  Stretch hands that column
+# whatever the others leave, which is the right rule only while something is left:
+# at the right column's own 340px budget the six sized columns took 269px of a 213px
+# viewport, leaving the names 74px and three columns off-screen behind a horizontal
+# scrollbar.  Two of those columns existed to show a glyph -- 单位 held at most four
+# characters and 锁定 one checkbox, and each was floored at 44px by its own header --
+# so they now ride inside the name cell where the design draws them, which is what
+# lets the four remaining columns fit without scrolling.  The floor stays because the
+# bounds are not padding and cannot be squeezed below their digits.
+NAME_MIN_WIDTH_FRACTION = 0.35
 # Ceiling on the prior column's share of the viewport.  A configured prior such as
 # soft_range([0.1, 0.9], σ=0.05) is wider than any name, so sizing that column to
 # its contents let it take the width the names need; the summary that no longer
 # fits stays reachable through the cell's tooltip.
 PRIOR_MAX_WIDTH_FRACTION = 0.3
-# Shown on the lock cell of a constraint-driven row, where the checkbox is a
-# read-only indicator rather than a user toggle.
+# Shown on the name cell of a constraint-driven row, where the lock indicator is
+# read-only rather than a user toggle.
 CONSTRAINT_DRIVEN_TOOLTIP = "该参数由表达式约束驱动，数值不可手动编辑"
+# 名字格那个勾的三档。Qt 自带的 partial 档正好装「仅范围」，所以三态不需要额外一列或一个
+# 对话框；``ItemIsUserTristate`` 让点击在三档之间轮转。两张表按枚举建，读回时用反查，避免
+# 「勾的状态」和「档位」在两处各写一份对应关系。
+FREEDOM_CHECK_STATES: dict[api.ParameterFreedom, Qt.CheckState] = {
+    api.ParameterFreedom.FREE: Qt.CheckState.Unchecked,
+    api.ParameterFreedom.RANGE_ONLY: Qt.CheckState.PartiallyChecked,
+    api.ParameterFreedom.FIXED: Qt.CheckState.Checked,
+}
+FREEDOM_BY_CHECK_STATE: dict[Qt.CheckState, api.ParameterFreedom] = dict(
+    zip(FREEDOM_CHECK_STATES.values(), FREEDOM_CHECK_STATES.keys(), strict=True)
+)
+#: 三档各自说的是拟合器拿这个量怎么办。名字格的勾和检视区那三个圆点悬停出同一句话：同一个
+#: 档位在两处说法不同，读者会以为自己在调两件事。「仅范围」这句必须点明声明的上下限仍是硬
+#: 边界——省掉这半句，它就和「固定」读不出区别，也解释不了为什么值得单独占一档。
+FREEDOM_TOOLTIPS: dict[api.ParameterFreedom, str] = {
+    api.ParameterFreedom.FREE: "自由：在声明的上下限内自由拟合",
+    api.ParameterFreedom.RANGE_ONLY: "仅范围：优先待在这一行填的区间内，越界按 soft_range 先验渐进受罚，声明的上下限仍是硬边界",
+    api.ParameterFreedom.FIXED: "固定：不参与拟合，值停在初值上",
+}
 
-# Declarations already arrive clustered by owner -- every parameter of one layer is
-# adjacent, then the next layer, then the backing, then the instrument -- but
-# seventeen identically styled adjacent rows hid that structure completely, and ten
-# of those seventeen belong to the instrument rather than to the sample.  A caption
-# row opens each cluster so a user can tell which layer a 厚度 row belongs to
-# without hovering it.  Grouping by ``category`` instead would scatter one layer's
-# thickness, density and roughness across three distant blocks, which reads worse
-# than the flat table it replaced.
-BACKING_CAPTION = "基底"
-INSTRUMENT_CAPTION = "仪器"
 # A caption is identified by carrying no parameter name in UserRole, so nothing
 # else may be stored there; the group key lives in its own role.
 GROUP_KEY_ROLE = Qt.ItemDataRole.UserRole + 2
@@ -77,18 +113,10 @@ GROUP_KEY_ROLE = Qt.ItemDataRole.UserRole + 2
 CAPTION_ROW_NAME = ""
 
 
-def _uses_nm(definition: api.ParameterDefinition) -> bool:
-    return definition.name.endswith((".thickness_a", ".roughness_a"))
-
-
-def _display_scale(definition: api.ParameterDefinition) -> float:
-    return 0.1 if _uses_nm(definition) else 1.0
-
-
 def _prior_display_scale(definition: api.ParameterDefinition) -> float:
     # Roughness-fraction priors live on [0, 1], even though the corresponding
     # physical-value columns display the decoded roughness in nm.
-    return 1.0 if definition.transform == "roughness_fraction" else _display_scale(definition)
+    return 1.0 if definition.transform == "roughness_fraction" else display_scale(definition)
 
 
 def _number(value: float) -> str:
@@ -110,62 +138,16 @@ def _prior_body(prior: api.PriorSpec, scale: float) -> str:
     return ""  # uniform carries no scalar parameters
 
 
-def _prior_summary(definition: api.ParameterDefinition) -> str:
+def prior_summary(definition: api.ParameterDefinition) -> str:
+    """这个量的先验写成一行，没有先验时是空串。
+
+    表的最后一列和帧③「参数化」那枚徽章说的是同一件事，所以共用这一份：各写各的话，
+    同一个先验会在两处呈现出不同的形状，而两处都没标注自己用的是哪种写法。
+    """
     prior = definition.prior
     if prior is None:
         return ""
     return f"{prior.kind}({_prior_body(prior, _prior_display_scale(definition))})"
-
-
-def _group_key(definition: api.ParameterDefinition) -> str:
-    """Identify the layer, the backing or the instrument owning a declaration.
-
-    Component parameters are keyed on ``component.{index}`` rather than on the
-    leading segment alone, so a periodic block's per-layer and per-repeat rows stay
-    with the block that produced them.
-    """
-    head, _, _ = definition.name.partition(".")
-    if head != "component":
-        return head
-    return ".".join(definition.name.split(".")[:2])
-
-
-def _caption_text(key: str, captions: Mapping[str, str]) -> str:
-    """Name a group the way the structure editor names it.
-
-    A component's caption cannot be recovered from its rows: a periodic block named
-    ML contributes rows reading "W 厚度" and "Si 厚度", which share no token with
-    the block.  The owner therefore supplies the component names and the key is
-    only a fallback for callers that hold no structure.
-    """
-    if key == "instrument":
-        return INSTRUMENT_CAPTION
-    if key == "backing":
-        return BACKING_CAPTION
-    return captions.get(key, key)
-
-
-def _row_layout(
-    definitions: tuple[api.ParameterDefinition, ...],
-    captions: Mapping[str, str],
-) -> tuple[tuple[str, api.ParameterDefinition | None], ...]:
-    """Interleave group captions with the declarations they introduce.
-
-    A caption naming the only group present separates nothing, so a table holding
-    one group is left exactly as it was before grouping existed.
-    """
-    keys = tuple(dict.fromkeys(_group_key(definition) for definition in definitions))
-    if len(keys) < 2:
-        return tuple((_group_key(value), value) for value in definitions)
-    rows: list[tuple[str, api.ParameterDefinition | None]] = []
-    current: str | None = None
-    for definition in definitions:
-        key = _group_key(definition)
-        if key != current:
-            rows.append((key, None))
-            current = key
-        rows.append((key, definition))
-    return tuple(rows)
 
 
 class ValuePositionDelegate(QStyledItemDelegate):
@@ -198,12 +180,31 @@ class ValuePositionDelegate(QStyledItemDelegate):
 class ParameterTable(QTableWidget):
     """Render immutable declarations without owning persisted settings."""
 
+    # 整张表换了一批声明。跟着当前行走的东西（右栏那张卡的抬头）靠这个退回去：重填顺带清掉
+    # 的当前行是在 ``QSignalBlocker`` 里清的，``currentCellChanged`` 一声不响。发信方是表
+    # 自己，连接因此和表同生共死——挂到 ``model()`` 上的连接会在表的 Python 包装失效之后再
+    # 响一次，那一响什么都碰不得。
+    rows_reloaded = Signal()
+
     def __init__(self) -> None:
         super().__init__(0, len(HEADERS))
         self.setObjectName("parameterTable")
         self.setAccessibleName("拟合参数")
         self.setHorizontalHeaderLabels(HEADERS)
+        # The design's grid has no row-number gutter, and at a 340px column those
+        # 35px are a third of what the names get to work with.
+        self.verticalHeader().setVisible(False)
+        # ``QTableView`` wraps by default, and the rows stay one line tall: a name
+        # too wide for its column folded onto a second line that the row then cut
+        # in half, while its neighbours in the same column elided cleanly.  One
+        # behaviour for the whole column -- elide, with the full text in the
+        # tooltip, which is what _prior_item already does.
+        self.setWordWrap(False)
         header = self.horizontalHeader()
+        # Qt floors every section at 16px by default, which would leave the prior
+        # column occupying space while showing nothing; _apply_prior_width collapses
+        # it to zero when no declaration carries a prior, and this lets zero mean it.
+        header.setMinimumSectionSize(0)
         for column, mode in enumerate(COLUMN_RESIZE_MODES):
             header.setSectionResizeMode(column, mode)
         # The 初值 column carries a value-position bar behind its text; the bounds
@@ -211,10 +212,26 @@ class ParameterTable(QTableWidget):
         self.setItemDelegateForColumn(VALUE_COLUMNS[0], ValuePositionDelegate(self))
         self._definitions: tuple[api.ParameterDefinition, ...] = ()
         self._rows: tuple[tuple[str, api.ParameterDefinition | None], ...] = ()
+        # 档位落在 setting 上，声明里没有；表只画不存，所以按名字接一份只读映射。缺名字读作
+        # 「自由/固定」由声明的 ``locked`` 决定，这样没传映射的调用点行为不变。
+        self._freedom: dict[str, api.ParameterFreedom] = {}
 
     @property
     def definitions(self) -> tuple[api.ParameterDefinition, ...]:
         return self._definitions
+
+    def freedom_of(self, name: str) -> api.ParameterFreedom:
+        """这一行当前的档位。
+
+        没有持久化 setting 的参数只有声明上的 ``locked``，两态；有 setting 的按 setting 走。
+        表自己不存档位，读的是 :meth:`load` 收到的那份映射。
+        """
+        stored = self._freedom.get(name)
+        if stored is not None:
+            return stored
+        matches = tuple(item for item in self._definitions if item.name == name)
+        locked = bool(matches and (matches[0].locked or matches[0].constrained))
+        return api.ParameterFreedom.from_locked(locked)
 
     @property
     def row_names(self) -> tuple[str, ...]:
@@ -232,26 +249,62 @@ class ParameterTable(QTableWidget):
         *,
         expert_mode: bool,
         captions: Mapping[str, str] | None = None,
+        freedom: Mapping[str, api.ParameterFreedom] | None = None,
     ) -> None:
         visible = tuple(definition for definition in definitions if expert_mode or not definition.expert_only)
         names = {} if captions is None else captions
-        rows = _row_layout(visible, names)
+        self._freedom = {} if freedom is None else dict(freedom)
+        rows = row_layout(visible, names)
+        # 读者站在哪个量上，按名字记下来。行号记不得：重填的原因往往正是行的构成变了
+        # （换数据集、切高级选项），第 n 行装的会是另一份声明。
+        standing_on = self.current_name()
         blocker = QSignalBlocker(self)
         self.clearContents()
         self.setRowCount(len(rows))
         self._definitions = visible
         self._rows = rows
+        # ``row_layout`` emits no captions for a single group, and a row whose
+        # owner is named nowhere above it has to name it itself, so the prefix is
+        # only dropped under a caption that was actually drawn.
+        caption: str | None = None
         for row, (key, definition) in enumerate(rows):
             if definition is None:
-                self._render_caption(row, key, names)
+                caption = self._render_caption(row, key, names)
             else:
-                self._render_row(row, definition)
+                self._render_row(row, definition, caption=caption)
+        if standing_on is not None:
+            self._restore_current(standing_on)
         del blocker
+        # 重填顺带把当前行清成了 -1，而那是在 ``QSignalBlocker`` 里清的（否则每写一格都要走
+        # 一遍 ``itemChanged``），没人听得见；上面把它落回了同一个量，解除屏蔽之后在这里补
+        # 一声，让跟着当前行走的东西（帧③ 的抬头与那三档）知道该重读一次。
+        self.rows_reloaded.emit()
+        # A reload changes which declarations are present, so both widths are stale
+        # until they are recomputed -- and no resize follows a mere expert-mode
+        # toggle to recompute them for us.
         self._apply_prior_width()
+        self._apply_bounds_widths()
+        self._apply_name_width()
+
+    def _restore_current(self, name: str) -> None:
+        """把当前行落回 ``name`` 那一行；那个量不在了就不落。
+
+        不落回顶上那一行：抬头会改口说另一个量，而它读起来和「读者自己点了这一行」
+        一模一样。
+        """
+        for row, (_key, definition) in enumerate(self._rows):
+            if definition is not None and definition.name == name:
+                self.setCurrentCell(row, 0)
+                return
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
+        # Order matters: the prior column's width is one of the widths the name
+        # column measures itself against, and the bounds cap themselves against
+        # what is left once the prior has taken its share.
         self._apply_prior_width()
+        self._apply_bounds_widths()
+        self._apply_name_width()
 
     def _apply_prior_width(self) -> None:
         """Give the prior column only what its summaries need, capped by the share.
@@ -269,6 +322,52 @@ class ParameterTable(QTableWidget):
         cap = int(available * PRIOR_MAX_WIDTH_FRACTION)
         self.setColumnWidth(PRIOR_COLUMN, min(self.sizeHintForColumn(PRIOR_COLUMN), cap))
 
+    def _apply_bounds_widths(self) -> None:
+        """Size the three bounds to their digits, capped so none outgrows the name.
+
+        ``ResizeToContents`` gave each of them the widest limit any row happened to
+        hold and never handed a pixel back: at the inspector's own budget that was
+        47/63/69px of a 237px viewport, and the names -- which take whatever is left
+        -- ran on 58.  The column a reader scans to tell 幂律背景幅值 B₂ from
+        幂律背景指数 p was the narrowest thing on the screen.  A bound that overruns
+        its cell still reads in full in the editor it opens into; a name has no
+        editor to fall back on, so the bounds are the ones that give.
+        """
+        available = self.viewport().width() - self.columnWidth(PRIOR_COLUMN)
+        if available <= 0:
+            return
+        hints = [self.sizeHintForColumn(column) for column in VALUE_COLUMNS]
+        # Water-fill: the widest bound gives back a pixel at a time until what is
+        # left for the name is at least as wide as the widest bound still standing.
+        cap = max(hints, default=0)
+        while cap > 0 and available - sum(min(hint, cap) for hint in hints) < cap:
+            cap -= 1
+        for column, hint in zip(VALUE_COLUMNS, hints, strict=True):
+            self.setColumnWidth(column, min(hint, cap))
+
+    def _apply_name_width(self) -> None:
+        """Hand the name column the surplus, reclaiming it from 先验 before starving.
+
+        The name identifies the row and cannot be traded for a bound summary, so a
+        surplus under the floor is topped up out of the prior column, whose overflow
+        stays reachable on its own tooltip.  What the prior column cannot give is
+        taken as read: the other three columns hold editable bounds, and clipping one
+        of those to pad a name would put a value out of reach behind a horizontal
+        scrollbar -- which is the one thing a 340px column has no room to absorb.
+        """
+        available = self.viewport().width()
+        if available <= 0:
+            return
+        bounds = sum(self.columnWidth(column) for column in VALUE_COLUMNS)
+        floor = int(available * NAME_MIN_WIDTH_FRACTION)
+        surplus = available - bounds - self.columnWidth(PRIOR_COLUMN)
+        if surplus < floor:
+            self.setColumnWidth(PRIOR_COLUMN, max(available - bounds - floor, 0))
+            surplus = available - bounds - self.columnWidth(PRIOR_COLUMN)
+        width = max(surplus, 0)
+        if width != self.columnWidth(0):
+            self.setColumnWidth(0, width)
+
     def clear_parameters(self) -> None:
         self.load((), expert_mode=False)
 
@@ -280,12 +379,39 @@ class ParameterTable(QTableWidget):
 
     def display_values(self, name: str) -> tuple[float, float, float]:
         definition = self.definition(name)
-        scale = _display_scale(definition)
+        scale = display_scale(definition)
         return tuple(value * scale for value in (definition.initial, definition.lower, definition.upper))
+
+    def current_name(self) -> str | None:
+        """当前行是哪个参数，站在分组标题行或者没有当前行时是 ``None``。
+
+        分组标题行（「表面氧化层 · SiO₂」）的名字格里不存参数名，见 ``_parameter_item``：
+        它说的是归属，不是一个可以设自由/固定的量。
+        """
+        row = self.currentRow()
+        if row < 0:
+            return None
+        cell = self.item(row, 0)
+        if cell is None:
+            return None
+        name = cell.data(Qt.ItemDataRole.UserRole)
+        return None if name is None else str(name)
+
+    def current_quantity(self) -> str | None:
+        """当前行说的是哪个量，比如 ``厚度 d``。
+
+        量名取自行名格自己的文本，而不是另去声明里重算一遍：抬头、档位和行名从此不可能
+        各说各的。单位（``厚度 d（nm）`` 里那截全角括号）留给行——设计稿的抬头只写量名。
+        """
+        if self.current_name() is None:
+            return None
+        cell = self.item(self.currentRow(), 0)
+        quantity, _, _ = cell.text().partition("（")
+        return quantity or None
 
     def display_unit(self, name: str) -> str:
         definition = self.definition(name)
-        return "nm" if _uses_nm(definition) else definition.unit
+        return parameter_display_unit(definition)
 
     def entered_value(self, item: QTableWidgetItem) -> float:
         """Read a numeric cell back without losing digits the display rounded off.
@@ -308,10 +434,10 @@ class ParameterTable(QTableWidget):
         upper: float,
     ) -> tuple[float, float, float]:
         definition = self.definition(name)
-        scale = 10.0 if _uses_nm(definition) else 1.0
+        scale = 10.0 if uses_nm(definition) else 1.0
         return initial * scale, lower * scale, upper * scale
 
-    def _render_caption(self, row: int, key: str, captions: Mapping[str, str]) -> None:
+    def _render_caption(self, row: int, key: str, captions: Mapping[str, str]) -> str:
         """Open a group with a bold, inert row naming its owner.
 
         Only the name column is populated: leaving the numeric columns empty keeps
@@ -319,42 +445,57 @@ class ParameterTable(QTableWidget):
         ``_read_row`` rejects an incomplete row.  The row is unselectable so
         keyboard navigation lands on parameters only, and it holds no name in
         UserRole, which is what distinguishes it from a declaration.
+
+        The text is returned so the rows underneath can drop the owner it already
+        names.
         """
-        item = QTableWidgetItem(_caption_text(key, captions))
+        text = caption_text(key, captions)
+        item = QTableWidgetItem(text)
         item.setFlags(Qt.ItemFlag.ItemIsEnabled)
         item.setData(GROUP_KEY_ROLE, key)
         font = item.font()
         font.setBold(True)
         item.setFont(font)
         self.setItem(row, 0, item)
+        return text
 
-    def _render_row(self, row: int, definition: api.ParameterDefinition) -> None:
+    def _render_row(
+        self,
+        row: int,
+        definition: api.ParameterDefinition,
+        caption: str | None = None,
+    ) -> None:
         numbers = self._display_values(definition)
         values = (
-            definition.display_name,
+            _name_text(definition, caption=caption),
             _number(numbers[0]),
             _number(numbers[1]),
             _number(numbers[2]),
-            "nm" if _uses_nm(definition) else definition.unit,
         )
         # A constraint-driven value is computed from other parameters, so its
-        # numeric columns join the always-read-only display-name/unit columns;
-        # an unconstrained row keeps 1/2/3 editable exactly as before.
-        readonly_columns = (0, 1, 2, 3, 4) if definition.constrained else (0, 4)
+        # numeric columns join the always-read-only name column; an unconstrained
+        # row keeps 1/2/3 editable exactly as before.
+        readonly_columns = (0, 1, 2, 3) if definition.constrained else (0,)
         for column, value in enumerate(values):
             self.setItem(
                 row,
                 column,
-                _parameter_item(definition, column, value, numbers, readonly_columns),
+                _parameter_item(
+                    definition,
+                    column,
+                    value,
+                    numbers,
+                    readonly_columns,
+                    self.freedom_of(definition.name),
+                ),
             )
-        self.setItem(row, 5, _lock_item(definition))
-        self.setItem(row, 6, _prior_item(definition))
+        self.setItem(row, PRIOR_COLUMN, _prior_item(definition))
 
     def _display_values(
         self,
         definition: api.ParameterDefinition,
     ) -> tuple[float, float, float]:
-        scale = _display_scale(definition)
+        scale = display_scale(definition)
         return (
             definition.initial * scale,
             definition.lower * scale,
@@ -368,13 +509,14 @@ def _parameter_item(
     value: str,
     numbers: tuple[float, float, float],
     readonly_columns: tuple[int, ...],
+    freedom: api.ParameterFreedom,
 ) -> QTableWidgetItem:
     item = QTableWidgetItem(value)
     if column in readonly_columns:
         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
     if column == 0:
         item.setData(Qt.ItemDataRole.UserRole, definition.name)
-        item.setToolTip(f"{definition.display_name}\n({definition.name})")
+        _apply_lock(item, definition, freedom)
     if column in VALUE_COLUMNS:
         exact = numbers[column - VALUE_COLUMNS[0]]
         item.setData(EXACT_VALUE_ROLE, exact)
@@ -402,22 +544,66 @@ def _value_position(numbers: tuple[float, float, float]) -> float | None:
     return min(1.0, max(0.0, (initial - lower) / width))
 
 
-def _lock_item(definition: api.ParameterDefinition) -> QTableWidgetItem:
-    item = QTableWidgetItem()
-    flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-    if not definition.constrained:
-        flags |= Qt.ItemFlag.ItemIsUserCheckable
-    item.setFlags(flags)
-    item.setCheckState(
-        Qt.CheckState.Checked if definition.locked or definition.constrained else Qt.CheckState.Unchecked
-    )
+def _apply_lock(
+    item: QTableWidgetItem,
+    definition: api.ParameterDefinition,
+    freedom: api.ParameterFreedom,
+) -> None:
+    """Give the name cell the design's in-place lock glyph and its full tooltip.
+
+    Frame ① draws the lock inside the name cell -- ``<td>密度 ρ <span class="lock
+    on"></span></td>`` -- and frame ③ puts it in the field's own label.  A table
+    item's check indicator is exactly that glyph: it renders at the head of the
+    cell, before the text, and is toggled by clicking it, so the lock costs no
+    column of its own.
+
+    Three states need three indicator states, and Qt already has one: the partial
+    check is 「仅范围」, sitting between 自由 (unchecked) and 固定 (checked).  Granting
+    ``ItemIsUserTristate`` makes a click cycle 自由 → 仅范围 → 固定 in place, so the
+    middle gear is reachable without a second column or a dialog.
+
+    A constraint-driven row keeps the indicator as a read-only annotation: checked,
+    because the value is not free, but not user-checkable, because unlocking it
+    would have to delete the constraint.  The reason is appended to the tooltip the
+    cell already carries rather than replacing it -- the identifying name is what
+    tells two 厚度 rows apart and must not be traded for the explanation.
+    """
+    tooltip = f"{definition.display_name}\n({definition.name})"
     if definition.constrained:
-        item.setToolTip(CONSTRAINT_DRIVEN_TOOLTIP)
-    return item
+        item.setToolTip(f"{tooltip}\n{CONSTRAINT_DRIVEN_TOOLTIP}")
+        # A fresh item is user-checkable by default, so a driven row has to have the
+        # flag taken away rather than merely not granted.
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+        item.setCheckState(Qt.CheckState.Checked)
+        return
+    item.setToolTip(f"{tooltip}\n{FREEDOM_TOOLTIPS[freedom]}")
+    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsUserTristate)
+    item.setCheckState(FREEDOM_CHECK_STATES[freedom])
+
+
+def _name_text(definition: api.ParameterDefinition, *, caption: str | None) -> str:
+    """What the name cell reads: the quantity, its unit, and nothing else.
+
+    The unit rides with the quantity the way the design writes it -- ``<label>厚度
+    d（nm）</label>`` -- in fullwidth parens, and is omitted entirely when the
+    declaration is dimensionless: frame ① renders that unit cell as ``—``, and
+    ``（）`` around nothing would read as a value that failed to load.
+
+    The owner is dropped when a caption above the row already names it.  Frame ①'s
+    ``<tr class="grouprow">`` carries 表面氧化层 · SiO₂ and its rows carry only
+    ``厚度 d``, while the declarations arrive prefixed: a layer named film
+    contributes "film 厚度".  The match is exact and includes the separating space,
+    so 基底's group -- whose single row reads 基底连接界面粗糙度, one word rather
+    than a prefixed quantity -- keeps every character through the strip; it shortens
+    to ``粗糙度 σ`` one step later, by whole-name rewrite (``grouping.ROW_ALIASES``).
+    """
+    text = parameter_row_name(definition.display_name, caption)
+    unit = parameter_display_unit(definition)
+    return f"{text}（{unit}）" if unit else text
 
 
 def _prior_item(definition: api.ParameterDefinition) -> QTableWidgetItem:
-    summary = _prior_summary(definition)
+    summary = prior_summary(definition)
     item = QTableWidgetItem(summary)
     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
     if summary:

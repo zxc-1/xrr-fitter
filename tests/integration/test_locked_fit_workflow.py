@@ -29,7 +29,9 @@ def _locked_project(tmp_path: Path, mode: str, joint: bool) -> api.XrrProject:
         dataset_id = project.datasets[-1].dataset_id
         project = api.set_structure(project, dataset_id, original.structure)
         settings = tuple(
-            api.ParameterSetting(value.name, value.initial, value.initial, value.initial, locked=True)
+            api.ParameterSetting(
+                value.name, value.initial, value.initial, value.initial, freedom=api.ParameterFreedom.FIXED
+            )
             for value in api.describe_parameters(project, dataset_id)
         )
         project = api.set_parameter_settings(project, dataset_id, settings)

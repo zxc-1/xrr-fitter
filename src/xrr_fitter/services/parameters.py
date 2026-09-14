@@ -14,9 +14,11 @@ from xrr_fitter.model.parameters import (
     RESERVED_DATASET_ID,
     ConstraintRule,
     ParameterDefinition,
+    ParameterFreedom,
     ParameterPrior,
     ParameterReference,
     ParameterSetting,
+    PriorSpec,
     SharingRule,
     _iter_references,
     validate_constraint_stage_split,
@@ -268,6 +270,73 @@ def _reconciled_parameter_settings(
     return settings, priors, compatible
 
 
+def _soft_range_prior(
+    setting: ParameterSetting,
+    definition: ParameterDefinition,
+) -> ParameterPrior:
+    """Turn a 「仅范围」 interval into the prior that actually enforces it.
+
+    The interval is clamped to the declaration because priors are truncated to a
+    definition's bounds; an interval reaching past the box would lose its penalty
+    region on that side and read as flat. ``std`` is a tenth of the interval, so
+    drifting out by 10% of the width costs ``-0.5`` in log-prior (a nudge) while a
+    full width out costs ``-50`` (refused in practice but never a hard wall) — that
+    graded edge is the whole difference between 「仅范围」 and 「固定」.
+    """
+    low = max(setting.lower, definition.lower)
+    high = min(setting.upper, definition.upper)
+    return ParameterPrior(setting.name, PriorSpec("soft_range", (low, high, (high - low) / 10.0)))
+
+
+def _stale_range_priors(
+    definitions: tuple[ParameterDefinition, ...],
+    previous: Sequence[ParameterSetting],
+    settings: Sequence[ParameterSetting],
+) -> tuple[ParameterPrior, ...]:
+    """The priors this module derived for 「仅范围」 settings that have since moved.
+
+    Attaching without ever detaching leaves the interval enforced after the gear
+    stopped claiming it: editing the interval would keep penalising the old one (the
+    name already holds a prior, so no new one is attached), and switching back to
+    「自由」 would keep a range penalty the reader never wrote. Only a prior equal to
+    what this module would have derived is dropped, so a hand-authored distribution
+    is never mistaken for a derived one.
+    """
+    by_name = {definition.name: definition for definition in definitions}
+    current = {setting.name: setting for setting in settings}
+    return tuple(
+        _soft_range_prior(setting, by_name[setting.name])
+        for setting in previous
+        if setting.freedom is ParameterFreedom.RANGE_ONLY
+        and setting.name in by_name
+        and current.get(setting.name) != setting
+    )
+
+
+def _with_range_only_priors(
+    definitions: tuple[ParameterDefinition, ...],
+    previous: Sequence[ParameterSetting],
+    settings: Sequence[ParameterSetting],
+    priors: tuple[ParameterPrior, ...],
+) -> tuple[ParameterPrior, ...]:
+    """Keep the derived ``soft_range`` priors in step with the 「仅范围」 gear.
+
+    A prior the user authored themselves wins: 「保留/附加」 means an explicit
+    distribution is never overwritten by the derived one, so switching a parameter
+    to 「仅范围」 cannot quietly discard a hand-tuned prior.
+    """
+    by_name = {definition.name: definition for definition in definitions}
+    stale = _stale_range_priors(definitions, previous, settings)
+    kept = tuple(prior for prior in priors if prior not in stale)
+    held = {prior.name for prior in kept}
+    attached = tuple(
+        _soft_range_prior(setting, by_name[setting.name])
+        for setting in settings
+        if setting.freedom is ParameterFreedom.RANGE_ONLY and setting.name in by_name and setting.name not in held
+    )
+    return kept + attached
+
+
 def set_parameter_settings(
     project: XrrProject,
     dataset_id: str,
@@ -292,7 +361,10 @@ def set_parameter_settings(
     _, priors = _reconciled_parameter_sidecars(
         effective,
         (),
-        dataset.parameter_priors,
+        # 派生先验的裁剪源是声明本身：「仅范围」那一档不动搜索盒，所以拿 ``definitions`` 而不是
+        # 折进设置之后的 ``effective``——后者对另外两档已经换成了设置里的区间，重算不出当初存下
+        # 的那条先验，于是旧的一条会赖着不走。
+        _with_range_only_priors(definitions, dataset.parameter_settings, validated, tuple(dataset.parameter_priors)),
     )
     if validated == dataset.parameter_settings and priors == dataset.parameter_priors:
         return project

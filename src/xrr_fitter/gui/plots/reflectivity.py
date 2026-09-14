@@ -42,9 +42,7 @@ class ReflectivityPaneArrays:
     fit-dependent member empty so those panes clear rather than draw a bare data
     series as if it were a fit, matching the matplotlib placeholder state. The
     ``qz4_ylabel`` mirrors ``draw_qz4``'s dynamic axis label (it records the
-    scaling reference on overflow) and ``quality_caption`` mirrors the saved
-    objective, mode, and unit note, so both backends annotate identically. Those
-    labels are ``None`` without a candidate.
+    scaling reference on overflow) and is ``None`` without a candidate.
     """
 
     log_angles: np.ndarray
@@ -58,8 +56,8 @@ class ReflectivityPaneArrays:
     qz4: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None
     residual: tuple[np.ndarray, np.ndarray] | None
     residual_ylabel: str | None
+    residual_sigma_reference: bool
     qz4_ylabel: str | None
-    quality_caption: str | None
 
 
 def validate_plot_data(data: api.PreparedData, mask: object) -> np.ndarray:
@@ -111,7 +109,8 @@ def _prepared_dataset(
             dataset.beam,
             dataset.import_angle_offset_deg,
             dataset.column_mapping,
-            project.fit_config.noise_model,
+            angle_convention=dataset.angle_convention,
+            noise_model=project.fit_config.noise_model,
         )
     except (OSError, ValueError):
         return None
@@ -175,7 +174,7 @@ def prepare_project_plots(project: api.XrrProject) -> PreparedProjectPlots:
 
 
 def _quality_caption_text(candidate: object | None) -> str | None:
-    """Caption the saved objective and mode, without recomputing a statistic."""
+    """Caption the saved objective/mode/units on static exports, not live panes."""
     if candidate is None:
         return None
     return f"J={candidate.objective:.4g} · {candidate.noise_model} · 残差单位 {candidate.residual_unit}"
@@ -238,7 +237,7 @@ def draw_raw(
             np.asarray(candidate.model_normalized) * data.normalization,
             "--",
             color=theme.DATA_CANDIDATE,
-            label="当前候选模型",
+            label="当前拟合模型",
         )
     axes.set(title="原始数据与模型", xlabel="2θ (deg)", ylabel="原始强度")
     axes.legend()
@@ -255,10 +254,10 @@ def draw_log(
     axes.clear()
     angles = np.asarray(data.two_theta_deg, dtype=float)
     observed = np.maximum(np.asarray(data.intensity_normalized, dtype=float), data.r_floor)
-    axes.plot(angles, observed, "o", color=theme.DATA_OBSERVED, label="归一化数据")
+    axes.plot(angles, observed, "o", color=theme.DATA_OBSERVED, label="观测数据")
     if candidate is not None:
         model = np.maximum(np.asarray(candidate.model_normalized, dtype=float), data.r_floor)
-        axes.plot(angles, model, "--", color=theme.DATA_CANDIDATE, label="当前候选模型")
+        axes.plot(angles, model, "--", color=theme.DATA_CANDIDATE, label="当前拟合模型")
     axes.set(
         title="对数反射率",
         xlabel="2θ (deg)",
@@ -376,8 +375,8 @@ def reflectivity_pane_arrays(
             qz4=None,
             residual=None,
             residual_ylabel=None,
+            residual_sigma_reference=False,
             qz4_ylabel=None,
-            quality_caption=None,
         )
     model_normalized = np.asarray(candidate.model_normalized, dtype=float)
     qz = np.asarray(candidate.qz_a_inv, dtype=float)
@@ -395,8 +394,8 @@ def reflectivity_pane_arrays(
         qz4=(data_qz, data_values, model_qz, model_values),
         residual=(qz, np.asarray(candidate.weighted_residuals, dtype=float)),
         residual_ylabel=residual_label(candidate),
+        residual_sigma_reference=candidate.noise_model == "gaussian",
         qz4_ylabel=_qz4_axis_label(data_label, model_label),
-        quality_caption=_quality_caption_text(candidate),
     )
 
 
@@ -419,8 +418,8 @@ def draw_qz4(
     )
     axes = view.axes
     axes.clear()
-    axes.plot(data_qz, data_transform, "o", label="归一化数据")
-    axes.plot(model_qz, model_transform, "--", label="当前候选模型")
+    axes.plot(data_qz, data_transform, "o", label="观测数据")
+    axes.plot(model_qz, model_transform, "--", label="当前拟合模型")
     axis_label = _qz4_axis_label(ylabel, model_label)
     axes.set(title="qz⁴R 诊断变换（非拟合数据）", xlabel="qz (Å⁻¹)", ylabel=axis_label)
     axes.legend()

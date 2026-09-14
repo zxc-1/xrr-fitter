@@ -17,3 +17,7 @@
 # it to LF changes those bytes and breaks
 # `tools/sync_orso_suite.py --check` in a fresh clone.
 tests/fixtures/orso/** -text -whitespace
+
+# The hash-bound Qt unified diff contains literal space-only context lines.
+# Preserve its bytes; the Qt input manifest, not text normalization, validates it.
+tools/qt-cocoa/ownership.patch -text -whitespace

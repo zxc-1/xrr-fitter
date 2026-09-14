@@ -2,7 +2,10 @@
 
 The scanner checks module paths, symbols, package initializers, responsibility
 prefixes, permanent task-stage names, and Qt camelCase overrides. Qt methods
-are exempt only when an imported Qt base really exposes that method.
+are exempt only when a Qt base really exposes that method; the base may be
+imported from Qt directly, reached through a project widget that descends from
+Qt, or reached through a pyqtgraph graphics item, and a base without Qt
+ancestry exempts nothing.
 """
 
 from __future__ import annotations
@@ -23,6 +26,10 @@ CAP_WORDS = re.compile(r"_?[A-Z][A-Za-z0-9]*")
 UPPER_SNAKE_CASE = re.compile(r"[A-Z][A-Z0-9_]*")
 TASK_STAGE = re.compile(r"(?:^|_)task\d+(?:_|$)")
 QT_BASE_PREFIXES = ("PySide6.", "matplotlib.backends.backend_qtagg.")
+# 项目自己的 widget 和 pyqtgraph 的绘图项也可以当基类，但放行仍然只跟 Qt 血缘：解析出来的
+# 类得真有 Qt 祖先。所以 pg.AxisItem（一路继承到 QGraphicsWidget）算，pg.ColorMap 这类
+# 同库里的纯 Python 类不算——放宽跟的是「是不是 Qt 后代」，不是「出自哪个库」。
+QT_DESCENDANT_BASE_PREFIXES = ("xrr_fitter.", "pyqtgraph.")
 
 
 @dataclass(frozen=True)
@@ -101,6 +108,28 @@ def _import_object(qualified: str) -> object | None:
     return None
 
 
+def _has_qt_ancestor(value: type[object]) -> bool:
+    """Say whether a class really descends from Qt, by module of its ancestors."""
+    return any(getattr(ancestor, "__module__", "").startswith(QT_BASE_PREFIXES) for ancestor in value.__mro__)
+
+
+def _resolved_base(qualified: str | None) -> type[object] | None:
+    """Resolve a base class expression to a Qt class, or to nothing.
+
+    Qt 基类直接认；项目基类与 pyqtgraph 的绘图项要多走一步：导进来看它的 ``__mro__`` 里有
+    没有 Qt 祖先。解析得到但不是 Qt 后代的类照样返回 ``None``，所以它下面的 camelCase 仍然违规。
+    """
+    if not qualified:
+        return None
+    if qualified.startswith(QT_BASE_PREFIXES):
+        value = _import_object(qualified)
+        return value if isinstance(value, type) else None
+    if not qualified.startswith(QT_DESCENDANT_BASE_PREFIXES):
+        return None
+    value = _import_object(qualified)
+    return value if isinstance(value, type) and _has_qt_ancestor(value) else None
+
+
 def _class_qt_bases(
     node: ast.ClassDef,
     bindings: dict[str, str],
@@ -112,8 +141,8 @@ def _class_qt_bases(
         if qualified in local_bases:
             bases.extend(local_bases[qualified])
             continue
-        value = _import_object(qualified) if qualified and qualified.startswith(QT_BASE_PREFIXES) else None
-        if isinstance(value, type):
+        value = _resolved_base(qualified)
+        if value is not None:
             bases.append(value)
     return tuple(bases)
 
@@ -309,6 +338,89 @@ class DiagnosticCanvas(FigureCanvasQTAgg):
 
     assert ("DiagnosticCanvas", "closeEvent") in qt_overrides
     assert _symbol_violations(tree, qt_overrides) == ()
+
+
+def test_symbol_fixture_accepts_qt_override_from_a_pyqtgraph_item() -> None:
+    """pyqtgraph 的绘图项也是 Qt 控件，覆写它的虚函数同样只能照 Qt 的 camelCase 写。
+
+    ``AxisItem`` 一路继承到 ``QGraphicsWidget``。要改对数刻度的写法，pyqtgraph 留的钩子
+    叫 ``logTickStrings``，名字由它定：改成 snake_case 就不再是覆写，根本不会被调用。规则
+    原先按发行方认基类（PySide6 与 matplotlib 的 Qt 画布），于是同样是 Qt 后代的 pyqtgraph
+    被判成命名违规——那等于让门禁替库作者改方法名。
+    """
+    source = """
+import pyqtgraph as pg
+
+class DecadeAxis(pg.AxisItem):
+    def logTickStrings(self, values, scale, spacing):
+        return [str(value) for value in values]
+"""
+    tree = ast.parse(source)
+    qt_overrides = _qt_overrides(tree)
+
+    assert ("DecadeAxis", "logTickStrings") in qt_overrides
+    assert _symbol_violations(tree, qt_overrides) == ()
+
+
+def test_symbol_fixture_still_rejects_camelcase_on_a_pyqtgraph_base_without_qt_ancestry() -> None:
+    """放行跟着 Qt 血缘走，不跟着「基类出自哪个库」走。
+
+    ``pg.ColorMap`` 同在 pyqtgraph 里，却是个纯 Python 类，没有 Qt 祖先，它下面的
+    camelCase 方法不覆写任何东西。少了这条对照，「也认 pyqtgraph 基类」就成了按库名整批放宽。
+    """
+    source = """
+import pyqtgraph as pg
+
+class Ramp(pg.ColorMap):
+    def notAQtMethod(self):
+        return None
+"""
+    tree = ast.parse(source)
+    qt_overrides = _qt_overrides(tree)
+
+    assert qt_overrides == set()
+    assert [violation.name for violation in _symbol_violations(tree, qt_overrides)] == ["notAQtMethod"]
+
+
+def test_symbol_fixture_accepts_qt_override_through_a_project_widget_base() -> None:
+    """项目自己的 Qt 子类也算 Qt 基类，跨模块那一跳不能把血缘弄断。
+
+    ``ReorderableTree`` 继承 ``ContentSizedTree``，覆写的仍然是 ``QAbstractItemView``
+    的 ``dropEvent``。规则原先只跟两种基类：同文件里定义的，和直接从 Qt 导入的；中间隔
+    一个项目模块，真覆写就会被判成命名违规。
+    """
+    source = """
+from xrr_fitter.gui.sizing import ContentSizedTree
+
+class ReorderableTree(ContentSizedTree):
+    def dropEvent(self, event):
+        return event
+"""
+    tree = ast.parse(source)
+    qt_overrides = _qt_overrides(tree)
+
+    assert ("ReorderableTree", "dropEvent") in qt_overrides
+    assert _symbol_violations(tree, qt_overrides) == ()
+
+
+def test_symbol_fixture_still_rejects_camelcase_on_a_project_base_without_qt_ancestry() -> None:
+    """放行跟着 Qt 血缘走，不跟着「是项目里的类」走。
+
+    这条是上一条的对照：项目里的普通类没有 Qt 祖先，它下面的 camelCase 方法不是覆写任何
+    东西，仍然是违规。少了这条，「也解析项目基类」就等于把门禁悄悄放宽成谁都能 camelCase。
+    """
+    source = """
+from xrr_fitter.api import MaterialSpec
+
+class Decorated(MaterialSpec):
+    def notAQtMethod(self):
+        return None
+"""
+    tree = ast.parse(source)
+    qt_overrides = _qt_overrides(tree)
+
+    assert qt_overrides == set()
+    assert [violation.name for violation in _symbol_violations(tree, qt_overrides)] == ["notAQtMethod"]
 
 
 def test_naming_scans_exactly_the_same_python_files_as_radon() -> None:

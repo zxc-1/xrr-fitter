@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from math import isfinite
+
 INTERVAL_LABELS = {
     "loss_support": "损失支持（探索）",
     "likelihood_ratio": "似然比区间",
@@ -9,6 +11,20 @@ INTERVAL_LABELS = {
     "exploratory_bootstrap": "Bootstrap 样本（探索）",
     "unavailable": "不可用",
 }
+
+
+def correlation_unavailable_reason(report: object) -> str | None:
+    """A finite array alone is not evidence that covariance was estimated."""
+    evidence = report.covariance_evidence
+    if evidence is None:
+        return "缺少协方差证据"
+    if evidence.matrix is None:
+        return evidence.unavailable_reason
+    if not report.correlation_names:
+        return "参数轴为空"
+    if any(not isfinite(float(value)) for row in report.correlation_matrix for value in row):
+        return "相关矩阵含非有限值"
+    return None
 
 
 def interval_metadata(evidence: object) -> str:
@@ -53,10 +69,11 @@ def covariance_metadata(report: object) -> list[str]:
     evidence = report.covariance_evidence
     if evidence is None:
         return ["协方差：未执行/不可用"]
-    available = "可用" if evidence.matrix is not None else "不可用"
+    reason = correlation_unavailable_reason(report)
+    available = "可用" if reason is None else "不可用"
     parts = [f"协方差：{available}", f"方法：{evidence.method}", f"秩：{evidence.rank}/{len(evidence.names)}"]
-    if evidence.unavailable_reason is not None:
-        parts.append(f"不可用原因：{evidence.unavailable_reason}")
+    if reason is not None:
+        parts.append(f"不可用原因：{reason}")
     if evidence.unidentifiable_names:
         parts.append(f"不可辨识参数：{'、'.join(evidence.unidentifiable_names)}")
     return ["；".join(parts)]

@@ -87,7 +87,7 @@ def test_gradient_microslab_topology_parameter_cannot_be_unlocked() -> None:
             initial.structure,
             initial.instrument,
             initial.config,
-            (ParameterSetting(name, 20.0, 10.0, 30.0, locked=False),),
+            (ParameterSetting(name, 20.0, 10.0, 30.0, freedom=ParameterFreedom.FREE),),
         )
 
 

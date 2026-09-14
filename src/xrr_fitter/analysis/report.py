@@ -33,11 +33,9 @@ from xrr_fitter.analysis.derivatives import (
 )
 from xrr_fitter.analysis.mcmc import prior_conflicts, with_parameter_priors
 from xrr_fitter.analysis.profile_calibration import problem_profile_options
-from xrr_fitter.analysis.profiles import (
-    _evidence_focused_layout,
-    build_problem_profiles,
-    select_profile_names,
-)
+from xrr_fitter.analysis.profile_selection import evidence_focused_layout as _evidence_focused_layout
+from xrr_fitter.analysis.profile_selection import select_profile_names
+from xrr_fitter.analysis.profiles import build_problem_profiles
 from xrr_fitter.analysis.residual_calibration import (
     DiagnosticRefitter,
     calibrate_residuals,
@@ -509,6 +507,7 @@ def _enrich_search_result(
         stage_summaries=search_result.stage_summaries,
         region_labels=search_result.region_labels,
         region_weights=search_result.region_weights,
+        skipped_stages=search_result.skipped_stages,
     )
 
 
@@ -537,6 +536,7 @@ def _append_uncertainty_summary(
         stage_summaries=summaries,
         region_labels=search_result.region_labels,
         region_weights=search_result.region_weights,
+        skipped_stages=search_result.skipped_stages,
     )
 
 
@@ -560,6 +560,9 @@ def analyze_search_result(
     _validate_analysis_members(problem, search_result, bootstrap)
     _validate_analysis_ownership(problem, search_result, bootstrap)
     parameter_priors = _analysis_parameter_priors(parameter_priors)
+    if search_result.terminated_early:
+        _check_cancelled(cancelled)
+        return FitResult.from_incomplete_search(search_result)
     candidates = _stage_e_candidates(search_result)
     best = search_result.best_candidate
     if best is None:

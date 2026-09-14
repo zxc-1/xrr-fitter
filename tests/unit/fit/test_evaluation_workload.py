@@ -15,7 +15,7 @@ from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.data import BeamSpec, DataColumnMapping
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 
 
 def _masked_pair(mode="robust_log", layout="plain"):
@@ -162,7 +162,13 @@ def test_profile_scan_only_evaluates_fitted_physics_rows(monkeypatch) -> None:
 
     masked, _compact = _masked_pair()
     settings = tuple(
-        ParameterSetting(item.name, item.initial, item.lower, item.upper, locked=item.name != "instrument.scale")
+        ParameterSetting(
+            item.name,
+            item.initial,
+            item.lower,
+            item.upper,
+            freedom=ParameterFreedom.from_locked(item.name != "instrument.scale"),
+        )
         for item in masked.parameter_definitions
     )
     masked = compile_fit_problem(masked.data, masked.structure, masked.instrument, masked.config, settings)

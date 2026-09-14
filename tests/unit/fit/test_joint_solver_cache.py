@@ -21,7 +21,7 @@ from xrr_fitter.fit.joint_problem import compile_joint_problem
 from xrr_fitter.fit.joint_sharing import initial_joint_vector
 from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.fit.problem import compile_fit_problem
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 
 
 def _callbacks(problem, cancelled=None):
@@ -171,7 +171,7 @@ def test_all_locked_joint_system_has_the_correct_empty_column_axis() -> None:
     members = []
     for member in original.problems:
         settings = tuple(
-            ParameterSetting(item.name, item.initial, item.lower, item.upper, locked=True)
+            ParameterSetting(item.name, item.initial, item.lower, item.upper, freedom=ParameterFreedom.FIXED)
             for item in member.parameter_definitions
         )
         members.append(compile_fit_problem(member.data, member.structure, member.instrument, member.config, settings))

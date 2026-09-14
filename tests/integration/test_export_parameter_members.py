@@ -50,7 +50,9 @@ def test_nonshared_joint_exports_each_members_own_saved_sigma(tmp_path: Path, no
     project_path = tmp_path / "nonshared.xrrproj.json"
     api.save_project(fitted, project_path)
     loaded = api.load_project(project_path)
-    manifest = api.export_result(loaded, tmp_path / "exports", include_ort=True)
+    manifest = api.export_result(
+        loaded, tmp_path / "exports", formats=(*api.DEFAULT_FORMATS, api.ExportFormat.ORT, api.ExportFormat.CSV)
+    )
 
     _assert_nonshared_member_axis(loaded)
     for dataset in loaded.datasets:
@@ -77,7 +79,9 @@ def test_automatic_joint_exports_saved_sigma_without_persisted_project_sharing_r
     project_path = tmp_path / "automatic.xrrproj.json"
     api.save_project(fitted, project_path)
     loaded = api.load_project(project_path)
-    manifest = api.export_result(loaded, tmp_path / "exports", include_ort=True)
+    manifest = api.export_result(
+        loaded, tmp_path / "exports", formats=(*api.DEFAULT_FORMATS, api.ExportFormat.ORT, api.ExportFormat.CSV)
+    )
 
     assert loaded.batch_mode == "independent"
     assert loaded.sharing_rules == ()

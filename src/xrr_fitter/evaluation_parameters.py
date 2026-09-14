@@ -6,6 +6,7 @@ from functools import partial
 from math import isfinite
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 from xrr_fitter.evaluation_geometry import (
     _active_upper_tangent as _active_upper_tangent,
@@ -86,13 +87,13 @@ from xrr_fitter.model.parameters import (
 )
 
 
-def _readonly_vector(value: object) -> np.ndarray:
+def _readonly_vector(value: ArrayLike) -> np.ndarray:
     result = np.array(value, dtype=float, copy=True)
     result.setflags(write=False)
     return result
 
 
-def _validated_unit(problem: object, unit_vector: np.ndarray) -> np.ndarray:
+def _validated_unit(problem: FitEvaluationContext, unit_vector: np.ndarray) -> np.ndarray:
     unit = np.asarray(unit_vector, dtype=float)
     valid = all(
         (
@@ -164,7 +165,7 @@ def _initial_parameter_pair(
     return definition.name, definition.initial
 
 
-def _declared_values(problem: object) -> dict[str, float]:
+def _declared_values(problem: FitEvaluationContext) -> dict[str, float]:
     return dict(map(_initial_parameter_pair, problem.parameter_definitions))
 
 
@@ -176,7 +177,7 @@ def _zero_jacobian_pair(
 
 
 def _decode_nonrough_values(
-    problem: object,
+    problem: FitEvaluationContext,
     unit: np.ndarray,
     values: dict[str, float],
     *,

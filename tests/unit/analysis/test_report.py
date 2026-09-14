@@ -51,7 +51,7 @@ from xrr_fitter.model.fitting import (
     FitStageSummary,
 )
 from xrr_fitter.model.instrument import InstrumentSpec, PhysicsDiagnostic
-from xrr_fitter.model.parameters import ParameterSetting, PriorSpec
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting, PriorSpec
 from xrr_fitter.model.provenance import (
     bootstrap_provenance_sha256,
     fit_search_provenance_sha256,
@@ -81,7 +81,7 @@ def _problem(*, thickness_a: float = 20.0):
             definition.initial,
             definition.lower,
             definition.upper,
-            locked=definition.name not in targets,
+            freedom=ParameterFreedom.from_locked(definition.name not in targets),
         )
         for definition in initial.parameter_definitions
     )
@@ -132,7 +132,7 @@ def _angle_offset_problem():
             definition.initial,
             definition.lower,
             definition.upper,
-            locked=definition.name != "instrument.angle_offset_deg",
+            freedom=ParameterFreedom.from_locked(definition.name != "instrument.angle_offset_deg"),
         )
         for definition in initial.parameter_definitions
     )

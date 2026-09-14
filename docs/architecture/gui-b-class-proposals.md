@@ -99,9 +99,17 @@
 
 ## B1 可停靠面板布局
 
-> **状态：已落地。** 五个 dock + 绘图作中央控件；参数/拟合/结果改为 tab 而非纵向
-> 堆叠（三者共享右侧高度时各自都会溢出）。布局等于构造默认时持久化为空串，
-> 因此仅显示窗口不会让项目变 dirty；默认基线在首次 show 时取得。
+> **状态：已落地后回退。** 曾以五个 dock + 绘图作中央控件实现；现按
+> `deliverables/xrr-fitter-gui-redesign.html` 的 `grid-template-columns:264px 1fr
+> 340px` 改回固定三栏——一个 `QSplitter` 作中央控件，三列为 `navigationColumn` /
+> `canvasColumn` / `inspectorColumn`，无标题栏、不可浮动、不可折叠。下文保留原提案
+> 作为记录，其"设计方案"一节描述的是已被替换的形态。
+>
+> 回退的理由是设计稿本身：dock 给每列加了标题栏和关闭按钮，把右栏三节压成 tab
+> 一次只看一节，并允许整体被拖散——三者设计稿都没画。B1 唯一留下的是「视图 ▸
+> 重置布局」（固定栏也需要一条回到默认宽度的路），以及 `dock_state` 字段与
+> `api.set_dock_state`：两者保留以维持旧文件可读与 api 向后兼容，GUI 已不再读写，
+> 带 `dock_state` 的旧项目按上面的列宽默认打开。
 
 ### 动机
 当前三列固定，`setChildrenCollapsible(False)` 且三列均不可折叠，无法适应"这一步只
@@ -146,6 +154,17 @@ Refl1D 已从固定四象限迁移到 golden-layout 可拖拽布局。
 - 损坏或跨版本不兼容的 `dock_state` 回落默认布局且不报错。
 - 旧项目文件（无 `dock_state`）打开正常。
 - 复杂度门禁不退化；无障碍名称与键盘顺序在新布局下重新覆盖。
+
+### 回退后实际生效的验收标准
+- 中央控件是 `workspaceSplitter`，三列顺序等于 `window_layout.COLUMN_NAMES`，无一列
+  可折叠到零宽。
+- 侧栏宽度是**预算**不是偏好：`_scrolled` 关掉横向滚动，因此列内面板的
+  `minimumSizeHint().width()` 必须小于该列预算，否则内容被裁掉且没有滚动条可达。
+  这就是 `test_workspace_columns.py` 的 `fits_its_budget` 系列在量的东西。
+- 列宽随项目保存/打开往返一致（`workspace_splitter_sizes` 恢复语义，成为唯一的列宽
+  状态）；旧项目的 `dock_state` 被忽略而不报错。
+- 三列与右栏三张 section card 各自带无障碍名称——dock 会自报标题，纯 `QWidget` 列和
+  `QFrame` 卡片不会。
 
 ---
 

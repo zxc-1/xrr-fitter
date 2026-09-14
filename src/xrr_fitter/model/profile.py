@@ -38,6 +38,7 @@ class ParameterProfile:
     unavailable_reason: str | None = None
     delta_total: float | None = None
     objective_point_count: int = 1
+    objective_threshold: float | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -61,6 +62,8 @@ class ParameterProfile:
         self._validate_confidence_level()
 
     def _validate_threshold(self) -> None:
+        if self.objective_threshold is not None and not isfinite(self.objective_threshold):
+            raise ValueError("profile objective threshold must be finite")
         _evidence_count(self.objective_point_count, "objective_point_count")
         if self.objective_point_count == 0:
             raise ValueError("objective_point_count must be positive")

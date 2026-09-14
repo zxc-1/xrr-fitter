@@ -12,6 +12,7 @@ from xrr_fitter.model.fitting import (
     candidate_selection_objective,
 )
 from xrr_fitter.model.parameters import SharingRule
+from xrr_fitter.model.progress import search_terminated_early
 
 from .common import (
     AutomaticPreparedResult,
@@ -34,6 +35,11 @@ from .joint_selection import (
     _validated_automatic_joint_inputs,
 )
 from .sharing import automatic_sharing_rules
+
+
+def _joint_search_terminated(results: tuple[FitResult, ...]) -> bool:
+    """A user-ended joint attempt is terminal, not evidence for another retry."""
+    return any(search_terminated_early(result.skipped_stages) for result in results)
 
 
 def _qualified_joint_refinement(
@@ -90,6 +96,8 @@ def _qualified_joint_refinement(
     if len(joint_results) != len(joint_prepared):
         raise ValueError("automatic joint result batch size mismatch")
     material_rules = _material_only_rules(initial_rules)
+    if _joint_search_terminated(joint_results):
+        return joint_prepared, joint_results, decisions, material_rules
     if _joint_result_conflicts(
         joint_prepared,
         prefits,
@@ -197,6 +205,9 @@ def _retry_isolated_results(
 ) -> tuple[AutomaticPreparedResult, ...]:
     for index, isolation_reason in enumerate(isolation_reasons):
         if isolation_reason is None:
+            continue
+        if search_terminated_early(prefits[index].fit_result.skipped_stages):
+            accepted[index] = prefits[index]
             continue
         isolated = _locked_material_prepared(
             prepared[index],

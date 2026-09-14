@@ -93,7 +93,7 @@ def test_gui_mode_selection_roundtrips_the_config_and_user_mask(qtbot, tmp_path,
 
 @pytest.mark.parametrize(
     ("mode", "sigma", "fractional", "error"),
-    (("gaussian", False, False, "sigma"), ("poisson", True, True, "integer")),
+    (("gaussian", False, False, "sigma"), ("poisson", True, True, "整数")),
 )
 def test_invalid_noise_declaration_blocks_before_worker_launch(
     qtbot, tmp_path, monkeypatch, mode, sigma, fractional, error
@@ -177,13 +177,16 @@ def test_import_caller_previews_actual_mode_without_dropping_valid_observations(
     import_data = api.import_data
 
     def import_with_record(*args, **kwargs):
-        modes.append(kwargs["noise_model"])
-        return import_data(*args, **kwargs)
+        modes.append(kwargs.get("noise_model"))
+        data = import_data(*args, **kwargs)
+        inspected.append(tuple(data.intensity_raw[:3]))
+        return data
 
     def inspect_dialog(dialog):
         dialog.select_beam_kind("monochromatic")
         dialog.set_column_mapping(intensity_sigma=2)
-        inspected.extend(dialog._preview_curve.getData()[1][:3])
+        assert dialog.preview_table.item(0, 3).text() == "40"
+        assert dialog.preview_table.item(0, 4).text() == "✓ 就绪"
         return QDialog.DialogCode.Rejected
 
     monkeypatch.setattr(api, "import_data", import_with_record)
@@ -191,7 +194,7 @@ def test_import_caller_previews_actual_mode_without_dropping_valid_observations(
     panel._confirm_import((source,), folder=False)
 
     assert modes and set(modes) == {mode}
-    assert inspected == [offset, offset + 1, offset + 2]
+    assert inspected[-1] == (offset, offset + 1, offset + 2)
     assert panel.document.project is value
 
 
@@ -201,18 +204,28 @@ def test_gaussian_column_mapping_revalidates_the_visible_preview(qtbot, tmp_path
     panel = DataPanel(ProjectDocument(value))
     qtbot.addWidget(panel)
     states = []
+    import_data = api.import_data
+
+    def import_with_record(*args, **kwargs):
+        data = import_data(*args, **kwargs)
+        states.append(float(data.intensity_raw[0]))
+        return data
 
     def inspect_dialog(dialog):
         dialog.select_beam_kind("monochromatic")
-        states.append(float(dialog._preview_curve.getData()[1][0]))
+        assert dialog.preview_table.item(0, 3).text() == "40"
+        dialog.set_column_mapping(intensity_sigma=2)
+        assert dialog.preview_table.item(0, 4).text() == "✓ 就绪"
         dialog.set_column_mapping(intensity=2, intensity_sigma=1)
-        states.append(float(dialog._preview_curve.getData()[1][0]))
+        assert dialog.preview_table.item(0, 2).text() == "1 → 3 · σ:2"
+        assert dialog.preview_table.item(0, 4).text() == "✓ 就绪"
         return QDialog.DialogCode.Rejected
 
+    monkeypatch.setattr(api, "import_data", import_with_record)
     monkeypatch.setattr(ImportDialog, "exec", inspect_dialog)
     panel._confirm_import((source,), folder=False)
 
-    assert states == [1200.0, 5.0]
+    assert states[-2:] == [1200.0, 5.0]
 
 
 def test_unavailable_first_preview_does_not_block_other_batch_files(qtbot, tmp_path, monkeypatch):
@@ -225,13 +238,13 @@ def test_unavailable_first_preview_does_not_block_other_batch_files(qtbot, tmp_p
 
     def accept_available(dialog):
         dialog.select_beam_kind("monochromatic")
-        observed.append(dialog._preview_error.text())
+        observed.append(dialog.preview_table.item(0, 4).text())
         return QDialog.DialogCode.Accepted if dialog.import_button().isEnabled() else QDialog.DialogCode.Rejected
 
     monkeypatch.setattr(ImportDialog, "exec", accept_available)
     panel._confirm_import((broken, good), folder=False)
 
-    assert "预览不可用" in observed[0]
+    assert observed[0] == "✕ 无数据列"
     assert tuple(item.dataset_id for item in panel.document.project.datasets) == ("P2",)
     assert panel.failure_table.rowCount() == 1
     assert panel.failure_table.item(0, 0).text() == broken.name

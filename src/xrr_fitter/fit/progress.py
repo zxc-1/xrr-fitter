@@ -18,8 +18,18 @@ def emit_progress(
     best: float,
     message: str,
     preview: FitCandidate | None = None,
+    *,
+    iteration: int | None = None,
+    nfev: int | None = None,
+    acceptance_rate: float | None = None,
+    step_size: float | None = None,
 ) -> None:
-    """Publish progress with a bounded curve when an incumbent changes."""
+    """Publish progress with a bounded curve when an incumbent changes.
+
+    The solver telemetry keywords are forwarded verbatim: a stage passes only the
+    counters it actually holds, and whatever it omits stays ``None`` rather than
+    being inferred from the ones it did pass.
+    """
     if callback is None:
         return
     axes = (None, None) if preview is None else downsampled_preview(preview.qz_a_inv, preview.model_normalized)
@@ -33,6 +43,10 @@ def emit_progress(
             message,
             preview_qz_a_inv=axes[0],
             preview_model_normalized=axes[1],
+            iteration=iteration,
+            nfev=nfev,
+            acceptance_rate=acceptance_rate,
+            step_size=step_size,
         )
     )
 

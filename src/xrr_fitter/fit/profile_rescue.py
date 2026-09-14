@@ -20,10 +20,10 @@ from xrr_fitter.fit.candidates import (
     materially_improves,
 )
 from xrr_fitter.fit.local_budget import optimizer_evidence
-from xrr_fitter.fit.local_search import SearchCancelled, solve_local
+from xrr_fitter.fit.local_search import LocalSearchResult, SearchCancelled, solve_local
 from xrr_fitter.fit.tasking import TaskRunner
 from xrr_fitter.fit.tasking import run_tasks as _run_tasks
-from xrr_fitter.model.fitting import FitCandidate
+from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext
 
 
 def _poll(cancelled: Callable[[], bool] | None) -> None:
@@ -44,7 +44,7 @@ def _profile_rescue_seed(child_seed: int, seed_index: int) -> int:
 
 
 def _profile_rescue_start(
-    problem: object,
+    problem: FitEvaluationContext,
     center: np.ndarray,
     child_seed: int,
     seed_index: int,
@@ -71,13 +71,13 @@ def _profile_rescue_start(
 # Profile rescue paths
 #
 def _profile_rescue_paths(
-    problem: object,
+    problem: FitEvaluationContext,
     center: np.ndarray,
     child_seeds: tuple[int, ...],
     maximum: int,
     cancelled: Callable[[], bool] | None,
     task_runner: TaskRunner | None,
-) -> tuple[object, ...] | None:
+) -> tuple[LocalSearchResult, ...] | None:
     """Run every distinct rescue start without publishing partial evidence.
 
     Duplicate or malformed starts reject the continuation before local search.
@@ -112,11 +112,11 @@ def _profile_rescue_paths(
 # Solve profile rescue path
 #
 def _solve_profile_rescue_path(
-    problem: object,
+    problem: FitEvaluationContext,
     start: np.ndarray,
     maximum: int,
     cancelled: Callable[[], bool] | None,
-):
+) -> LocalSearchResult:
     _poll(cancelled)
     return solve_local(problem, start, max_nfev=maximum, cancelled=cancelled)
 
@@ -124,7 +124,7 @@ def _solve_profile_rescue_path(
 #
 # Valid profile rescue result
 #
-def _valid_profile_rescue_result(problem: object, result: object) -> bool:
+def _valid_profile_rescue_result(problem: FitEvaluationContext, result: LocalSearchResult) -> bool:
     """Check one local result's coordinate layout and finite evaluation."""
     unit = np.asarray(result.unit_vector, dtype=float)
     evaluation = result.evaluation
@@ -157,9 +157,9 @@ def _profile_rescue_evidence(original, result, child_seed, seed_index, maximum):
 # Publish profile rescue
 #
 def _publish_profile_rescue(
-    problem: object,
+    problem: FitEvaluationContext,
     originals: tuple[FitCandidate, ...],
-    refined: tuple[object, ...],
+    refined: tuple[LocalSearchResult, ...],
     parameter_name: str,
     child_seeds: tuple[int, ...],
     maximum: int,
@@ -205,7 +205,7 @@ def _publish_profile_rescue(
 # Reconverge profile basin
 #
 def reconverge_profile_basin(
-    problem: object,
+    problem: FitEvaluationContext,
     stage_candidates: tuple[FitCandidate, ...],
     center_unit: np.ndarray,
     child_seeds: tuple[int, ...],

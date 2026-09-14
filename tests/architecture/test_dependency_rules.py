@@ -104,7 +104,7 @@ ALLOWED = {
     "evaluation": {"model", "physics", "evaluation"},
     "fit": {"fit", "model", "physics", "evaluation"},
     "analysis": {"analysis", "model", "physics", "evaluation"},
-    "services": {"services", "model", "io", "physics", "fit", "analysis"},
+    "services": {"services", "model", "io", "physics", "fit", "analysis", "evaluation"},
     "api": {"model", "services"},
     "gui": {"gui", "api"},
     "cli": {"cli", "api"},
@@ -147,12 +147,12 @@ THIRD_PARTY_OWNER_ALLOWLIST = {
     "PySide6": {"gui"},
 }
 THIRD_PARTY_MODULE_ALLOWLIST = {
-    "numpy": {"services.datasets", "gui.plots", "gui.data.import_dialog"},
+    "numpy": {"services.datasets", "gui.plots"},
     "periodictable": {"physics.materials"},
     "pandas": {"io.export_tables"},
     "xlsxwriter": {"io.export_tables"},
     "matplotlib": {"io.export_plots", "gui.plots"},
-    "pyqtgraph": {"gui.plots.live", "gui.data.import_dialog"},
+    "pyqtgraph": {"gui.plots.live"},
     "jsonschema": {"io.orso"},
     "orsopy": {"io.orso"},
 }

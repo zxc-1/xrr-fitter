@@ -44,7 +44,7 @@ def _fast_single_project() -> api.XrrProject:
             definition.initial,
             definition.lower if definition.name == free_name else definition.initial,
             definition.upper if definition.name == free_name else definition.initial,
-            locked=definition.name != free_name,
+            freedom=api.ParameterFreedom.from_locked(definition.name != free_name),
         )
         for definition in definitions
     )

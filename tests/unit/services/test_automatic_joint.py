@@ -23,7 +23,7 @@ from xrr_fitter.model.automation import (
 )
 from xrr_fitter.model.fitting import FitConfig, FitSearchResult
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterReference, ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterReference, ParameterSetting
 from xrr_fitter.services import fitting
 from xrr_fitter.services.fitting_phases import joint_execution, sharing
 from xrr_fitter.services.materials import automatic_structure
@@ -49,7 +49,7 @@ def _prepared(
                 1e-6,
                 0.0,
                 20e-6,
-                locked=index not in free_imag,
+                freedom=ParameterFreedom.from_locked(index not in free_imag),
             )
             for index in released_imag
         ),

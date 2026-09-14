@@ -33,6 +33,7 @@ from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
     ConstraintNode,
     ConstraintRule,
+    ParameterFreedom,
     ParameterReference,
     ParameterSetting,
     SharingRule,
@@ -89,7 +90,7 @@ def _geometry_member(size):
             value.initial,
             value.lower if value.name in free else value.initial,
             value.upper if value.name in free else value.initial,
-            locked=value.name not in free,
+            freedom=ParameterFreedom.from_locked(value.name not in free),
         )
         for value in base.parameter_definitions
     )

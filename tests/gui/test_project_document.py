@@ -180,11 +180,16 @@ def test_open_project_revalidation_restores_persisted_mask_after_retry(
     assert document.project.datasets[0].fit_mask[8] is False
 
 
-def test_main_window_docks_every_side_panel_around_the_plot(qtbot) -> None:
-    """The fixed three columns became docks arranged around a central plot."""
-    from PySide6.QtWidgets import QDockWidget
+def test_main_window_lays_the_workspace_out_as_the_designs_three_columns(qtbot) -> None:
+    """The shell is one splitter of three columns, not docks around a plot.
 
+    Docks gave every column a title bar and a close button, showed one inspector
+    section at a time behind tabs, and let the arrangement be dragged apart -- none
+    of which the design draws.  What replaces them is a single central splitter,
+    so its absence is the failure this asserts against.
+    """
     from xrr_fitter.gui.main_window import MainWindow
+    from xrr_fitter.gui.window_layout import COLUMN_NAMES
 
     window = MainWindow()
     qtbot.addWidget(window)
@@ -192,22 +197,24 @@ def test_main_window_docks_every_side_panel_around_the_plot(qtbot) -> None:
 
     window.set_guidance_visible(False)
 
-    assert window.findChild(QSplitter, "workspaceSplitter") is None
+    splitter = window.findChild(QSplitter, "workspaceSplitter")
+    assert splitter is not None
+    assert window.centralWidget() is splitter
     assert window.central_stack.currentWidget() is window.plot_panel
-    assert tuple(window.docks) == (
-        "dataDock",
-        "structureDock",
-        "parametersDock",
-        "fitDock",
-        "resultsDock",
-    )
-    assert all(isinstance(dock, QDockWidget) for dock in window.docks.values())
-    assert all(dock.widget() is not None for dock in window.docks.values())
-    assert window.minimumWidth() == 1280
-    assert window.minimumHeight() == 760
+    assert tuple(splitter.widget(index).objectName() for index in range(splitter.count())) == COLUMN_NAMES
+    # No column may be collapsed away: a fixed grid has no dismissable columns.
+    assert all(size > 0 for size in splitter.sizes())
+    # 设计稿 ``.appwin`` 是 1272 宽（1270 内容 + 左右各 1px 边框 = nav 264 + canvas 666 +
+    # inspector 340），最矮的一帧（帧② 引导模式）是 731 高，减去 38px 的模拟标题栏 = 693。
+    # 下限比这两个数大，窗口就永远到不了设计稿那个尺寸——1280×760 的窗口装的是被多撑开 8px
+    # 的画布列和多出 67px 的一段留白，两边逐帧比对时每一行都差着位。
+    assert window.minimumWidth() == 1272
+    assert window.minimumHeight() == 693
     # A fresh project is untitled and unmodified: the name resolves to the
     # placeholder and Qt's [*] marker collapses to nothing when not modified.
-    assert window.windowTitle() == "未命名项目[*] — XRR 全自动拟合"
+    # 破折号后面是这个软件的正式名。``README`` 首行、``docs/user-guide.md`` 与设计稿五帧的
+    # 标题栏写的都是它；标题栏是这个名字最显眼的一处，独自写成一句功能描述就成了改名。
+    assert window.windowTitle() == "未命名项目[*] — XRR Fitter"
     assert window.isWindowModified() is False
 
 
@@ -380,4 +387,4 @@ def test_window_title_tracks_unsaved_state(qtbot) -> None:
     # the human-readable name, so the platform renders the unsaved indicator.
     window.document.mark_dirty()
     assert window.isWindowModified() is True
-    assert window.windowTitle() == "未命名项目[*] — XRR 全自动拟合"
+    assert window.windowTitle() == "未命名项目[*] — XRR Fitter"

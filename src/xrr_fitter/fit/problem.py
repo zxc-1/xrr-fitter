@@ -25,6 +25,7 @@ from xrr_fitter.model.parameters import (
     ConstraintRule,
     ParameterCoordinate,
     ParameterDefinition,
+    ParameterFreedom,
     ParameterReference,
     ParameterSetting,
     _iter_references,
@@ -399,7 +400,9 @@ def compile_fixed_parameter_problem(
             value if definition.name == parameter_name else definition.initial,
             value if definition.name == parameter_name else definition.lower,
             value if definition.name == parameter_name else definition.upper,
-            locked=True if definition.name == parameter_name else definition.locked,
+            freedom=ParameterFreedom.FIXED
+            if definition.name == parameter_name
+            else ParameterFreedom.from_locked(definition.locked),
         )
         for definition in problem.parameter_definitions
     )

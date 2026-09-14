@@ -12,8 +12,9 @@ from tests.support.model_cases import final_fit_result, prepared_data
 
 import xrr_fitter.api as api
 from xrr_fitter.gui.plots.diagnostics import build_scratch_views, release_scratch_views
-from xrr_fitter.gui.plots.reflectivity import _prepared_dataset, draw_residual
+from xrr_fitter.gui.plots.reflectivity import _prepared_dataset, draw_log, draw_residual
 from xrr_fitter.gui.plots.sld import draw_uncertainty
+from xrr_fitter.gui.results.uncertainty import UncertaintyView
 from xrr_fitter.model.bootstrap import BootstrapResult
 
 
@@ -39,12 +40,16 @@ def test_live_and_static_residual_axes_use_candidate_units(qtbot, mode):
 def test_quality_caption_reports_actual_mode_not_a_recomputed_log_statistic(qtbot, mode):
     data = prepared_data(size=24)
     candidate = _candidate(data, noise_model=mode)
-    panel = _panel(qtbot, data=data, result=final_fit_result(candidate))
-    caption = panel.view("log").quality_caption_text()
-    assert mode in caption
-    assert f"J={candidate.objective:.4g}" in caption
-    assert "平均残差" not in caption
-    assert "decade" not in caption
+    scratch = build_scratch_views()
+    try:
+        draw_log(scratch["log"], data, candidate)
+        caption = "\n".join(item.get_text() for item in scratch["log"].axes.texts)
+        assert mode in caption
+        assert f"J={candidate.objective:.4g}" in caption
+        assert "平均残差" not in caption
+        assert "decade" not in caption
+    finally:
+        release_scratch_views(scratch)
 
 
 @pytest.mark.parametrize("mode", ("robust_log", "gaussian", "poisson"))
@@ -79,13 +84,15 @@ def test_project_plot_preparation_respects_gaussian_zero_and_negative_observatio
         value, source, api.InstrumentSpec(), column_mapping=api.DataColumnMapping(intensity_sigma=2)
     )
 
-    data, _mask = _prepared_dataset(value, value.datasets[0])
+    prepared = _prepared_dataset(value, value.datasets[0])
+    assert prepared is not None, "GUI rereads must retain the project's noise declaration"
+    data, _mask = prepared
 
     np.testing.assert_array_equal(data.intensity_raw[:3], [-2, -1, 0])
     assert np.all(data.validation_mask[:3])
 
 
-def test_profile_plot_labels_exploratory_evidence_without_likelihood_claims():
+def test_profile_plot_labels_exploratory_evidence_without_likelihood_claims(qtbot):
     profile = api.ParameterProfile("scale", np.array([0.8, 1, 1.2]), np.array([0.3, 0.1, 0.4]), True, True)
     bootstrap = BootstrapResult(
         ("scale",),
@@ -116,8 +123,10 @@ def test_profile_plot_labels_exploratory_evidence_without_likelihood_claims():
     try:
         draw_uncertainty(views["uncertainty"], result, "candidate-a")
         axes = views["uncertainty"].figure.axes[1]
-        annotations = tuple(axes.texts) + tuple(axes.get_legend().get_texts())
-        text = "\n".join(item.get_text() for item in annotations)
+        evidence = UncertaintyView()
+        qtbot.addWidget(evidence)
+        evidence.set_result(result, "candidate-a")
+        text = evidence.text()
         assert "loss_support" in text
         assert "objective_tolerance" in text
         assert "exploratory_bootstrap" in text

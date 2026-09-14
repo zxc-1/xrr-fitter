@@ -21,7 +21,6 @@ ROOT = Path(__file__).resolve().parents[2]
 DATASET_EXPORT_NAMES = {
     "fit_result.xlsx",
     "fit_result.json",
-    "parameters.csv",
     "fit_overview.png",
     "sld_profile.png",
     "residuals.png",
@@ -121,7 +120,7 @@ def test_export_multi_dataset_writes_complete_atomic_artifact_tree(
 
 def test_export_publishes_parameter_csv_with_saved_evidence_and_manifest_hash(tmp_path: Path) -> None:
     fitted = _fitted_project()
-    manifest = api.export_result(fitted, tmp_path / "csv-export")
+    manifest = api.export_result(fitted, tmp_path / "csv-export", formats=(*api.DEFAULT_FORMATS, api.ExportFormat.CSV))
     files = {Path(record.path).name: record for record in manifest.datasets[0].files}
 
     assert "parameters.csv" in files
@@ -257,7 +256,9 @@ def test_three_modes_fit_save_load_export_and_refit_keep_the_same_evidence(tmp_p
     project_path = tmp_path / "fitted.xrrproj.json"
     api.save_project(fitted, project_path)
     loaded = api.load_project(project_path)
-    manifest = api.export_result(loaded, tmp_path / "exports", include_ort=True)
+    manifest = api.export_result(
+        loaded, tmp_path / "exports", formats=(*api.DEFAULT_FORMATS, api.ExportFormat.ORT, api.ExportFormat.CSV)
+    )
 
     assert loaded.fit_config.noise_model == noise_model
     assert loaded.algorithm_version == "xrr-fit-v2-poisson-5"

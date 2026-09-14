@@ -15,7 +15,7 @@ from xrr_fitter.fit.joint_solvers import solve_joint
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, FitSearchResult
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterReference, ParameterSetting, SharingRule
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterReference, ParameterSetting, SharingRule
 
 
 def scale_problem(mode="robust_log", *, repeats=1, seed=17, systematic=False):
@@ -32,7 +32,13 @@ def scale_problem(mode="robust_log", *, repeats=1, seed=17, systematic=False):
     config = replace(FitConfig.fast(17), scale_prior_enabled=False, noise_model="robust_log")
     initial = compile_fit_problem(data, simple_structure(), InstrumentSpec(footprint_mode="none"), config)
     settings = tuple(
-        ParameterSetting(item.name, item.initial, item.lower, item.upper, locked=item.name != "instrument.scale")
+        ParameterSetting(
+            item.name,
+            item.initial,
+            item.lower,
+            item.upper,
+            freedom=ParameterFreedom.from_locked(item.name != "instrument.scale"),
+        )
         for item in initial.parameter_definitions
     )
     problem = compile_fit_problem(data, initial.structure, initial.instrument, config, settings)

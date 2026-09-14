@@ -54,6 +54,7 @@ from xrr_fitter.fit.adaptive_review import (
 )
 from xrr_fitter.fit.candidates import (
     CandidateStart,
+    StageBArchive,
     archive_stage_b_candidates,
     best_candidate_index,
     bounded_perturbations,
@@ -65,12 +66,13 @@ from xrr_fitter.fit.candidates import (
     select_full_search_candidates,
 )
 from xrr_fitter.fit.global_search import (
+    GlobalSearchResult,
     build_de_population,
     build_stage_e_population,
     solve_global,
 )
 from xrr_fitter.fit.local_budget import local_stage_setups, next_local_round, optimizer_evidence
-from xrr_fitter.fit.local_search import SearchCancelled, solve_local
+from xrr_fitter.fit.local_search import LocalSearchResult, SearchCancelled, solve_local
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_stage_problem
 from xrr_fitter.fit.progress import (
@@ -79,21 +81,18 @@ from xrr_fitter.fit.progress import (
 from xrr_fitter.fit.progress import (
     emit_progress as _emit,
 )
-from xrr_fitter.fit.screening import fringe_count_screen
+from xrr_fitter.fit.screening import FringeScreenResult, fringe_count_screen
+from xrr_fitter.fit.stage_schedule import (
+    STAGE_ORDER,  # noqa: F401
+    ChildSeed,  # noqa: F401
+    remaining_stages,  # noqa: F401
+    reserve_child_seeds,  # noqa: F401
+)
 from xrr_fitter.fit.tasking import TaskRunner
 from xrr_fitter.fit.tasking import run_tasks as _run_tasks
-from xrr_fitter.model.fitting import FitCandidate, FitProgress, FitStageSummary
-from xrr_fitter.model.parameters import ParameterSetting
-
-STAGE_ORDER = ("A", "B", "C", "D", "E")
-
-
-@dataclass(frozen=True, slots=True)
-class ChildSeed:
-    """One named deterministic stream and its generated integer seed."""
-
-    stream_id: str
-    seed: int
+from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext, FitProgress, FitStageSummary
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
+from xrr_fitter.model.search import SearchEvidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,8 +117,8 @@ class _StageESetup:
     against the complete context and may include the declared initial point.
     """
 
-    coarse_problem: object
-    full_problem: object
+    coarse_problem: FitEvaluationContext
+    full_problem: FitEvaluationContext
     centers: tuple[np.ndarray, ...]
     full_incumbents: tuple[np.ndarray, ...]
     population_size: int
@@ -128,14 +127,14 @@ class _StageESetup:
 #
 # Parameter settings
 #
-def _parameter_settings(problem: object) -> tuple[ParameterSetting, ...]:
+def _parameter_settings(problem: FitEvaluationContext) -> tuple[ParameterSetting, ...]:
     return tuple(
         ParameterSetting(
             definition.name,
             definition.initial,
             definition.lower,
             definition.upper,
-            definition.locked,
+            ParameterFreedom.from_locked(definition.locked),
         )
         for definition in problem.parameter_definitions
     )
@@ -144,7 +143,7 @@ def _parameter_settings(problem: object) -> tuple[ParameterSetting, ...]:
 #
 # Compile coarse problem
 #
-def compile_coarse_problem(problem: object) -> object:
+def compile_coarse_problem(problem: FitEvaluationContext) -> FitEvaluationContext:
     """Subset the numerical grid without recompiling full-data evidence."""
     return compile_grid_problem(problem, initial_grid_points(problem.data))
 
@@ -153,64 +152,13 @@ def compile_coarse_problem(problem: object) -> object:
 # Stage problems
 #
 def _stage_problems(
-    problem: object,
+    problem: FitEvaluationContext,
     stage: str,
     current_values: dict[str, float],
-) -> tuple[object, object]:
+) -> tuple[FitEvaluationContext, FitEvaluationContext]:
     full = compile_stage_problem(problem, stage, current_values)
     coarse = compile_coarse_problem(problem)
     return compile_stage_problem(coarse, stage, current_values), full
-
-
-#
-# Stream order
-#
-def _stream_order(stream_id: str) -> tuple[int, int, str]:
-    prefix, separator, suffix = stream_id.partition("-")
-    if not separator or not suffix.isdigit():
-        return 2, 0, stream_id
-    priority = {"E": 0, "B": 1}.get(prefix, 2)
-    return priority, int(suffix), stream_id
-
-
-#
-# Reserve child seeds
-#
-def reserve_child_seeds(
-    master_seed: int,
-    stream_ids: tuple[str, ...],
-) -> tuple[ChildSeed, ...]:
-    """Map named streams to SeedSequence children independent of request order.
-
-    Canonical E streams precede B streams, followed by lexical fallbacks. Results
-    are restored to caller order only after every named child has been generated,
-    keeping incremental and full reservations identical.
-    """
-    requested = tuple(stream_ids)
-    if len(requested) != len(set(requested)) or any(not value for value in requested):
-        raise ValueError("child stream IDs must be nonempty and unique")
-    canonical = tuple(sorted(requested, key=_stream_order))
-    spawned = np.random.SeedSequence(master_seed).spawn(len(canonical))
-    by_stream = {
-        stream_id: int(child.generate_state(1, dtype=np.uint64)[0])
-        for stream_id, child in zip(canonical, spawned, strict=True)
-    }
-    return tuple(ChildSeed(stream_id, by_stream[stream_id]) for stream_id in requested)
-
-
-#
-# Remaining stages
-#
-def remaining_stages(completed_stage: str | None) -> tuple[str, ...]:
-    """Return the strict suffix after a completed checkpoint stage.
-
-    Unknown stage labels never fall back to a fresh search.
-    """
-    if completed_stage is None:
-        return STAGE_ORDER
-    if completed_stage not in STAGE_ORDER:
-        raise ValueError(f"unsupported fit stage: {completed_stage}")
-    return STAGE_ORDER[STAGE_ORDER.index(completed_stage) + 1 :]
 
 
 #
@@ -231,7 +179,7 @@ def _candidate_values(candidate: FitCandidate) -> dict[str, float]:
 #
 # Complete values
 #
-def _complete_values(problem: object, values: dict[str, float]) -> dict[str, float]:
+def _complete_values(problem: FitEvaluationContext, values: dict[str, float]) -> dict[str, float]:
     return {
         definition.name: values.get(definition.name, definition.initial) for definition in problem.parameter_definitions
     }
@@ -241,8 +189,8 @@ def _complete_values(problem: object, values: dict[str, float]) -> dict[str, flo
 # Published candidate
 #
 def _published_candidate(
-    problem: object,
-    stage_problem: object,
+    problem: FitEvaluationContext,
+    stage_problem: FitEvaluationContext,
     stage_unit: np.ndarray,
     candidate_id: str,
     seed_index: int,
@@ -289,7 +237,7 @@ def _summary(stage: str, candidates: tuple[FitCandidate, ...]) -> FitStageSummar
 #
 # Coarse log curve
 #
-def _coarse_log_curve(problem: object, candidate: FitCandidate) -> np.ndarray:
+def _coarse_log_curve(problem: FitEvaluationContext, candidate: FitCandidate) -> np.ndarray:
     modeled = candidate.model_normalized[problem.data.fit_mask]
     return np.log10(np.maximum(modeled, problem.data.r_floor))
 
@@ -321,7 +269,7 @@ def _ensure_two_starts(starts: tuple[CandidateStart, ...]) -> tuple[CandidateSta
 #
 # Stage a candidate
 #
-def _stage_a_candidate(problem: object, start: CandidateStart, index: int) -> FitCandidate | None:
+def _stage_a_candidate(problem: FitEvaluationContext, start: CandidateStart, index: int) -> FitCandidate | None:
     try:
         unit = encode_physical_vector(problem, dict(start.values))
     except (EvaluationConstraintError, PhysicalValueError):
@@ -342,7 +290,7 @@ def _stage_a_candidate(problem: object, start: CandidateStart, index: int) -> Fi
 # Evaluate stage a pool
 #
 def _evaluate_stage_a_pool(
-    problem: object,
+    problem: FitEvaluationContext,
     dataset_id: str | None,
     pool: tuple[CandidateStart, ...],
     progress: Callable[[FitProgress], None] | None,
@@ -373,15 +321,19 @@ def _evaluate_stage_a_pool(
         # Always emit the current incumbent so the preview curve stays alive
         # even during long stretches without improvement. The panel-side
         # throttle (50ms) prevents canvas flicker.
+        # Physically rejected starts never reach the objective. Reserve one
+        # final progress unit for adaptive full-grid review and screening; the
+        # coarse scan alone is not a committed Stage-A completion.
         _emit(
             progress,
             dataset_id,
             "A",
             index + 1,
-            len(pool),
+            len(pool) + 1,
             best,
             message,
             incumbent,
+            nfev=index + 1 - rejected_count,
         )
     return tuple(evaluated), rejected_count, invalid_count
 
@@ -426,7 +378,10 @@ def _stage_a_stop_reasons(
     return tuple(reasons)
 
 
-def _screen_stage_a(problem, reviewed):
+def _screen_stage_a(
+    problem: FitEvaluationContext,
+    reviewed: tuple[tuple[CandidateStart, FitCandidate], ...],
+) -> tuple[tuple[tuple[CandidateStart, FitCandidate], ...], FringeScreenResult, int]:
     screen = fringe_count_screen(problem, tuple(candidate for _start, candidate in reviewed))
     survivors = {candidate.candidate_id for candidate in screen.candidates}
     accepted = tuple(item for item in reviewed if item[1].candidate_id in survivors)
@@ -444,10 +399,10 @@ def _screen_stage_a(problem, reviewed):
 # Run stage a
 #
 def run_stage_a(
-    problem: object,
+    problem: FitEvaluationContext,
     dataset_id: str | None,
     *,
-    coarse_problem: object | None = None,
+    coarse_problem: FitEvaluationContext | None = None,
     progress: Callable[[FitProgress], None] | None,
     cancelled: Callable[[], bool] | None,
 ) -> tuple[tuple[CandidateStart, ...], FitStageSummary, tuple[str, ...]]:
@@ -502,6 +457,17 @@ def run_stage_a(
         stop_reasons,
         (evidence,),
     )
+    _emit(
+        progress,
+        dataset_id,
+        "A",
+        len(pool) + 1,
+        len(pool) + 1,
+        summary.best_objective,
+        "completed initial full-grid review and screening",
+        _best_candidate(tuple(candidate for _start, candidate in accepted)),
+        nfev=evidence.grid_review_evaluations + evidence.full_review_evaluations,
+    )
     return selected, summary, warnings
 
 
@@ -509,7 +475,7 @@ def run_stage_a(
 # Stage b candidate
 #
 def _stage_b_candidate(
-    problem: object,
+    problem: FitEvaluationContext,
     start: CandidateStart,
     index: int,
     seed: int,
@@ -521,7 +487,8 @@ def _stage_b_candidate(
     values = _complete_values(problem, dict(start.values))
     coarse_problem, full_problem = _stage_problems(problem, "B", values)
     unit = encode_physical_vector(coarse_problem, values)
-    evidence = ()
+    evidence: tuple[SearchEvidence, ...]
+    solved: GlobalSearchResult | LocalSearchResult
     if unit.size == 0:
         solved = solve_local(full_problem, unit, max_nfev=1, cancelled=cancelled)
         evidence = (optimizer_evidence(f"B-{index}", seed, f"B-{index}", 1, solved, 0),)
@@ -535,7 +502,7 @@ def _stage_b_candidate(
         #
         # B gen callback
         #
-        def _b_gen_callback(xk: np.ndarray, best_obj: float) -> None:
+        def _b_gen_callback(xk: np.ndarray, best_obj: float, generation: int, nfev: int) -> None:
             preview = _published_candidate(problem, coarse_problem, xk, f"B-{index}", index, "running", 0)
             _emit(
                 progress,
@@ -546,6 +513,8 @@ def _stage_b_candidate(
                 best_obj,
                 f"DE generation (launch {index + 1})",
                 preview,
+                iteration=generation,
+                nfev=nfev,
             )
 
         solved = solve_global(
@@ -587,7 +556,7 @@ def _stage_b_candidate(
 # Stage b launch evidence
 #
 def _stage_b_launch_evidence(
-    problem: object,
+    problem: FitEvaluationContext,
     start: CandidateStart,
     optimized: FitCandidate,
     index: int,
@@ -610,7 +579,7 @@ def _stage_b_launch_evidence(
 #
 # Stage b geometry indices
 #
-def _stage_b_geometry_indices(problem: object) -> tuple[int, ...]:
+def _stage_b_geometry_indices(problem: FitEvaluationContext) -> tuple[int, ...]:
     return tuple(
         index
         for index, variable in enumerate(problem.variables)
@@ -637,7 +606,7 @@ def _stage_b_geometry_distance(
 # Stage b geometry group
 #
 def _stage_b_geometry_group(
-    problem: object,
+    problem: FitEvaluationContext,
     candidates: tuple[FitCandidate, ...],
     groups: list[list[int]],
     candidate_index: int,
@@ -662,7 +631,7 @@ def _stage_b_geometry_group(
 # Stage b representatives
 #
 def _stage_b_representatives(
-    problem: object,
+    problem: FitEvaluationContext,
     candidates: tuple[FitCandidate, ...],
     limit: int = 4,
 ) -> tuple[FitCandidate, ...]:
@@ -735,7 +704,7 @@ def _retain_stage_b_work(
 # Run stage b
 #
 def run_stage_b(
-    problem: object,
+    problem: FitEvaluationContext,
     dataset_id: str | None,
     starts: tuple[CandidateStart, ...],
     seeds: tuple[int, ...],
@@ -791,13 +760,13 @@ def run_stage_b(
 # Local stage candidate
 #
 def _local_stage_candidate(
-    problem: object,
-    stage_problem: object,
+    problem: FitEvaluationContext,
+    stage_problem: FitEvaluationContext,
     start: np.ndarray,
     candidate_id: str,
     seed_index: int,
     cancelled: Callable[[], bool] | None,
-    iteration_callback: Callable[[np.ndarray], None] | None = None,
+    iteration_callback: Callable[[np.ndarray, int, int, float | None], None] | None = None,
     *,
     origin: str,
     seed: int,
@@ -833,7 +802,7 @@ def _local_stage_candidate(
 # Run local stage
 #
 def run_local_stage(
-    problem: object,
+    problem: FitEvaluationContext,
     dataset_id: str | None,
     stage: str,
     parents: tuple[FitCandidate, ...],
@@ -862,10 +831,27 @@ def run_local_stage(
         "D": "full-resolution roughness/instrument refinement",
     }.get(stage, f"completed local stage {stage}")
 
-    def _make_local_cb(stg_problem, cid, sidx, position):
-        def _cb(unit_vector: np.ndarray) -> None:
+    def _make_local_cb(
+        stg_problem: FitEvaluationContext,
+        cid: str,
+        sidx: int,
+        position: int,
+    ) -> Callable[[np.ndarray, int, int, float | None], None]:
+        def _cb(unit_vector: np.ndarray, iteration: int, nfev: int, step: float | None) -> None:
             preview = _published_candidate(problem, stg_problem, unit_vector, cid, sidx, "running", 0)
-            _emit(progress, dataset_id, stage, position, total, preview.objective, message, preview)
+            _emit(
+                progress,
+                dataset_id,
+                stage,
+                position,
+                total,
+                preview.objective,
+                message,
+                preview,
+                iteration=iteration,
+                nfev=nfev,
+                step_size=step,
+            )
 
         return _cb
 
@@ -942,7 +928,10 @@ def _archive_stage_b_candidates(
     return _ordered_stage_b_continuation(candidates, archive)
 
 
-def _ordered_stage_b_continuation(candidates, archive):
+def _ordered_stage_b_continuation(
+    candidates: tuple[FitCandidate, ...],
+    archive: StageBArchive,
+) -> tuple[tuple[FitCandidate, ...], tuple[int, ...]]:
     counts = {
         candidate.candidate_id: count
         for candidate, count in zip(archive.active, archive.perturbation_counts, strict=True)
@@ -982,7 +971,7 @@ def local_stage_continuation(
 #
 # Stage e setup
 #
-def _stage_e_setup(problem: object, parents: tuple[FitCandidate, ...]) -> _StageESetup:
+def _stage_e_setup(problem: FitEvaluationContext, parents: tuple[FitCandidate, ...]) -> _StageESetup:
     """Build Stage-E coarse centers and complete full-data incumbent starts.
 
     Only selectable parents participate. The declared initial vector is appended
@@ -1045,13 +1034,13 @@ def _incumbent_starts(
 # Stage e local candidate
 #
 def _stage_e_local_candidate(
-    problem: object,
+    problem: FitEvaluationContext,
     setup: _StageESetup,
     start: np.ndarray,
     candidate_id: str,
     seed_index: int,
     cancelled: Callable[[], bool] | None,
-    iteration_callback: Callable[[np.ndarray], None] | None = None,
+    iteration_callback: Callable[[np.ndarray, int, int, float | None], None] | None = None,
     *,
     source_seed: int,
     round_index: int,
@@ -1074,7 +1063,7 @@ def _stage_e_local_candidate(
 # Run stage e locals
 #
 def _run_stage_e_locals(
-    problem: object,
+    problem: FitEvaluationContext,
     setup: _StageESetup,
     starts: tuple[np.ndarray, ...],
     seed_index: int,
@@ -1090,11 +1079,11 @@ def _run_stage_e_locals(
     # Result positions retain start order so winner selection and nfev totals
     # are independent of worker completion timing.
 
-    def _make_e_local_cb(cid, sidx):
+    def _make_e_local_cb(cid: str, sidx: int) -> Callable[[np.ndarray, int, int, float | None], None]:
         #
         # Cb
         #
-        def _cb(unit_vector: np.ndarray) -> None:
+        def _cb(unit_vector: np.ndarray, iteration: int, nfev: int, step: float | None) -> None:
             preview = _published_candidate(
                 problem,
                 setup.full_problem,
@@ -1113,6 +1102,9 @@ def _run_stage_e_locals(
                 preview.objective,
                 f"local refinement (seed {seed_index + 1})",
                 preview,
+                iteration=iteration,
+                nfev=nfev,
+                step_size=step,
             )
 
         return _cb
@@ -1139,7 +1131,7 @@ def _run_stage_e_locals(
 # Stage e seed
 #
 def _stage_e_seed(
-    problem: object,
+    problem: FitEvaluationContext,
     setup: _StageESetup,
     seed_index: int,
     child_seed: int,
@@ -1178,7 +1170,7 @@ def _stage_e_seed(
     #
     # E gen callback
     #
-    def _e_gen_callback(xk: np.ndarray, best_obj: float) -> None:
+    def _e_gen_callback(xk: np.ndarray, best_obj: float, generation: int, nfev: int) -> None:
         preview = _published_candidate(
             problem,
             setup.coarse_problem,
@@ -1197,6 +1189,8 @@ def _stage_e_seed(
             best_obj,
             f"DE generation (seed {seed_index + 1})",
             preview,
+            iteration=generation,
+            nfev=nfev,
         )
 
     solved = solve_global(
@@ -1285,7 +1279,7 @@ def _stage_e_seed(
 # Run stage e
 #
 def run_stage_e(
-    problem: object,
+    problem: FitEvaluationContext,
     dataset_id: str | None,
     parents: tuple[FitCandidate, ...],
     seeds: tuple[int, ...],

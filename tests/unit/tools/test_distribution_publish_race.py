@@ -67,6 +67,42 @@ def test_pathname_fallback_rejects_target_created_before_hardlink_publish(
     assert target.read_bytes() == b"replacement"
 
 
+def test_pathname_fallback_publishes_when_directory_handles_are_unavailable(
+    tmp_path: Path,
+    load_tool_module,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_tool_module("verify_distribution")
+    report = tmp_path / "report"
+    report.mkdir()
+    helper = module._write_new_file_in_anchored_directory
+    helper_globals = helper.__globals__
+    target = report / "artifact-manifest.json"
+    identity = helper_globals["_directory_identity"](report, "report directory")
+    original_open = helper_globals["os"].open
+
+    monkeypatch.setitem(helper_globals, "DIRECTORY_FD_SUPPORTED", False)
+    monkeypatch.setitem(helper_globals, "ANCHORED_FILE_FD_SUPPORTED", False)
+
+    def reject_directory_open(path, *args, **kwargs):
+        if Path(path) == report:
+            raise PermissionError("directory handles are unavailable")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(helper_globals["os"], "open", reject_directory_open)
+
+    helper(
+        report,
+        identity,
+        target.name,
+        b"published",
+        directory_label="report directory",
+        file_label="manifest",
+    )
+
+    assert target.read_bytes() == b"published"
+
+
 def test_publish_manifest_does_not_cleanup_replacement_artifact_directory(
     tmp_path: Path,
     load_tool_module,

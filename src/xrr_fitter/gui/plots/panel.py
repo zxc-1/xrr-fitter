@@ -32,18 +32,23 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.canvas_top import canvas_tab_group
 from xrr_fitter.gui.plots.diagnostics import (
     ANALYSIS_KEYS,
     REFLECTIVITY_KEYS,
+    RESIDUAL_KEY,
     TAB_SPECS,
     VIEW_SPECS,
     DiagnosticView,
+    apply_plot_card_captions,
+    build_residual_companion_pane,
     build_scratch_views,
     build_tabs,
     draw_batch_trends,
     draw_candidate_comparison,
     draw_empty,
     release_scratch_views,
+    residual_tab_host,
     validate_batch_trends,
 )
 from xrr_fitter.gui.plots.heatmaps import draw_parameter_heatmap, draw_residual_heatmap
@@ -88,6 +93,50 @@ from xrr_fitter.gui.plots.sld_state import (
     sync_band_controls,
     visible_bands,
 )
+
+# 画布在每一步露哪几段。设计稿六帧里的画布一律是两张卡：帧①「反射率 + 加权残差」、
+# 帧③「层堆叠 + SLD 深度剖面」、帧④「总进度 + 实时反射率」、帧⑤「参数相关矩阵 +
+# Profile 似然」。绘图栈的四段此前全都常驻，按 3:2:2:2 分同一个 ~800px 的画布，每段落到
+# 180px 上下——装不下一张带坐标轴和图例的图：帧⑤ 的两张子图叠在一起连标签都读不出来，
+# 帧③ 的 SLD 剖面干脆被挤到折叠线以下。右栏早就按步收窄了（``STEP_INSPECTOR_SECTIONS``，
+# 那儿的注释记着「五段内容高约 1900px、视口 815px，2.3 倍」），这里是同一个毛病的另一半。
+#
+# 键是 ``PIPELINE_STEPS`` 的下标：0 数据 / 1 结构 / 2 参数 / 3 拟合 / 4 结果 / 5 导出。
+# 0-2 这三步画布上半是层堆叠（``STEPS_WITH_LAYER_STACK``），所以下半只留一段。
+#
+STEP_PLOT_PANES: dict[int, tuple[str, ...]] = {
+    # 数据：还没有结构可画，这一步要看的就是刚导进来的那条曲线。
+    0: ("reflectivity",),
+    # 结构（帧③）：画布是「层堆叠 + SLD 深度剖面」两张卡，层堆叠由结构面板出，这里只出剖面。
+    # 反射率与残差在这一步画的都是上一轮的旧曲线，摆在层堆叠下面会被读成「改完之后的样子」。
+    1: ("sld",),
+    # 参数：仍在编辑同一个模型，剖面留着——边界是照着它设的。
+    2: ("sld",),
+    # 拟合中（帧④）：只有正在动的那条实时曲线。残差和候选解画的都是上一轮的收敛结果，
+    # 和进度摆在一起会被读成本轮读数——这和右栏在运行中只剩控制那一段是同一个理由。
+    3: ("reflectivity",),
+    # 结果（帧①）：反射率与它的加权残差。残差紧跟它判读的那张图。
+    4: ("reflectivity", "residual"),
+    5: ("reflectivity", "residual"),
+}
+
+# 剖面画「正在编辑的这套结构」而不是「上一轮拟合出来的候选」的那两步，键同样是
+# ``PIPELINE_STEPS`` 的下标。取 ``STEP_PLOT_PANES`` 里只有 ``sld`` 的两步：那时画布上半是
+# 层堆叠，改一层下半当场跟着动，而跟着动的只可能是标称结构那条线。
+STRUCTURE_EDIT_STEPS = (1, 2)
+
+# 结果态选中分析页时画布整块换成分析页（帧⑤ 那一屏：相关矩阵 + Profile 似然，两张卡都在
+# 分析页自己那张图里）。分析页是另一种看法而不是第三张图：反射率与残差一起让位给它。
+#
+# 让位也带走模式条——它是反射率页的角落控件。设计稿帧③ 与帧⑤ 的 ``.canvas-top`` 里确实都
+# 没有模式条：帧③ 那一行是三个结构按钮，帧⑤ 只有标签页。所以这不是牺牲，是照着做。剩下的
+# 那几张 matplotlib 静态图仍能滚轮缩放（``scroll_event`` 直接连在画布上），而返回反射率那
+# 一组走菜单「视图」——它不经过标签页，收起标签页不会把人困住。
+ANALYSIS_STEPS = (4, 5)
+
+# 分析页至少要有的高度。不确定度那一页自己再上下切成两张子图，坐标轴、刻度、图例都得读得
+# 出来；低于这个数就回到叠字那种状态，所以这是下限而不是某一次量到的像素值。
+ANALYSIS_MIN_H = 300
 
 
 #
@@ -138,10 +187,9 @@ class PlotPanel(QWidget):
     # editor so a hand edit and a typed edit take exactly the same path.
     structure_edit_requested = Signal(object)
 
-    # The standing hint shown when the pointer is not over any curve; it names
-    # the gesture rather than leaving the coordinate strip blank, so an empty
-    # readout never reads as a broken control.
-    CURSOR_IDLE_HINT = "将指针移到曲线上可读取坐标"
+    # 指针不在曲线上时这条读数带什么都不写。设计稿在残差卡和状态栏之间没有常驻提示：
+    # 一句永远挂着的操作说明占的是数据的位置，而读数带空着本身就说明「现在没有读数」。
+    CURSOR_IDLE_HINT = ""
 
     #
     # Init
@@ -160,32 +208,69 @@ class PlotPanel(QWidget):
         self._trends: BatchTrends | None = None
         self._visible_range: tuple[float, float] | None = None
         self._released = False
+        # 画布当前按哪一步收窄。None 表示还没有人告诉过它（独立构造的面板、以及旧测试），
+        # 这时四段按老样子全露——收窄是窗口接线加上去的，不是面板自己的默认姿势。
+        self._step: int | None = None
+        # 专家模式开没开。同样用 None 表示「还没有人说过」：此前 SLD 剖面的可见性只由
+        # ``interactions._apply_tabs`` 写，没跑过它的独立面板剖面就是露着的，None 保住这个行为。
+        self._expert_mode: bool | None = None
         self.toolbar = PlotInteractionToolbar(self)
         self.reflectivity_tabs, self.analysis_tabs, self._views = build_tabs()
         # Backward-compatible alias: external code that references panel.tabs
         # (workspace findChild, some tests) gets the reflectivity group.
         self.tabs = self.reflectivity_tabs
+        # 设计稿 帧①/⑤ 的画布也以 ``.canvas-top`` 开头（HTML 148-152）：一条扁 tab 条，
+        # 紧跟着这一页的动作。``QTabWidget`` 自带的 tab 是带边框的小盒子，而它唯一的行内
+        # 附加位 ``setCornerWidget`` 只有「贴右边框」这一种摆法——模式条会离开它作用的那四
+        # 个 tab 六百多像素。所以两组都收进 ``canvas_tab_group``：容器退成页面壳，露在外面
+        # 的是那一行；模式条排在 tab 后面的动作位上。
+        self.reflectivity_group, self.reflectivity_canvas_tabs, reflectivity_actions = canvas_tab_group(
+            self.reflectivity_tabs,
+            parent=self,
+            name="reflectivityCanvas",
+            row_name="reflectivityCanvasTop",
+            tabs_name="reflectivityCanvasTabs",
+        )
+        reflectivity_actions.addWidget(self.toolbar)
+        self.analysis_group, self.analysis_canvas_tabs, _analysis_actions = canvas_tab_group(
+            self.analysis_tabs,
+            parent=self,
+            name="analysisCanvas",
+            row_name="analysisCanvasTop",
+            tabs_name="analysisCanvasTabs",
+        )
+        self.residual_pane = build_residual_companion_pane(self._views)
+        # 「加权残差」那一页的空壳，和它在 splitter 里的那一格。卡只有一份，在这两处之间搬。
+        self._residual_host = residual_tab_host(self.reflectivity_tabs)
+        self._residual_slot = 1
         self.sld_pane, self.sld_bands_toggle, self.sld_align_selector = build_sld_companion_pane(
             self,
             self._views,
             self._on_bands_toggled,
             self._on_align_changed,
         )
-        # Three-layer vertical layout: reflectivity tabs on top, analysis tabs
-        # in the middle, SLD depth profile at the bottom.  A fit is judged on
-        # curve agreement, comparative diagnostics and structural plausibility
-        # at once, so none may hide another behind a tab.
+        # 四段竖排，顺序固定：反射率页 / 加权残差 / 分析页 / SLD 深度剖面。残差紧挨着它
+        # 判读的那张图，隔两段的复核是不会有人看的复核。哪几段露由 ``set_step_scope``
+        # 按步骤定（``STEP_PLOT_PANES``）——四段同时在场时每段只有 180px，那是叠字，不是图。
+        # 顺序在这里排一次，换步时就不必把控件从 splitter 里摘下来重插。
+        # 例外只有残差这一格：选中「加权残差」那个 tab 时，那张卡搬去当那一页的正文
+        # （见 ``_sync_residual_home``），离开时再插回 ``_residual_slot``。
         self.plot_splitter = QSplitter(Qt.Orientation.Vertical, self)
         self.plot_splitter.setObjectName("plotSplitter")
         self.plot_splitter.setChildrenCollapsible(False)
-        self.plot_splitter.addWidget(self.reflectivity_tabs)
-        self.plot_splitter.addWidget(self.analysis_tabs)
+        self.plot_splitter.addWidget(self.reflectivity_group)
+        self.plot_splitter.addWidget(self.residual_pane)
+        self.plot_splitter.addWidget(self.analysis_group)
         self.plot_splitter.addWidget(self.sld_pane)
-        self.plot_splitter.setStretchFactor(0, 3)
-        self.plot_splitter.setStretchFactor(1, 2)
-        self.plot_splitter.setStretchFactor(2, 2)
-        self.sld_pane.setMinimumHeight(140)
-        self._float_toolbar_over_plot()
+        # 设计稿 帧① 的两张卡是 345 : 199.8 高（≈ 7:4）。3:2 把残差压到 199 以下，那条
+        # 曲线在 ±3σ 的参考线之间只剩几个像素可摆。帧③/④/⑤ 的画布列各只剩 24px 富余，
+        # 帧① 有 274px——那段白是它右栏太高撑出来的 CSS grid 拉伸，不是给某一张卡的高度，
+        # 所以这里对的是比例而不是绝对值。
+        self.plot_splitter.setStretchFactor(0, 7)
+        self.plot_splitter.setStretchFactor(1, 4)
+        self.plot_splitter.setStretchFactor(2, 4)
+        self.plot_splitter.setStretchFactor(3, 4)
+        self.analysis_tabs.setMinimumHeight(ANALYSIS_MIN_H)
         content = QWidget(self)
         content.setObjectName("plotContent")
         content_layout = QVBoxLayout(content)
@@ -203,79 +288,28 @@ class PlotPanel(QWidget):
         self._interactions = PlotInteractionController(self, self.toolbar)
         self._install_view_shortcuts()
         self.toolbar.overlay_toggled.connect(self._on_overlay_toggled)
-
-    #
-    # Float toolbar over plot
-    #
-    def _float_toolbar_over_plot(self) -> None:
-        """Lift the interaction bar out of the layout and onto the plot itself.
-
-        Peer charting tools put their mode bar over the chart rather than in a
-        labelled row above it: the controls belong to the picture they act on,
-        and a row of their own spent a band of vertical space on chrome.  The bar
-        parents to the tab stack, not to a tab page, so it survives a view switch
-        instead of being rebuilt once per diagnostic.
-        """
-        self.toolbar.setParent(self.tabs)
-        self.tabs.installEventFilter(self)
-        self.tabs.currentChanged.connect(self._raise_toolbar_overlay)
-        self._position_toolbar_overlay()
-
-    #
-    # Position toolbar overlay
-    #
-    def _position_toolbar_overlay(self) -> None:
-        """Pin the bar inside the plot's top-right corner, clear of the tab bar.
-
-        Sized to its own content: the bar has no stretch, so it covers only the
-        strip of plot it needs.  The left edge is clamped to the margin so a
-        narrow panel slides the bar leftward instead of pushing it off-screen.
-        """
-        if self._released:
-            return
-        tab_bar = self.tabs.tabBar()
-        top = tab_bar.height() if tab_bar.isVisible() else 0
-        hint = self.toolbar.sizeHint()
-        margin = theme.SPACE_SM
-        left = max(margin, self.tabs.width() - hint.width() - margin)
-        self.toolbar.setGeometry(left, top + margin, hint.width(), hint.height())
-        self.toolbar.raise_()
-
-    #
-    # Raise toolbar overlay
-    #
-    def _raise_toolbar_overlay(self, *_args: object) -> None:
-        """Re-assert the bar's place after a view switch restacks the children."""
-        self._position_toolbar_overlay()
-
-    #
-    # Eventfilter
-    #
-    def eventFilter(self, watched: object, event: QEvent) -> bool:
-        """Hold the floating bar in the corner as the plot stack is resized.
-
-        An overlay is outside the layout, so nothing else moves it: without this
-        the bar would keep its first geometry and drift away from the corner the
-        moment the window, the splitter or the dock changed the plot's width.
-        """
-        if watched is self.tabs and event.type() in (
-            QEvent.Type.Resize,
-            QEvent.Type.Show,
-            QEvent.Type.LayoutRequest,
-        ):
-            self._position_toolbar_overlay()
-        return super().eventFilter(watched, event)
+        # 换视图要重算画布范围：结果态选到分析页时残差让位给分析页（见 ``ANALYSIS_STEPS``）。
+        # 挂在 ``view_changed`` 上而不是两个 tab 的 currentChanged 上，因为菜单「视图」也走
+        # ``select_view``，那条路不经过 tab 的点击。
+        self.view_changed.connect(self._on_view_changed_scope)
+        # 控制器就位后才问得出「此刻选中的是哪一段」，所以残差卡的落脚点在这里对一次。
+        self._sync_residual_home()
 
     #
     # Install view shortcuts
     #
     def _install_view_shortcuts(self) -> None:
-        """Bind Alt+1..Alt+8 to the diagnostic tabs by visible position.
+        """Bind one Alt+N per diagnostic tab, addressed by visible position.
 
-        Users switch among eight diagnostic plots constantly; clicking or cycling
-        with Ctrl+Tab is slow. Numbering by visible position (not fixed view key)
-        keeps the keys contiguous when the expert-only SLD tab is hidden, so the
-        same key never lands on a hidden tab or skips a number.
+        Users switch among the diagnostic plots constantly; clicking or cycling
+        with Ctrl+Tab is slow.  The keys count the tabs, not the views: the SLD
+        profile is a companion pane that never leaves the screen, so it is not
+        addressable and consumes no number.  The weighted residual counts,
+        because it is both -- a tab of its own *and* the card pinned under the
+        strip; the one card moves between the two homes.
+        Numbering by visible position rather than by fixed view key means a
+        hidden tab shifts the keys up instead of leaving a key that lands on
+        nothing and a gap in the sequence.
         """
         self.view_shortcuts: list[QShortcut] = []
         for position in range(len(self.tab_keys())):
@@ -319,13 +353,181 @@ class PlotPanel(QWidget):
     def _sync_pages(self) -> None:
         self._pages.setCurrentIndex(0 if self._dataset_id is None else 1)
         self._sync_analysis_visibility()
+        # Every path that commits a new active dataset or a new result ends here, so
+        # this is the one place the plot-card captions have to be rewritten -- doing
+        # it per caller would leave whichever path was added last showing a stale
+        # name, or a stale χ²ᵥ on the residual card.
+        apply_plot_card_captions(
+            self,
+            self._dataset_id,
+            self._result,
+            candidate_for_result(self._result, self._candidate_id),
+        )
+
+    #
+    # Set step scope
+    #
+    def set_step_scope(self, step: int | None) -> None:
+        """按流程步收窄画布，只留这一步该露的那两段（``STEP_PLOT_PANES``）。
+
+        ``None`` 交回四段全露的老姿势，给独立构造的面板用。窗口那边由
+        ``window_layout.apply_step_scope`` 在同一处调用，和右栏收窄同进同退。
+
+        换了步还要重画一次：剖面在结构那两步画的是正在编辑的结构、别的步画的是拟合候选
+        （``_sld_follows_edits``），只改可见性的话，从「结果」回到「结构」看到的还是结果态
+        那张图，而它不会跟着层堆叠动。
+        """
+        if step is not None and not isinstance(step, int):
+            raise TypeError("step must be int or None")
+        changed = step != self._step
+        self._step = step
+        self._sync_pane_scope()
+        if changed and not self._released and self._dataset_id is not None:
+            self._transact(self._current_projection())
+
+    #
+    # Canvas pane keys
+    #
+    def canvas_pane_keys(self) -> tuple[str, ...]:
+        """当前这一步画布该露的段，按 splitter 里的固定顺序。
+
+        报的是「这一步的画布是什么」，不是「此刻屏幕上有什么」：没有数据集时整块面板停在
+        空态页上，那时每个子控件都读作不可见，拿可见性反推步骤范围会得到一个和步骤无关的答
+        案。空态与「这一步该露哪几段」是两件事，所以分开报。
+        """
+        if self._step is None:
+            return ("reflectivity", "residual", "analysis", "sld")
+        if self._step in ANALYSIS_STEPS and self._analysis_group_is_active():
+            return ("analysis",)
+        return STEP_PLOT_PANES.get(self._step, STEP_PLOT_PANES[0])
+
+    #
+    # Analysis group is active
+    #
+    def _analysis_group_is_active(self) -> bool:
+        """分析页是否是当前选中的那一组视图。
+
+        交互控制器是在 ``__init__`` 末尾才建起来的，而第一次 ``_sync_pages`` 在它之前就跑
+        了，所以这里不能假定它已经在场。
+        """
+        if getattr(self, "_interactions", None) is None:
+            return False
+        return self.current_view_key() in ANALYSIS_KEYS
+
+    #
+    # Active analysis view
+    #
+    def active_analysis_view(self) -> str | None:
+        """此刻选中的分析页是哪一页；不在分析组里（或控制器还没建起来）时为 ``None``。
+
+        右栏按视图挑段落时要问的正是这一句。``current_view_key`` 单独用不了：控制器缺席时它
+        直接抛，而反射率那几页选中时它报的键也不该拿去和分析页的名字比。
+        """
+        if not self._analysis_group_is_active():
+            return None
+        return self.current_view_key()
+
+    #
+    # On view changed scope
+    #
+    def _on_view_changed_scope(self, _index: int) -> None:
+        self._sync_residual_home()
+        self._sync_pane_scope()
+
+    #
+    # Residual is docked
+    #
+    def _residual_is_docked(self) -> bool:
+        """残差卡此刻是不是正当「加权残差」这一页的正文。"""
+        return self._residual_host.layout().indexOf(self.residual_pane) != -1
+
+    #
+    # Sync residual home
+    #
+    def _sync_residual_home(self) -> None:
+        """把那张唯一的残差卡放到此刻该在的位置。
+
+        设计稿 帧① 两处都要它：tab 条上有「加权残差」，画布下半段又钉着这张卡。一个控件
+        只有一个父件，真做两份就是画两遍、各记一套缩放状态——读者在 tab 里放大完回到下半
+        段会看到另一个视野，而两边本该是同一条曲线。所以选中这一段时卡搬进那一页当正文，
+        其余时候搬回 splitter 里紧跟 tab 组的那一格。
+        """
+        if getattr(self, "_interactions", None) is None:
+            return
+        if self.current_view_key() == RESIDUAL_KEY:
+            if not self._residual_is_docked():
+                self._residual_host.layout().addWidget(self.residual_pane)
+            # 钉在下半段时可能被步骤范围关掉过；搬进来当正文就得亮着，之后由 tab 决定这
+            # 一页露不露。
+            self.residual_pane.show()
+            return
+        if self.plot_splitter.indexOf(self.residual_pane) == -1:
+            self.plot_splitter.insertWidget(self._residual_slot, self.residual_pane)
+            self.plot_splitter.setStretchFactor(self._residual_slot, 4)
+
+    #
+    # Sync pane scope
+    #
+    def _sync_pane_scope(self) -> None:
+        """把 ``canvas_pane_keys`` 落到四段的可见性上。
+
+        分析页还有一道自己的闸，和步骤是「与」而不是覆盖：没有结果时它是四张空图，哪一步
+        都不该露。SLD 剖面那一道闸交给 ``_sld_is_wanted`` 判。
+        """
+        wanted = self.canvas_pane_keys()
+        # 收的是整组（行头 + 页面），不是单独那个页面壳：只藏页面会留下一条孤零零的 tab
+        # 条，读者点得动它却看不到任何结果。
+        self.reflectivity_group.setVisible("reflectivity" in wanted)
+        # 残差卡当着「加权残差」那一页的正文时，露不露由 tab 说了算：读者刚点开这一段，
+        # 步骤范围没把它算进来就把它关掉，点开的会是一页空白。
+        if not self._residual_is_docked():
+            self.residual_pane.setVisible("residual" in wanted)
+        self.sld_pane.setVisible(self._sld_is_wanted(wanted))
+        self.analysis_group.setVisible("analysis" in wanted and self._result is not None)
+
+    def _sld_is_wanted(self, wanted: tuple[str, ...]) -> bool:
+        """SLD 剖面此刻该不该在画布上。
+
+        没有步骤作用域时（裸面板、以及步骤化之前那套四段常驻布局）沿用专家模式那道闸：那时
+        四段同屏，剖面是可以省掉的一段，省掉了画布上还剩三张图。
+
+        有步骤作用域时由步骤说了算。设计稿帧③ 的画布就是层堆叠加剖面这两张卡，对应
+        ``STEP_PLOT_PANES`` 里步骤 1/2 只有 ``sld`` 这一项——再压一层专家模式，默认项目
+        （``expert_mode`` 出厂是关的）走到结构那一步会拿到一整块空白画布，而这一步的全部
+        看点就是「改一层，剖面当场跟着动」。
+        """
+        if "sld" not in wanted:
+            return False
+        return self._step is not None or self._expert_mode is not False
+
+    def _sld_follows_edits(self, projection: Projection) -> bool:
+        """剖面此刻画的是「读者正在编辑的结构」还是「上一轮拟合出来的候选」。
+
+        结构与参数这两步（``STRUCTURE_EDIT_STEPS``）画布上半是层堆叠，改一层下半当场跟着
+        动——跟着动的只可能是标称结构那条线，拟合候选不会因为改了一层而变。设计稿帧③ 的图区
+        因此只有一条剖面、它的带和几个手柄：候选（连它的虚部、以及折进图例的「其他候选 实部
+        ×N」那一行）画在这儿会被读成「改完之后的样子」，和反射率、残差在这一步退场是同一个
+        理由。
+
+        没有步骤作用域（裸面板、以及步骤化之前那套四段常驻布局）时照旧画候选。
+        """
+        return self._step in STRUCTURE_EDIT_STEPS and projection.structure is not None
+
+    def set_expert_pane_scope(self, enabled: bool) -> None:
+        """记下专家模式，然后重算两段的可见性。
+
+        由 ``interactions._apply_tabs`` 调，取代它此前直接 ``sld_pane.setVisible(expert_mode)``：
+        可见性只在 ``_sync_pane_scope`` 一处落地，两道闸才谈得上「与」。
+        """
+        self._expert_mode = bool(enabled)
+        self._sync_pane_scope()
 
     #
     # Sync analysis visibility
     #
     def _sync_analysis_visibility(self) -> None:
         """Hide the analysis pane when no fit result exists for the active dataset."""
-        self.analysis_tabs.setVisible(self._result is not None)
+        self._sync_pane_scope()
 
     #
     # Tab titles
@@ -413,6 +615,17 @@ class PlotPanel(QWidget):
     #
     def mode_buttons(self) -> dict[str, object]:
         return self.toolbar.buttons()
+
+    #
+    # Mode actions
+    #
+    def mode_actions(self) -> dict[str, object]:
+        """三档交互模式的 ``QAction``——状态住在这里，不在按钮上。
+
+        设计稿的 ``.modebar`` 只给「范围」留了字形，查看与掩膜从条的右键菜单进，所以问
+        「模式现在是哪一档」得问 action，``mode_buttons()`` 只剩留在条上的那一枚。
+        """
+        return self.toolbar.mode_actions()
 
     #
     # Navigation buttons
@@ -598,7 +811,9 @@ class PlotPanel(QWidget):
         )
         self._result = result
         self._candidate_id = candidate_id
-        self._sync_analysis_visibility()
+        # 残差卡的抬头写这次拟合的 χ²ᵥ，所以换了结果就得重写一遍抬头；``_sync_pages``
+        # 里已经含 ``_sync_analysis_visibility``。
+        self._sync_pages()
 
     #
     # Set batch trends
@@ -788,6 +1003,10 @@ class PlotPanel(QWidget):
         self.apply_workspace(
             expert_mode=project.ui_state.expert_mode,
             tab_index=project.ui_state.plot_tab_index,
+            # 分析组的序号也要跟着投，否则每次投射都替读者按一次分析组的第一个 tab：换视图
+            # 自己就会绕回这里（``view_changed`` → ``_capture_workspace`` → 换项目 → 投射），
+            # 画布停在读者选的那一张、屏上那条 tab 条却退回开头。
+            analysis_tab_index=project.ui_state.analysis_tab_index,
         )
 
     #
@@ -1037,10 +1256,12 @@ class PlotPanel(QWidget):
                 alignment=ALIGN_KEYS[self.sld_align_selector.currentIndex()],
                 surface_label=self.sld_align_selector.itemText(1),
             )
+            # 结构那两步画的是读者手上这套结构，候选连同它折进图例的那一行都不进画面。
+            edited = self._sld_follows_edits(projection)
             draw_sld(
                 views["sld"],
-                candidate,
-                comparison_candidates(projection.result, projection.candidate_id),
+                None if edited else candidate,
+                () if edited else comparison_candidates(projection.result, projection.candidate_id),
                 shown,
                 structure=projection.structure,
                 wavelength_a=data.beam.effective_wavelength_a,
@@ -1085,10 +1306,8 @@ class PlotPanel(QWidget):
             arrays.log_model,
             r_floor=arrays.r_floor,
         )
-        log.set_quality_caption(arrays.quality_caption)
         raw = views["raw"]
         raw.show_raw_reflectivity(arrays.raw_angles, arrays.raw_intensity, arrays.raw_mask, arrays.raw_model)
-        raw.set_quality_caption(arrays.quality_caption)
         qz4 = views["qz4"]
         if arrays.qz4 is None:
             qz4.show_placeholder("暂无当前候选")
@@ -1098,7 +1317,9 @@ class PlotPanel(QWidget):
         if arrays.residual is None:
             residual.show_placeholder("暂无当前候选")
         else:
-            residual.show_residual(*arrays.residual, ylabel=arrays.residual_ylabel)
+            residual.show_residual(
+                *arrays.residual, ylabel=arrays.residual_ylabel, sigma_reference=arrays.residual_sigma_reference
+            )
 
     #
     # Draw range
@@ -1129,11 +1350,6 @@ class PlotPanel(QWidget):
         if self._released:
             return
         self._released = True
-        # The floating bar's keepers outlive the layout, so they have to be undone
-        # by hand: a filter left on the tab stack would still be called while the
-        # panel is being torn down.
-        self.tabs.removeEventFilter(self)
-        self.tabs.currentChanged.disconnect(self._raise_toolbar_overlay)
         self._interactions.release()
         for view in self._views.values():
             if isinstance(view, LiveReflectivityPlot):

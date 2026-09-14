@@ -29,7 +29,7 @@ def _single_free_setting(definition, name: str, normalization: float = 1.0) -> a
         initial,
         definition.lower if definition.name == name else initial,
         definition.upper if definition.name == name else initial,
-        locked=definition.name != name,
+        freedom=api.ParameterFreedom.from_locked(definition.name != name),
     )
 
 
@@ -106,7 +106,13 @@ def _automatic_sigma_design(tmp_path: Path):
     dataset_id = value.datasets[0].dataset_id
     value = api.set_structure(value, dataset_id, original.structure)
     settings = tuple(
-        api.ParameterSetting(definition.name, definition.initial, definition.initial, definition.initial, locked=True)
+        api.ParameterSetting(
+            definition.name,
+            definition.initial,
+            definition.initial,
+            definition.initial,
+            freedom=api.ParameterFreedom.FIXED,
+        )
         for definition in api.describe_parameters(value, dataset_id)
     )
     operation = api.fit_project(api.set_parameter_settings(value, dataset_id, settings))
