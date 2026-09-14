@@ -65,6 +65,9 @@ from xrr_fitter.model.parameters import (
     ParameterValue,
 )
 from xrr_fitter.model.progress import FitProgress  # noqa: F401 -- re-exported via xrr_fitter.api
+from xrr_fitter.model.search import GridReview as GridReview
+from xrr_fitter.model.search import SearchAllocation as SearchAllocation
+from xrr_fitter.model.search import SearchEvidence, search_evidence_tuple
 from xrr_fitter.model.slab_stack import SlabStack
 from xrr_fitter.model.structure import StructureSpec
 
@@ -148,18 +151,22 @@ def _candidate_members(
 
 @dataclass(frozen=True, slots=True)
 class SearchBudget:
-    """Versioned work limits for global, local, and bootstrap stages."""
+    """Separate versioned work limits for search, bootstrap, and diagnostics."""
 
     short_de_maxiter: int
     full_de_maxiter: int
     local_min_nfev: int
     local_nfev_per_parameter: int
     bootstrap_samples: int
+    diagnostic_samples: int = 999
 
     def __post_init__(self) -> None:
         for field in self.__dataclass_fields__:
             allow_zero = field in {"short_de_maxiter", "full_de_maxiter"}
             _positive_integer(getattr(self, field), field, allow_zero=allow_zero)
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), _pickle_values(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +195,11 @@ class ConfidenceThresholds:
             raise ValueError("prior_conflict_sigmas must be positive")
 
 
+def _diagnostic_version(value: str) -> None:
+    if value != "poisson-refit-null-v4":
+        raise ValueError("diagnostic_version must be poisson-refit-null-v4")
+
+
 @dataclass(frozen=True, slots=True)
 class FitConfig:
     """Complete deterministic fitting configuration persisted by projects."""
@@ -208,6 +220,7 @@ class FitConfig:
     jacobian_version: str = "analytic-v1"
     noise_model: str = "robust_log"
     profile_steps: int = 41
+    diagnostic_version: str = "poisson-refit-null-v4"
 
     def __post_init__(self) -> None:
         validate_noise_model(self.noise_model)
@@ -217,6 +230,7 @@ class FitConfig:
         _positive_integer(self.profile_steps, "profile_steps")
         if self.profile_steps < 5:
             raise ValueError("profile_steps must be at least five")
+        _diagnostic_version(self.diagnostic_version)
         for field in (
             "objective_name",
             "objective_version",
@@ -236,6 +250,9 @@ class FitConfig:
             raise TypeError("budget must be a SearchBudget")
         if not isinstance(self.confidence, ConfidenceThresholds):
             raise TypeError("confidence must be ConfidenceThresholds")
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), _pickle_values(self)
 
     @classmethod
     def standard(cls, master_seed: int) -> FitConfig:
@@ -479,6 +496,7 @@ class FitCandidate(ResidualMetadata):
     diagnostics: tuple[PhysicsDiagnostic, ...]
     ranking_objective: float | None = None
     noise_model: str = "robust_log"
+    search_evidence: tuple[SearchEvidence, ...] = ()
 
     def __post_init__(self) -> None:
         validate_noise_model(self.noise_model)
@@ -492,6 +510,7 @@ class FitCandidate(ResidualMetadata):
         parameters, diagnostics = _candidate_members(self.parameters, self.diagnostics)
         object.__setattr__(self, "parameters", parameters)
         object.__setattr__(self, "diagnostics", diagnostics)
+        object.__setattr__(self, "search_evidence", search_evidence_tuple(self.search_evidence))
         self._freeze_arrays()
 
     def _freeze_arrays(self) -> None:
@@ -531,6 +550,7 @@ class FitStageSummary:
     best_objective: float
     total_nfev: int
     stop_reasons: tuple[str, ...]
+    search_evidence: tuple[SearchEvidence, ...] = ()
 
     def __post_init__(self) -> None:
         _nonempty(self.stage, "stage")
@@ -548,6 +568,7 @@ class FitStageSummary:
         _positive_integer(self.total_nfev, "total_nfev", allow_zero=True)
         object.__setattr__(self, "candidate_ids", candidates)
         object.__setattr__(self, "stop_reasons", reasons)
+        object.__setattr__(self, "search_evidence", search_evidence_tuple(self.search_evidence))
 
 
 @dataclass(frozen=True, slots=True)

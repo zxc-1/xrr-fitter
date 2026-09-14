@@ -15,6 +15,7 @@ from xrr_fitter.io.codec_common import (
     _real_array_to_list,
     _sequence,
 )
+from xrr_fitter.io.codec_search import search_evidence_from_list, search_evidence_to_list
 from xrr_fitter.model.fitting import FitCandidate, FitStageSummary
 from xrr_fitter.model.instrument import PhysicsDiagnostic
 from xrr_fitter.model.parameters import ParameterDefinition, ParameterValue, PriorSpec
@@ -156,6 +157,7 @@ def _candidate_to_dict(value: FitCandidate) -> dict[str, object]:
         "valid": value.valid,
         "stop_reason": value.stop_reason,
         "nfev": value.nfev,
+        "search_evidence": search_evidence_to_list(value.search_evidence),
         "qz_a_inv": _real_array_to_list(value.qz_a_inv),
         "model_normalized": _real_array_to_list(value.model_normalized),
         "log_residuals_decades": _real_array_to_list(value.log_residuals_decades),
@@ -182,6 +184,7 @@ def _candidate_from_dict(value: object) -> FitCandidate:
         "valid",
         "stop_reason",
         "nfev",
+        "search_evidence",
         "qz_a_inv",
         "model_normalized",
         "log_residuals_decades",
@@ -208,6 +211,7 @@ def _candidate_from_dict(value: object) -> FitCandidate:
         valid=payload["valid"],
         stop_reason=payload["stop_reason"],
         nfev=payload["nfev"],
+        search_evidence=search_evidence_from_list(payload["search_evidence"]),
         qz_a_inv=_real_array_from_list(payload["qz_a_inv"]),
         model_normalized=_real_array_from_list(payload["model_normalized"]),
         log_residuals_decades=_real_array_from_list(payload["log_residuals_decades"]),
@@ -284,6 +288,7 @@ def _stages_to_list(
                 ),
                 "total_nfev": value.total_nfev,
                 "stop_reasons": list(value.stop_reasons),
+                "search_evidence": search_evidence_to_list(value.search_evidence),
             }
         )
     return result
@@ -301,6 +306,7 @@ def _stages_from_list(
         "best_objective",
         "total_nfev",
         "stop_reasons",
+        "search_evidence",
     }
     for item in _sequence(value, "stage summaries"):
         payload = _mapping(item, fields, "stage summary")
@@ -316,6 +322,7 @@ def _stages_from_list(
                 ),
                 total_nfev=payload["total_nfev"],
                 stop_reasons=tuple(_sequence(payload["stop_reasons"], "stage stop reasons")),
+                search_evidence=search_evidence_from_list(payload["search_evidence"]),
             )
         )
     return tuple(result)

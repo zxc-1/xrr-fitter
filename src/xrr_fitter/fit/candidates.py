@@ -415,6 +415,8 @@ def build_candidate_pool(
 
     Feature grids are combined only after each geometry family is bounded. The
     caller's RNG controls every stochastic choice without global state.
+    Inactive axes can collapse distinct draws to the same complete identity;
+    retain its first occurrence without resampling or merging feature families.
     """
     _validate_candidate_limit(limit)
     baseline = _declared_baseline_start(data, structure, instrument)
@@ -447,7 +449,7 @@ def build_candidate_pool(
         all_dimensions = (geometry, *dimensions)
         combinations = _selected_combinations(all_dimensions, rng, generated_limit)
         generated = tuple(_make_start(structure, combination[0], (), *combination[1:]) for combination in combinations)
-    return (*protected, *generated[:generated_limit])
+    return tuple(dict.fromkeys((*protected, *generated[:generated_limit])))
 
 
 def _start_distance(first: CandidateStart, second: CandidateStart) -> float:
@@ -502,6 +504,18 @@ def best_candidate_index(
     """Return the deterministic winner, or ``None`` for an empty scope."""
     ranked = rank_candidate_indices(candidates, eligible_ids=eligible_ids)
     return ranked[0] if ranked else None
+
+
+#
+# Materially improves
+#
+def materially_improves(problem: object, incumbent: FitCandidate, candidate: FitCandidate) -> bool:
+    thresholds = problem.config.confidence
+    required = max(
+        thresholds.equivalent_cost_fraction * abs(incumbent.objective),
+        thresholds.equivalent_cost_floor,
+    )
+    return candidate.valid and candidate.objective + required < incumbent.objective
 
 
 def cluster_candidate_indices(

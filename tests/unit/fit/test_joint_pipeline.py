@@ -403,9 +403,16 @@ def test_joint_analysis_results_are_publishable_as_one_project() -> None:
     joint = _joint_problem()
     searches = fit_api.run_joint_fit(fit_api.JointFitRequest(joint))
     results = tuple(
-        analysis_api.analyze_search_result(problem, search, profile_names=(), recompile=recompile_resampled_problem)
+        analysis_api.analyze_search_result(
+            problem,
+            search,
+            profile_names=(),
+            bootstrap_enabled=False,
+            recompile=recompile_resampled_problem,
+        )
         for problem, search in zip(joint.problems, searches, strict=True)
     )
+    assert all(result.uncertainty.bootstrap_evidence is None for result in results)
     datasets = tuple(
         dataset_project(dataset_id, result=result)
         for dataset_id, result in zip(joint.dataset_ids, results, strict=True)
@@ -424,9 +431,16 @@ def test_joint_analysis_publishes_dataset_local_evidence_to_one_project() -> Non
     joint = _asymmetric_joint_problem()
     searches = fit_api.run_joint_fit(fit_api.JointFitRequest(joint))
     results = tuple(
-        analysis_api.analyze_search_result(problem, search, profile_names=(), recompile=recompile_resampled_problem)
+        analysis_api.analyze_search_result(
+            problem,
+            search,
+            profile_names=(),
+            bootstrap_enabled=False,
+            recompile=recompile_resampled_problem,
+        )
         for problem, search in zip(joint.problems, searches, strict=True)
     )
+    assert all(result.uncertainty.bootstrap_evidence is None for result in results)
     assert tuple(len(problem.variables) for problem in joint.problems) == (1, 2)
     assert results[0].best_candidate.objective != results[1].best_candidate.objective
     assert results[0].best_candidate.ranking_objective == results[1].best_candidate.ranking_objective

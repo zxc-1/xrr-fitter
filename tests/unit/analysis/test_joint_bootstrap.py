@@ -25,6 +25,7 @@ def test_joint_bootstrap_generates_all_members_then_refits_the_shared_problem(mo
     problem, searches = joint_scale_searches(mode)
     start = searches[0].best_candidate.unit_vector
     evaluation = evaluate_joint_vector(problem, start)
+    assert evaluation.valid
     prepared = []
     fitted = []
 
@@ -45,9 +46,9 @@ def test_joint_bootstrap_generates_all_members_then_refits_the_shared_problem(mo
         return np.array([scale])
 
     result = module.bootstrap_joint_local(
-        problem.problems,
-        evaluation.local_evaluations,
-        ("shared-scale",),
+        problem,
+        tuple(search.best_candidate for search in searches),
+        start,
         sample_count=8,
         child_seed=41,
         recompile=recompile,
@@ -107,12 +108,13 @@ def test_joint_bootstrap_rejects_residuals_from_a_different_noise_model() -> Non
     module = import_module("xrr_fitter.analysis.joint_bootstrap")
     problem, searches = joint_scale_searches("gaussian")
     evaluation = evaluate_joint_vector(problem, searches[0].best_candidate.unit_vector)
-    members = tuple(replace(value, noise_model="robust_log") for value in evaluation.local_evaluations)
+    assert evaluation.valid
+    members = tuple(replace(search.best_candidate, noise_model="robust_log") for search in searches)
     with pytest.raises(ValueError, match="noise model"):
         module.bootstrap_joint_local(
-            problem.problems,
+            problem,
             members,
-            ("shared-scale",),
+            searches[0].best_candidate.unit_vector,
             sample_count=1,
             child_seed=41,
             recompile=recompile_resampled_problem,
@@ -124,6 +126,7 @@ def test_joint_bootstrap_cancellation_during_last_refit_cannot_publish() -> None
     module = import_module("xrr_fitter.analysis.joint_bootstrap")
     problem, searches = joint_scale_searches("gaussian")
     evaluation = evaluate_joint_vector(problem, searches[0].best_candidate.unit_vector)
+    assert evaluation.valid
     cancelled = False
 
     def refit(_members):
@@ -133,9 +136,9 @@ def test_joint_bootstrap_cancellation_during_last_refit_cannot_publish() -> None
 
     with pytest.raises(InterruptedError, match="cancelled"):
         module.bootstrap_joint_local(
-            problem.problems,
-            evaluation.local_evaluations,
-            ("shared-scale",),
+            problem,
+            tuple(search.best_candidate for search in searches),
+            searches[0].best_candidate.unit_vector,
             sample_count=1,
             child_seed=41,
             recompile=recompile_resampled_problem,

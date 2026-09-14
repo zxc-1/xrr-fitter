@@ -10,6 +10,7 @@ import numpy as np
 from scipy.optimize import differential_evolution, least_squares
 
 from xrr_fitter.evaluation import cached_least_squares_callbacks
+from xrr_fitter.fit.adaptive_grid import GenerationStagnation
 from xrr_fitter.fit.joint_evaluation import (
     JointEvaluation,
     evaluate_joint_vector,
@@ -18,6 +19,7 @@ from xrr_fitter.fit.joint_evaluation import (
 )
 from xrr_fitter.fit.joint_problem import compile_joint_problem
 from xrr_fitter.fit.local_search import SearchCancelled
+from xrr_fitter.model.search import SearchEvidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +30,9 @@ class SolvedJoint:
     nfev: int
     objective_increased: bool = False
     converged: bool = True
+    population: np.ndarray | None = None
+    population_energies: np.ndarray | None = None
+    search_evidence: tuple[SearchEvidence, ...] = ()
 
 
 def poll(cancelled: Callable[[], bool] | None) -> None:
@@ -74,7 +79,8 @@ def solve_joint(
         jac=jacobian,
         bounds=(0.0, 1.0),
         loss=joint_least_squares_loss(problem),
-        ftol=1e-10,
+        # One high-count member can dominate the total cost without fixing the shared point.
+        ftol=None if any(member.config.noise_model == "poisson" for member in problem.problems) else 1e-10,
         xtol=1e-10,
         gtol=1e-10,
         x_scale="jac",
@@ -146,28 +152,46 @@ def solve_joint_global(
             1,
         )
 
+    members = np.asarray(population, dtype=float)
+    stagnation = GenerationStagnation()
+    evaluations = 0
+
     def objective(value: np.ndarray) -> float:
+        nonlocal evaluations
         poll(cancelled)
-        return evaluate_joint_vector(problem, value, fit_only=True).objective
+        result = evaluate_joint_vector(problem, value, fit_only=True)
+        stagnation.observe(value, result.objective)
+        evaluations += 1
+        if evaluations == len(members):
+            stagnation.start_generations()
+        return result.objective
+
+    def generation_finished(_unit: np.ndarray, convergence: float = 0.0) -> bool:
+        poll(cancelled)
+        return stagnation.finish_generation()
 
     solved = differential_evolution(
         objective,
         [(0.0, 1.0)] * len(problem.global_variables),
-        init=np.asarray(population, dtype=float),
+        init=members,
         seed=np.random.default_rng(seed),
         maxiter=maxiter,
         updating="deferred",
         polish=False,
-        tol=1e-6,
+        # Match the single-curve three-generation rule, not energy-spread convergence.
+        tol=0.0,
+        atol=-1.0,
         workers=1,
-        callback=lambda *_args, **_kwargs: poll(cancelled),
+        callback=generation_finished,
     )
     result_unit = np.array(solved.x, dtype=float, copy=True)
     return SolvedJoint(
         result_unit,
         evaluate_joint_vector(problem, result_unit),
-        str(solved.message),
+        "three_generation_stagnation" if stagnation.stopped else str(solved.message),
         int(solved.nfev),
+        population=np.array(getattr(solved, "population", population), dtype=float, copy=True),
+        population_energies=np.array(getattr(solved, "population_energies", ()), dtype=float, copy=True),
     )
 
 

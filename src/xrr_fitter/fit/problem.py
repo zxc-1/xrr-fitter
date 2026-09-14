@@ -338,7 +338,7 @@ def compile_fit_problem(
 def recompile_resampled_problem(problem: FitEvaluationContext, data: PreparedData) -> FitEvaluationContext:
     """Reestimate data-derived evidence without changing the declared parameter layout."""
     if not np.array_equal(problem.data.fit_mask, data.fit_mask) or not np.array_equal(
-        problem.data.qz_a_inv, data.qz_a_inv
+        problem.data.qz_a_inv, data.qz_a_inv, equal_nan=True
     ):
         raise ValueError("resampling must preserve the observation grid and mask")
     validate_noise_data(data, problem.config.noise_model)

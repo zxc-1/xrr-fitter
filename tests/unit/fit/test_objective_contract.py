@@ -123,8 +123,8 @@ def test_coarse_grid_freezes_complete_data_prior_evidence() -> None:
 
 def test_current_project_declares_only_the_v2_algorithm() -> None:
     project = XrrProject.new((), master_seed=5)
-    assert project.schema_version == 3
-    assert project.algorithm_version == "xrr-fit-v2"
+    assert project.schema_version == 5
+    assert project.algorithm_version == "xrr-fit-v2-poisson-5"
     assert project.fit_config.objective_version == "2"
 
 
@@ -154,3 +154,10 @@ def test_joint_solver_and_scalar_target_share_v2_data_and_unbalanced_priors() ->
     count = sum(member.objective_point_count for member in problem.problems)
     solver_total = np.sum(joint_least_squares_loss(problem)(evaluation.residuals**2)[0]) / 2
     assert solver_total / count == pytest.approx(evaluation.objective, rel=1e-12)
+
+
+def test_current_project_rejects_the_previous_poisson_refinement_identity() -> None:
+    payload = project_to_dict(XrrProject.new((), master_seed=5))
+    payload["algorithm_version"] = "xrr-fit-v2-poisson-1"
+    with pytest.raises(ProjectSchemaError, match="unsupported algorithm_version"):
+        project_from_dict(payload)

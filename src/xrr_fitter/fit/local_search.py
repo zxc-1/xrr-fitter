@@ -120,7 +120,8 @@ def solve_local(
         max_nfev=max_nfev,
         method="trf",
         x_scale="jac",
-        ftol=1e-10,
+        # Irreducible Poisson misfit must not hide resolvable absolute Q/KL differences.
+        ftol=None if problem.config.noise_model == "poisson" else 1e-10,
         xtol=1e-10,
         gtol=1e-10,
     )

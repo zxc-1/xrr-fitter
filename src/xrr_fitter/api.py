@@ -119,6 +119,7 @@ from xrr_fitter.services.projects import (
     set_batch_mode,
     set_dock_state,
     set_expert_mode,
+    set_fit_config,
     set_workspace_state,
 )
 from xrr_fitter.services.results import summarize_automatic_results
@@ -252,6 +253,7 @@ __all__ = (
     "set_constraint_rules",
     "set_dock_state",
     "set_expert_mode",
+    "set_fit_config",
     "set_fit_mask",
     "set_instrument",
     "set_parameter_priors",

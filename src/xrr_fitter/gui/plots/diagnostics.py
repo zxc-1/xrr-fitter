@@ -238,7 +238,7 @@ def draw_empty(view: DiagnosticView, title: str, message: str = "暂无可用数
 def _axes(figure: Figure, key: str) -> object:
     if key == "uncertainty":
         correlation, profile = figure.subplots(1, 2)
-        profile.set_title("参数剖面似然与区间")
+        profile.set_title("参数剖面与区间")
         return correlation
     return figure.subplots()
 

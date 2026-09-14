@@ -28,6 +28,13 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.noise import candidate_mode_lines
+from xrr_fitter.gui.results.inference_text import (
+    bootstrap_metadata,
+    covariance_metadata,
+    interval_metadata,
+    residual_diagnostic_lines,
+)
 
 CLASSIFICATION_LABELS = {
     "bootstrap_failure_rate": "Bootstrap 失败率超过阈值",
@@ -121,7 +128,7 @@ def _interval_text(interval: object) -> str:
 def _profile_text(profile: object) -> str:
     lower = "闭合" if profile.lower_closed else "开放"
     upper = "闭合" if profile.upper_closed else "开放"
-    return f"{profile.name}（下侧{lower}，上侧{upper}）"
+    return f"{profile.name}（下侧{lower}，上侧{upper}；{interval_metadata(profile)}）"
 
 
 def _report_lines(report: object) -> list[str]:
@@ -132,14 +139,14 @@ def _report_lines(report: object) -> list[str]:
     profiles = _joined(_profile_text(profile) for profile in report.profiles)
     intervals = _joined(_interval_text(item) for item in report.bootstrap_intervals)
     lines = [
-        f"Bootstrap 失败率：{report.bootstrap_failure_rate:.3g}",
+        *covariance_metadata(report),
+        *bootstrap_metadata(report),
         f"边界命中（可疑）：{boundaries}",
         f"先验冲突（信息）：{_joined_or(report.prior_conflicts, '无')}",
         f"强相关：{correlations}",
         f"profile 区间：{profiles or '不可用'}",
         f"bootstrap 区间：{intervals or '不可用'}",
-        f"系统性残差：{'是' if report.systematic_residual else '否'}",
-        f"残差 ACF：{'是' if report.residual_autocorrelation else '否'}",
+        *residual_diagnostic_lines(report),
     ]
     return lines
 
@@ -291,6 +298,9 @@ def _evidence_lines(result: object, candidate_id: str | None) -> list[str]:
     lines = ["可信度仅针对当前结构模型", *_classification_lines(result)]
     if candidate_id is None:
         return [*lines, "尚未选择候选解"]
+    candidate = next((value for value in result.candidates if value.candidate_id == candidate_id), None)
+    if candidate is not None:
+        lines.extend(candidate_mode_lines(candidate))
     report = result.uncertainty
     if report is None:
         return [*lines, f"当前候选 {candidate_id} 暂无不确定度证据"]

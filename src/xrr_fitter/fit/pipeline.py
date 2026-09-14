@@ -13,12 +13,12 @@ from xrr_fitter.evaluation import (
 )
 from xrr_fitter.fit.candidates import best_candidate_index
 from xrr_fitter.fit.checkpoint import build_checkpoint
+from xrr_fitter.fit.profile_rescue import reconverge_profile_basin
 from xrr_fitter.fit.resume import ResumePlan, validate_resume_checkpoint
 from xrr_fitter.fit.stages import (
     StageOutcome,
     compile_coarse_problem,
     local_stage_continuation,
-    reconverge_profile_basin,
     reserve_child_seeds,
     run_local_stage,
     run_stage_a,
@@ -332,6 +332,7 @@ def _profile_summary(
         min(candidate.objective for candidate in rebuilt),
         sum(candidate.nfev for candidate in rebuilt),
         tuple(candidate.stop_reason for candidate in rebuilt),
+        tuple(evidence for candidate in rebuilt for evidence in candidate.search_evidence),
     )
 
 

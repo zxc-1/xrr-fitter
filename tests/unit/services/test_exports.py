@@ -20,6 +20,7 @@ DATASET_FILES = (
     "fit_overview.png",
     "fit_result.json",
     "fit_result.xlsx",
+    "parameters.csv",
     "residuals.png",
     "run_log.txt",
     "sld_profile.png",
@@ -32,6 +33,7 @@ DATASET_FILES_WITH_ORT = (
     "fit_result.json",
     "fit_result.ort",
     "fit_result.xlsx",
+    "parameters.csv",
     "residuals.png",
     "run_log.txt",
     "sld_profile.png",
@@ -64,6 +66,7 @@ def _fitted_project(tmp_path: Path):
 def _stub_serializers(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (
         "dataset_json_bytes",
+        "parameters_csv_bytes",
         "dataset_workbook_bytes",
         "fit_overview_png",
         "sld_profile_png",
@@ -110,6 +113,7 @@ def test_export_defers_serializers_until_artifact_render(
     calls: list[str] = []
     for name in (
         "dataset_json_bytes",
+        "parameters_csv_bytes",
         "dataset_workbook_bytes",
         "fit_overview_png",
         "sld_profile_png",
@@ -134,6 +138,7 @@ def test_export_defers_serializers_until_artifact_render(
     rendered = {producer.path: producer.render() for producer in producers}
     assert set(calls) == {
         "dataset_json_bytes",
+        "parameters_csv_bytes",
         "dataset_workbook_bytes",
         "fit_overview_png",
         "sld_profile_png",
@@ -251,8 +256,8 @@ def test_export_omits_ort_covariance_owned_by_another_candidate(
     captured: dict[str, object] = {}
     _stub_serializers(monkeypatch)
 
-    def serialize_orso(_context, *, covariance):
-        captured["covariance"] = covariance
+    def serialize_orso(export_context):
+        captured["context"] = export_context
         return b"orso-document"
 
     monkeypatch.setattr(exports, "orso_bytes", serialize_orso)
@@ -260,4 +265,5 @@ def test_export_omits_ort_covariance_owned_by_another_candidate(
     artifacts = exports._dataset_artifacts(context, include_ort=True)
     next(item for item in artifacts.files if item.path == "fit_result.ort").render()
 
-    assert captured["covariance"] is None
+    assert captured["context"] is context
+    assert captured["context"].selected_uncertainty is None

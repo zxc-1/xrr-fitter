@@ -662,8 +662,8 @@ def test_pipeline_archives_stage_b_evidence_and_routes_only_active_clusters(
 
     def forced_archive(values, **_kwargs):
         archive_calls.append(tuple(value.candidate_id for value in values))
-        archived = replace(values[1], seed_index=-1, stop_reason="early_eliminated")
-        return candidates.StageBArchive((values[0],), (archived,), (5,))
+        archived = tuple(replace(value, seed_index=-1, stop_reason="early_eliminated") for value in values[1:])
+        return candidates.StageBArchive((values[0],), archived, (5,))
 
     monkeypatch.setattr(stages, "solve_global", no_op_global)
     monkeypatch.setattr(stages, "solve_local", _unchanged_local_solution)
@@ -672,8 +672,11 @@ def test_pipeline_archives_stage_b_evidence_and_routes_only_active_clusters(
     result = pipeline.run_fit_search(pipeline.FitSearchRequest("curve", _problem(seed=759)))
     candidate_ids = tuple(value.candidate_id for value in result.candidates)
 
-    assert archive_calls == [("B-0", "B-1")]
-    assert any(value.candidate_id == "B-1" and value.stop_reason == "early_eliminated" for value in result.candidates)
+    assert archive_calls == [("B-declared-start", "B-0", "B-1")]
+    assert tuple(value.candidate_id for value in result.candidates if value.stop_reason == "early_eliminated") == (
+        "B-0",
+        "B-1",
+    )
     assert tuple(value for value in candidate_ids if value.startswith("C-0-")) == tuple(
         f"C-0-{index}" for index in range(6)
     )

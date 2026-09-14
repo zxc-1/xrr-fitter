@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -20,6 +21,7 @@ from xrr_fitter.gui import messages, theme
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.fitting.controller import FitController
 from xrr_fitter.gui.fitting.progress import ProgressView
+from xrr_fitter.gui.noise import NOISE_MODE_LABELS, NOISE_MODE_REQUIREMENTS
 
 
 class FitPanel(QWidget):
@@ -63,6 +65,7 @@ class FitPanel(QWidget):
         self._refresh_readiness()
 
     def _build_controls(self) -> None:
+        self._build_noise_controls()
         self.batch_selector = QComboBox()
         self.batch_selector.setObjectName("batchModeSelector")
         self.batch_selector.addItem("独立拟合", "independent")
@@ -104,11 +107,43 @@ class FitPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(theme.SPACE_SM)
+        noise_row = QHBoxLayout()
+        noise_row.addWidget(self.noise_label)
+        noise_row.addWidget(self.noise_selector, 1)
+        layout.addLayout(noise_row)
+        layout.addWidget(self.noise_requirements)
         layout.addLayout(batch_row)
         layout.addLayout(buttons)
         layout.addWidget(self.progress_view)
         layout.addWidget(self.status_label)
         self._project_running_state(False)
+
+    def _build_noise_controls(self) -> None:
+        self.noise_selector = QComboBox()
+        self.noise_selector.setObjectName("noiseModelSelector")
+        self.noise_selector.setAccessibleName("噪声模式")
+        for mode, label in NOISE_MODE_LABELS.items():
+            self.noise_selector.addItem(label, mode)
+        self.noise_label = QLabel("噪声模式")
+        self.noise_label.setBuddy(self.noise_selector)
+        self.noise_requirements = QLabel()
+        self.noise_requirements.setObjectName("noiseModelRequirements")
+        self.noise_requirements.setWordWrap(True)
+        self.noise_selector.currentIndexChanged.connect(self._noise_mode_selected)
+
+    def _noise_mode_selected(self, _index: int) -> None:
+        current = self.document.project
+        config = replace(current.fit_config, noise_model=str(self.noise_selector.currentData()))
+        updated = api.set_fit_config(current, config)
+        if updated is not current:
+            self.document.replace_project(updated)
+
+    def _sync_noise_selector(self) -> None:
+        mode = self.document.project.fit_config.noise_model
+        blocker = QSignalBlocker(self.noise_selector)
+        self.noise_selector.setCurrentIndex(self.noise_selector.findData(mode))
+        del blocker
+        self.noise_requirements.setText(NOISE_MODE_REQUIREMENTS[mode])
 
     def _connect_controller(self) -> None:
         self.controller.running_changed.connect(self._project_running_state)
@@ -286,6 +321,7 @@ class FitPanel(QWidget):
             readiness = self._readiness if self.document.project.ui_state.expert_mode else self._automatic_readiness
             self._show_readiness(readiness)
         self._sync_batch_selector()
+        self._sync_noise_selector()
         self._sync_mode_visibility()
         self._refresh_controls()
 
@@ -308,6 +344,7 @@ class FitPanel(QWidget):
         self.cancel_button.setEnabled(active)
         self.force_button.setEnabled(active)
         self.batch_selector.setEnabled(not active)
+        self.noise_selector.setEnabled(not active)
         self._refresh_start_label()
 
     def _refresh_start_label(self) -> None:

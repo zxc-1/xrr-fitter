@@ -6,6 +6,9 @@ seed, C and D refine that single lineage, and each Stage-E seed publishes an
 atomic resumable prefix. Checkpoint batches transpose the aligned global history
 back by dataset. Resume accepts a batch only when every member describes the
 same joint state and deterministic child-seed prefix.
+Both DE stages optimize the first aligned grid and select their retained starts
+only after full-objective review. Per-call evidence records the global work once
+before projection; Stage E keeps the DE and local budgets and stop reasons apart.
 Stage-E summaries accumulate only completed seeds, so cancellation cannot expose
 a candidate or checkpoint for an unfinished prefix.
 Fresh automatic refinement may replace the declared Stage-A value with a
@@ -21,6 +24,7 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
+from xrr_fitter.fit.adaptive_review import joint_grid_contexts, review_joint_population
 from xrr_fitter.fit.candidates import best_candidate_index, candidate_from_evaluation
 from xrr_fitter.fit.checkpoint import build_checkpoint
 from xrr_fitter.fit.global_search import build_de_population
@@ -60,6 +64,7 @@ from xrr_fitter.model.fitting import (
 )
 from xrr_fitter.model.parameters import ConstraintRule, SharingRule
 from xrr_fitter.model.provenance import fit_search_provenance_sha256
+from xrr_fitter.model.search import SearchAllocation, SearchEvidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +136,13 @@ def _project_candidate(
         ranking = None if solved.objective_increased else solved.evaluation.objective
         if solved.objective_increased:
             candidate = replace(candidate, valid=False)
-        projected.append(replace(candidate, ranking_objective=ranking))
+        projected.append(
+            replace(
+                candidate,
+                ranking_objective=ranking,
+                search_evidence=solved.search_evidence,
+            )
+        )
     return tuple(projected)
 
 
@@ -152,6 +163,7 @@ def _summary(
         float(best),
         sum(candidate.nfev for candidate in first_dataset),
         tuple(candidate.stop_reason for candidate in first_dataset),
+        tuple(evidence for candidate in first_dataset for evidence in candidate.search_evidence),
     )
 
 
@@ -192,6 +204,7 @@ def _append_stage_e(
         min(previous.best_objective, objective),
         previous.total_nfev + primary.nfev,
         previous.stop_reasons + (primary.stop_reason,),
+        previous.search_evidence + primary.search_evidence,
     )
     return _JointState(
         tuple(existing + (addition,) for existing, addition in zip(state.candidates, candidate, strict=True)),
@@ -218,6 +231,38 @@ def _local_budget(problem: JointFitProblem) -> int:
         budget.local_min_nfev,
         budget.local_nfev_per_parameter * (len(problem.global_variables) + 1),
     )
+
+
+def _local_evidence(
+    solved: _SolvedJoint,
+    origin: str,
+    seed: int,
+    max_nfev: int,
+    *,
+    round_index: int = 0,
+) -> SearchEvidence:
+    allocation = SearchAllocation(origin, f"{origin}-local", round_index, max_nfev, solved.nfev)
+    return SearchEvidence(origin, seed, (), (allocation,), solved.stop_reason)
+
+
+def _locked_solution(
+    problem: JointFitProblem,
+    unit: np.ndarray,
+    origin: str,
+    seed: int,
+    cancelled: Callable[[], bool] | None,
+) -> _SolvedJoint:
+    _poll(cancelled)
+    evaluation = evaluate_joint_vector(problem, unit)
+    _poll(cancelled)
+    evidence = SearchEvidence(
+        origin,
+        seed,
+        (),
+        (SearchAllocation(origin, origin, 0, 1, 1),),
+        "no_free_parameters",
+    )
+    return _SolvedJoint(unit, evaluation, "no_free_parameters", 1, search_evidence=(evidence,))
 
 
 def _append_solution(
@@ -260,20 +305,30 @@ def _run_stage_b(
             population_size=max(32, 6 * len(problem.global_variables)),
         )
         solved = _solve_joint_global(
-            problem,
+            joint_grid_contexts(problem)[0],
             initial,
             population,
             seed=seed,
             maxiter=problem.problems[0].config.budget.short_de_maxiter,
             cancelled=cancelled,
         )
-    else:
-        solved = _SolvedJoint(
-            initial,
-            evaluate_joint_vector(problem, initial),
-            "no_free_parameters",
-            1,
+        starts, evidence = review_joint_population(
+            problem,
+            solved,
+            "B-0",
+            seed,
+            len(population) * (problem.problems[0].config.budget.short_de_maxiter + 1),
+            cancelled=cancelled,
         )
+        solved = replace(
+            solved,
+            unit_vector=starts[0],
+            evaluation=evaluate_joint_vector(problem, starts[0]),
+            search_evidence=(evidence,),
+        )
+    else:
+        solved = _locked_solution(problem, initial, "B-0", seed, cancelled)
+    _poll(cancelled)
     _append_solution(
         problem,
         solved,
@@ -294,6 +349,7 @@ def _run_local_joint_stage(
     problem: JointFitProblem,
     state: _JointState,
     stage: str,
+    seed: int,
     progress: Callable[[FitProgress], None] | None,
     cancelled: Callable[[], bool] | None,
 ) -> tuple[tuple[tuple[FitCandidate, ...], ...], FitStageSummary]:
@@ -302,7 +358,10 @@ def _run_local_joint_stage(
     if len(parents) != 1:
         raise ValueError(f"joint stage {stage} requires one parent candidate")
     projected: list[tuple[FitCandidate, ...]] = []
-    solved = _solve_joint(problem, parents[0], _local_budget(problem), cancelled)
+    maximum = _local_budget(problem)
+    solved = _solve_joint(problem, parents[0], maximum, cancelled)
+    _poll(cancelled)
+    solved = replace(solved, search_evidence=(_local_evidence(solved, f"{stage}-0", seed, maximum),))
     _append_solution(
         problem,
         solved,
@@ -324,32 +383,44 @@ def _stage_e_solution(
     start: np.ndarray,
     seed: int,
     cancelled: Callable[[], bool] | None,
+    *,
+    origin: str,
 ) -> _SolvedJoint:
     if not problem.global_variables:
-        return _SolvedJoint(
-            start,
-            evaluate_joint_vector(problem, start),
-            "no_free_parameters",
-            1,
-        )
+        return _locked_solution(problem, start, origin, seed, cancelled)
     population = build_de_population(
         start,
         seed=seed,
         population_size=max(64, 8 * len(problem.global_variables)),
     )
     global_solved = _solve_joint_global(
-        problem,
+        joint_grid_contexts(problem)[0],
         start,
         population,
         seed=seed,
         maxiter=problem.problems[0].config.budget.full_de_maxiter,
         cancelled=cancelled,
     )
-    return _solve_joint(
+    population_starts, evidence = review_joint_population(
         problem,
-        global_solved.unit_vector,
-        _local_budget(problem),
+        global_solved,
+        origin,
+        seed,
+        len(population) * (problem.problems[0].config.budget.full_de_maxiter + 1),
+        cancelled=cancelled,
+    )
+    maximum = _local_budget(problem)
+    local_solved = _solve_joint(
+        problem,
+        population_starts[0],
+        maximum,
         cancelled,
+    )
+    _poll(cancelled)
+    return replace(
+        local_solved,
+        nfev=global_solved.nfev + local_solved.nfev,
+        search_evidence=(evidence, _local_evidence(local_solved, origin, seed, maximum, round_index=1)),
     )
 
 
@@ -524,7 +595,7 @@ def _run_joint_stage(
         return _run_stage_b(problem, initial, seeds, progress, cancelled)
     if stage not in {"C", "D"}:
         raise ValueError(f"unsupported single-candidate joint stage: {stage}")
-    return _run_local_joint_stage(problem, state, stage, progress, cancelled)
+    return _run_local_joint_stage(problem, state, stage, seeds[0], progress, cancelled)
 
 
 def _completed_stage_e(state: _JointState) -> int:
@@ -560,6 +631,7 @@ def _run_stage_e_prefix(
             start,
             final_seeds[index],
             cancelled,
+            origin=f"E-{index}",
         )
         projected: list[tuple[FitCandidate, ...]] = []
         best = _append_solution(

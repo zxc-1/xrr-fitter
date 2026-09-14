@@ -18,12 +18,15 @@ from xrr_fitter.model.instrument import PhysicsDiagnostic
 
 def _validated_vectors(vectors: object) -> np.ndarray:
     values = np.asarray(vectors, dtype=float)
-    if values.ndim != 2 or min(values.shape) < 1 or np.any(~np.isfinite(values)):
+    if values.ndim != 2 or values.shape[0] < 1 or np.any(~np.isfinite(values)):
         raise ValueError("vectors must be a nonempty finite matrix")
     return values
 
 
 def _rms_distance(first: np.ndarray, second: np.ndarray) -> float:
+    # A fully locked model has exactly one point in its zero-dimensional space.
+    if first.size == 0:
+        return 0.0
     return float(np.sqrt(np.mean((first - second) ** 2)))
 
 

@@ -65,6 +65,7 @@ class MaskEditor(QObject):
             dataset.beam,
             dataset.import_angle_offset_deg,
             dataset.column_mapping,
+            self._document.project.fit_config.noise_model,
         )
 
     def _dataset(self, dataset_id: str) -> api.DatasetProject:

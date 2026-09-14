@@ -341,7 +341,7 @@ def test_fit_auto_readiness_or_domain_failure_maps_to_input_error_without_traceb
     project_path = tmp_path / "p.json"
     project_path.write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(commands.api, "load_project", lambda path: object())
+    monkeypatch.setattr(commands.api, "load_project", lambda path: commands.api.new_project())
     monkeypatch.setattr(
         commands.api,
         "inspect_sources",

@@ -27,6 +27,8 @@ from xrr_fitter.io.codec_inference import (
     bootstrap_to_dict,
     covariance_from_dict,
     covariance_to_dict,
+    parameter_members_from_list,
+    parameter_members_to_list,
     residual_from_dict,
     residual_to_dict,
 )
@@ -247,6 +249,7 @@ def _uncertainty_to_dict(
         return None
     payload: dict[str, object] = {
         "correlation_names": list(value.correlation_names),
+        "parameter_members": parameter_members_to_list(value.parameter_members),
         "correlation_matrix": _real_array_to_list(value.correlation_matrix),
         "profiles": [_profile_to_dict(item) for item in value.profiles],
         "bootstrap_intervals": [list(item) for item in value.bootstrap_intervals],
@@ -282,6 +285,7 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         return None
     required = {
         "correlation_names",
+        "parameter_members",
         "correlation_matrix",
         "profiles",
         "bootstrap_intervals",
@@ -306,6 +310,7 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
     )
     return UncertaintyReport(
         correlation_names=tuple(_sequence(payload["correlation_names"], "correlation names")),
+        parameter_members=parameter_members_from_list(payload["parameter_members"]),
         correlation_matrix=_square_array_from_list(payload["correlation_matrix"]),
         profiles=tuple(_profile_from_dict(item) for item in _sequence(payload["profiles"], "parameter profiles")),
         bootstrap_intervals=_rows(payload["bootstrap_intervals"], "bootstrap intervals"),

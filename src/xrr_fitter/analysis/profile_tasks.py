@@ -103,6 +103,12 @@ def _run_profile_tasks(
     return results
 
 
+def _profile_direction_results(plans, scan_plan_direction, task_runner):
+    tasks = tuple(partial(scan_plan_direction, plan, direction) for plan in plans for direction in (-1, 1))
+    results = _run_profile_tasks(tasks, task_runner)
+    return tuple((results[2 * index], results[2 * index + 1]) for index in range(len(plans)))
+
+
 def build_problem_profiles(
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
@@ -118,6 +124,7 @@ def build_problem_profiles(
     values_by_name: Callable[..., dict[str, float]],
     cancelled: Callable[[], bool] | None = None,
     task_runner=None,
+    interval_options: dict[str, object] | None = None,
 ) -> tuple[ParameterProfile, ...]:
     """Build profiles through flattened direction and refinement task batches.
 
@@ -125,7 +132,8 @@ def build_problem_profiles(
     two declares exactly one finalization task per profile. Both runner results
     are indexed rather than observed by completion time.
     """
-    interval_options = problem_profile_options(problem, unit_vector) if names else {}
+    if interval_options is None:
+        interval_options = problem_profile_options(problem, unit_vector) if names else {}
     plans = tuple(
         _problem_profile_plan(
             problem,
@@ -142,9 +150,7 @@ def build_problem_profiles(
         )
         for name in names
     )
-    direction_tasks = tuple(partial(scan_plan_direction, plan, direction) for plan in plans for direction in (-1, 1))
-    directional = _run_profile_tasks(direction_tasks, task_runner)
-    scans = tuple((directional[2 * index], directional[2 * index + 1]) for index in range(len(plans)))
+    scans = _profile_direction_results(plans, scan_plan_direction, task_runner)
     finish_tasks = tuple(partial(finish_plan, plan, scan) for plan, scan in zip(plans, scans, strict=True))
     finished = _run_profile_tasks(finish_tasks, task_runner)
     return tuple(result[0] for result in finished)

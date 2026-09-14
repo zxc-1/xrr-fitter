@@ -560,7 +560,9 @@ class DataPanel(QWidget):
             mapping = None
             recursive = False
             if preset is None or self._force_preset_dialog:
-                dialog = ImportDialog(paths, folder_mode=folder, parent=self)
+                dialog = ImportDialog(
+                    paths, folder_mode=folder, noise_model=self.document.project.fit_config.noise_model, parent=self
+                )
                 if dialog.exec() != QDialog.DialogCode.Accepted:
                     return
                 instrument = dialog.instrument_spec()

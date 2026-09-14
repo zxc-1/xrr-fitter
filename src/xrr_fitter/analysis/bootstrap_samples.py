@@ -6,9 +6,11 @@ from collections.abc import Callable, Iterable
 from typing import Protocol
 
 import numpy as np
+from scipy.stats import beta
 
 from xrr_fitter.model.analysis import MIN_BOOTSTRAP_SUCCESS, BootstrapResult
 from xrr_fitter.model.bootstrap import bootstrap_calibration_reason
+from xrr_fitter.model.bootstrap_intervals import JOINT_POISSON_INTERVAL_METHOD, bootstrap_interval_method
 
 BootstrapFit = Callable[[np.random.Generator, int], np.ndarray | str | None]
 BootstrapProgress = Callable[[int, int], None]
@@ -120,15 +122,43 @@ def _stable_percentiles(matrix: np.ndarray) -> np.ndarray:
     return result
 
 
+def _finite_mc_ranks(count: int) -> tuple[int, int]:
+    """Narrowest symmetric order interval with 95% assurance of 96% content.
+
+    This is a statement about finite draws from the bootstrap distribution,
+    not a theorem of fixed-parameter plug-in bootstrap coverage.
+    """
+    lower, upper = 0, (count + 1) // 2
+    while upper - lower > 1:
+        rank = (lower + upper) // 2
+        probability = float(beta.cdf(0.96, count + 1 - 2 * rank, 2 * rank))
+        if not np.isfinite(probability):
+            raise ValueError("bootstrap content assurance is not representable")
+        if probability <= 0.05:
+            lower = rank
+        else:
+            upper = rank
+    if lower == 0:
+        raise ValueError("bootstrap sample count cannot support the declared content assurance")
+    return lower, count + 1 - lower
+
+
 def _bootstrap_intervals(
     names: tuple[str, ...],
     matrix: np.ndarray,
     failure_rate: float,
-) -> tuple[tuple[str, float, float], ...]:
+    interval_method: str,
+) -> tuple[tuple[tuple[str, float, float], ...], tuple[int, int] | None]:
     if failure_rate > 0.20 or matrix.shape[0] < MIN_BOOTSTRAP_SUCCESS:
-        return ()
-    lower, upper = _stable_percentiles(matrix)
-    return tuple((name, float(lower[index]), float(upper[index])) for index, name in enumerate(names))
+        return (), None
+    ranks = None
+    if interval_method == JOINT_POISSON_INTERVAL_METHOD:
+        ranks = _finite_mc_ranks(matrix.shape[0])
+        lower, upper = np.sort(matrix, axis=0)[np.asarray(ranks) - 1]
+    else:
+        lower, upper = _stable_percentiles(matrix)
+    intervals = tuple((name, float(lower[index]), float(upper[index])) for index, name in enumerate(names))
+    return intervals, ranks
 
 
 def bootstrap_result_from_fits(
@@ -146,9 +176,21 @@ def bootstrap_result_from_fits(
         progress,
     )
     failure_rate = len(failures) / count
-    intervals = _bootstrap_intervals(names, matrix, failure_rate)
+    policy = bootstrap_interval_method(method)
+    intervals, ranks = _bootstrap_intervals(names, matrix, failure_rate, policy)
     reason = bootstrap_calibration_reason(matrix.shape[0], failure_rate)
-    return BootstrapResult(names, matrix, intervals, float(failure_rate), count, failures, method, reason)
+    return BootstrapResult(
+        names,
+        matrix,
+        intervals,
+        float(failure_rate),
+        count,
+        failures,
+        method,
+        reason,
+        interval_method=policy,
+        interval_ranks=ranks,
+    )
 
 
 def bootstrap_local(

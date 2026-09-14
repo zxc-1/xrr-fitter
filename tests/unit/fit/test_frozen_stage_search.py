@@ -69,45 +69,33 @@ def _frozen_single_layer_problem():
 
 
 def _assert_frozen_candidates(result) -> None:
-    assert result.best_index == 6
-    assert result.warnings == (
-        "stage_a_invalid_candidate_evaluation",
-        "stage_a_fringe_candidate_rejected",
-    )
+    assert result.best_index == 3
+    assert result.warnings == ("stage_a_fringe_candidate_rejected",)
     assert tuple(candidate.candidate_id for candidate in result.candidates) == (
         "B-0",
-        "B-1",
         "C-0-0",
-        "C-1-0",
         "D-0-0",
-        "D-1-0",
         "E-0",
         "E-1",
         "E-2",
         "E-3",
     )
     assert tuple(candidate.nfev for candidate in result.candidates) == (
-        33,
-        33,
+        67,
         2,
         2,
-        2,
-        2,
-        112,
-        112,
-        112,
-        112,
+        106,
+        106,
+        106,
+        106,
     )
     np.testing.assert_array_equal(
         np.asarray([candidate.unit_vector[0] for candidate in result.candidates]),
         np.asarray(
             [
                 0.4870315924464057,
-                0.8950138248837597,
                 0.4870315924464057,
-                0.8950138248837597,
                 0.4870315924464057,
-                0.8950138248837597,
                 0.4869588145930038,
                 0.4869588145930038,
                 0.4869588145930038,
@@ -117,32 +105,32 @@ def _assert_frozen_candidates(result) -> None:
     )
     assert tuple(summary.total_nfev for summary in result.stage_summaries) == (
         512,
-        66,
-        4,
-        4,
-        448,
+        67,
+        2,
+        2,
+        424,
     )
 
 
 def _assert_frozen_progress(progress) -> None:
     assert tuple(value.total for value in progress[-10:]) == (
+        512,
+        512,
         2,
         2,
-        6,
-        6,
-        6,
-        6,
+        1,
+        1,
         4,
         4,
         4,
         4,
     )
     assert tuple(value.message for value in progress[-10:]) == (
+        "processed initial candidate 511; physically rejected 0; invalid evaluations 0",
+        "processed initial candidate 512; physically rejected 0; invalid evaluations 0",
         "completed short differential evolution 1",
         "completed short differential evolution 2",
         "full-resolution density refinement",
-        "full-resolution density refinement",
-        "full-resolution roughness/instrument refinement",
         "full-resolution roughness/instrument refinement",
         "completed final seed 1",
         "completed final seed 2",
@@ -167,20 +155,15 @@ def _checkpoint_identities(checkpoints) -> set[tuple[str, ...]]:
 def _assert_frozen_checkpoints(checkpoints) -> None:
     assert (
         tuple(checkpoint.runtime_warnings for checkpoint in checkpoints)
-        == (
-            (
-                "stage_a_invalid_candidate_evaluation",
-                "stage_a_fringe_candidate_rejected",
-            ),
-        )
-        * 4
+        == (("stage_a_fringe_candidate_rejected",),) * 4
     )
     assert _checkpoint_identities(checkpoints) == {
         (
             "85729258067ff1c953257f6e784b6ec5a5c9e175e92f449ae0bc04680c1e42ea",
             "1f0681cfcc77d487b345d3739394e100597601782f7ae45f900a1cefa564a84f",
             "2e006dff3a7e489619e37403d3e58c9afb50642a06acd3b1aff9c2f392cc9120",
-            "8198fef6ddead8fa2b7a30665b8d52c6ee84b360ba5d1a1f80ea8230194405dd",
+            # Diagnostic statistics v4 change identity, not this non-Poisson replay.
+            "9e6ec4d6515d908b340ff3cb88b550bfa53659695c13730479d484cd0a2a56c6",
             "bab9ebdb6b2377582c6d3e5afddbec238d6b4c427be151500cbd19c18ff076f3",
         )
     }
@@ -199,24 +182,45 @@ def test_stage_a_replays_frozen_coarse_grid_selection_and_audit() -> None:
 
     assert tuple(start.feature_key for start in starts) == (
         "declared-baseline",
-        "geometry-6",
+        "geometry-10",
     )
-    assert summary.candidate_ids == ("declared-baseline", "geometry-6")
+    assert summary.candidate_ids == ("declared-baseline", "geometry-10", "geometry-11")
     assert summary.best_objective == pytest.approx(
-        5.807945232222954,
+        5.728299963651607,
         rel=0.0,
         abs=1e-15,
     )
     assert summary.total_nfev == 512
     assert summary.stop_reasons == (
         "evaluated",
-        "invalid_evaluation:108",
-        "fringe_rejected:294",
+        "fringe_rejected:391",
     )
-    assert warnings == (
-        "stage_a_invalid_candidate_evaluation",
-        "stage_a_fringe_candidate_rejected",
+    assert warnings == ("stage_a_fringe_candidate_rejected",)
+
+
+def test_stage_a_keeps_best_full_candidate_when_fringe_screen_rejects_every_start(monkeypatch) -> None:
+    stages = import_module("xrr_fitter.fit.stages")
+    screening = import_module("xrr_fitter.fit.screening")
+    problem = _frozen_single_layer_problem()
+
+    def reject_every_candidate(_problem, candidates):
+        return screening.FringeScreenResult(
+            (),
+            False,
+            stop_reason="stage_a_all_candidates_rejected",
+        )
+
+    monkeypatch.setattr(stages, "fringe_count_screen", reject_every_candidate)
+    starts, summary, warnings = stages.run_stage_a(
+        problem,
+        problem.data.source_sha256,
+        progress=None,
+        cancelled=None,
     )
+
+    assert starts
+    assert summary.candidate_ids
+    assert "stage_a_all_candidates_rejected" in warnings
 
 
 def test_fit_search_replays_frozen_a_through_e_evidence() -> None:

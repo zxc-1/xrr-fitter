@@ -10,6 +10,7 @@ from matplotlib.ticker import LogFormatter
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.noise import residual_label
 from xrr_fitter.gui.plots.diagnostics import (
     DiagnosticView,
     current_plot_palette,
@@ -41,9 +42,9 @@ class ReflectivityPaneArrays:
     fit-dependent member empty so those panes clear rather than draw a bare data
     series as if it were a fit, matching the matplotlib placeholder state. The
     ``qz4_ylabel`` mirrors ``draw_qz4``'s dynamic axis label (it records the
-    scaling reference on overflow) and ``quality_caption`` mirrors the log/raw
-    ``J=… · 平均残差 …`` note, so the pg panes annotate identically; both are
-    ``None`` without a candidate.
+    scaling reference on overflow) and ``quality_caption`` mirrors the saved
+    objective, mode, and unit note, so both backends annotate identically. Those
+    labels are ``None`` without a candidate.
     """
 
     log_angles: np.ndarray
@@ -56,6 +57,7 @@ class ReflectivityPaneArrays:
     raw_model: np.ndarray | None
     qz4: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None
     residual: tuple[np.ndarray, np.ndarray] | None
+    residual_ylabel: str | None
     qz4_ylabel: str | None
     quality_caption: str | None
 
@@ -109,6 +111,7 @@ def _prepared_dataset(
             dataset.beam,
             dataset.import_angle_offset_deg,
             dataset.column_mapping,
+            project.fit_config.noise_model,
         )
     except (OSError, ValueError):
         return None
@@ -172,30 +175,14 @@ def prepare_project_plots(project: api.XrrProject) -> PreparedProjectPlots:
 
 
 def _quality_caption_text(candidate: object | None) -> str | None:
-    """Compose the ``J=… · 平均残差 …`` note both backends annotate with.
-
-    Factoring the string here keeps the matplotlib ``_quality_caption`` overlay and
-    the pyqtgraph ``ReflectivityPaneArrays.quality_caption`` byte-identical, so the
-    parity test that compares them is really pinning one source of truth.
-    """
+    """Caption the saved objective and mode, without recomputing a statistic."""
     if candidate is None:
         return None
-    residuals = np.asarray(candidate.log_residuals_decades, dtype=float)
-    finite = residuals[np.isfinite(residuals)]
-    parts = [f"J={candidate.objective:.4g}"]
-    if finite.size:
-        parts.append(f"平均残差 {np.mean(np.abs(finite)):.3g} decade")
-    return " · ".join(parts)
+    return f"J={candidate.objective:.4g} · {candidate.noise_model} · 残差单位 {candidate.residual_unit}"
 
 
 def _quality_caption(axes: object, candidate: object | None) -> None:
-    """Annotate how well the drawn candidate agrees with the data.
-
-    Two overlaid curves on a log axis look close whatever their disagreement, so
-    the axes state the objective the search minimised together with the mean
-    absolute log-decade miss, which reads as "off by this many decades on
-    average" and is the same quantity the exported residual plot labels.
-    """
+    """State the saved objective together with its actual noise declaration."""
     caption = _quality_caption_text(candidate)
     if caption is None:
         return
@@ -388,6 +375,7 @@ def reflectivity_pane_arrays(
             raw_model=None,
             qz4=None,
             residual=None,
+            residual_ylabel=None,
             qz4_ylabel=None,
             quality_caption=None,
         )
@@ -406,6 +394,7 @@ def reflectivity_pane_arrays(
         raw_model=model_normalized * data.normalization,
         qz4=(data_qz, data_values, model_qz, model_values),
         residual=(qz, np.asarray(candidate.weighted_residuals, dtype=float)),
+        residual_ylabel=residual_label(candidate),
         qz4_ylabel=_qz4_axis_label(data_label, model_label),
         quality_caption=_quality_caption_text(candidate),
     )
@@ -447,6 +436,6 @@ def draw_residual(view: DiagnosticView, candidate: object | None) -> None:
     axes.clear()
     axes.plot(qz, candidate.weighted_residuals, "-o", label="加权残差")
     axes.plot(qz, np.zeros_like(qz), ":", label="零参考线")
-    axes.set(title="加权残差", xlabel="qz (Å⁻¹)", ylabel="加权残差")
+    axes.set(title="加权残差", xlabel="qz (Å⁻¹)", ylabel=residual_label(candidate))
     axes.legend()
     finish_view(view)

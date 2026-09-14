@@ -414,9 +414,8 @@ def _quality_captions(panel, key):
 def test_data_and_model_views_caption_the_fit_quality_they_are_showing(qtbot) -> None:
     """A curve overlay alone does not say how well it agrees with the data.
 
-    The candidate's objective and its mean log-decade miss are both already
-    computed; without them on the axes a user judges the fit by eyeballing how
-    close two lines look, which a log axis makes unreliable.
+    The saved objective must name its noise model and residual units. The GUI
+    does not invent another fit statistic by averaging a display array.
     """
     data = prepared_data(size=4)
     candidate = _candidate(data, objective=0.25, log_residuals_decades=np.full(4, 0.1))
@@ -426,8 +425,9 @@ def test_data_and_model_views_caption_the_fit_quality_they_are_showing(qtbot) ->
         caption = _quality_captions(panel, key)
         assert len(caption) == 1, f"{key} view carries no quality caption"
         assert "J=0.25" in caption[0]
-        # Mean |log residual| in decades: a physical reading of the same miss.
-        assert "0.1" in caption[0]
+        assert "robust_log" in caption[0]
+        assert "decade" in caption[0]
+        assert "平均残差" not in caption[0]
 
 
 def test_quality_caption_stays_off_the_views_until_a_candidate_exists(qtbot) -> None:

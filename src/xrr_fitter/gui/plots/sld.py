@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from textwrap import fill
+
 import numpy as np
 
 import xrr_fitter.api as api
@@ -13,6 +15,7 @@ from xrr_fitter.gui.plots.diagnostics import (
     draw_empty,
     finish_view,
 )
+from xrr_fitter.gui.results.inference_text import compact_interval_metadata
 
 # A layer thinner than this reads as roughness, not a film; dragging an interface
 # past its predecessor is clamped here so a gesture can never invert the stack.
@@ -362,7 +365,7 @@ def _unavailable(
         axes.set_xticks(())
         axes.set_yticks(())
     correlation.set_title("相关矩阵")
-    profile.set_title("参数剖面似然与区间")
+    profile.set_title("参数剖面与区间")
     palette = apply_figure_palette(view.figure)
     for axes, text in ((correlation, message), (profile, "区间证据不可用")):
         axes.text(
@@ -377,6 +380,61 @@ def _unavailable(
     finish_view(view)
 
 
+def _profile_summary(profiles: tuple[object, ...]) -> list[str]:
+    if not profiles:
+        return []
+    metadata = tuple(dict.fromkeys(compact_interval_metadata(profile) for profile in profiles))
+    lines = [f"剖面：{len(profiles)} 个参数"]
+    if len(metadata) == 1:
+        lines.extend(metadata[0])
+    else:
+        lines.append("推断元数据因参数而异")
+    return lines
+
+
+def _draw_interval_notes(axes: object, report: object) -> None:
+    # A plot is an overview, not a scrolling evidence table. Repeated metadata
+    # and every interval bound could extend past the canvas without a warning.
+    # The candidate-owned text view retains all per-parameter evidence.
+    lines = _profile_summary(tuple(report.profiles))
+    evidence = report.bootstrap_evidence
+    if evidence is not None:
+        lines.extend(
+            (
+                f"Bootstrap：{evidence.successful_samples}/{evidence.attempted_count}",
+                f"失败率：{evidence.failure_rate:g}；区间参数：{len(report.bootstrap_intervals)}",
+            )
+        )
+        lines.extend(compact_interval_metadata(evidence))
+    if not lines:
+        axes.text(0.5, 0.5, "剖面与区间证据未执行/不可用", ha="center", va="center", transform=axes.transAxes)
+        return
+    lines.extend(("完整逐参数证据：", "结果面板的证据文本"))
+    axes.text(
+        0.02,
+        0.02,
+        "\n".join(fill(line, width=32) for line in lines),
+        ha="left",
+        va="bottom",
+        transform=axes.transAxes,
+        fontsize=theme.FONT_PT_SM,
+    )
+
+
+def _draw_profile_legend(axes: object) -> None:
+    handles, labels = axes.get_legend_handles_labels()
+    shown = 4
+    title = f"图例：{shown}/{len(labels)}（全部曲线已绘制）" if len(labels) > shown else None
+    axes.legend(
+        handles[:shown],
+        labels[:shown],
+        title=title,
+        title_fontsize=theme.FONT_PT_SM,
+        loc="upper left",
+        fontsize=theme.FONT_PT_SM,
+    )
+
+
 def _draw_profiles(axes: object, report: object) -> None:
     profiles = tuple(report.profiles)
     for profile in profiles:
@@ -384,21 +442,11 @@ def _draw_profiles(axes: object, report: object) -> None:
         span = float(np.ptp(values))
         normalized = np.zeros_like(values) if span == 0.0 else (values - np.min(values)) / span
         axes.plot(normalized, profile.objectives, "-o", label=profile.name)
-    for name, lower, upper in report.bootstrap_intervals:
-        axes.text(
-            0.02,
-            0.98 - 0.08 * len(axes.texts),
-            f"{name}: [{lower:g}, {upper:g}]",
-            ha="left",
-            va="top",
-            transform=axes.transAxes,
-        )
+    _draw_interval_notes(axes, report)
     if profiles:
-        axes.legend(fontsize=theme.FONT_PT_SM)
-    elif not report.bootstrap_intervals:
-        axes.text(0.5, 0.5, "剖面似然与区间证据不可用", ha="center", va="center", transform=axes.transAxes)
+        _draw_profile_legend(axes)
     axes.set(
-        title="参数剖面似然与区间",
+        title="参数剖面与区间",
         xlabel="参数坐标（各参数独立归一化至 [0, 1]）",
         ylabel="目标函数",
     )

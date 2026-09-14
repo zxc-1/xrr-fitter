@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from xrr_fitter.model.analysis import ConfidenceClass, FitResult
 from xrr_fitter.model.fitting import FitCheckpoint, FitSearchResult
+from xrr_fitter.model.provenance import residual_owner_sha256
 from xrr_fitter.services.parallel import OrderedTaskRunner
 
 from .common import (
@@ -65,6 +66,16 @@ def _completed_automatic_result(
     )
 
 
+def _cached_residual(prepared, search, previous_result):
+    if previous_result is None or previous_result.uncertainty is None:
+        return None
+    members = previous_result.uncertainty.member_residuals
+    if len(members) != 1:
+        return None
+    owner = residual_owner_sha256(prepared.problem, search.best_candidate, prepared.dataset_id)
+    return members[0] if members[0].owner_sha256 == owner else None
+
+
 def _automatic_fast_analysis(
     prepared: PreparedDatasetFit,
     search: FitSearchResult,
@@ -74,6 +85,7 @@ def _automatic_fast_analysis(
     task_runner: Callable,
     analysis_request: Callable,
     run_analysis: Callable,
+    previous_result: FitResult | None = None,
 ) -> FitResult:
     return run_analysis(
         analysis_request(
@@ -83,6 +95,7 @@ def _automatic_fast_analysis(
             profile_names=(),
             bootstrap_enabled=False,
             parameter_priors=prepared.updated_dataset.parameter_priors,
+            residual_evidence=_cached_residual(prepared, search, previous_result),
         ),
         cancelled=cancelled,
         progress=progress,
@@ -184,6 +197,7 @@ def fit_automatic_prepared_dataset(
                 task_runner=runner.run,
                 analysis_request=analysis_request,
                 run_analysis=run_analysis,
+                previous_result=fast_result,
             )
             decision = assess_automatic_quality(prepared.problem, fast_result)
         if decision.absorption_names:
@@ -204,6 +218,7 @@ def fit_automatic_prepared_dataset(
                     task_runner=runner.run,
                     analysis_request=analysis_request,
                     run_analysis=run_analysis,
+                    previous_result=fast_result,
                 )
                 decision = assess_automatic_quality(prepared.problem, fast_result)
         final_result = run_analysis(
@@ -214,6 +229,7 @@ def fit_automatic_prepared_dataset(
                 profile_names=decision.profile_names,
                 bootstrap_enabled=False,
                 parameter_priors=prepared.updated_dataset.parameter_priors,
+                residual_evidence=_cached_residual(prepared, search, fast_result),
             ),
             cancelled=cancelled,
             progress=progress,

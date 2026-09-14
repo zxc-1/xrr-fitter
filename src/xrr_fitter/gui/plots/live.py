@@ -272,7 +272,7 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self._hide_placeholder()
         self.set_log_mode(False)
 
-    def show_residual(self, qz: object, weighted: object) -> None:
+    def show_residual(self, qz: object, weighted: object, *, ylabel: str = "加权残差") -> None:
         """Render the weighted residual as a marked line above a zero baseline."""
         self.apply_palette(theme.current_plot_palette())
         x = np.asarray(qz, dtype=float)
@@ -284,7 +284,7 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self.reference_item.setData(x, np.zeros_like(x))
         self.set_model(None, None)
         self.excluded_item.setData([], [])
-        self._apply_labels("加权残差", "qz (Å⁻¹)", "加权残差")
+        self._apply_labels("加权残差", "qz (Å⁻¹)", ylabel)
         self._hide_placeholder()
         self.set_log_mode(False)
 
@@ -298,7 +298,7 @@ class LiveReflectivityPlot(pg.PlotWidget):
     def set_quality_caption(self, text: str | None) -> None:
         """Caption the fit quality in the corner, or clear it when text is None.
 
-        This is the pg twin of draw_*'s bottom-right ``J=… · 平均残差 …`` note; the
+        This is the pg twin of draw_*'s saved objective/mode/unit note; the
         panel supplies the string so the widget stays ignorant of the objective.
         """
         self._caption_text = text

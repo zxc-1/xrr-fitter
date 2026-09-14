@@ -206,6 +206,7 @@ def _assert_analysis_pickle_contract(api, request, restored) -> None:
         "bootstrap",
         "bootstrap_enabled",
         "parameter_priors",
+        "residual_evidence",
     )
     assert restored.dataset_id == "curve"
     assert restored.problem.data.qz_a_inv.flags.writeable is False
@@ -317,6 +318,7 @@ def test_twelve_parameter_default_profiles_use_preliminary_evidence(
     monkeypatch.setattr(module, "select_profile_names", select)
     candidates = (object(),)
     bootstrap = object()
+    residual, covariance = object(), object()
 
     selected = module._selected_profile_names(
         problem,
@@ -325,6 +327,9 @@ def test_twelve_parameter_default_profiles_use_preliminary_evidence(
         bootstrap,
         ("warning",),
         None,
+        "curve",
+        residual,
+        covariance,
     )
 
     assert selected == ("parameter.0",)
@@ -335,6 +340,9 @@ def test_twelve_parameter_default_profiles_use_preliminary_evidence(
             "profile_names": (),
             "bootstrap": bootstrap,
             "cancelled": None,
+            "dataset_id": "curve",
+            "residual_evidence": residual,
+            "covariance_evidence": covariance,
         },
     )
     assert observed["select"] == (
@@ -614,13 +622,12 @@ def test_build_report_rejects_none_lineage_for_identified_candidate() -> None:
         _api().build_uncertainty_report(problem, (identified, missing), profile_names=())
 
 
-def test_build_report_allows_missing_lineage_for_legacy_candidate_double() -> None:
+def test_owned_diagnostics_require_candidate_lineage_even_for_a_single_test_double() -> None:
     problem = _problem()
-    legacy = _legacy(_candidate(problem, "E-0"))
+    missing = _legacy(_candidate(problem, "E-0"))
 
-    report = _api().build_uncertainty_report(problem, (legacy,), profile_names=())
-
-    assert report.candidate_id is None
+    with pytest.raises(AttributeError, match="candidate_id"):
+        _api().build_uncertainty_report(problem, (missing,), profile_names=())
 
 
 def test_build_report_selects_the_persisted_global_ranking_winner(
@@ -634,7 +641,7 @@ def test_build_report_selects_the_persisted_global_ranking_winner(
         replace(_candidate(problem, "E-2"), objective=0.30, ranking_objective=20.0),
         replace(_candidate(problem, "E-3"), objective=0.40, ranking_objective=30.0),
     )
-    monkeypatch.setattr(module, "_profiles", lambda *_args: ())
+    monkeypatch.setattr(module, "_profiles", lambda *_args, **_options: ())
 
     report = module.build_uncertainty_report(problem, candidates, profile_names=())
 

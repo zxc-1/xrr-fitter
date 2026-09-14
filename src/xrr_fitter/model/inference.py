@@ -6,6 +6,8 @@ from dataclasses import dataclass, fields
 
 import numpy as np
 
+from xrr_fitter.model.diagnostic_calibration import DiagnosticCalibration
+from xrr_fitter.model.fitting import _sha256
 from xrr_fitter.model.instrument import PhysicsDiagnostic
 
 
@@ -78,6 +80,15 @@ class CovarianceEvidence:
         return type(self), tuple(getattr(self, field.name) for field in fields(self))
 
 
+def _calibrated_member_flags(calibration: DiagnosticCalibration, dataset_id: str | None) -> tuple[bool, bool]:
+    statistics = tuple(value for value in calibration.statistics if value.dataset_id == dataset_id)
+    if not statistics:
+        raise ValueError("calibration statistics must represent the residual dataset member")
+    systematic = any(value.adjusted_p_value <= calibration.alpha for value in statistics)
+    autocorrelation = any(value.kind == "acf" and value.adjusted_p_value <= calibration.alpha for value in statistics)
+    return systematic, autocorrelation
+
+
 @dataclass(frozen=True, slots=True)
 class ResidualEvidence:
     """Executed diagnostics are distinct from unavailable or unrequested work."""
@@ -89,16 +100,46 @@ class ResidualEvidence:
     point_count: int
     diagnostics: tuple[PhysicsDiagnostic, ...] = ()
     unavailable_reason: str | None = None
+    raw_systematic: bool | None = None
+    raw_autocorrelation: bool | None = None
+    advisories: tuple[PhysicsDiagnostic, ...] = ()
+    calibration: DiagnosticCalibration | None = None
+    owner_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if self.dataset_id is not None:
             _nonempty(self.dataset_id, "residual dataset_id")
         _count(self.point_count, "residual point_count")
         self._validate_execution()
-        diagnostics = tuple(self.diagnostics)
-        if any(not isinstance(value, PhysicsDiagnostic) for value in diagnostics):
-            raise TypeError("residual diagnostics must contain PhysicsDiagnostic values")
-        object.__setattr__(self, "diagnostics", diagnostics)
+        for name in ("diagnostics", "advisories"):
+            values = tuple(getattr(self, name))
+            if any(not isinstance(value, PhysicsDiagnostic) for value in values):
+                raise TypeError(f"residual {name} must contain PhysicsDiagnostic values")
+            object.__setattr__(self, name, values)
+        self._validate_raw_evidence()
+        self._validate_calibration()
+
+    def _validate_raw_evidence(self) -> None:
+        for name in ("raw_systematic", "raw_autocorrelation"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, bool):
+                raise TypeError(f"residual {name} must be bool or None")
+        if self.owner_sha256 is not None:
+            _sha256(self.owner_sha256, "residual owner_sha256")
+
+    def _validate_calibration(self) -> None:
+        calibration = self.calibration
+        if calibration is None:
+            return
+        if not isinstance(calibration, DiagnosticCalibration):
+            raise TypeError("residual calibration must be DiagnosticCalibration or None")
+        if calibration.status == "unavailable":
+            if self.executed or self.unavailable_reason != calibration.unavailable_reason:
+                raise ValueError("unavailable calibration requires unexecuted matching residual evidence")
+            return
+        expected = _calibrated_member_flags(calibration, self.dataset_id)
+        if not self.executed or (self.systematic, self.autocorrelation) != expected:
+            raise ValueError("residual effective flags must match calibrated member statistics")
 
     def _validate_execution(self) -> None:
         if not isinstance(self.executed, bool):

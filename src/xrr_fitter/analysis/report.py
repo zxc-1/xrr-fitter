@@ -31,14 +31,18 @@ from xrr_fitter.analysis.covariance import covariance_summary, problem_covarianc
 from xrr_fitter.analysis.derivatives import (
     strong_parameter_correlations,
 )
-from xrr_fitter.analysis.diagnostics import (
-    build_residual_evidence,
-)
 from xrr_fitter.analysis.mcmc import prior_conflicts, with_parameter_priors
+from xrr_fitter.analysis.profile_calibration import problem_profile_options
 from xrr_fitter.analysis.profiles import (
     _evidence_focused_layout,
     build_problem_profiles,
     select_profile_names,
+)
+from xrr_fitter.analysis.residual_calibration import (
+    DiagnosticRefitter,
+    calibrate_residuals,
+    qualify_poisson_bootstrap,
+    validate_residual_owner,
 )
 from xrr_fitter.model.analysis import (
     BootstrapResult,
@@ -47,6 +51,8 @@ from xrr_fitter.model.analysis import (
     ResidualEvidence,
     UncertaintyReport,
 )
+from xrr_fitter.model.diagnostic_calibration import RESIDUAL_ADVISORY_CODES
+from xrr_fitter.model.evaluation import ModelEvaluation
 from xrr_fitter.model.fitting import (
     FitEvaluationContext,
     FitProgress,
@@ -58,6 +64,7 @@ from xrr_fitter.model.parameters import ParameterPrior
 from xrr_fitter.model.provenance import (
     bootstrap_provenance_sha256,
     fit_search_provenance_sha256,
+    residual_owner_sha256,
 )
 
 UNCERTAINTY_SEED_DOMAIN = 0x554E434552544149
@@ -122,12 +129,18 @@ class AnalysisRequest:
     bootstrap: BootstrapResult | None = None
     bootstrap_enabled: bool = True
     parameter_priors: tuple[ParameterPrior, ...] = ()
+    residual_evidence: ResidualEvidence | None = None
 
     def __post_init__(self) -> None:
         dataset_id = _analysis_dataset_id(self.dataset_id)
         names = _analysis_profile_names(self.profile_names)
         _validate_analysis_members(self.problem, self.search_result, self.bootstrap)
         _validate_analysis_ownership(self.problem, self.search_result, self.bootstrap)
+        if self.residual_evidence is not None:
+            if self.search_result.best_candidate is None:
+                raise ValueError("residual evidence requires a numerical winner")
+            owner = residual_owner_sha256(self.problem, self.search_result.best_candidate, dataset_id)
+            validate_residual_owner(self.residual_evidence, owner, dataset_id)
         if not isinstance(self.bootstrap_enabled, bool):
             raise TypeError("bootstrap_enabled must be bool")
         priors = _analysis_parameter_priors(self.parameter_priors)
@@ -144,6 +157,7 @@ class AnalysisRequest:
             self.bootstrap,
             self.bootstrap_enabled,
             self.parameter_priors,
+            self.residual_evidence,
         )
 
 
@@ -181,8 +195,11 @@ def _correlation_evidence(
     unit_vector: np.ndarray,
     names: tuple[str, ...],
     residuals: tuple[ResidualEvidence, ...],
+    covariance_evidence: CovarianceEvidence | None = None,
 ) -> tuple[np.ndarray, tuple[str, ...], tuple[tuple[str, str, float], ...], np.ndarray | None, CovarianceEvidence]:
-    evidence = problem_covariance(problem, unit_vector, residuals)
+    evidence = covariance_evidence
+    if evidence is None:
+        evidence = problem_covariance(problem, unit_vector, residuals)
     correlation, sigma = covariance_summary(evidence)
     fraction = problem.config.confidence.boundary_fraction
     boundary_hits = tuple(
@@ -203,6 +220,9 @@ def _profiles(
     cancelled: Callable[[], bool] | None,
     progress: Callable[[int, int, str], None] | None = None,
     task_runner: TaskRunner | None = None,
+    *,
+    residual_evidence: ResidualEvidence | None = None,
+    covariance_evidence: CovarianceEvidence | None = None,
 ) -> tuple[object, ...]:
     names = tuple(variable.name for variable in problem.variables)
     requested = tuple(name for name in profile_names if name in names or _validate_derived_profile(problem, name))
@@ -214,6 +234,12 @@ def _profiles(
         requested,
         cancelled=cancelled,
         task_runner=task_runner,
+        interval_options=problem_profile_options(
+            problem,
+            unit_vector,
+            residual_evidence=residual_evidence,
+            covariance_evidence=covariance_evidence,
+        ),
     )
     for index, name in enumerate(requested, start=1):
         if progress is not None:
@@ -234,8 +260,45 @@ def _residual_evidence(
     problem: object,
     candidate: object,
     dataset_id: str | None = None,
+    *,
+    diagnostic_refit: DiagnosticRefitter | None = None,
+    recompile: Recompile | None = None,
+    cancelled=None,
+    task_runner=None,
+    progress=None,
 ) -> ResidualEvidence:
-    return build_residual_evidence(problem, candidate.residuals, candidate.diagnostics, dataset_id=dataset_id)
+    evaluation = ModelEvaluation(
+        candidate.valid,
+        "published_winner",
+        candidate.parameters,
+        candidate.qz_a_inv,
+        candidate.model_normalized,
+        candidate.residuals[problem.data.fit_mask],
+        candidate.weighted_residuals[problem.data.fit_mask],
+        candidate.objective,
+        candidate.expanded_stack,
+        candidate.diagnostics,
+        candidate.noise_model,
+    )
+    return calibrate_residuals(
+        (problem,),
+        (dataset_id,),
+        candidate.unit_vector,
+        (evaluation,),
+        owner_sha256=residual_owner_sha256(problem, candidate, dataset_id),
+        refit=diagnostic_refit,
+        recompile=recompile,
+        cancelled=cancelled,
+        task_runner=task_runner,
+        progress=progress,
+    )[0]
+
+
+def _qualified_bootstrap(problem, candidate, bootstrap, residual_evidence):
+    qualified = qualify_poisson_bootstrap(bootstrap, (problem,), (residual_evidence,))
+    if qualified is not bootstrap and qualified.candidate_id is not None:
+        return replace(qualified, provenance_sha256=bootstrap_provenance_sha256(problem, candidate, qualified))
+    return qualified
 
 
 def build_uncertainty_report(
@@ -249,6 +312,8 @@ def build_uncertainty_report(
     task_runner: TaskRunner | None = None,
     parameter_priors: tuple[ParameterPrior, ...] = (),
     dataset_id: str | None = None,
+    residual_evidence: ResidualEvidence | None = None,
+    covariance_evidence: CovarianceEvidence | None = None,
 ) -> UncertaintyReport:
     """Build covariance, profile, bootstrap, and residual evidence."""
     parameter_priors = _analysis_parameter_priors(parameter_priors)
@@ -257,12 +322,17 @@ def build_uncertainty_report(
     best = _select_candidate(problem, values)
     unit = np.asarray(best.unit_vector, dtype=float)
     names = tuple(variable.name for variable in problem.variables)
-    residual_evidence = _residual_evidence(problem, best, dataset_id)
+    if residual_evidence is None:
+        residual_evidence = _residual_evidence(problem, best, dataset_id)
+    else:
+        validate_residual_owner(residual_evidence, residual_owner_sha256(problem, best, dataset_id), dataset_id)
+    bootstrap = _qualified_bootstrap(problem, best, bootstrap, residual_evidence)
     correlation, boundary_hits, strong_correlations, sigma, covariance_evidence = _correlation_evidence(
         problem,
         unit,
         names,
         (residual_evidence,),
+        covariance_evidence,
     )
     profiles = _profiles(
         with_parameter_priors(problem, parameter_priors),
@@ -271,6 +341,8 @@ def build_uncertainty_report(
         cancelled,
         progress,
         task_runner,
+        residual_evidence=residual_evidence,
+        covariance_evidence=covariance_evidence,
     )
     _check_cancelled(cancelled)
     intervals = () if bootstrap is None else bootstrap.intervals
@@ -361,6 +433,9 @@ def _selected_profile_names(
     bootstrap: BootstrapResult,
     warnings: tuple[str, ...],
     cancelled: Callable[[], bool] | None,
+    dataset_id: str | None,
+    residual_evidence: ResidualEvidence,
+    covariance_evidence: CovarianceEvidence,
 ) -> tuple[str, ...]:
     if requested is not None:
         return tuple(requested)
@@ -372,6 +447,9 @@ def _selected_profile_names(
             profile_names=(),
             bootstrap=bootstrap,
             cancelled=cancelled,
+            dataset_id=dataset_id,
+            residual_evidence=residual_evidence,
+            covariance_evidence=covariance_evidence,
         )
     return select_profile_names(
         problem,
@@ -394,6 +472,12 @@ def _diagnostic_warning(problem: object, diagnostic: object) -> str | None:
     return f"{diagnostic.code}: {diagnostic.message}; full_data_indices=[{index_text}]; qz_a_inv_range={extent}"
 
 
+def _effective_candidate_diagnostics(candidate, report):
+    physical = tuple(item for item in candidate.diagnostics if item.code not in RESIDUAL_ADVISORY_CODES)
+    unique = {(item.code, item.point_indices): item for item in (*physical, *report.diagnostics)}
+    return tuple(unique.values())
+
+
 def _enrich_search_result(
     problem: object,
     search_result: FitSearchResult,
@@ -408,11 +492,7 @@ def _enrich_search_result(
     )
     if winner is None:
         raise ValueError("uncertainty report references an unknown candidate")
-    diagnostics = {
-        (diagnostic.code, diagnostic.point_indices): diagnostic
-        for diagnostic in (*winner.diagnostics, *report.diagnostics)
-    }
-    replacement = replace(winner, diagnostics=tuple(diagnostics.values()))
+    replacement = replace(winner, diagnostics=_effective_candidate_diagnostics(winner, report))
     candidates = tuple(replacement if candidate is winner else candidate for candidate in search_result.candidates)
     diagnostic_warnings = tuple(
         warning
@@ -473,6 +553,8 @@ def analyze_search_result(
     task_runner: TaskRunner | None = None,
     parameter_priors: tuple[ParameterPrior, ...] = (),
     recompile: Recompile | None = None,
+    residual_evidence: ResidualEvidence | None = None,
+    diagnostic_refit: DiagnosticRefitter | None = None,
 ) -> FitResult:
     """Finalize a fitting-only search with deterministic uncertainty evidence."""
     _validate_analysis_members(problem, search_result, bootstrap)
@@ -496,6 +578,26 @@ def analyze_search_result(
                     message,
                 )
             )
+
+    if residual_evidence is None:
+        residual_evidence = _residual_evidence(
+            problem,
+            best,
+            dataset_id,
+            diagnostic_refit=diagnostic_refit,
+            recompile=recompile,
+            cancelled=cancelled,
+            task_runner=task_runner,
+            progress=lambda completed, total: publish(
+                "diagnostic-calibration",
+                completed,
+                total,
+                f"Poisson diagnostic calibration {completed}/{total}",
+            ),
+        )
+    else:
+        validate_residual_owner(residual_evidence, residual_owner_sha256(problem, best, dataset_id), dataset_id)
+    covariance_evidence = problem_covariance(problem, best.unit_vector, (residual_evidence,))
 
     if bootstrap is None and bootstrap_enabled and problem.variables:
         if recompile is None:
@@ -529,6 +631,9 @@ def analyze_search_result(
         bootstrap,
         search_result.warnings,
         cancelled,
+        dataset_id,
+        residual_evidence,
+        covariance_evidence,
     )
     if selected_profiles:
         publish("profile", 0, len(selected_profiles), f"profile 0/{len(selected_profiles)}")
@@ -546,6 +651,8 @@ def analyze_search_result(
         task_runner=task_runner,
         parameter_priors=parameter_priors,
         dataset_id=dataset_id,
+        residual_evidence=residual_evidence,
+        covariance_evidence=covariance_evidence,
     )
     publish("finalizing", 0, 1, "finalizing")
     enriched = _enrich_search_result(problem, search_result, report)
@@ -576,6 +683,7 @@ def run_analysis(
     progress: Callable[[FitProgress], None] | None = None,
     task_runner: TaskRunner | None = None,
     recompile: Recompile | None = None,
+    diagnostic_refit: DiagnosticRefitter | None = None,
 ) -> FitResult:
     """Execute one validated worker request without storing runtime callbacks."""
     if not isinstance(request, AnalysisRequest):
@@ -592,4 +700,6 @@ def run_analysis(
         task_runner=task_runner,
         parameter_priors=request.parameter_priors,
         recompile=recompile,
+        residual_evidence=request.residual_evidence,
+        diagnostic_refit=diagnostic_refit,
     )

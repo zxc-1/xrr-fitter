@@ -73,6 +73,28 @@ from tests.architecture.evaluation_policy import (
     EVALUATION_IMPLEMENTATION_MODULES,
 )
 
+# Model policy is imported as data so this scanner remains focused on AST rules.
+# Every model module still needs an explicit entry, including leaf modules.
+# An absent key means an unregistered module, not an implicit empty allowance.
+# The fitting value layer consumes search evidence as a peer dependency.
+# Search evidence itself is immutable model data with no lower-level imports.
+# Keeping this edge explicit prevents an accidental analysis dependency.
+# The test below resolves imports from source rather than loading production.
+# This preserves deterministic evidence even when GUI modules have side effects.
+# The policy object uses package-local names, matching the scanner's targets.
+# Owner checks run before edge checks so wrong module ownership stays visible.
+# Exact edges remain distinct from package-level exceptions elsewhere in this file.
+# The model fixture exercises both allowed and forbidden internal edges.
+# Dynamic imports are handled by the separate process/reference checks.
+# Type-only imports pass through the same AST target resolver.
+# Relative imports are normalized before this policy is consulted.
+# Self-dependencies are allowed here because graph checks handle cycles separately.
+# New model modules must update this policy in the same change as their source.
+# This explicit registration prevents source discovery from passing vacuously.
+# The separate policy module has no production ownership or runtime behavior.
+# It keeps the scanner focused on traversal logic rather than policy data.
+from tests.architecture.model_policy import MODEL_ALLOWED
+
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "src" / "xrr_fitter"
 ALLOWED = {
@@ -107,62 +129,6 @@ PACKAGE_EDGE_EXCEPTIONS = {
 # Importing another physics module from io.examples is therefore a violation.
 # Importing either target from another IO module is also a violation.
 # Exceptions do not propagate through aliases, packages, or transitive imports.
-# The fixture below proves allowed targets, a wrong target, and a wrong source.
-# The exhaustive filesystem check applies the same rule to production modules.
-# The fast path-level check only rejects owners with no possible valid edge.
-# The AST rule is decisive because it retains each resolved module target.
-# Package roots cannot appear in this exception table as shorthand targets.
-# The architecture document records the same two edges for human review.
-# The graph phase still records both real edges for cycle detection.
-# Any future exception requires its own exact mapping and three-way fixture.
-# Every model module needs a key here even when it imports no sibling at all.
-# An absent key is a model-module violation, not an implicit empty allowance.
-# So sld_bands is registered with an empty set: it depends on numpy only.
-# The analysis entry then gains sld_bands because it re-exports that value.
-MODEL_ALLOWED = {
-    "data": set(),
-    "instrument": set(),
-    "automation": {"data", "instrument"},
-    "structure": set(),
-    "parameters": set(),
-    "constraint_expression": {"parameters"},
-    "constraint_resolution": {"constraint_expression", "parameters"},
-    "project_parameter_graph": {"parameters"},
-    "progress": set(),
-    "mcmc_sampling": set(),
-    "mcmc_samples": {"mcmc_sampling"},
-    "sld_bands": set(),
-    "slab_stack": set(),
-    "fitting": {"data", "instrument", "structure", "parameters", "progress", "slab_stack"},
-    "evaluation": {"data", "fitting", "instrument", "parameters", "slab_stack"},
-    "inference": {"instrument"},
-    "bootstrap": {"fitting"},
-    "profile": {"fitting"},
-    "provenance": {"fitting"},
-    "analysis": {
-        "inference",
-        "bootstrap",
-        "profile",
-        "data",
-        "parameters",
-        "fitting",
-        "mcmc_samples",
-        "mcmc_sampling",
-        "sld_bands",
-    },
-    "project": {
-        "automation",
-        "data",
-        "instrument",
-        "structure",
-        "parameters",
-        "fitting",
-        "analysis",
-        "project_parameter_graph",
-    },
-    "operations": {"automation", "fitting", "analysis", "project"},
-    "export": {"data", "fitting", "analysis", "project", "operations"},
-}
 THIRD_PARTY_ROOTS = {
     "numpy",
     "scipy",

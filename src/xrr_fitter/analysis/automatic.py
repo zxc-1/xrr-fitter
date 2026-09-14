@@ -31,6 +31,8 @@ def _report_concerns(report: object) -> tuple[list[str], set[str]]:
     """Collect report failures and parameters named directly by the report."""
     reasons: list[str] = []
     implicated: set[str] = set()
+    if report.systematic_residual is None or report.residual_autocorrelation is None:
+        reasons.append("residual diagnostics unavailable")
     if report.boundary_hits:
         reasons.append("parameter boundary hit")
         implicated.update(report.boundary_hits)

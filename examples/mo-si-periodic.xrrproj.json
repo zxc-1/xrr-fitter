@@ -1,5 +1,5 @@
 {
-  "algorithm_version": "xrr-fit-v2",
+  "algorithm_version": "xrr-fit-v2-poisson-5",
   "batch_mode": "independent",
   "datasets": [
     {
@@ -1914,6 +1914,7 @@
   "fit_config": {
     "budget": {
       "bootstrap_samples": 200,
+      "diagnostic_samples": 999,
       "full_de_maxiter": 200,
       "local_min_nfev": 2000,
       "local_nfev_per_parameter": 300,
@@ -1929,6 +1930,7 @@
       "equivalent_cost_fraction": 0.02,
       "strong_correlation": 0.95
     },
+    "diagnostic_version": "poisson-refit-null-v4",
     "downsample_rule_version": "feature-grid-v1",
     "final_seed_count": 4,
     "fringe_screen_threshold_version": "fringe-count-v1",
@@ -1963,7 +1965,7 @@
     },
     "preset_id": "example-lab-xrr"
   },
-  "schema_version": 3,
+  "schema_version": 5,
   "sharing_rules": [],
   "ui_state": {
     "active_dataset_id": null,

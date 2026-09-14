@@ -7,6 +7,11 @@ from math import isfinite
 
 import numpy as np
 
+from xrr_fitter.model.bootstrap_intervals import (
+    LINEAR_INTERVAL_METHOD,
+    BootstrapIntervalMetadata,
+    validated_interval_ranks,
+)
 from xrr_fitter.model.fitting import _pickle_values
 
 MIN_BOOTSTRAP_SUCCESS = 200
@@ -106,7 +111,7 @@ def _validate_bootstrap_owner(
 
 
 @dataclass(frozen=True, slots=True)
-class BootstrapResult:
+class BootstrapResult(BootstrapIntervalMetadata):
     """Successful physical bootstrap samples and interval summary."""
 
     parameter_names: tuple[str, ...]
@@ -119,6 +124,10 @@ class BootstrapResult:
     unavailable_reason: str | None = None
     candidate_id: str | None = None
     provenance_sha256: str | None = None
+    diagnostic_unavailable_reason: str | None = None
+    joint_owner_sha256: str | None = None
+    interval_method: str = LINEAR_INTERVAL_METHOD
+    interval_ranks: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
         names = _bootstrap_names(self.parameter_names)
@@ -126,6 +135,8 @@ class BootstrapResult:
         _validate_bootstrap_failure_rate(self.failure_rate)
         intervals = _bootstrap_intervals(names, self.intervals)
         _validate_bootstrap_owner(self.candidate_id, self.provenance_sha256)
+        if self.joint_owner_sha256 is not None:
+            _validate_bootstrap_owner(self.candidate_id, self.joint_owner_sha256)
         object.__setattr__(self, "parameter_names", names)
         object.__setattr__(self, "samples", samples)
         object.__setattr__(self, "intervals", intervals)
@@ -136,6 +147,7 @@ class BootstrapResult:
         failures = self._validated_failures()
         self._validate_counts(len(failures))
         self._validate_calibration()
+        object.__setattr__(self, "interval_ranks", validated_interval_ranks(self))
         object.__setattr__(self, "failure_reasons", failures)
 
     def _validated_failures(self) -> tuple[tuple[int, str], ...]:
@@ -159,8 +171,12 @@ class BootstrapResult:
     def _validate_calibration(self) -> None:
         if not isinstance(self.method, str) or not self.method:
             raise ValueError("bootstrap method must not be empty")
-        reason = bootstrap_calibration_reason(self.successful_samples, self.failure_rate)
-        if self.unavailable_reason != reason or bool(self.intervals) != (reason is None):
+        diagnostic_reason = self.diagnostic_unavailable_reason
+        if diagnostic_reason is not None and (not isinstance(diagnostic_reason, str) or not diagnostic_reason.strip()):
+            raise ValueError("bootstrap diagnostic reason must be a nonempty string or None")
+        sampling_reason = bootstrap_calibration_reason(self.successful_samples, self.failure_rate)
+        reason = sampling_reason or diagnostic_reason
+        if self.unavailable_reason != reason or bool(self.intervals) != (sampling_reason is None):
             raise ValueError("bootstrap intervals and unavailable_reason must match calibration gates")
 
     @property
@@ -169,13 +185,13 @@ class BootstrapResult:
 
     @property
     def interval_kind(self) -> str:
-        if self.intervals:
+        if self.intervals and self.diagnostic_unavailable_reason is None:
             return "percentile_bootstrap"
         return "exploratory_bootstrap" if self.successful_samples and self.failure_rate <= 0.20 else "unavailable"
 
     @property
     def confidence_level(self) -> float | None:
-        return 0.95 if self.intervals else None
+        return 0.95 if self.interval_kind == "percentile_bootstrap" else None
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)

@@ -9,6 +9,7 @@ from scipy import signal
 from scipy.stats import spearmanr
 
 from xrr_fitter.model.analysis import ResidualEvidence
+from xrr_fitter.model.diagnostic_calibration import RESIDUAL_ADVISORY_CODES
 from xrr_fitter.model.fitting import FitEvaluationContext
 from xrr_fitter.model.instrument import PhysicsDiagnostic
 
@@ -155,7 +156,7 @@ def _background(problem: object, data: _OrderedResiduals) -> PhysicsDiagnostic |
     )
 
 
-def _surface(data: _OrderedResiduals) -> PhysicsDiagnostic | None:
+def _surface_spectrum(data: _OrderedResiduals) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
     start = data.indices.size // 2
     indices = data.indices[start:]
     qz = data.qz[start:]
@@ -172,6 +173,14 @@ def _surface(data: _OrderedResiduals) -> PhysicsDiagnostic | None:
     thickness_a = 2.0 * np.pi * frequencies
     eligible = (thickness_a >= 2.0) & (thickness_a <= 50.0)
     eligible[0] = False
+    return indices, spectrum, eligible
+
+
+def _surface(data: _OrderedResiduals) -> PhysicsDiagnostic | None:
+    components = _surface_spectrum(data)
+    if components is None:
+        return None
+    indices, spectrum, eligible = components
     nonzero = spectrum[1:]
     median = float(np.median(nonzero))
     mad = float(np.median(np.abs(nonzero - median)))
@@ -209,15 +218,38 @@ def build_residual_evidence(
     *,
     dataset_id: str | None = None,
 ) -> ResidualEvidence:
+    physical = tuple(item for item in diagnostics if item.code not in RESIDUAL_ADVISORY_CODES)
     data = _ordered_data(problem, residuals)
     count = data.residual.size
     if count < 10 or count != int(np.count_nonzero(problem.data.fit_mask)):
-        return ResidualEvidence(dataset_id, False, None, None, count, diagnostics, "insufficient_finite_residuals")
+        return ResidualEvidence(dataset_id, False, None, None, count, physical, "insufficient_finite_residuals")
     derived = _pattern_diagnostics(problem, data)
     autocorrelation = residual_autocorrelation_flag(data.residual)
-    unique = {(item.code, item.point_indices): item for item in (*diagnostics, *derived)}
+    systematic = bool(derived) or autocorrelation
+    if problem.config.noise_model == "poisson" and systematic:
+        return ResidualEvidence(
+            dataset_id,
+            False,
+            None,
+            None,
+            count,
+            physical,
+            "poisson_diagnostic_calibration_required",
+            systematic,
+            autocorrelation,
+            derived,
+        )
+    unique = {(item.code, item.point_indices): item for item in (*physical, *derived)}
     return ResidualEvidence(
-        dataset_id, True, bool(derived) or autocorrelation, autocorrelation, count, tuple(unique.values())
+        dataset_id,
+        True,
+        systematic,
+        autocorrelation,
+        count,
+        tuple(unique.values()),
+        raw_systematic=systematic,
+        raw_autocorrelation=autocorrelation,
+        advisories=derived,
     )
 
 

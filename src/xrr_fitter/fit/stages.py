@@ -31,12 +31,6 @@ being recomputed from an archived candidate list after resume.
 Stage E combines ranked coarse population members, full-data incumbents, and
 bounded deterministic restarts. A better candidate becomes an elite start for a
 later seed only after exceeding the configured material-gain threshold.
-
-Profile-basin recovery is fit-owned continuation. It accepts an opaque decision
-value, validates its unit center, creates four distinct starts from the reserved
-Stage-E seeds, and atomically returns four replacement candidates only after all
-paths are valid and materially improve the incumbent. This module never imports
-analysis or trusts an analysis-reported objective.
 """
 
 from __future__ import annotations
@@ -51,7 +45,12 @@ from xrr_fitter.evaluation import (
     EvaluationConstraintError,
     PhysicalValueError,
     encode_physical_vector,
-    values_by_name,
+)
+from xrr_fitter.fit.adaptive_grid import initial_grid_points
+from xrr_fitter.fit.adaptive_review import (
+    compile_grid_problem,
+    review_single_population,
+    review_stage_a,
 )
 from xrr_fitter.fit.candidates import (
     CandidateStart,
@@ -60,6 +59,7 @@ from xrr_fitter.fit.candidates import (
     bounded_perturbations,
     build_candidate_pool,
     candidate_from_evaluation,
+    materially_improves,
     rank_candidate_indices,
     select_coarse_candidates,
     select_full_search_candidates,
@@ -67,10 +67,9 @@ from xrr_fitter.fit.candidates import (
 from xrr_fitter.fit.global_search import (
     build_de_population,
     build_stage_e_population,
-    downsample_prepared_data,
-    feature_grid_indices,
     solve_global,
 )
+from xrr_fitter.fit.local_budget import local_stage_setups, next_local_round, optimizer_evidence
 from xrr_fitter.fit.local_search import SearchCancelled, solve_local
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_stage_problem
@@ -147,20 +146,7 @@ def _parameter_settings(problem: object) -> tuple[ParameterSetting, ...]:
 #
 def compile_coarse_problem(problem: object) -> object:
     """Subset the numerical grid without recompiling full-data evidence."""
-    indices = feature_grid_indices(problem.data)
-    if np.array_equal(indices, np.arange(problem.data.qz_a_inv.size)):
-        return problem
-    data = downsample_prepared_data(problem.data, indices)
-    mass = problem.sampling_multipliers[indices].copy()
-    selected = data.fit_mask
-    mass[selected] *= np.sum(problem.sampling_multipliers[problem.data.fit_mask]) / np.sum(mass[selected])
-    return replace(
-        problem,
-        data=data,
-        region_labels=problem.region_labels[indices],
-        weights=problem.weights[indices],
-        sampling_multipliers=mass,
-    )
+    return compile_grid_problem(problem, initial_grid_points(problem.data))
 
 
 #
@@ -296,6 +282,7 @@ def _summary(stage: str, candidates: tuple[FitCandidate, ...]) -> FitStageSummar
         best,
         sum(candidate.nfev for candidate in candidates),
         tuple(candidate.stop_reason for candidate in candidates),
+        tuple(evidence for candidate in candidates for evidence in candidate.search_evidence),
     )
 
 
@@ -439,6 +426,20 @@ def _stage_a_stop_reasons(
     return tuple(reasons)
 
 
+def _screen_stage_a(problem, reviewed):
+    screen = fringe_count_screen(problem, tuple(candidate for _start, candidate in reviewed))
+    survivors = {candidate.candidate_id for candidate in screen.candidates}
+    accepted = tuple(item for item in reviewed if item[1].candidate_id in survivors)
+    screen_accepted_count = len(accepted)
+    if not accepted and reviewed:
+        # A strict fringe screen can reject every launch after full-grid review
+        # (for example, a user-supplied initial thickness one fringe away).
+        # Keep the best complete objective as an auditable Stage-B baseline so
+        # the run can recover instead of failing before any optimizer starts.
+        accepted = reviewed[:1]
+    return accepted, screen, screen_accepted_count
+
+
 #
 # Run stage a
 #
@@ -472,25 +473,26 @@ def run_stage_a(
         progress,
         cancelled,
     )
-    screen = fringe_count_screen(coarse, tuple(candidate for _start, candidate in evaluated))
-    survivors = {candidate.candidate_id for candidate in screen.candidates}
-    accepted = tuple(item for item in evaluated if item[1].candidate_id in survivors)
+    reviewed, evidence = review_stage_a(problem, evaluated, len(pool) - rejected_count, cancelled)
+    accepted, screen, screen_accepted_count = _screen_stage_a(problem, reviewed)
     scored = tuple((candidate.objective, start) for start, candidate in accepted)
-    curves = {start: _coarse_log_curve(coarse, candidate) for start, candidate in accepted}
+    curves = {start: _coarse_log_curve(problem, candidate) for start, candidate in accepted}
     reported = select_coarse_candidates(scored, curves, limit=24)
     selected = _ensure_two_starts(select_full_search_candidates(scored, curves, limit=8))
     warnings = _stage_a_warnings(
         tuple(screen.warnings),
-        len(evaluated),
-        len(accepted),
+        len(reviewed),
+        screen_accepted_count,
         rejected_count,
         invalid_count,
     )
+    if screen.stop_reason is not None and screen_accepted_count == 0:
+        warnings = (*warnings, screen.stop_reason)
     stop_reasons = _stage_a_stop_reasons(
         accepted,
         rejected_count,
         invalid_count,
-        len(evaluated) - len(accepted),
+        len(reviewed) - screen_accepted_count,
     )
     summary = FitStageSummary(
         "A",
@@ -498,6 +500,7 @@ def run_stage_a(
         min(cost for cost, _start in scored),
         len(pool) - rejected_count,
         stop_reasons,
+        (evidence,),
     )
     return selected, summary, warnings
 
@@ -518,8 +521,10 @@ def _stage_b_candidate(
     values = _complete_values(problem, dict(start.values))
     coarse_problem, full_problem = _stage_problems(problem, "B", values)
     unit = encode_physical_vector(coarse_problem, values)
+    evidence = ()
     if unit.size == 0:
         solved = solve_local(full_problem, unit, max_nfev=1, cancelled=cancelled)
+        evidence = (optimizer_evidence(f"B-{index}", seed, f"B-{index}", 1, solved, 0),)
     else:
         population = build_de_population(
             unit,
@@ -552,15 +557,30 @@ def _stage_b_candidate(
             cancelled=cancelled,
             generation_callback=_b_gen_callback if progress else None,
         )
-    return _published_candidate(
+        reviewed, record = review_single_population(
+            full_problem,
+            solved,
+            f"B-{index}",
+            seed,
+            len(population) * (problem.config.budget.short_de_maxiter + 1),
+            cancelled=cancelled,
+        )
+        evidence = (record,)
+        selected_unit = reviewed[0]
+    if not unit.size:
+        selected_unit = solved.unit_vector
+    _poll(cancelled)
+    candidate = _published_candidate(
         problem,
         full_problem,
-        solved.unit_vector,
+        selected_unit,
         f"B-{index}",
         index,
         solved.stop_reason,
         solved.nfev,
     )
+    _poll(cancelled)
+    return replace(candidate, search_evidence=evidence)
 
 
 #
@@ -691,6 +711,26 @@ def _best_objective(candidates: tuple[FitCandidate, ...]) -> float:
     return float("inf") if winner is None else candidates[winner].objective
 
 
+def _retain_stage_b_work(
+    representatives: tuple[FitCandidate, ...],
+    candidates: tuple[FitCandidate, ...],
+) -> tuple[FitCandidate, ...]:
+    """Geometry deduplication must not discard the work done by merged launches."""
+    retained_ids = {candidate.candidate_id for candidate in representatives}
+    merged = tuple(candidate for candidate in candidates if candidate.candidate_id not in retained_ids)
+    if not merged:
+        return representatives
+    owner = representatives[0]
+    evidence = tuple(
+        record
+        for candidate in candidates
+        if candidate.candidate_id == owner.candidate_id or candidate.candidate_id not in retained_ids
+        for record in candidate.search_evidence
+    )
+    retained = replace(owner, nfev=owner.nfev + sum(candidate.nfev for candidate in merged), search_evidence=evidence)
+    return (retained, *representatives[1:])
+
+
 #
 # Run stage b
 #
@@ -733,14 +773,17 @@ def run_stage_b(
             f"completed short differential evolution {index + 1}",
             _best_candidate(current),
         )
-    representatives = _stage_b_representatives(problem, tuple(candidates))
+    completed = tuple(candidates)
+    representatives = _stage_b_representatives(problem, completed)
+    representatives = _retain_stage_b_work(representatives, completed)
     archive = archive_stage_b_candidates(representatives)
     archived_by_id = {candidate.candidate_id: candidate for candidate in archive.active + archive.archived}
     values = tuple(archived_by_id[candidate.candidate_id] for candidate in representatives)
+    _parents, counts = _ordered_stage_b_continuation(values, archive)
     return StageOutcome(
         values,
         _summary("B", values),
-        perturbation_counts=archive.perturbation_counts,
+        perturbation_counts=counts,
     )
 
 
@@ -755,6 +798,10 @@ def _local_stage_candidate(
     seed_index: int,
     cancelled: Callable[[], bool] | None,
     iteration_callback: Callable[[np.ndarray], None] | None = None,
+    *,
+    origin: str,
+    seed: int,
+    round_index: int,
 ) -> FitCandidate:
     maximum = max(
         problem.config.budget.local_min_nfev,
@@ -767,7 +814,8 @@ def _local_stage_candidate(
         cancelled=cancelled,
         iteration_callback=iteration_callback,
     )
-    return _published_candidate(
+    _poll(cancelled)
+    candidate = _published_candidate(
         problem,
         stage_problem,
         solved.unit_vector,
@@ -776,26 +824,9 @@ def _local_stage_candidate(
         solved.stop_reason,
         solved.nfev,
     )
-
-
-#
-# Local stage starts
-#
-def _local_stage_starts(
-    problem: object,
-    stage_problem: object,
-    parent: FitCandidate,
-    stage: str,
-    cluster_index: int,
-    perturbation_count: int,
-) -> tuple[np.ndarray, ...]:
-    center = encode_physical_vector(stage_problem, _candidate_values(parent))
-    seed = int(
-        np.random.SeedSequence([problem.config.master_seed, ord(stage), cluster_index]).generate_state(
-            1, dtype=np.uint64
-        )[0]
-    )
-    return (center, *bounded_perturbations(center, perturbation_count, seed=seed))
+    _poll(cancelled)
+    evidence = optimizer_evidence(origin, seed, candidate_id, maximum, solved, round_index)
+    return replace(candidate, search_evidence=(evidence,))
 
 
 #
@@ -812,74 +843,54 @@ def run_local_stage(
     cancelled: Callable[[], bool] | None,
     task_runner: TaskRunner | None = None,
 ) -> StageOutcome:
-    """Refine each parent and its deterministic bounded perturbations.
+    """Refine every lineage once, then allocate the bounded pool by full cost.
 
-    Stage-specific compilation releases only the intended parameter groups.
-    Selected parents receive compact stage-local lineage identifiers. Retained
-    perturbation counts preserve that order for the next stage and checkpoint
-    resume.
+    Each subsequent round visits a lineage at most once. Independent lineages
+    may run concurrently within a round; the next round waits for every result
+    and ranks their complete objectives rather than worker completion order.
     """
     counts = (0,) * len(parents) if perturbation_counts is None else tuple(perturbation_counts)
     if len(counts) != len(parents):
         raise ValueError("local perturbation counts must align with parent clusters")
-    total = sum(count + 1 for count in counts)
+    setups = local_stage_setups(problem, stage, parents, counts)
+    total = len(parents) + min(sum(counts), sum(len(setup.starts) - 1 for setup in setups))
+    groups: list[list[FitCandidate]] = [[] for _parent in parents]
     candidates: list[FitCandidate] = []
     completed = 0
     message = {
         "C": "full-resolution density refinement",
         "D": "full-resolution roughness/instrument refinement",
     }.get(stage, f"completed local stage {stage}")
-    for index, (parent, count) in enumerate(zip(parents, counts, strict=True)):
-        # A parent remains sequentially dependent, while its declared restarts
-        # form one ordered batch that can safely execute concurrently.
-        values = _candidate_values(parent)
-        stage_problem = compile_stage_problem(problem, stage, values)
-        starts = _local_stage_starts(problem, stage_problem, parent, stage, index, count)
 
-        #
-        # Make local cb
-        #
-        def _make_local_cb(stg_problem, cid, sidx, _completed=completed):
-            #
-            # Cb
-            #
-            def _cb(unit_vector: np.ndarray) -> None:
-                preview = _published_candidate(
-                    problem,
-                    stg_problem,
-                    unit_vector,
-                    cid,
-                    sidx,
-                    "running",
-                    0,
-                )
-                _emit(
-                    progress,
-                    dataset_id,
-                    stage,
-                    _completed + 1,
-                    total,
-                    preview.objective,
-                    message,
-                    preview,
-                )
+    def _make_local_cb(stg_problem, cid, sidx, position):
+        def _cb(unit_vector: np.ndarray) -> None:
+            preview = _published_candidate(problem, stg_problem, unit_vector, cid, sidx, "running", 0)
+            _emit(progress, dataset_id, stage, position, total, preview.objective, message, preview)
 
-            return _cb
+        return _cb
 
+    selected = tuple(range(len(parents)))
+    while selected:
         tasks = tuple(
             partial(
                 _local_stage_candidate,
                 problem,
-                stage_problem,
-                start,
-                f"{stage}-{index}-{restart}",
+                setups[index].problem,
+                setups[index].starts[len(groups[index])],
+                f"{stage}-{index}-{len(groups[index])}",
                 index,
                 cancelled,
-                _make_local_cb(stage_problem, f"{stage}-{index}-{restart}", index) if progress else None,
+                _make_local_cb(setups[index].problem, f"{stage}-{index}-{len(groups[index])}", index, completed + 1)
+                if progress
+                else None,
+                origin=f"{stage}-{index}",
+                seed=setups[index].seed,
+                round_index=len(groups[index]),
             )
-            for restart, start in enumerate(starts)
+            for index in selected
         )
-        for candidate in _run_tasks(tasks, task_runner):
+        for index, candidate in zip(selected, _run_tasks(tasks, task_runner), strict=True):
+            groups[index].append(candidate)
             candidates.append(candidate)
             completed += 1
             current = tuple(candidates)
@@ -893,8 +904,10 @@ def run_local_stage(
                 message,
                 _best_candidate(current),
             )
+        selected = next_local_round(stage, setups, groups, total - completed)
     values = tuple(candidates)
-    return StageOutcome(values, _summary(stage, values), perturbation_counts=counts)
+    retained = tuple(max(0, len(group) - 1) for group in groups)
+    return StageOutcome(values, _summary(stage, values), perturbation_counts=retained)
 
 
 #
@@ -906,17 +919,36 @@ def stage_b_continuation(
 ) -> tuple[tuple[FitCandidate, ...], tuple[int, ...]]:
     """Recover active Stage-B parents and their reclaimed local budgets.
 
-    Supplied counts belong to a resumed outcome and must align exactly with the
-    active candidates. Fresh continuation derives the same values from archive
-    policy.
+    Fresh outcome counts follow publication order. Resume reconstructs that
+    same order, keeping each count and index-derived seed on its original parent
+    even when the archive's full-cost ranking differs from publication order.
     """
-    active = tuple(candidate for candidate in candidates if rank_candidate_indices((candidate,)))
+    active = _active_stage_b_candidates(candidates)
     if perturbation_counts:
         if len(active) != len(perturbation_counts):
             raise ValueError("Stage-B perturbation counts do not match active candidates")
         return active, perturbation_counts
+    return _archive_stage_b_candidates(candidates)
+
+
+def _active_stage_b_candidates(candidates: tuple[FitCandidate, ...]) -> tuple[FitCandidate, ...]:
+    return tuple(candidate for candidate in candidates if rank_candidate_indices((candidate,)))
+
+
+def _archive_stage_b_candidates(
+    candidates: tuple[FitCandidate, ...],
+) -> tuple[tuple[FitCandidate, ...], tuple[int, ...]]:
     archive = archive_stage_b_candidates(candidates)
-    return archive.active, archive.perturbation_counts
+    return _ordered_stage_b_continuation(candidates, archive)
+
+
+def _ordered_stage_b_continuation(candidates, archive):
+    counts = {
+        candidate.candidate_id: count
+        for candidate, count in zip(archive.active, archive.perturbation_counts, strict=True)
+    }
+    active = tuple(candidate for candidate in candidates if candidate.candidate_id in counts)
+    return active, tuple(counts[candidate.candidate_id] for candidate in active)
 
 
 #
@@ -981,45 +1013,6 @@ def _stage_e_setup(problem: object, parents: tuple[FitCandidate, ...]) -> _Stage
 
 
 #
-# Population energies
-#
-def _population_energies(problem: object, solved: object) -> tuple[np.ndarray, np.ndarray]:
-    """Validate and normalize one solver population trace.
-
-    Missing energies are reevaluated in row order; supplied energies must align
-    exactly and expose at least four population members.
-    """
-    population = np.asarray(solved.population, dtype=float)
-    if population.ndim != 2 or population.shape[1] != len(problem.variables):
-        raise ValueError("Stage-E DE trace has an invalid population layout")
-    supplied = getattr(solved, "population_energies", None)
-    energies = (
-        np.asarray([evaluate_vector(problem, row).objective for row in population])
-        if supplied is None
-        else np.asarray(supplied, dtype=float)
-    )
-    if population.shape[0] < 4 or energies.shape != (population.shape[0],):
-        raise ValueError("Stage-E DE trace has an invalid population layout")
-    return population, energies
-
-
-#
-# Population starts
-#
-def _population_starts(setup: _StageESetup, solved: object) -> tuple[np.ndarray, ...]:
-    population, energies = _population_energies(setup.coarse_problem, solved)
-    ranked = np.where(np.isfinite(energies), energies, np.inf)
-    order = np.argsort(ranked, kind="stable")[:4]
-    return tuple(
-        encode_physical_vector(
-            setup.full_problem,
-            values_by_name(setup.coarse_problem, population[index]),
-        )
-        for index in order
-    )
-
-
-#
 # Incumbent starts
 #
 def _incumbent_starts(
@@ -1059,26 +1052,21 @@ def _stage_e_local_candidate(
     seed_index: int,
     cancelled: Callable[[], bool] | None,
     iteration_callback: Callable[[np.ndarray], None] | None = None,
+    *,
+    source_seed: int,
+    round_index: int,
 ) -> FitCandidate:
-    maximum = max(
-        problem.config.budget.local_min_nfev,
-        problem.config.budget.local_nfev_per_parameter * (start.size + 1),
-    )
-    solved = solve_local(
-        setup.full_problem,
-        start,
-        max_nfev=maximum,
-        cancelled=cancelled,
-        iteration_callback=iteration_callback,
-    )
-    return _published_candidate(
+    return _local_stage_candidate(
         problem,
         setup.full_problem,
-        solved.unit_vector,
+        start,
         candidate_id,
         seed_index,
-        solved.stop_reason,
-        solved.nfev,
+        cancelled,
+        iteration_callback,
+        origin=f"E-{seed_index}",
+        seed=source_seed,
+        round_index=round_index,
     )
 
 
@@ -1096,6 +1084,8 @@ def _run_stage_e_locals(
     progress: Callable[[FitProgress], None] | None = None,
     dataset_id: str | None = None,
     total_seeds: int = 1,
+    *,
+    source_seed: int,
 ) -> list[FitCandidate]:
     # Result positions retain start order so winner selection and nfev totals
     # are independent of worker completion timing.
@@ -1137,6 +1127,8 @@ def _run_stage_e_locals(
             seed_index,
             cancelled,
             _make_e_local_cb(f"E-{seed_index}-{kind}-{index}", seed_index) if progress else None,
+            source_seed=source_seed,
+            round_index=1 if kind == "local" else 2,
         )
         for index, start in enumerate(starts)
     )
@@ -1173,6 +1165,8 @@ def _stage_e_seed(
             f"E-{seed_index}",
             seed_index,
             cancelled,
+            source_seed=child_seed,
+            round_index=0,
         )
     population = build_stage_e_population(
         setup.centers,
@@ -1214,8 +1208,16 @@ def _stage_e_seed(
         cancelled=cancelled,
         generation_callback=_e_gen_callback if progress else None,
     )
+    population_starts, evidence = review_single_population(
+        setup.full_problem,
+        solved,
+        f"E-{seed_index}",
+        child_seed,
+        len(population) * (problem.config.budget.full_de_maxiter + 1),
+        cancelled=cancelled,
+    )
     starts = _incumbent_starts(setup, seed_index, child_seed, elite)
-    starts += _population_starts(setup, solved)
+    starts += population_starts[:4]
     attempts = _run_stage_e_locals(
         problem,
         setup,
@@ -1227,6 +1229,7 @@ def _stage_e_seed(
         progress=progress,
         dataset_id=dataset_id,
         total_seeds=total_seeds,
+        source_seed=child_seed,
     )
     winner_index = best_candidate_index(tuple(attempts))
     if winner_index is None:
@@ -1264,6 +1267,7 @@ def _stage_e_seed(
             progress=progress,
             dataset_id=dataset_id,
             total_seeds=total_seeds,
+            source_seed=restart_seed,
         )
     )
     winner = best_candidate_index(tuple(attempts))
@@ -1273,210 +1277,7 @@ def _stage_e_seed(
         candidate_id=f"E-{seed_index}",
         seed_index=seed_index,
         nfev=solved.nfev + sum(candidate.nfev for candidate in attempts),
-    )
-
-
-#
-# Materially improves
-#
-def _materially_improves(problem: object, incumbent: FitCandidate, candidate: FitCandidate) -> bool:
-    thresholds = problem.config.confidence
-    required = max(
-        thresholds.equivalent_cost_fraction * abs(incumbent.objective),
-        thresholds.equivalent_cost_floor,
-    )
-    return candidate.valid and candidate.objective + required < incumbent.objective
-
-
-#
-# Profile rescue start
-#
-def _profile_rescue_start(
-    problem: object,
-    center: np.ndarray,
-    child_seed: int,
-    seed_index: int,
-) -> np.ndarray | None:
-    """Derive one bounded profile-rescue start from a Stage-E child seed.
-
-    The ``P`` namespace separates continuation perturbations from ordinary Stage-E
-    incumbent and restart streams.
-    """
-    seed = int(
-        np.random.SeedSequence([int(child_seed), ord("P"), seed_index]).generate_state(
-            1,
-            dtype=np.uint64,
-        )[0]
-    )
-    generated = bounded_perturbations(center, 1, seed=seed, sigma=0.002)
-    if len(generated) != 1:
-        return None
-    start = np.asarray(generated[0], dtype=float)
-    valid = (
-        start.shape == (len(problem.variables),)
-        and np.all(np.isfinite(start))
-        and np.all((start >= 0.0) & (start <= 1.0))
-    )
-    return np.array(start, copy=True) if valid else None
-
-
-#
-# Profile rescue paths
-#
-def _profile_rescue_paths(
-    problem: object,
-    center: np.ndarray,
-    child_seeds: tuple[int, ...],
-    cancelled: Callable[[], bool] | None,
-    task_runner: TaskRunner | None,
-) -> tuple[object, ...] | None:
-    """Run every distinct rescue start without publishing partial evidence.
-
-    Duplicate or malformed starts reject the continuation before local search.
-    Any missing local result rejects the complete four-path set; cancellation is
-    polled before each start, each solve, and final return.
-    """
-    starts: list[np.ndarray] = []
-    for seed_index, child_seed in enumerate(child_seeds):
-        _poll(cancelled)
-        start = _profile_rescue_start(problem, center, child_seed, seed_index)
-        if start is None or any(np.array_equal(start, prior) for prior in starts):
-            return None
-        starts.append(start)
-    maximum = max(
-        problem.config.budget.local_min_nfev,
-        problem.config.budget.local_nfev_per_parameter * (center.size + 1),
-    )
-    tasks = tuple(
-        partial(
-            _solve_profile_rescue_path,
-            problem,
-            start,
-            maximum,
-            cancelled,
-        )
-        for start in starts
-    )
-    refined = _run_tasks(tasks, task_runner)
-    if any(result is None for result in refined):
-        return None
-    _poll(cancelled)
-    return refined
-
-
-#
-# Solve profile rescue path
-#
-def _solve_profile_rescue_path(
-    problem: object,
-    start: np.ndarray,
-    maximum: int,
-    cancelled: Callable[[], bool] | None,
-):
-    _poll(cancelled)
-    return solve_local(problem, start, max_nfev=maximum, cancelled=cancelled)
-
-
-#
-# Valid profile rescue result
-#
-def _valid_profile_rescue_result(problem: object, result: object) -> bool:
-    """Check one local result's coordinate layout and finite evaluation."""
-    unit = np.asarray(result.unit_vector, dtype=float)
-    evaluation = result.evaluation
-    return bool(
-        unit.shape == (len(problem.variables),)
-        and np.all(np.isfinite(unit))
-        and np.all((unit >= 0.0) & (unit <= 1.0))
-        and evaluation.valid
-        and np.isfinite(evaluation.objective)
-    )
-
-
-#
-# Publish profile rescue
-#
-def _publish_profile_rescue(
-    problem: object,
-    originals: tuple[FitCandidate, ...],
-    refined: tuple[object, ...],
-    parameter_name: str,
-) -> tuple[FitCandidate, ...] | None:
-    """Build four replacement candidates after all-or-nothing validation.
-
-    The best refined evaluation must materially improve the original Stage-E
-    incumbent. Every replacement retains its original path work and stable seed
-    identity while recording the profile parameter in stop evidence.
-    """
-    if len(refined) != 4:
-        return None
-    if not all(_valid_profile_rescue_result(problem, result) for result in refined):
-        return None
-    incumbent_index = best_candidate_index(originals)
-    if incumbent_index is None:
-        return None
-    best_result = min(refined, key=lambda result: result.evaluation.objective)
-    if not _materially_improves(
-        problem,
-        originals[incumbent_index],
-        best_result.evaluation,
-    ):
-        return None
-    return tuple(
-        candidate_from_evaluation(
-            problem,
-            result.unit_vector,
-            result.evaluation,
-            candidate_id=f"E-{seed_index}",
-            seed_index=seed_index,
-            stop_reason=(f"profile_basin_rescue:{parameter_name}:seed-{seed_index}:{result.stop_reason}"),
-            nfev=int(original.nfev) + int(result.nfev),
-        )
-        for seed_index, (original, result) in enumerate(zip(originals, refined, strict=True))
-    )
-
-
-#
-# Reconverge profile basin
-#
-def reconverge_profile_basin(
-    problem: object,
-    stage_candidates: tuple[FitCandidate, ...],
-    center_unit: np.ndarray,
-    child_seeds: tuple[int, ...],
-    *,
-    parameter_name: str,
-    cancelled: Callable[[], bool] | None = None,
-    task_runner: TaskRunner | None = None,
-) -> tuple[FitCandidate, ...] | None:
-    """Rebuild all four Stage-E paths from one analysis-selected basin.
-
-    Candidate and seed cardinality, seed indices, center shape, finiteness, and
-    unit bounds are verified before any solve. The decision objective is ignored;
-    only fit-owned full-data evaluations can authorize publication.
-    """
-    candidates = tuple(stage_candidates)
-    seeds = tuple(child_seeds)
-    if len(candidates) != 4 or len(seeds) != 4:
-        return None
-    if tuple(candidate.seed_index for candidate in candidates) != (0, 1, 2, 3):
-        return None
-    center = np.asarray(center_unit, dtype=float)
-    valid_center = (
-        center.shape == (len(problem.variables),)
-        and np.all(np.isfinite(center))
-        and np.all((center >= 0.0) & (center <= 1.0))
-    )
-    if not valid_center:
-        return None
-    refined = _profile_rescue_paths(problem, center, seeds, cancelled, task_runner)
-    if refined is None:
-        return None
-    return _publish_profile_rescue(
-        problem,
-        candidates,
-        refined,
-        parameter_name,
+        search_evidence=(evidence, *(record for candidate in attempts for record in candidate.search_evidence)),
     )
 
 
@@ -1523,7 +1324,7 @@ def run_stage_e(
         winner = best_candidate_index(tuple(candidates))
         current = None if winner is None else candidates[winner]
         if best is not None and current is not None and current is not best:
-            if _materially_improves(problem, best, current):
+            if materially_improves(problem, best, current):
                 elite = encode_physical_vector(
                     setup.full_problem,
                     _candidate_values(current),

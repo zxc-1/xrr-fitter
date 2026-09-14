@@ -30,15 +30,34 @@ OPTIONAL_FIELDS = frozenset(
         "confidence_level",
         "delta_total",
         "provenance_sha256",
+        "joint_owner_sha256",
+        "interval_ranks",
+        "monte_carlo_assurance",
         "matrix",
         "search_parameter_spread",
         "parameter_sigma",
+        "parameter_members",
         "systematic_residual",
         "residual_autocorrelation",
         "dataset_id",
         "systematic",
         "autocorrelation",
         "unavailable_reason",
+        "diagnostic_unavailable_reason",
+        "raw_systematic",
+        "raw_autocorrelation",
+        "calibration",
+        "owner_sha256",
+        "center",
+        "scale",
+        "adjusted_p_value",
+        "tail_count",
+        "tie_count",
+        "observed_score",
+        "null_statistics_sha256",
+        "refit_discrepancy",
+        "p_value",
+        "rejected",
         "expanded_stack",
         "formula",
         "fit_group_id",
@@ -70,11 +89,13 @@ NULLABLE_ARRAY_FIELDS = frozenset(
     {
         "acceptance_fraction",
         "correlation_matrix",
+        "coarse_objectives",
         "depth_a",
         "effective_sample_size",
         "imaginary",
         "log_probability",
         "log_residuals_decades",
+        "full_objectives",
         "residuals",
         "model_normalized",
         "objectives",
@@ -132,11 +153,22 @@ def _reject_constant(value: str) -> object:
     raise ProjectSchemaError(f"nonstandard JSON numeric constant: {value}")
 
 
+def _diagnostic_solver_status_null(path):
+    return (
+        len(path) >= 7
+        and (path[-7], path[-5], path[-3], path[-1]) == ("calibration", "paths", "stages", "status")
+        and path[-6] in {"observed_work", "null_work"}
+        and all(type(path[index]) is int and path[index] >= 0 for index in (-4, -2))
+    )
+
+
 def _allows_null(path: tuple[str | int, ...]) -> bool:
     field = path[-1]
     if isinstance(field, str) and field in OPTIONAL_FIELDS:
         return True
-    return any(isinstance(part, str) and part in NULLABLE_ARRAY_FIELDS for part in path)
+    return _diagnostic_solver_status_null(path) or any(
+        isinstance(part, str) and part in NULLABLE_ARRAY_FIELDS for part in path
+    )
 
 
 def _linked_path(path: tuple[str | int, ...]) -> object | None:

@@ -2,15 +2,46 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from xrr_fitter.io.codec_candidates import _diagnostic_from_dict, _diagnostic_to_dict
 from xrr_fitter.io.codec_common import (
+    ProjectSchemaError,
     _mapping,
     _real_array_from_list,
     _real_array_to_list,
     _sequence,
     _square_array_from_list,
 )
+from xrr_fitter.io.codec_diagnostic_calibration import calibration_from_dict, calibration_to_dict
 from xrr_fitter.model.analysis import BootstrapResult, CovarianceEvidence, ResidualEvidence
+from xrr_fitter.model.joint_bootstrap_provenance import validate_joint_bootstrap_content
+from xrr_fitter.model.parameters import ParameterReference
+
+
+def parameter_members_to_list(value: tuple[tuple[ParameterReference, ...], ...] | None) -> list | None:
+    if value is None:
+        return None
+    return [
+        [{"dataset_id": member.dataset_id, "parameter_name": member.parameter_name} for member in group]
+        for group in value
+    ]
+
+
+def _parameter_member_from_dict(value: object) -> ParameterReference:
+    payload = _mapping(value, {"dataset_id", "parameter_name"}, "parameter member")
+    if any(not isinstance(item, str) for item in payload.values()):
+        raise ProjectSchemaError("parameter member fields must be strings")
+    return ParameterReference(**payload)
+
+
+def parameter_members_from_list(value: object) -> tuple[tuple[ParameterReference, ...], ...] | None:
+    if value is None:
+        return None
+    return tuple(
+        tuple(_parameter_member_from_dict(member) for member in _sequence(group, "parameter member group"))
+        for group in _sequence(value, "parameter_members")
+    )
 
 
 def covariance_to_dict(value: CovarianceEvidence | None) -> dict | None:
@@ -44,7 +75,14 @@ def covariance_from_dict(value: object) -> CovarianceEvidence | None:
     )
 
 
+def _validate_residual_owner(value: ResidualEvidence) -> None:
+    if value.calibration is not None and value.owner_sha256 != value.calibration.owner_sha256:
+        raise ProjectSchemaError("residual owner must match its diagnostic calibration owner")
+
+
 def residual_to_dict(value: ResidualEvidence) -> dict:
+    value = replace(value)
+    _validate_residual_owner(value)
     return {
         "dataset_id": value.dataset_id,
         "executed": value.executed,
@@ -53,29 +91,36 @@ def residual_to_dict(value: ResidualEvidence) -> dict:
         "point_count": value.point_count,
         "diagnostics": [_diagnostic_to_dict(item) for item in value.diagnostics],
         "unavailable_reason": value.unavailable_reason,
+        "raw_systematic": value.raw_systematic,
+        "raw_autocorrelation": value.raw_autocorrelation,
+        "advisories": [_diagnostic_to_dict(item) for item in value.advisories],
+        "calibration": calibration_to_dict(value.calibration),
+        "owner_sha256": value.owner_sha256,
     }
 
 
 def residual_from_dict(value: object) -> ResidualEvidence:
-    payload = _mapping(
-        value,
-        {"dataset_id", "executed", "systematic", "autocorrelation", "point_count", "diagnostics", "unavailable_reason"},
-        "residual evidence",
+    fields = set(ResidualEvidence.__dataclass_fields__)
+    payload = _mapping(value, fields, "residual evidence")
+    sequences = {"diagnostics", "advisories"}
+    evidence = ResidualEvidence(
+        **{field: payload[field] for field in fields - sequences - {"calibration"}},
+        **{
+            field: tuple(_diagnostic_from_dict(item) for item in _sequence(payload[field], f"residual {field}"))
+            for field in sequences
+        },
+        calibration=calibration_from_dict(payload["calibration"]),
     )
-    return ResidualEvidence(
-        payload["dataset_id"],
-        payload["executed"],
-        payload["systematic"],
-        payload["autocorrelation"],
-        payload["point_count"],
-        tuple(_diagnostic_from_dict(item) for item in _sequence(payload["diagnostics"], "residual diagnostics")),
-        payload["unavailable_reason"],
-    )
+    _validate_residual_owner(evidence)
+    return evidence
 
 
 def bootstrap_to_dict(value: BootstrapResult | None) -> dict | None:
     if value is None:
         return None
+    value = replace(value)
+    if value.joint_owner_sha256 is not None or value.method.startswith("joint_"):
+        validate_joint_bootstrap_content(value)
     return {
         "parameter_names": list(value.parameter_names),
         "samples": _real_array_to_list(value.samples),
@@ -90,6 +135,13 @@ def bootstrap_to_dict(value: BootstrapResult | None) -> dict | None:
         "interval_kind": value.interval_kind,
         "confidence_level": value.confidence_level,
         "successful_samples": value.successful_samples,
+        "diagnostic_unavailable_reason": value.diagnostic_unavailable_reason,
+        "joint_owner_sha256": value.joint_owner_sha256,
+        "interval_method": value.interval_method,
+        "interval_ranks": None if value.interval_ranks is None else list(value.interval_ranks),
+        "bootstrap_content_target": value.bootstrap_content_target,
+        "monte_carlo_assurance": value.monte_carlo_assurance,
+        "diagnostic_error_budget": value.diagnostic_error_budget,
     }
 
 
@@ -97,7 +149,14 @@ def bootstrap_from_dict(value: object) -> BootstrapResult | None:
     if value is None:
         return None
     fields = set(BootstrapResult.__dataclass_fields__)
-    summaries = {"interval_kind", "confidence_level", "successful_samples"}
+    summaries = {
+        "interval_kind",
+        "confidence_level",
+        "successful_samples",
+        "bootstrap_content_target",
+        "monte_carlo_assurance",
+        "diagnostic_error_budget",
+    }
     payload = _mapping(value, fields | summaries, "bootstrap evidence")
     names = tuple(_sequence(payload["parameter_names"], "bootstrap names"))
     samples = _real_array_from_list(payload["samples"])
@@ -113,6 +172,8 @@ def bootstrap_from_dict(value: object) -> BootstrapResult | None:
         samples=samples,
         **rows,
     )
+    if result.joint_owner_sha256 is not None or result.method.startswith("joint_"):
+        validate_joint_bootstrap_content(result)
     if any(payload[key] != getattr(result, key) for key in summaries):
         raise ValueError("bootstrap interval metadata must match sampling evidence")
     return result

@@ -191,6 +191,10 @@ def test_export_json_v2_preserves_the_documented_field_order() -> None:
         "log_residuals_decades",
         "weighted_residuals",
         "candidate_id",
+        "residuals",
+        "noise_model",
+        "residual_name",
+        "residual_unit",
     )
     assert tuple(payload["run_info"]) == (
         "schema_version",
@@ -221,6 +225,10 @@ def test_export_json_v2_preserves_the_documented_field_order() -> None:
         "jacobian_version",
         "dataset_directory",
         "dataset_directory_mapping",
+        "noise_model",
+        "residual_name",
+        "residual_unit",
+        "inference",
     )
     assert json_text({"second": 2, "first": 1}) == '{"second": 2, "first": 1}'
 

@@ -119,7 +119,7 @@ def test_plot_labels_avoid_english_and_jargon_leaks(qtbot) -> None:
     assert "display floor" not in log_ylabel
 
     titles = [axes.get_title() for axes in panel.view("uncertainty").figure.axes]
-    assert any("剖面似然" in title for title in titles)
+    assert any("参数剖面与区间" in title for title in titles)
     assert not any("profile likelihood" in title for title in titles)
 
 

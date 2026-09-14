@@ -332,6 +332,83 @@ def test_export_residual_plot_shades_disjoint_exclusions_separately(
     assert all(not lower <= included_between <= upper for lower, upper in expected)
 
 
+@pytest.mark.parametrize(
+    ("noise_model", "residual_name", "residual_unit"),
+    (
+        ("robust_log", "log_reflectivity", "decade"),
+        ("gaussian", "standardized_intensity", "1"),
+        ("poisson", "signed_poisson_deviance", "1"),
+    ),
+)
+def test_export_residual_plot_uses_actual_mode_residuals_and_units(
+    monkeypatch, noise_model, residual_name, residual_unit
+) -> None:
+    from xrr_fitter.io import export_plots
+
+    context = _context()
+    candidate = replace(
+        context.selected,
+        noise_model=noise_model,
+        residuals=np.linspace(-2.0, 2.0, context.data.qz_a_inv.size),
+    )
+    dataset = replace(context.dataset, last_valid_result=replace(context.result, candidates=(candidate,)))
+    changed = replace(
+        context, project=replace(context.project, datasets=(dataset,)), dataset=dataset, selected=candidate
+    )
+    captured = {}
+    original = export_plots._png
+
+    def capture(figure, **kwargs):
+        captured["residuals"] = figure.axes[0].lines[0].get_ydata().copy()
+        captured["weighted"] = figure.axes[1].lines[0].get_ydata().copy()
+        captured["labels"] = tuple(axis.get_ylabel() for axis in figure.axes)
+        return original(figure, **kwargs)
+
+    monkeypatch.setattr(export_plots, "_png", capture)
+
+    payload = residuals_png(changed)
+
+    assert payload.startswith(b"\x89PNG\r\n\x1a\n")
+    np.testing.assert_array_equal(captured["residuals"], candidate.residuals)
+    np.testing.assert_array_equal(captured["weighted"], candidate.weighted_residuals)
+    assert tuple(label.replace("\n", "") for label in captured["labels"]) == (
+        f"{residual_name} ({residual_unit})",
+        f"Weighted residual ({residual_unit})",
+    )
+
+
+@pytest.mark.parametrize("noise_model", ("robust_log", "gaussian", "poisson"))
+def test_export_residual_labels_fit_inside_the_png_canvas(monkeypatch, noise_model) -> None:
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    from xrr_fitter.io import export_plots
+
+    context = _context()
+    candidate = replace(context.selected, noise_model=noise_model)
+    dataset = replace(context.dataset, last_valid_result=replace(context.result, candidates=(candidate,)))
+    changed = replace(
+        context, project=replace(context.project, datasets=(dataset,)), dataset=dataset, selected=candidate
+    )
+    captured = {}
+    original = export_plots._png
+
+    def capture(figure, **kwargs):
+        canvas = FigureCanvasAgg(figure)
+        canvas.draw()
+        renderer = canvas.get_renderer()
+        captured["bounds"] = tuple(axis.yaxis.label.get_window_extent(renderer).bounds for axis in figure.axes)
+        captured["size"] = canvas.get_width_height()
+        return original(figure, **kwargs)
+
+    monkeypatch.setattr(export_plots, "_png", capture)
+
+    residuals_png(changed)
+
+    width, height = captured["size"]
+    assert all(0 <= x and x + span <= width for x, _y, span, _h in captured["bounds"]), captured["bounds"]
+    assert all(0 <= y and y + span <= height for _x, y, _w, span in captured["bounds"]), captured["bounds"]
+
+
 def _zero_width_bands() -> SldUncertaintyBands:
     # Five quantile faces on one depth grid; the two published pairs are present
     # so both fill_between groups render. Distinct rows keep the banded PNG
@@ -407,13 +484,14 @@ def _mismatched_and_absent_band_contexts() -> tuple[DatasetExportData, DatasetEx
     return mismatched, absent
 
 
-# Frozen from the three renderers at ``bb5f253^`` in the locked Matplotlib
-# environment, before SLD-band drawing existed.  A fresh render is compared to
-# both size and digest so this is not the former same-function self-comparison.
+# Overview and SLD references were frozen at ``bb5f253^`` before band drawing.
+# The residual reference includes V2 residual names and both axes' saved units.
+# In the locked Matplotlib environment, size and digest detect later drift
+# without the former same-function self-comparison.
 BANDLESS_PNG_BASELINES = {
     fit_overview_png: (24674, "901e5ee64154b0aa2e2664128d13d1af26c0609df3ee4ddd7be3db1e92eca1f5"),
     sld_profile_png: (28382, "4d20b19995be2676ce0d7e341738e8745233d5288abcad1372a9d8be47cead86"),
-    residuals_png: (27318, "f2b140ae08a3eb079b9656fa0e50332bfcd2299807be39d915b00f6f853885b4"),
+    residuals_png: (28515, "5fc26b6b3eda4375a995142dfab7027591c89db06babba195dd49ded50af7438"),
 }
 
 

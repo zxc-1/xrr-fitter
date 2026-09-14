@@ -68,6 +68,7 @@ from xrr_fitter.model.project import (
     ProjectUiState,
     ScalePriorState,
     XrrProject,
+    validate_project,
 )
 
 
@@ -457,6 +458,7 @@ def project_to_dict(project: XrrProject) -> dict[str, object]:
     """Encode a project without its runtime-only base directory."""
     if not isinstance(project, XrrProject):
         raise TypeError("project must be an XrrProject")
+    validate_project(project)
     document: dict[str, object] = {
         "schema_version": project.schema_version,
         "algorithm_version": project.algorithm_version,

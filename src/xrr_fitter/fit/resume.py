@@ -149,7 +149,13 @@ def _validate_candidate_layout(
         )
         if not _derived_candidate_equal(candidate, expected):
             raise ValueError("resume checkpoint candidate derived state mismatch")
-        normalized.append(replace(expected, ranking_objective=candidate.ranking_objective))
+        normalized.append(
+            replace(
+                expected,
+                ranking_objective=candidate.ranking_objective,
+                search_evidence=candidate.search_evidence,
+            )
+        )
     return tuple(normalized)
 
 
@@ -159,21 +165,29 @@ def _summary_for_candidates(
     *,
     joint: bool,
 ) -> FitStageSummary:
-    if joint:
-        rankings = tuple(candidate.ranking_objective for candidate in candidates)
-        if any(value is None for value in rankings):
-            raise ValueError("joint resume candidate ranking objective is missing")
-        best = min(rankings, default=float("inf"))
-    else:
-        ranked = rank_candidate_indices(candidates)
-        best = candidates[ranked[0]].objective if ranked else float("inf")
+    best = _summary_best_objective(candidates, joint=joint)
     return FitStageSummary(
         summary.stage,
         tuple(candidate.candidate_id for candidate in candidates),
         float(best),
         sum(candidate.nfev for candidate in candidates),
         tuple(candidate.stop_reason for candidate in candidates),
+        tuple(evidence for candidate in candidates for evidence in candidate.search_evidence),
     )
+
+
+def _summary_best_objective(candidates: tuple[FitCandidate, ...], *, joint: bool) -> float:
+    if joint:
+        return _joint_best_objective(candidates)
+    ranked = rank_candidate_indices(candidates)
+    return candidates[ranked[0]].objective if ranked else float("inf")
+
+
+def _joint_best_objective(candidates: tuple[FitCandidate, ...]) -> float:
+    rankings = tuple(candidate.ranking_objective for candidate in candidates)
+    if any(value is None for value in rankings):
+        raise ValueError("joint resume candidate ranking objective is missing")
+    return min(rankings, default=float("inf"))
 
 
 def _validate_summaries(checkpoint: FitCheckpoint, *, joint: bool) -> None:

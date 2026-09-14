@@ -51,6 +51,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 from enum import StrEnum
+from itertools import chain
 from math import isfinite
 
 import numpy as np
@@ -65,10 +66,11 @@ from xrr_fitter.model.fitting import (
 )
 from xrr_fitter.model.inference import CovarianceEvidence as CovarianceEvidence
 from xrr_fitter.model.inference import ResidualEvidence as ResidualEvidence
+from xrr_fitter.model.joint_bootstrap_provenance import validate_joint_bootstrap_report
 from xrr_fitter.model.mcmc_samples import McmcReport as McmcReport
 from xrr_fitter.model.mcmc_sampling import EnsembleSamples as EnsembleSamples
 from xrr_fitter.model.mcmc_sampling import McmcConfig as McmcConfig
-from xrr_fitter.model.parameters import ParameterDefinition
+from xrr_fitter.model.parameters import ParameterDefinition, ParameterReference
 from xrr_fitter.model.profile import ParameterProfile as ParameterProfile
 
 # Re-exported so analysis values keep one import entry point; the band lives in
@@ -166,6 +168,22 @@ def _parameter_sigma(
     return sigma
 
 
+def _parameter_members(value: object, dimension: int) -> tuple[tuple[ParameterReference, ...], ...] | None:
+    if value is None:
+        return None
+    members = tuple(tuple(group) for group in value)
+    if len(members) != dimension:
+        raise ValueError("parameter_members must match the correlation axis")
+    if any(not group for group in members):
+        raise ValueError("parameter_members groups must not be empty")
+    references = tuple(chain.from_iterable(members))
+    if any(not isinstance(reference, ParameterReference) for reference in references):
+        raise TypeError("parameter_members must contain ParameterReference values")
+    if len(set(references)) != len(references):
+        raise ValueError("parameter_members references must be globally unique")
+    return members
+
+
 @dataclass(frozen=True, slots=True)
 class UncertaintyReport:
     """Combined covariance, profile, bootstrap, residual, and MCMC evidence."""
@@ -190,6 +208,9 @@ class UncertaintyReport:
     member_residuals: tuple[ResidualEvidence, ...] = ()
     search_parameter_spread: np.ndarray | None = None
     bootstrap_evidence: BootstrapResult | None = None
+    # None is a local-name axis; joint publication binds every ordered global
+    # axis to the exact dataset/parameter references used by the compiled fit.
+    parameter_members: tuple[tuple[ParameterReference, ...], ...] | None = None
 
     def __post_init__(self) -> None:
         names = tuple(self.correlation_names)
@@ -217,8 +238,10 @@ class UncertaintyReport:
         sigma = _parameter_sigma(self.parameter_sigma, len(names))
         if sigma is not None:
             object.__setattr__(self, "parameter_sigma", sigma)
+        object.__setattr__(self, "parameter_members", _parameter_members(self.parameter_members, len(names)))
         self._validate_inference(names)
         self._validate_bootstrap_summary()
+        self._validate_owned_bootstrap()
 
     def _validate_bootstrap_summary(self) -> None:
         evidence = self.bootstrap_evidence
@@ -234,6 +257,11 @@ class UncertaintyReport:
             or self.bootstrap_failure_rate != evidence.failure_rate
         ):
             raise ValueError("bootstrap summary must agree with sampling evidence")
+
+    def _validate_owned_bootstrap(self) -> None:
+        evidence = self.bootstrap_evidence
+        if evidence is not None and (self.parameter_members is not None or evidence.joint_owner_sha256 is not None):
+            validate_joint_bootstrap_report(self)
 
     def _validate_inference(self, names: tuple[str, ...]) -> None:
         evidence = self.covariance_evidence

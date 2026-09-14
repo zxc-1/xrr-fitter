@@ -24,8 +24,8 @@ from xrr_fitter.analysis.bootstrap_samples import (
 )
 from xrr_fitter.evaluation import EvaluationConstraintError
 from xrr_fitter.model.analysis import BootstrapResult
-from xrr_fitter.model.evaluation import ModelEvaluation
 from xrr_fitter.model.fitting import FitEvaluationContext
+from xrr_fitter.model.joint_bootstrap_provenance import joint_bootstrap_owner_sha256, seal_joint_bootstrap
 
 
 def _refit(contexts, refit, cancelled):
@@ -40,16 +40,16 @@ def _refit(contexts, refit, cancelled):
     return fitted
 
 
-def _joint_sources(problems, evaluations):
-    if len(problems) < 2 or len(problems) != len(evaluations) or any(not item.valid for item in evaluations):
+def _joint_sources(problems, candidates):
+    if len(problems) < 2 or len(problems) != len(candidates) or any(not item.valid for item in candidates):
         raise ValueError("joint bootstrap requires valid aligned member evaluations")
     if any(
-        problem.config.noise_model != value.noise_model for problem, value in zip(problems, evaluations, strict=True)
+        problem.config.noise_model != value.noise_model for problem, value in zip(problems, candidates, strict=True)
     ):
         raise ValueError("joint bootstrap evaluations must match each member's noise model")
     return tuple(
-        bootstrap_source(problem, value.model_normalized, value.fit_residuals)
-        for problem, value in zip(problems, evaluations, strict=True)
+        bootstrap_source(problem, value.model_normalized, value.residuals[problem.data.fit_mask])
+        for problem, value in zip(problems, candidates, strict=True)
     )
 
 
@@ -59,9 +59,9 @@ def _joint_method(problems) -> str:
 
 
 def bootstrap_joint_local(
-    problems: tuple[FitEvaluationContext, ...],
-    evaluations: tuple[ModelEvaluation, ...],
-    parameter_names: tuple[str, ...],
+    problem: object,
+    candidates: tuple,
+    unit_vector: np.ndarray,
     *,
     sample_count: int,
     child_seed: int,
@@ -71,12 +71,14 @@ def bootstrap_joint_local(
     progress: BootstrapProgress | None = None,
     task_runner: TaskRunner | None = None,
 ) -> BootstrapResult:
-    names = validated_bootstrap_names(parameter_names)
+    names = validated_bootstrap_names(tuple(variable.name for variable in problem.global_variables))
     count = validated_sample_count(sample_count)
-    sources = _joint_sources(problems, evaluations)
+    owner = joint_bootstrap_owner_sha256(problem, candidates, unit_vector, child_seed)
+    sources = _joint_sources(problem.problems, candidates)
     rng = np.random.default_rng(child_seed)
     draws = draw_replicates(sources, count, rng, recompile, cancelled)
     tasks = tuple(partial(_refit, contexts, refit, cancelled) for contexts in draws)
     fits = run_tasks(tasks, task_runner)
     poll_cancelled(cancelled)
-    return bootstrap_result_from_fits(names, fits, count, progress, method=_joint_method(problems))
+    result = bootstrap_result_from_fits(names, fits, count, progress, method=_joint_method(problem.problems))
+    return seal_joint_bootstrap(result, candidates[0].candidate_id, owner)

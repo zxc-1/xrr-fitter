@@ -21,6 +21,7 @@ from tests.unit.fit.test_stage_search import (
 )
 
 from xrr_fitter.evaluation import encode_physical_vector
+from xrr_fitter.fit import profile_rescue
 from xrr_fitter.fit.objective import evaluate_vector
 
 
@@ -87,7 +88,7 @@ def test_profile_continuation_forwards_task_runner(
     assert observed == [runner]
 
 
-def test_local_stage_batches_each_parents_restarts(
+def test_local_stage_waits_for_each_reprioritized_budget_round(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stages = _stages_api()
@@ -107,7 +108,7 @@ def test_local_stage_batches_each_parents_restarts(
         task_runner=runner,
     )
 
-    assert runner.sizes == [3]
+    assert runner.sizes == [1, 1, 1]
     assert tuple(candidate.candidate_id for candidate in outcome.candidates) == (
         "C-0-0",
         "C-0-1",
@@ -157,7 +158,6 @@ def test_stage_e_batches_ranked_locals_before_restarts(
 def test_profile_rescue_batches_all_four_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stages = _stages_api()
     problem = _problem(seed=775)
     center = encode_physical_vector(
         problem,
@@ -165,14 +165,14 @@ def test_profile_rescue_batches_all_four_paths(
     )
     candidates = tuple(replace(_candidate(problem, f"E-{index}", center), seed_index=index) for index in range(4))
     runner = _BatchRunner()
-    monkeypatch.setattr(stages, "solve_local", _unchanged_local_solution)
+    monkeypatch.setattr(profile_rescue, "solve_local", _unchanged_local_solution)
     monkeypatch.setattr(
-        stages,
+        profile_rescue,
         "_publish_profile_rescue",
         lambda _problem, originals, *_args: originals,
     )
 
-    rebuilt = stages.reconverge_profile_basin(
+    rebuilt = profile_rescue.reconverge_profile_basin(
         problem,
         candidates,
         center,

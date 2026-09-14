@@ -525,6 +525,11 @@ def test_export_dataset_parameters_preserve_definition_metadata() -> None:
             "expert_only",
             "sharing_key",
             "selected_candidate_id",
+            "sigma",
+            "sigma_unavailable_reason",
+            "covariance_method",
+            "covariance_rank",
+            "covariance_unavailable_reason",
         ],
         "name": "scale",
         "display_name": "Scale",
@@ -578,6 +583,10 @@ def test_export_workbook_run_info_matches_json_and_keeps_strings_literal() -> No
         "budget_reclaim_threshold_version",
         "downsample_rule_version",
         "jacobian_version",
+        "noise_model",
+        "residual_name",
+        "residual_unit",
+        "inference",
     ]
     assert row["dataset_id"] == "=1+1"
     assert json.loads(row["dataset_directory_mapping"]) == payload["run_info"]["dataset_directory_mapping"]
@@ -696,7 +705,11 @@ def test_export_csv_and_compatibility_workbook_are_deterministic() -> None:
     expected = {
         "csv_deterministic": True,
         "csv_has_crlf": False,
-        "csv_header": b"parameter_name,value,lower,upper",
+        "csv_header": (
+            b"parameter_name,value,lower,upper,noise_model,residual_name,residual_unit,"
+            b"sigma,sigma_unavailable_reason,covariance_method,covariance_rank,"
+            b"covariance_unavailable_reason,inference_json"
+        ),
         "workbook_deterministic": True,
         "sheets": ["Summary", "Parameters_nm", "Curves"],
         "summary_columns": [
@@ -705,6 +718,10 @@ def test_export_csv_and_compatibility_workbook_are_deterministic() -> None:
             "objective",
             "selected_candidate_id",
             "warnings",
+            "noise_model",
+            "residual_name",
+            "residual_unit",
+            "inference",
         ],
         "warnings": ["length-warning"],
         "length_columns": [
@@ -750,6 +767,11 @@ def test_export_batch_parameters_put_dataset_identity_first() -> None:
         "lower",
         "upper",
         "unit",
+        "sigma",
+        "sigma_unavailable_reason",
+        "covariance_method",
+        "covariance_rank",
+        "covariance_unavailable_reason",
     ]
     assert parameters["dataset_id"].tolist() == [
         "first",
@@ -804,6 +826,7 @@ def test_export_log_records_warnings_seed_tree_stages_and_diagnostics() -> None:
     context = _context_with_mcmc_diagnostics()
 
     text = run_log_bytes(context).decode("utf-8")
+    inference = json.loads(dataset_json_bytes(context))["run_info"]["inference"]
 
     expected = "\n".join(
         (
@@ -816,6 +839,10 @@ def test_export_log_records_warnings_seed_tree_stages_and_diagnostics() -> None:
             "joint_root_child: 20202",
             "optimizer_child_seeds: [101,202]",
             "mcmc_child_seed: 30303",
+            "noise_model: robust_log",
+            "residual_name: log_reflectivity",
+            "residual_unit: decade",
+            "inference: " + json.dumps(inference, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
             "warning: review-warning",
             'stage review-stage: candidate_ids=["candidate-0"]; '
             'best_objective=1.0; total_nfev=17; stop_reasons=["review-stop"]',

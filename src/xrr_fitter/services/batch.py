@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from threading import Lock
 
+from xrr_fitter.io.source import validate_sources as inspect_sources
 from xrr_fitter.model.analysis import ConfidenceClass, FitResult
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus, MeasurementPreset
 from xrr_fitter.model.fitting import FitProgress
@@ -25,7 +26,6 @@ from xrr_fitter.model.parameters import ParameterSetting
 from xrr_fitter.model.project import ScalePriorState, XrrProject
 from xrr_fitter.model.structure import GradientLayerSpec, LayerSpec, PeriodicBlock
 from xrr_fitter.services.parallel import OrderedTaskRunner
-from xrr_fitter.services.projects import inspect_sources
 
 
 @dataclass(frozen=True, slots=True)

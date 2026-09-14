@@ -958,6 +958,7 @@ def build_problem_profiles(
     *,
     cancelled: Callable[[], bool] | None = None,
     task_runner=None,
+    interval_options: dict[str, object] | None = None,
 ) -> tuple[ParameterProfile, ...]:
     """Build ordered problem profiles through the shared two-phase task graph."""
     return _build_problem_profiles(
@@ -974,6 +975,7 @@ def build_problem_profiles(
         values_by_name=values_by_name,
         cancelled=cancelled,
         task_runner=task_runner,
+        interval_options=interval_options,
     )
 
 
@@ -1055,8 +1057,9 @@ def recover_profile_basin(
     """Search thickness profiles for the first materially better basin.
 
     Already-good or invalid candidates do not trigger expensive recovery. Each
-    eligible thickness coordinate is scanned in compiler order, and the first
-    decision is returned for fit-owned four-path reconvergence.
+    eligible thickness coordinate uses the same bounded analytic residual system
+    as reported problem profiles. Coordinates are scanned in compiler order, and
+    the first decision is returned for fit-owned four-path reconvergence.
     """
     unit = np.asarray(candidate.unit_vector, dtype=float)
     if not candidate.valid or not isfinite(candidate.objective):
@@ -1074,12 +1077,21 @@ def recover_profile_basin(
                 return np.inf
             return evaluation.objective if evaluation.valid else np.inf
 
+        residual, jacobian = cached_least_squares_callbacks(partial(least_squares_system, problem))
+        maximum = max(
+            problem.config.budget.local_min_nfev,
+            problem.config.budget.local_nfev_per_parameter * max(1, len(problem.variables)),
+        )
         _profile, decision = profile_parameter_with_decision(
             objective,
             unit,
             parameter_index=index,
             name=name,
             steps=problem.config.profile_steps,
+            residual=residual,
+            residual_jacobian=jacobian,
+            residual_loss=least_squares_loss(problem),
+            least_squares_max_nfev=maximum,
             cancelled=cancelled,
         )
         if decision is not None:

@@ -5,13 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 
+from xrr_fitter.io.source import validate_sources as inspect_sources
 from xrr_fitter.model.analysis import McmcConfig
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
 from xrr_fitter.model.fitting import FitProgress
 from xrr_fitter.model.operations import FitReadiness, ProjectFitResult
 from xrr_fitter.model.project import XrrProject
 from xrr_fitter.services.datasets import mcmc_candidate_seed, service_seed_branches
-from xrr_fitter.services.projects import inspect_sources
 
 from .base import _has_cross_dataset_constraints
 from .common import CancellationProbe, CheckpointCallback, ProgressCallback

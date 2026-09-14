@@ -21,26 +21,34 @@ def _unavailable_reason(problem, covariance, residual) -> str | None:
 
 def _diagnostic_reason(residual) -> str | None:
     if not residual.executed:
-        return "residual_diagnostics_not_executed"
+        return residual.unavailable_reason
     if residual.systematic or residual.autocorrelation or residual.diagnostics:
         return "residual_diagnostics_failed"
     return None
 
 
-def _calibration_reason(problem, unit) -> str | None:
+def _calibration_reason(problem, unit, residual, covariance) -> str | None:
     if problem.config.noise_model == "robust_log":
         return "robust_objective_is_not_a_likelihood"
-    evaluation = evaluate_model(problem, unit)
-    values = np.full(problem.data.fit_mask.shape, np.nan)
-    if evaluation.valid:
-        values[problem.data.fit_mask] = evaluation.fit_residuals
-    residual = build_residual_evidence(problem, values, evaluation.diagnostics)
-    covariance = problem_covariance(problem, unit, (residual,))
+    if residual is None:
+        evaluation = evaluate_model(problem, unit)
+        values = np.full(problem.data.fit_mask.shape, np.nan)
+        if evaluation.valid:
+            values[problem.data.fit_mask] = evaluation.fit_residuals
+        residual = build_residual_evidence(problem, values, evaluation.diagnostics)
+    if covariance is None:
+        covariance = problem_covariance(problem, unit, (residual,))
     return _unavailable_reason(problem, covariance, residual)
 
 
-def problem_profile_options(problem: FitEvaluationContext, unit: np.ndarray) -> dict[str, object]:
-    reason = _calibration_reason(problem, unit)
+def problem_profile_options(
+    problem: FitEvaluationContext,
+    unit: np.ndarray,
+    *,
+    residual_evidence=None,
+    covariance_evidence=None,
+) -> dict[str, object]:
+    reason = _calibration_reason(problem, unit, residual_evidence, covariance_evidence)
     metadata = {
         "interval_kind": "likelihood_ratio" if reason is None else "loss_support",
         "confidence_level": 0.95 if reason is None else None,

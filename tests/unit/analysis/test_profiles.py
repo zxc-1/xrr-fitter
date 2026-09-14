@@ -248,6 +248,12 @@ def test_profile_basin_recovery_treats_physical_constraint_failures_as_invalid_p
         return SimpleNamespace(valid=True, objective=float((unit[0] - 0.8) ** 2))
 
     monkeypatch.setattr(_api(), "evaluate_model", evaluate)
+    monkeypatch.setattr(
+        _api(),
+        "least_squares_system",
+        lambda _problem, unit: (np.asarray([unit[0] - 0.8]), np.ones((1, 1))),
+    )
+    monkeypatch.setattr(_api(), "least_squares_loss", lambda _problem: "linear")
 
     decision = recover_profile_basin(problem, candidate)
 

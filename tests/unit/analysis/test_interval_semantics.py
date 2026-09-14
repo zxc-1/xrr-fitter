@@ -133,9 +133,9 @@ def test_nonregular_likelihood_profile_withholds_formal_confidence(reason) -> No
     assert profile.unavailable_reason
 
 
-def test_low_count_poisson_with_failed_diagnostics_does_not_claim_likelihood_coverage() -> None:
+def test_low_count_poisson_requires_calibration_before_claiming_likelihood_coverage() -> None:
     problem = scale_problem("poisson")
     profile = build_problem_profile(problem, scale_candidate(problem).unit_vector, "instrument.scale")
     assert profile.interval_kind == "loss_support"
     assert profile.confidence_level is None
-    assert profile.unavailable_reason == "residual_diagnostics_failed"
+    assert profile.unavailable_reason == "poisson_diagnostic_calibration_required"

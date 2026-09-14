@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import datetime
 import io
-from numbers import Real
 
 import numpy as np
 from jsonschema import ValidationError
@@ -20,6 +19,13 @@ from orsopy import fileio
 from orsopy.fileio.base import ContentHash, _read_header_data, _validate_header_data
 
 from xrr_fitter.io.codec_declarations import _fit_config_to_dict
+from xrr_fitter.io.codec_inference import covariance_to_dict
+from xrr_fitter.io.export_evidence import (
+    covariance_absent_reason,
+    inference_metadata,
+    parameter_uncertainty,
+    residual_metadata,
+)
 from xrr_fitter.io.export_tables import DatasetExportData
 from xrr_fitter.version import __version__ as PACKAGE_VERSION
 
@@ -31,16 +37,13 @@ EXPERIMENT_COMMENT = "measurement start date and instrument model unavailable in
 INSTRUMENT_SENTINEL = "unknown"
 OWNER_AFFILIATION = "XRR-Fitter automated export"
 EXCLUDED_ROW_REASON = "non_finite_or_nonpositive_export_row"
-COVARIANCE_ABSENT_REASON = "covariance not estimated for this fit result"
 
 
-def orso_bytes(context: DatasetExportData, *, covariance: np.ndarray | None) -> bytes:
+def orso_bytes(context: DatasetExportData) -> bytes:
     """Serialize one selected dataset to a validated ORSO ``.ort`` document."""
     if not isinstance(context, DatasetExportData):
         raise TypeError("context must be DatasetExportData")
     data = context.data
-    selected = context.selected
-    result = context.result  # property raises if no fit result exists
     mask = _export_mask(context)
 
     columns, matrix = _data_segment(data, mask)
@@ -48,7 +51,7 @@ def orso_bytes(context: DatasetExportData, *, covariance: np.ndarray | None) -> 
         data_source=_data_source(context, mask),
         reduction=_reduction(context),
         columns=columns,
-        **_extensions(context, result, selected, mask, covariance),
+        **_extensions(context, mask),
     )
     dataset = fileio.OrsoDataset(info=info, data=matrix)
     buffer = io.StringIO()
@@ -83,7 +86,7 @@ def _export_mask(context: DatasetExportData) -> np.ndarray:
         data.intensity_normalized,
         selected.qz_a_inv,
         selected.model_normalized,
-        selected.log_residuals_decades,
+        selected.residuals,
     ]
     if data.intensity_sigma_normalized is not None:
         arrays.append(data.intensity_sigma_normalized)
@@ -162,41 +165,43 @@ def _reduction(context):
     return fileio.Reduction(software=software)
 
 
-def _extensions(context, result, selected, mask, covariance):
-    """Three frozen extension keys: confidence payload, reproducibility payload,
-    and the fit model curve.
-
-    ``xrr_fitter.model`` carries the fitted Qz axis, model reflectivity, and
-    log-decade residuals (row-filtered by ``mask`` to align with the exported
-    data rows). These are fit outputs, not measured reflectivity, so they cannot
-    occupy ORSO data columns (前四列位置被 schema 固定为 ``Qz, R, sR, sQz``) and
-    live here instead. The fitted Qz is explicit because an optimized angle
-    offset can make it differ from the imported data Qz column.
-    """
+def _confidence_payload(context, mask):
     uncertainty = context.selected_uncertainty
-    covariance_names = _covariance_names(uncertainty)
-    selected_covariance = (
-        _validated_covariance(covariance, covariance_names)
-        if uncertainty is not None and covariance is not None
-        else None
-    )
+    metadata = inference_metadata(uncertainty, context.uncertainty_absent_reason)
+    covariance = covariance_to_dict(None if uncertainty is None else uncertainty.covariance_evidence)
     confidence = {
-        "class_name": result.confidence.name,
-        "display": result.confidence.value,
-        "reason_codes": list(result.classification_evidence),
+        "class_name": context.result.confidence.name,
+        "display": context.result.confidence.value,
+        "reason_codes": list(context.result.classification_evidence),
         "parameters": [
-            {"name": p.name, "value": p.value, "lower": p.lower, "upper": p.upper} for p in selected.parameters
+            {
+                "name": parameter.name,
+                "value": parameter.value,
+                "lower": parameter.lower,
+                "upper": parameter.upper,
+                **parameter_uncertainty(
+                    uncertainty,
+                    parameter.name,
+                    context.uncertainty_absent_reason,
+                    dataset_id=context.dataset.dataset_id,
+                ),
+            }
+            for parameter in context.selected.parameters
         ],
         "error_bars": _error_bars(uncertainty),
         "excluded_rows": {"count": int(np.count_nonzero(~mask)), "reason": EXCLUDED_ROW_REASON},
+        "inference": metadata,
     }
-    if selected_covariance is None:
-        confidence["covariance_absent_reason"] = context.uncertainty_absent_reason or COVARIANCE_ABSENT_REASON
+    if covariance is None or covariance["matrix"] is None:
+        confidence["covariance_absent_reason"] = covariance_absent_reason(
+            uncertainty, context.uncertainty_absent_reason
+        )
     else:
-        confidence["covariance"] = {
-            "names": covariance_names,
-            "matrix": selected_covariance.tolist(),
-        }
+        confidence["covariance"] = covariance
+    return confidence
+
+
+def _reduction_payload(context, mask):
     reduction = {
         "service_seed_tree_version": context.replay_identity.service_seed_tree_version,
         "project_master_seed": context.project.master_seed,
@@ -208,15 +213,28 @@ def _extensions(context, result, selected, mask, covariance):
     pointwise_resolution = _pointwise_resolution_payload(context.data, mask)
     if pointwise_resolution is not None:
         reduction["pointwise_resolution"] = pointwise_resolution
-    model = {
+    return reduction
+
+
+def _model_payload(context, mask):
+    """Keep the actual residual domain; an unavailable log transform is a gap."""
+    selected = context.selected
+    log_values = np.asarray(selected.log_residuals_decades, dtype=float)[mask]
+    return {
         "qz_a_inv": np.asarray(selected.qz_a_inv, dtype=float)[mask].tolist(),
         "reflectivity": np.asarray(selected.model_normalized, dtype=float)[mask].tolist(),
-        "residual_decades": np.asarray(selected.log_residuals_decades, dtype=float)[mask].tolist(),
+        "residual_decades": [float(value) if np.isfinite(value) else None for value in log_values],
+        "residuals": np.asarray(selected.residuals, dtype=float)[mask].tolist(),
+        **residual_metadata(selected),
     }
+
+
+def _extensions(context, mask):
+    """Fit evidence belongs in extensions, not ORSO's measured-data columns."""
     return {
-        "xrr_fitter.confidence": confidence,
-        "xrr_fitter.reduction": reduction,
-        "xrr_fitter.model": model,
+        "xrr_fitter.confidence": _confidence_payload(context, mask),
+        "xrr_fitter.reduction": _reduction_payload(context, mask),
+        "xrr_fitter.model": _model_payload(context, mask),
     }
 
 
@@ -250,49 +268,18 @@ def _beam_payload(beam):
 
 
 def _error_bars(uncertainty):
-    if uncertainty is None:
+    if uncertainty is None or uncertainty.bootstrap_evidence is None:
         return []
-    return [_error_bar(interval) for interval in uncertainty.bootstrap_intervals]
-
-
-def _finite_bound(value) -> bool:
-    return isinstance(value, Real) and not isinstance(value, bool) and bool(np.isfinite(value))
-
-
-def _error_bar(interval):
-    if not isinstance(interval, (tuple, list)) or len(interval) != 3:
-        raise ValueError("bootstrap intervals must contain name, lower, and upper")
-    name, lower, upper = interval
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError("bootstrap intervals must contain finite ordered bounds")
-    if not _finite_bound(lower) or not _finite_bound(upper) or lower > upper:
-        raise ValueError("bootstrap intervals must contain finite ordered bounds")
-    return {"name": name, "lower": float(lower), "upper": float(upper)}
-
-
-def _covariance_names(uncertainty):
-    return [] if uncertainty is None else list(uncertainty.correlation_names)
-
-
-def _validated_covariance(covariance, names):
-    matrix = np.asarray(covariance, dtype=float)
-    expected = (len(names), len(names))
-    structurally_valid = (
-        matrix.ndim == 2
-        and matrix.shape == expected
-        and np.all(np.isfinite(matrix))
-        and np.allclose(matrix, matrix.T, rtol=1e-10, atol=1e-12)
-    )
-    if not structurally_valid:
-        raise ValueError(
-            "covariance must be a finite symmetric positive-semidefinite square matrix matching correlation names"
-        )
-    symmetric = (matrix + matrix.T) / 2.0
-    if matrix.size:
-        eigenvalues = np.linalg.eigvalsh(symmetric)
-        tolerance = 1e-10 * float(np.max(np.abs(symmetric)))
-        if float(np.min(eigenvalues)) < -tolerance:
-            raise ValueError(
-                "covariance must be a finite symmetric positive-semidefinite square matrix matching correlation names"
-            )
-    return symmetric
+    evidence = uncertainty.bootstrap_evidence
+    return [
+        {
+            "name": name,
+            "lower": lower,
+            "upper": upper,
+            "interval_kind": evidence.interval_kind,
+            "confidence_level": evidence.confidence_level,
+            "method": evidence.method,
+            "unavailable_reason": evidence.unavailable_reason,
+        }
+        for name, lower, upper in evidence.intervals
+    ]

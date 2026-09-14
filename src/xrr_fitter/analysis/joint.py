@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import isfinite
 
 import numpy as np
@@ -14,9 +14,12 @@ from xrr_fitter.analysis.classification import (
 )
 from xrr_fitter.analysis.covariance import covariance_method, covariance_summary, joint_covariance
 from xrr_fitter.analysis.diagnostics import aggregate_residual_flag, build_residual_evidence
+from xrr_fitter.analysis.residual_calibration import validate_residual_owner
 from xrr_fitter.evaluation import EvaluationConstraintError
 from xrr_fitter.model.analysis import ConfidenceClass, CovarianceEvidence, ResidualEvidence, UncertaintyReport
 from xrr_fitter.model.fitting import ConfidenceThresholds
+from xrr_fitter.model.joint_bootstrap_provenance import validate_joint_bootstrap
+from xrr_fitter.model.provenance import joint_residual_owner_sha256
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +192,24 @@ def _uncertainty_report(
     )
 
 
+def _with_bootstrap(report, vectors, candidate_ids, bootstrap, bootstrap_owner):
+    if bootstrap is None or report.candidate_id is None or not report.correlation_names:
+        return report
+    if bootstrap_owner is None:
+        raise ValueError("joint bootstrap requires an independent numerical owner check")
+    vector = vectors[candidate_ids.index(report.candidate_id)]
+    expected = bootstrap_owner(report.candidate_id, vector)
+    sampling = bootstrap(report.candidate_id, vector)
+    validate_joint_bootstrap(sampling, report.candidate_id, expected, report.correlation_names)
+    return replace(
+        report,
+        bootstrap_evidence=sampling,
+        bootstrap_intervals=sampling.intervals,
+        bootstrap_failure_rate=sampling.failure_rate,
+        bootstrap_performed=True,
+    )
+
+
 def analyze_joint_ensemble(
     *,
     variable_names: tuple[str, ...],
@@ -200,6 +221,8 @@ def analyze_joint_ensemble(
     diagnostics: tuple[tuple[object, ...], ...],
     thresholds: ConfidenceThresholds,
     point_evidence: Callable | None = None,
+    bootstrap: Callable | None = None,
+    bootstrap_owner: Callable | None = None,
 ) -> tuple[UncertaintyReport, ConfidenceClass, tuple[str, ...]]:
     """Build and classify one global Stage-E candidate ensemble."""
     ensemble = _validated_ensemble(
@@ -214,6 +237,9 @@ def analyze_joint_ensemble(
     report = _uncertainty_report(ensemble, thresholds, point_evidence)
     if ensemble.count == 0:
         return report, ConfidenceClass.UNTRUSTED, ("no_active_candidates",)
+    report = _with_bootstrap(report, ensemble.vectors, ensemble.identifiers, bootstrap, bootstrap_owner)
+    if report.bootstrap_performed and report.bootstrap_failure_rate > 0.20:
+        return report, ConfidenceClass.UNTRUSTED, ("bootstrap_failure_rate",)
     clusters = (
         (tuple(range(ensemble.count)),)
         if ensemble.width == 0
@@ -236,6 +262,31 @@ def analyze_joint_ensemble(
     return report, confidence, evidence
 
 
+def _joint_residual_evidence(
+    dataset_ids,
+    problems,
+    unit_vector,
+    evaluations,
+    residual_evidence,
+    layout_fingerprint,
+) -> tuple[ResidualEvidence, ...]:
+    if residual_evidence is not None:
+        evidence = tuple(residual_evidence)
+        if layout_fingerprint is None or len(evidence) != len(dataset_ids):
+            raise ValueError("joint residual evidence requires an aligned member axis and layout identity")
+        owner = joint_residual_owner_sha256(problems, dataset_ids, unit_vector, evaluations, layout_fingerprint)
+        for dataset_id, member in zip(dataset_ids, evidence, strict=True):
+            validate_residual_owner(member, owner, dataset_id)
+        return evidence
+    residuals = []
+    for dataset_id, problem, evaluation in zip(dataset_ids, problems, evaluations, strict=True):
+        values = np.full(problem.data.fit_mask.shape, np.nan)
+        if evaluation.valid:
+            values[problem.data.fit_mask] = evaluation.fit_residuals
+        residuals.append(build_residual_evidence(problem, values, evaluation.diagnostics, dataset_id=dataset_id))
+    return tuple(residuals)
+
+
 def analyze_joint_point(
     names: tuple[str, ...],
     dataset_ids: tuple[str, ...],
@@ -243,15 +294,19 @@ def analyze_joint_point(
     unit_vector: np.ndarray,
     local_evaluations: tuple,
     inference_layout: Callable,
+    *,
+    residual_evidence: tuple[ResidualEvidence, ...] | None = None,
+    layout_fingerprint: str | None = None,
 ) -> tuple[CovarianceEvidence, tuple[ResidualEvidence, ...]]:
-    """Diagnose every actual member at the shared optimum before calibration."""
-    residuals = []
-    for dataset_id, problem, evaluation in zip(dataset_ids, problems, local_evaluations, strict=True):
-        values = np.full(problem.data.fit_mask.shape, np.nan)
-        if evaluation.valid:
-            values[problem.data.fit_mask] = evaluation.fit_residuals
-        residuals.append(build_residual_evidence(problem, values, evaluation.diagnostics, dataset_id=dataset_id))
-    evidence = tuple(residuals)
+    """Use one owned joint family for covariance; low-level calls never invent calibration."""
+    evidence = _joint_residual_evidence(
+        dataset_ids,
+        problems,
+        unit_vector,
+        local_evaluations,
+        residual_evidence,
+        layout_fingerprint,
+    )
     try:
         covariance = joint_covariance(names, unit_vector, problems, inference_layout(), evidence)
     except (EvaluationConstraintError, FloatingPointError, np.linalg.LinAlgError) as error:

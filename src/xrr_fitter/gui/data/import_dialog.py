@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
-from xrr_fitter.io.xy import read_xy
+from xrr_fitter.gui.noise import NOISE_MODE_LABELS, NOISE_MODE_REQUIREMENTS
 
 LOG = logging.getLogger(__name__)
 
@@ -156,11 +156,15 @@ class ImportDialog(QDialog):
         paths: tuple[Path, ...] | list[Path],
         *,
         folder_mode: bool = False,
+        noise_model: str = "robust_log",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._paths = tuple(Path(path) for path in paths)
         self._column_mapping: api.DataColumnMapping | None = None
+        self._noise_model = noise_model
+        self._folder_mode = folder_mode
+        self._preview_issue: str | None = None
         self.setObjectName("importDialog")
         self.setWindowTitle("导入 XRR 数据")
         self.setAccessibleName("导入 XRR 数据")
@@ -168,8 +172,8 @@ class ImportDialog(QDialog):
         self._build_source_controls(folder_mode)
         self._build_beam_controls()
         self._build_instrument_controls()
-        self._build_preview_plot()
         self._build_buttons()
+        self._build_preview_plot()
         self._arrange()
 
     def _build_source_controls(self, folder_mode: bool) -> None:
@@ -177,6 +181,11 @@ class ImportDialog(QDialog):
         self.source_label = QLabel(names)
         self.source_label.setObjectName("importSourcePaths")
         self.source_label.setWordWrap(True)
+        self.noise_label = QLabel(f"噪声模式：{NOISE_MODE_LABELS[self._noise_model]}")
+        self.noise_label.setObjectName("importNoiseModel")
+        self.noise_requirements = QLabel(NOISE_MODE_REQUIREMENTS[self._noise_model])
+        self.noise_requirements.setObjectName("importNoiseRequirements")
+        self.noise_requirements.setWordWrap(True)
         self.recursive_check = QCheckBox("递归导入子目录")
         self.recursive_check.setObjectName("recursiveFolderImportCheck")
         self.recursive_check.setVisible(bool(folder_mode))
@@ -222,7 +231,7 @@ class ImportDialog(QDialog):
         self._preview.setBackground("w")
         self._preview.getPlotItem().setLabel("bottom", "2θ / °")
         self._preview.getPlotItem().setLabel("left", "Intensity")
-        self._preview.getPlotItem().setLogMode(y=True)
+        self._preview.getPlotItem().setLogMode(y=self._noise_model == "robust_log")
         self._preview_curve = self._preview.plot(
             [],
             [],
@@ -236,30 +245,36 @@ class ImportDialog(QDialog):
 
     def _refresh_preview(self) -> None:
         """Try to parse the first file and draw a preview curve."""
-        if not self._paths:
+        self._preview_issue = None
+        if not self._paths or self._folder_mode:
             self._preview_curve.setData([], [])
+            self._sync_import_validation()
             return
         path = self._paths[0]
-        beam_kind = self.beam_kind()
-        if beam_kind is None:
-            beam = api.BeamSpec("monochromatic", wavelength_a=1.5406)
-        else:
-            try:
-                beam = self.beam_spec()
-            except (ValueError, TypeError):
-                beam = api.BeamSpec("monochromatic", wavelength_a=1.5406)
         try:
-            data = read_xy(path, beam, column_mapping=self._column_mapping)
+            beam = api.BeamSpec("monochromatic") if self.beam_kind() is None else self.beam_spec()
+            data = api.import_data(path, beam, column_mapping=self._column_mapping, noise_model=self._noise_model)
             x = np.asarray(data.two_theta_deg, dtype=float)
             y = np.asarray(data.intensity_raw, dtype=float)
-            valid = np.isfinite(x) & np.isfinite(y) & (y > 0)
+            valid = np.isfinite(x) & np.isfinite(y)
+            if self._noise_model == "robust_log":
+                valid &= y > 0
             self._preview_curve.setData(x[valid], y[valid])
             self._preview_error.hide()
-        except Exception as exc:
+        except (OSError, ValueError, TypeError) as exc:
             LOG.debug("preview parse failed: %s", exc)
             self._preview_curve.setData([], [])
-            self._preview_error.setText(f"预览不可用：{exc}")
+            self._preview_issue = f"预览不可用：{exc}"
+            self._preview_error.setText(self._preview_issue)
             self._preview_error.show()
+        self._sync_import_validation()
+
+    def _sync_import_validation(self) -> None:
+        selected = self.beam_kind() is not None
+        self._import_button.setEnabled(selected)
+        text = VALIDATION_TEXT if not selected else (self._preview_issue or "")
+        self.validation_label.setText(text)
+        self.validation_label.setVisible(bool(text))
 
     def _build_buttons(self) -> None:
         self.mapping_button = QPushButton("高级列映射…")
@@ -296,6 +311,8 @@ class ImportDialog(QDialog):
         instrument_form.addRow("分辨率域", self.resolution_domain)
         layout = QVBoxLayout(self)
         layout.addWidget(self.source_label)
+        layout.addWidget(self.noise_label)
+        layout.addWidget(self.noise_requirements)
         layout.addWidget(self.recursive_check)
         layout.addWidget(beam_box)
         layout.addWidget(instrument_box)
@@ -311,9 +328,6 @@ class ImportDialog(QDialog):
         self.beam_width.setEnabled(enabled)
 
     def _refresh_validation(self, _button: object, _checked: bool) -> None:
-        selected = self.beam_kind() is not None
-        self._import_button.setEnabled(selected)
-        self.validation_label.setVisible(not selected)
         self._refresh_preview()
 
     def _edit_column_mapping(self) -> None:
@@ -400,9 +414,11 @@ class ImportDialog(QDialog):
             resolution,
             resolution_kind,
         )
+        self._refresh_preview()
 
     def cancel_column_mapping(self) -> None:
         self._column_mapping = None
+        self._refresh_preview()
 
     def recursive_folder_import(self) -> bool:
         return self.recursive_check.isChecked()
