@@ -10,7 +10,8 @@ from statistics import median
 from xrr_fitter.model.analysis import FitResult
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
 from xrr_fitter.model.fitting import FitCheckpoint
-from xrr_fitter.model.parameters import ParameterSetting, SharingRule
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting, SharingRule
+from xrr_fitter.model.progress import search_terminated_early
 
 from .base import _scale_prior
 from .common import (
@@ -143,7 +144,7 @@ def _unlocked_joint_prepared(
                 physical[name],
                 definitions[name].lower,
                 definitions[name].upper,
-                locked=False,
+                freedom=ParameterFreedom.FREE,
             )
             for name in names_by_dataset.get(item.dataset_id, ())
         }
@@ -255,6 +256,9 @@ def _automatic_joint_result(
     result: FitResult,
     decision: object,
 ) -> AutomaticPreparedResult:
+    if search_terminated_early(result.skipped_stages):
+        reason = f"incomplete search: skipped stages {', '.join(result.skipped_stages)}"
+        return AutomaticPreparedResult(prepared, result, False, reason)
     reason = None if decision.passed else "; ".join(decision.reasons)
     if not decision.passed and not reason:
         reason = "automatic quality review required"
@@ -278,6 +282,8 @@ def _accepted_material_values(
     for rule in material_rules:
         member = rule.members[0]
         result = results_by_id[member.dataset_id]
+        if search_terminated_early(result.skipped_stages):
+            continue
         best = result.best_candidate
         if best is None or not best.valid:
             continue
@@ -314,7 +320,7 @@ def _locked_material_prepared(
                 material_values[key],
                 definition.lower,
                 definition.upper,
-                locked=True,
+                freedom=ParameterFreedom.FIXED,
             )
     return _recompiled_automatic_prepared(
         isolated,

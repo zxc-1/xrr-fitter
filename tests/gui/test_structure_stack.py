@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtWidgets import QWidget
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QLabel, QWidget
 
 import xrr_fitter.api as api
 
@@ -163,8 +164,7 @@ def test_clicking_a_medium_band_selects_nothing(qtbot) -> None:
 def test_clicking_the_diagram_moves_the_tree_selection(qtbot, tmp_path) -> None:
     """Two views of one stack must not disagree about which layer is current.
 
-    The buttons act on the tree's current row, so a click that highlighted only
-    the diagram would leave 删除 pointing somewhere else.
+    行的右键菜单作用在树的当前行上，所以只点亮示意图的选中会让「删除」指到别处去。
     """
     panel = _panel(qtbot, tmp_path)
     panel.set_structure(api.StructureSpec(AIR, (_layer("cap"), _layer("film")), SI))
@@ -174,7 +174,7 @@ def test_clicking_the_diagram_moves_the_tree_selection(qtbot, tmp_path) -> None:
     _click(qtbot, view, view.bands()[2])
 
     assert panel.editor.tree.currentItem().data(0, Qt.ItemDataRole.UserRole) == 1
-    assert panel.editor.remove_button.isEnabled()
+    assert panel.editor.remove_action.isEnabled()
 
 
 def test_selecting_a_tree_row_highlights_the_matching_band(qtbot, tmp_path) -> None:
@@ -197,3 +197,74 @@ def test_clearing_the_editor_empties_the_diagram(qtbot, tmp_path) -> None:
     panel.editor.clear()
 
     assert view.bands() == ()
+
+
+def _swatch_colour(tree, item) -> str | None:
+    """The colour actually drawn in a row's swatch, read off the pixmap it carries.
+
+    Reading the pixmap rather than a data role kept beside it means the assertion
+    is about what reaches the screen: a role recorded in parallel can agree with
+    the diagram while the swatch painted from it does not.
+    """
+    from xrr_fitter.gui.structure.rows import SWATCH_OBJECT
+
+    row = tree.itemWidget(item, 0)
+    label = None if row is None else row.findChild(QLabel, SWATCH_OBJECT)
+    pixmap = None if label is None else label.pixmap()
+    if pixmap is None or pixmap.isNull():
+        return None
+    image = pixmap.toImage()
+    return image.pixelColor(image.width() // 2, image.height() // 2).name()
+
+
+def test_each_tree_row_carries_the_colour_of_its_own_band(qtbot, tmp_path) -> None:
+    """设计稿层行的行首是色块（`.lyr > .sw`）：把这一行和图上那条带对上。
+
+    图和树讲的是同一个结构的两种写法，中间只差一个视觉挂钩——没有它，读者得靠数
+    行序自己配对，而周期块在图上是一条带、在树里是一行带子行，序号并不同步。
+    """
+    from xrr_fitter.gui import theme
+
+    panel = _panel(qtbot, tmp_path)
+    panel.set_structure(api.StructureSpec(AIR, (_layer("cap"), _periodic()), SI))
+    view = panel.findChild(QWidget, "structureStack")
+    tree = panel.editor.tree
+
+    bands = {band.index: band.fill for band in view.bands()}
+    for row in range(tree.topLevelItemCount()):
+        item = tree.topLevelItem(row)
+        index = item.data(0, Qt.ItemDataRole.UserRole)
+        expected = theme.DATA_NEUTRAL if index is None else bands[index]
+        assert _swatch_colour(tree, item) == QColor(expected).name(), f"row {row} swatch does not match its band"
+
+
+def test_the_bounding_media_do_not_spend_a_data_hue(qtbot, tmp_path) -> None:
+    """设计系统写明「空气与基底一律取中性灰不占序列色相」。
+
+    半无限介质不是被拟合的层，占掉一个序列色相就让第一层看起来是第二层。
+    """
+    from xrr_fitter.gui import theme
+
+    panel = _panel(qtbot, tmp_path)
+    panel.set_structure(api.StructureSpec(AIR, (_layer("cap"),), SI))
+    tree = panel.editor.tree
+
+    media = (tree.topLevelItem(0), tree.topLevelItem(tree.topLevelItemCount() - 1))
+
+    assert [_swatch_colour(tree, item) for item in media] == [QColor(theme.DATA_NEUTRAL).name()] * 2
+    assert _swatch_colour(tree, tree.topLevelItem(1)) == QColor(theme.DATA_SEQUENCE[0]).name()
+
+
+def test_a_child_layer_of_a_periodic_block_is_not_given_its_own_colour(qtbot, tmp_path) -> None:
+    """周期块在图上只有一条带，所以子行没有可对应的颜色。
+
+    给子行也发一个色块会读成「这两层在图上各有一条带」，而它们合起来才是那条带。
+    """
+    panel = _panel(qtbot, tmp_path)
+    panel.set_structure(api.StructureSpec(AIR, (_periodic(),), SI))
+
+    tree = panel.editor.tree
+    block = tree.topLevelItem(1)
+
+    assert block.childCount() == 2
+    assert [_swatch_colour(tree, block.child(row)) for row in range(2)] == [None, None]

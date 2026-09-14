@@ -18,8 +18,15 @@ import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.parameters.constraints import ConstraintEditor
+from xrr_fitter.gui.parameters.disposition import ParameterDisposition
+from xrr_fitter.gui.parameters.grouping import component_captions
 from xrr_fitter.gui.parameters.sharing import SharingEditor
-from xrr_fitter.gui.parameters.table import VALUE_COLUMNS, ParameterTable
+from xrr_fitter.gui.parameters.table import (
+    FREEDOM_BY_CHECK_STATE,
+    FREEDOM_CHECK_STATES,
+    VALUE_COLUMNS,
+    ParameterTable,
+)
 
 # Wash of the error color behind a cell whose entered bound is self-inconsistent.
 INVALID_CELL_BRUSH = QBrush(QColor(179, 38, 30, 48))
@@ -51,16 +58,28 @@ class ParametersPanel(QWidget):
     sharing_changed = Signal(tuple)
     constraints_changed = Signal(tuple)
     expert_mode_changed = Signal(bool)
+    # 这一屏刚编译出来的参数声明。左栏那行「N 共享 + M 独立」要数自由参数，而
+    # ``describe_parameters`` 会读源文件——挂在 project_changed 上等于把这里做过的读取再做
+    # 一遍。所以由算过的这一方报出来，别处只订阅。
+    definitions_changed = Signal(tuple)
 
     def __init__(self, document: ProjectDocument) -> None:
         super().__init__()
         self.document = document
         self.setObjectName("parametersPanel")
         self._definitions: tuple[api.ParameterDefinition, ...] = ()
-        self.expert_toggle = QCheckBox("专家模式")
+        # Named for what it uncovers, not for who is presumed to be looking: the
+        # command bar's 引导↔专家 segment already owns 专家, and it switches which
+        # surface is on screen rather than how deep this one goes.  Both carrying the
+        # one word meant the guided surface's 「切换到专家模式」 hint landed on a
+        # workspace where a control of the same name was still unchecked.
+        self.expert_toggle = QCheckBox("显示高级选项")
         self.expert_toggle.setObjectName("expertModeToggle")
-        self.expert_toggle.setAccessibleName("切换专家参数")
+        self.expert_toggle.setAccessibleName("切换高级选项")
+        self.expert_toggle.setToolTip("显示高级参数、SLD 与诊断图、不确定度与预设入口；与顶栏的引导↔专家不是同一个开关")
         self.parameter_table = ParameterTable()
+        self.disposition = ParameterDisposition()
+        self.disposition.freedom_requested.connect(self._set_freedom)
         self.sharing_editor = SharingEditor(document)
         self.sharing_editor.rules_changed.connect(self.sharing_changed.emit)
         self.constraint_editor = ConstraintEditor(document)
@@ -78,10 +97,20 @@ class ParametersPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(theme.SPACE_SM)
         layout.addWidget(self.expert_toggle)
+        # ``disposition`` 不在这个面板的布局里：设计稿帧③ 把三档与两枚徽标画在右栏「参数化」
+        # 那一段（HTML 711-720），而这张表在画布列的「参数总览」卡里。它仍归这个面板所有——
+        # 接线、锁定回写都在这里——只是由 ``window_layout`` 挂到右栏那一段去。
         layout.addWidget(tabs)
         layout.addWidget(self.status_label)
         self.expert_toggle.toggled.connect(self._toggle_expert_mode)
         self.parameter_table.itemChanged.connect(self._table_setting_changed)
+        # 抬头和这一段跟同一行走。两个发信方都必须是表自己：挂到 ``table.model()`` 上的
+        # 连接会在表的 Python 包装失效之后再响一次，抛 shiboken 的「对象已删除」，而那个
+        # 异常落在 Qt 事件循环里会被 pytest-qt 记到*下一条*用例头上。
+        self.parameter_table.currentCellChanged.connect(self._follow_current_row)
+        # 换数据集、换结构都会重填整张表，选中行随之作废——那次作废发生在
+        # ``QSignalBlocker`` 里，``currentCellChanged`` 一声不响，所以由表自己补一声。
+        self.parameter_table.rows_reloaded.connect(self._follow_current_row)
         self.parameter_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.parameter_table.customContextMenuRequested.connect(self._show_row_context_menu)
         document.project_changed.connect(self._refresh)
@@ -124,10 +153,10 @@ class ParametersPanel(QWidget):
         initial: float,
         lower: float,
         upper: float,
-        locked: bool,
+        freedom: api.ParameterFreedom,
     ) -> bool:
         self._definition(name)
-        setting = api.ParameterSetting(name, initial, lower, upper, locked)
+        setting = api.ParameterSetting(name, initial, lower, upper, freedom)
         dataset_id = self._require_active_dataset_id()
         dataset = self._dataset(dataset_id)
         settings = self._with_setting(dataset.parameter_settings, setting)
@@ -147,7 +176,7 @@ class ParametersPanel(QWidget):
         initial: float,
         lower: float,
         upper: float,
-        locked: bool,
+        freedom: api.ParameterFreedom,
     ) -> bool:
         values = self.parameter_table.to_persisted_values(
             name,
@@ -160,7 +189,7 @@ class ParametersPanel(QWidget):
             initial=values[0],
             lower=values[1],
             upper=values[2],
-            locked=locked,
+            freedom=freedom,
         )
 
     def set_expert_mode(self, enabled: bool) -> bool:
@@ -225,6 +254,44 @@ class ParametersPanel(QWidget):
 
     def _toggle_expert_mode(self, enabled: bool) -> None:
         self.set_expert_mode(enabled)
+
+    def _follow_current_row(self, *_args) -> None:
+        """把「参数化」那一段切到表里当前那一行上。"""
+        name = self.parameter_table.current_name()
+        definition = None if name is None else self._visible_definition(name)
+        self.disposition.show_definition(
+            definition,
+            quantity=self.parameter_table.current_quantity(),
+            # 档位读表的那份映射，不重新去 project 里翻 setting：表刚才就是按它画的，另找一
+            # 条来源等于给同一件事开第二个真相。
+            freedom=None if name is None else self.parameter_table.freedom_of(name),
+            sharing_rules=self.sharing_rules,
+        )
+
+    def _visible_definition(self, name: str) -> api.ParameterDefinition | None:
+        matches = tuple(item for item in self.visible_definitions if item.name == name)
+        return matches[0] if matches else None
+
+    def _set_freedom(self, name: str, freedom: api.ParameterFreedom) -> None:
+        """走名字格那个勾原本那条提交路径，而不是另起一条。
+
+        另起一条的话，同一件事有两个入口各提交各的：改完档位之后表里的勾会和这一段的档位
+        对不上，而两处都没标注自己读的是哪一边。
+        """
+        row = self._row_of(name)
+        if row is None:
+            return
+        item = self.parameter_table.item(row, 0)
+        if item is None:
+            return
+        item.setCheckState(FREEDOM_CHECK_STATES[freedom])
+
+    def _row_of(self, name: str) -> int | None:
+        for row in range(self.parameter_table.rowCount()):
+            item = self.parameter_table.item(row, 0)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == name:
+                return row
+        return None
 
     def _show_row_context_menu(self, position: object) -> None:
         item = self.parameter_table.itemAt(position)
@@ -312,11 +379,13 @@ class ParametersPanel(QWidget):
         return tuple(value for value in priors if value.name != name)
 
     def _table_setting_changed(self, item: object) -> None:
-        if item.column() not in (1, 2, 3, 5):
+        # Column 0 carries the freedom gear as its check state, so a toggle there is a
+        # setting change exactly like an edited bound.
+        if item.column() not in (0, 1, 2, 3):
             return
         row = item.row()
         try:
-            name, values, locked = self._read_row(row)
+            name, values, freedom = self._read_row(row)
         except (KeyError, ValueError) as error:
             self._refresh()
             self.status_label.setText(str(error))
@@ -336,21 +405,23 @@ class ParametersPanel(QWidget):
                 initial=values[0],
                 lower=values[1],
                 upper=values[2],
-                locked=locked,
+                freedom=freedom,
             )
         except (KeyError, ValueError) as error:
             self._refresh()
             self.status_label.setText(str(error))
 
-    def _read_row(self, row: int) -> tuple[str, tuple[float, float, float], bool]:
+    def _read_row(self, row: int) -> tuple[str, tuple[float, float, float], api.ParameterFreedom]:
+        # The name cell holds both the identity and the freedom gear: it is the only
+        # cell a caption row populates, so requiring the numeric cells is still what
+        # keeps a caption from being read as a parameter.
         name_item = self.parameter_table.item(row, 0)
         value_items = tuple(self.parameter_table.item(row, column) for column in VALUE_COLUMNS)
-        lock_item = self.parameter_table.item(row, 5)
-        if name_item is None or lock_item is None or any(value is None for value in value_items):
+        if name_item is None or any(value is None for value in value_items):
             raise ValueError("parameter row is incomplete")
         name = str(name_item.data(Qt.ItemDataRole.UserRole))
         initial, lower, upper = (self.parameter_table.entered_value(value) for value in value_items)
-        return name, (initial, lower, upper), lock_item.checkState() == Qt.CheckState.Checked
+        return name, (initial, lower, upper), FREEDOM_BY_CHECK_STATE[name_item.checkState()]
 
     def _mark_row_invalid(self, row: int, problem: str) -> None:
         for column in VALUE_COLUMNS:
@@ -380,29 +451,30 @@ class ParametersPanel(QWidget):
             self._definitions,
             expert_mode=self.expert_mode,
             captions=self._component_captions(dataset_id),
+            freedom=self._freedom_map(dataset_id),
         )
         # The row count is legible from the table itself, so the status line
         # stays empty here and is reserved for validation problems and the
         # outcome of a reset.
         self.status_label.clear()
+        self.definitions_changed.emit(self._definitions)
+
+    def _freedom_map(self, dataset_id: str) -> dict[str, api.ParameterFreedom]:
+        """已持久化 setting 的那些参数当前各在哪一档。
+
+        声明上只有 ``locked``，两态装不下「仅范围」；档位只存在 setting 里，所以要有
+        setting 的按 setting 报，没 setting 的不进这份映射，交给表按声明回落。
+        """
+        return {setting.name: setting.freedom for setting in self._dataset(dataset_id).parameter_settings}
 
     def _component_captions(self, dataset_id: str) -> dict[str, str]:
-        """Name each component group the way the structure editor names it.
-
-        A component's own name is not recoverable from its parameter rows: a
-        periodic block named ML contributes rows reading "W 厚度" and "Si 厚度",
-        which share no token with the block.  The structure is therefore read here,
-        where it is available, and the table only renders what it is handed.
-        """
-        structure = self._dataset(dataset_id).structure
-        if structure is None:
-            return {}
-        return {f"component.{index}": component.name for index, component in enumerate(structure.components)}
+        return component_captions(self._dataset(dataset_id).structure)
 
     def _clear_projection(self, message: str) -> None:
         self._definitions = ()
         self.parameter_table.clear_parameters()
         self.status_label.setText(message)
+        self.definitions_changed.emit(self._definitions)
 
     def _definition(self, name: str) -> api.ParameterDefinition:
         matches = tuple(value for value in self._definitions if value.name == name)

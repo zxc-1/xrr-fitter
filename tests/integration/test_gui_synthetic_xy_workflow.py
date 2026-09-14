@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 import xrr_fitter.api as api
-from xrr_fitter.gui.results.candidates import candidate_is_selectable
+from xrr_fitter.gui.results.candidate_row import candidate_is_selectable
 from xrr_fitter.io.xy import xy_bytes
 from xrr_fitter.physics.reflectivity import instrument_reflectivity
 from xrr_fitter.physics.stack import expand_structure
@@ -174,12 +174,14 @@ def _lock_all_but_first_thickness(window, initial_nm: float) -> None:
     QApplication.processEvents()
     for name in tuple(panel.row_names):
         if not name:
-            # Group caption rows carry no parameter and no lock cell; row_names
-            # holds a blank placeholder for them to keep physical row indices
-            # aligned, so there is nothing to lock here.
+            # Group caption rows carry no parameter and no lock, so there is
+            # nothing to lock here; row_names holds a blank placeholder for them to
+            # keep physical row indices aligned.
             continue
         row = panel.row_names.index(name)
-        item = table.item(row, 5)
+        # The lock is the name cell's check state, drawn beside the quantity the
+        # way the design puts it inside the label.
+        item = table.item(row, 0)
         desired = Qt.CheckState.Unchecked if name == free_name else Qt.CheckState.Checked
         if item.checkState() != desired:
             item.setCheckState(desired)
@@ -349,8 +351,8 @@ def _edit_plot_mask(window, source: Path) -> None:
     assert np.any(np.isclose(prepared.two_theta_deg, stored_range[0]))
     assert np.any(np.isclose(prepared.two_theta_deg, stored_range[1]))
 
-    mask_button = window.plot_panel.mode_buttons()["mask"]
-    QTest.mouseClick(mask_button, Qt.MouseButton.LeftButton)
+    mask_button = window.plot_panel.mode_actions()["mask"]
+    mask_button.trigger()
     masked_index = 20
     _click_point_mask(window, float(prepared.two_theta_deg[masked_index]))
     assert window.document.project.datasets[1].fit_mask[masked_index] is False
@@ -398,8 +400,9 @@ def _select_alternate_candidate(window) -> str:
 
 
 def _save_and_export(window, project_path: Path) -> None:
-    save_as = window.findChild(QPushButton, "saveAsProjectButton")
-    QTest.mouseClick(save_as, Qt.MouseButton.LeftButton)
+    # 另存为 只在 文件 菜单里：命令栏按设计稿只摆 新建/打开/保存。
+    save_as = next(action for action in window.actions() if action.objectName() == "saveAsProjectAction")
+    save_as.trigger()
     assert project_path.is_file()
     assert window.document.is_dirty is False
 

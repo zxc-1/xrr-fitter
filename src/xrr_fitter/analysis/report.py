@@ -243,6 +243,23 @@ def _residual_evidence(
     return bool(derived) or autocorrelation, tuple(diagnostics.values()), autocorrelation
 
 
+def _bootstrap_request_count(bootstrap: BootstrapResult | None) -> int:
+    """请求了多少次重采样——从手上这份证据反解，而不是回头去问预算。
+
+    预算（``config.budget.bootstrap_samples``）说的是「现在会请求多少」，可调用方完全可以
+    递进一份用别的 ``sample_count`` 跑出来的 bootstrap；读数得跟着证据走。反解是精确的而
+    不是估计：``_collect_bootstrap_samples`` 用两条 ``RuntimeError`` 钉住
+    ``kept == count - failures``，所以「成功数 ÷（1 − 失败率）」还原的就是 count 本身。
+    全军覆没时分母为 0，次数无从得知，记 0（未记录）。
+    """
+    if bootstrap is None:
+        return 0
+    survival = 1.0 - float(bootstrap.failure_rate)
+    if survival <= 0.0:
+        return 0
+    return round(int(bootstrap.samples.shape[0]) / survival)
+
+
 def build_uncertainty_report(
     problem: FitEvaluationContext,
     candidates: tuple[object, ...],
@@ -285,6 +302,7 @@ def build_uncertainty_report(
         profiles=profiles,
         bootstrap_intervals=intervals,
         bootstrap_failure_rate=failure_rate,
+        bootstrap_sample_count=_bootstrap_request_count(bootstrap),
         boundary_hits=boundary_hits,
         strong_correlations=strong_correlations,
         systematic_residual=systematic,
@@ -429,6 +447,7 @@ def _enrich_search_result(
         stage_summaries=search_result.stage_summaries,
         region_labels=search_result.region_labels,
         region_weights=search_result.region_weights,
+        skipped_stages=search_result.skipped_stages,
     )
 
 
@@ -457,6 +476,7 @@ def _append_uncertainty_summary(
         stage_summaries=summaries,
         region_labels=search_result.region_labels,
         region_weights=search_result.region_weights,
+        skipped_stages=search_result.skipped_stages,
     )
 
 
@@ -477,6 +497,9 @@ def analyze_search_result(
     _validate_analysis_members(problem, search_result, bootstrap)
     _validate_analysis_ownership(problem, search_result, bootstrap)
     parameter_priors = _analysis_parameter_priors(parameter_priors)
+    if search_result.terminated_early:
+        _check_cancelled(cancelled)
+        return FitResult.from_incomplete_search(search_result)
     candidates = _stage_e_candidates(search_result)
     best = search_result.best_candidate
     if best is None:

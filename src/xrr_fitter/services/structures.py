@@ -11,6 +11,7 @@ from xrr_fitter.model.analysis import StructureEvidence
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.parameters import (
     ConstraintRule,
+    ParameterFreedom,
     ParameterSetting,
     SharingRule,
     _iter_references,
@@ -359,7 +360,7 @@ def accept_oxide_suggestion(
                 1.0,
                 1.0,
                 1.0,
-                locked=True,
+                freedom=ParameterFreedom.FIXED,
             ),
         ),
     )

@@ -83,11 +83,14 @@ def cleanup_environment(root: Path, job: Path, runner_temp: Path) -> None:
 def combined_key(root: Path, trust_domain: str) -> str:
     from package_cache import cache_key
     from package_downloads import read_manifest
+    from qt_cocoa_inputs import input_cache_key as qt_key
+    from qt_cocoa_inputs import read_inputs as qt_inputs
     from refnx_build_inputs import input_cache_key, read_inputs
 
     ordinary = cache_key(read_manifest(root, root / "tools/package-manifests/macos-arm64-py312.json"), trust_domain)
     builder = input_cache_key(read_inputs(root), trust_domain)
-    digest = hashlib.sha256(f"{ordinary}\n{builder}\n".encode("ascii")).hexdigest()
+    qt = qt_key(qt_inputs(root), trust_domain)
+    digest = hashlib.sha256(f"{ordinary}\n{builder}\n{qt}\n".encode("ascii")).hexdigest()
     return f"xrr-macos-inputs-v1-{trust_domain}-python-3.12-pip-26.1.2-{digest}"
 
 
@@ -95,7 +98,7 @@ def prepare_cache(root: Path, cache: Path, report: Path) -> Path:
     from package_cache import _cache_directory
 
     cache = _cache_directory(root, cache, report)
-    if {item.name for item in cache.iterdir()} - {"wheels", "refnx"}:
+    if {item.name for item in cache.iterdir()} - {"wheels", "refnx", "qt"}:
         raise ValueError("macOS input cache contains unrelated members")
     return cache
 
@@ -111,6 +114,8 @@ def run_setup_steps(steps) -> tuple[str, int]:
 def setup_environment(root: Path, job: Path, runner_temp: Path, cache: Path, trust_domain: str) -> int:
     from package_cache import cached_download
     from package_downloads import install_packages, require_install_target
+    from qt_cocoa_build import build_cocoa
+    from qt_cocoa_inputs import cached_inputs as cached_qt_inputs
     from refnx_build import build_refnx
     from refnx_build_inputs import cached_inputs
 
@@ -128,9 +133,22 @@ def setup_environment(root: Path, job: Path, runner_temp: Path, cache: Path, tru
             lambda: cached_download(root, manifest, report / "packages", cache / "wheels", trust_domain),
         ),
         ("refnx-inputs", lambda: cached_inputs(root, report / "refnx-inputs", cache / "refnx", trust_domain)),
+        ("qt-cocoa-inputs", lambda: cached_qt_inputs(root, report / "qt-cocoa-inputs", cache / "qt", trust_domain)),
+        (
+            "qt-cocoa-build",
+            lambda: build_cocoa(
+                root, report / "qt-cocoa-inputs/inputs", report / "packages/wheels", report / "qt-cocoa-build"
+            ),
+        ),
         (
             "ordinary-install",
-            lambda: install_packages(root, manifest, report / "packages/wheels", report / "installation"),
+            lambda: install_packages(
+                root,
+                manifest,
+                report / "packages/wheels",
+                report / "installation",
+                qt_build=report / "qt-cocoa-build/build.json",
+            ),
         ),
         (
             "refnx-build",

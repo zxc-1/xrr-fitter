@@ -225,17 +225,45 @@ def _installed_versions(manifest: dict) -> None:
             raise ValueError(f"installed package version differs from the manifest: {item['name']}")
 
 
-def install_packages(root: Path, manifest_path: Path, wheel_directory: Path, report: Path) -> int:
+def _qt_installation(root: Path, manifest: dict, wheel_directory: Path, report: Path | None) -> dict | None:
+    if report is None:
+        return None
+    if manifest["target"] != "macos-arm64-py312":
+        raise ValueError("Qt source-build evidence is only valid for macOS arm64")
+    from qt_cocoa_evidence import read_build
+
+    qt = read_build(root, report, wheel_directory)
+    originals = [item for item in manifest["wheels"] if item["name"] == "pyside6-essentials"]
+    if originals != [qt["receipt"]["inputs"]["upstream_wheel"]]:
+        raise ValueError("Qt installation upstream differs from the selected ordinary manifest")
+    return qt
+
+
+def _installation_requirements(manifest: dict, wheel_directory: Path, qt: dict | None) -> str:
+    choices = [(item, wheel_directory / item["filename"]) for item in manifest["wheels"]]
+    if qt is not None:
+        choices = [
+            (qt["record"], qt["path"]) if item["name"] == "pyside6-essentials" else (item, path)
+            for item, path in choices
+        ]
+    return "".join(
+        f"{item['name']} @ {path.resolve().as_uri()} --hash=sha256:{item['sha256']}\n" for item, path in choices
+    )
+
+
+def install_packages(
+    root: Path, manifest_path: Path, wheel_directory: Path, report: Path, *, qt_build: Path | None = None
+) -> int:
     manifest = read_manifest(root, manifest_path)
     require_install_target(manifest["target"])
     if Path(sys.prefix).resolve().is_relative_to(root.resolve()):
         raise ValueError("package installation requires an external virtual environment")
     before = verify_wheels(wheel_directory, manifest["wheels"])
+    qt = _qt_installation(root, manifest, wheel_directory, qt_build)
     report, guard, environment = prepare_report(root, report)
-    requirements = "".join(
-        f"{item['name']} @ {(wheel_directory / item['filename']).resolve().as_uri()} --hash=sha256:{item['sha256']}\n"
-        for item in manifest["wheels"]
-    )
+    requirements = _installation_requirements(manifest, wheel_directory, qt)
+    if qt is not None:
+        _write(report, "qt-cocoa-build.json", manifest_bytes(qt["receipt"]).decode("ascii"))
     _write(report, "install.requirements", requirements)
     _write(report, "manifest.json", manifest_bytes(manifest).decode("ascii"))
     code = run_logged(install_command(report), root=root, report=report, label="install", environment=environment)
@@ -248,6 +276,8 @@ def install_packages(root: Path, manifest_path: Path, wheel_directory: Path, rep
             (sys.executable, "-m", "pip", "check"), root=root, report=report, label="pip-check", environment=environment
         )
     guard()
+    if _qt_installation(root, manifest, wheel_directory, qt_build) != qt:
+        raise ValueError("Qt source-build evidence changed during installation")
     _summary(report, "install", code, target=manifest["target"], vcs_verified=False)
     return code
 
@@ -260,6 +290,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--report-dir", type=Path)
     parser.add_argument("--wheel-dir", type=Path)
+    parser.add_argument("--qt-build", type=Path)
     args = parser.parse_args(argv)
     required = {
         "resolve": ("target", "report_dir"),
@@ -276,7 +307,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.mode == "download":
             return download_packages(root, args.manifest, args.report_dir)
         if args.mode == "install":
-            return install_packages(root, args.manifest, args.wheel_dir, args.report_dir)
+            return install_packages(root, args.manifest, args.wheel_dir, args.report_dir, qt_build=args.qt_build)
         manifest = read_manifest(root, args.manifest)
         records = verify_wheels(args.wheel_dir, manifest["wheels"])
         print(json.dumps({"state": "PASS", "target": manifest["target"], "wheels": records, "vcs_verified": False}))

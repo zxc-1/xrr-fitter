@@ -8,7 +8,11 @@ keeps every process entry point pickle-safe at module scope.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from functools import partial
+from threading import Lock
+from time import sleep as _sleep
 
 from xrr_fitter.analysis import sld_bands as _bands
 from xrr_fitter.analysis.automatic import assess_automatic_quality
@@ -39,7 +43,7 @@ from xrr_fitter.fit.joint_sharing import (
 from xrr_fitter.fit.joint_sharing import (
     validate_sharing_rules as validate_compiled_sharing_rules,
 )
-from xrr_fitter.fit.local_search import SearchCancelled
+from xrr_fitter.fit.local_search import SearchCancelled, StageSkipped
 from xrr_fitter.fit.objective import evaluate_declared_initial, evaluate_vector
 from xrr_fitter.fit.parameters import (
     apply_parameter_settings,
@@ -83,6 +87,68 @@ from xrr_fitter.services.fitting_phases.common import (
     ProgressCallback,
 )
 from xrr_fitter.services.fitting_phases.sharing import automatic_sharing_rules
+
+# 暂停期间探针醒来查看的周期。取消要在这个量级内被听见，而不是等到下一个阶段边界。
+PAUSE_POLL_SECONDS = 0.05
+
+
+def pause_aware_probe(cancellation, pause, skip=None, *, sleep=_sleep):
+    """Poll cancellation first, consume one stage skip, then honor pause."""
+    skip_lock = Lock()
+
+    def probe() -> bool:
+        while True:
+            if cancellation.is_set():
+                return True
+            with skip_lock:
+                if skip is not None and skip.is_set():
+                    skip.clear()
+                    raise StageSkipped("stage skipped by request")
+            if pause is None or not pause.is_set():
+                return False
+            sleep(PAUSE_POLL_SECONDS)
+
+    return probe
+
+
+class _WorkerCancellation:
+    """Give solver-owned search scopes a skip-capable view of worker control."""
+
+    def __init__(self, cancellation, pause, skip) -> None:
+        self._skip = skip
+        self._normal_probe = pause_aware_probe(cancellation, pause)
+        self._search_probe = pause_aware_probe(cancellation, pause, skip)
+
+    def _discard_skip(self) -> None:
+        if self._skip is not None:
+            self._skip.clear()
+
+    def __call__(self) -> bool:
+        self._discard_skip()
+        return self._normal_probe()
+
+    @contextmanager
+    def search_scope(self):
+        # Requests made before or after a search must not skip the next dataset.
+        self._discard_skip()
+        try:
+            yield self._search_probe
+        finally:
+            self._discard_skip()
+
+
+def build_cancellation_probe(cancellation, pause, skip=None):
+    """Build normal worker control; only a search boundary enables stage skip."""
+    if pause is None and skip is None:
+        return cancellation.is_set
+    return _WorkerCancellation(cancellation, pause, skip)
+
+
+def _run_skippable_search(run_search, request, *, cancelled=None, **kwargs):
+    if isinstance(cancelled, _WorkerCancellation):
+        with cancelled.search_scope() as probe:
+            return run_search(request, cancelled=probe, **kwargs)
+    return run_search(request, cancelled=cancelled, **kwargs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,7 +420,7 @@ def fit_prepared_dataset(
         local_workers=local_workers,
         profile_names=profile_names,
         fit_search_request=FitSearchRequest,
-        run_fit_search=run_fit_search,
+        run_fit_search=partial(_run_skippable_search, run_fit_search),
         recover_profile_basin=recover_profile_basin,
         continue_profile_basin=continue_profile_basin,
         analysis_request=AnalysisRequest,
@@ -421,7 +487,7 @@ def fit_automatic_prepared_dataset(
         checkpoint=checkpoint,
         local_workers=local_workers,
         fit_search_request=FitSearchRequest,
-        run_fit_search=run_fit_search,
+        run_fit_search=partial(_run_skippable_search, run_fit_search),
         analysis_request=AnalysisRequest,
         run_analysis=run_analysis,
         assess_automatic_quality=assess_automatic_quality,
@@ -463,7 +529,7 @@ def fit_automatic_joint_group(
         compile_joint_problem=compile_joint_problem,
         consensus_joint_vector=consensus_joint_vector,
         joint_fit_request=JointFitRequest,
-        run_joint_fit=run_joint_fit,
+        run_joint_fit=partial(_run_skippable_search, run_joint_fit),
         analysis_request=AnalysisRequest,
         run_analysis=run_analysis,
         assess_automatic_quality=assess_automatic_quality,
@@ -492,7 +558,7 @@ def fit_joint_datasets(
         checkpoint=checkpoint,
         compile_joint_problem=compile_joint_problem,
         joint_fit_request=JointFitRequest,
-        run_joint_fit=run_joint_fit,
+        run_joint_fit=partial(_run_skippable_search, run_joint_fit),
         analyze_joint_searches=_analyze_joint_searches,
     )
 

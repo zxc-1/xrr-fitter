@@ -15,6 +15,7 @@ import numpy as np
 from xrr_fitter.gui.plots.diagnostics import (
     DiagnosticView,
     candidate_is_inspection_only,
+    diverging_colormap,
     draw_empty,
     finish_view,
 )
@@ -113,7 +114,7 @@ def draw_residual_heatmap(
     matrix = np.vstack([np.asarray(candidate.weighted_residuals, dtype=float) for candidate in candidates])
     limit = _symmetric_limit(matrix)
     axes = reset_single_axes(view)
-    image = axes.imshow(matrix, aspect="auto", cmap="coolwarm", vmin=-limit, vmax=limit)
+    image = axes.imshow(matrix, aspect="auto", cmap=diverging_colormap(), vmin=-limit, vmax=limit)
     view.figure.colorbar(image, ax=axes)
     _label_rows(axes, _row_labels(candidates, candidate_id))
     xlabel = _label_columns_with_qz(axes, candidates[0], matrix.shape[1])

@@ -12,7 +12,7 @@ from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 from xrr_fitter.model.provenance import fit_search_provenance_sha256
 
 
@@ -35,7 +35,7 @@ def _problem():
             definition.initial,
             definition.lower,
             definition.upper,
-            locked=definition.name != "component.0.thickness_a",
+            freedom=ParameterFreedom.from_locked(definition.name != "component.0.thickness_a"),
         )
         for definition in initial.parameter_definitions
     )

@@ -32,9 +32,10 @@ class WorkspaceView:
     def from_root(cls, root: QWidget) -> WorkspaceView:
         """Bind to whichever workspace widgets the root actually has.
 
-        Panel geometry moved to the dock layout, which persists separately as
-        an opaque ``dock_state``. Splitters are therefore optional here; this
-        view now carries only the tab selection and expert mode.
+        Every field is optional because this view is also built over partial
+        roots in tests, and because the canvas' tab widgets are created by the
+        plot panel rather than by the shell.  A missing widget contributes
+        nothing to the snapshot instead of failing the whole capture.
         """
         return cls(
             root,
@@ -167,4 +168,7 @@ def configure_splitters(view: WorkspaceView) -> None:
     left.setChildrenCollapsible(False)
     for index in range(left.count()):
         left.setCollapsible(index, False)
-        left.setStretchFactor(index, 1)
+        # 机架两块都按内容定高（见 ``ContentSizedSplitter``），余量靠栏里的 stretch 落到
+        # 页脚之上——设计稿的 ``.ds-summary{margin-top:auto}`` 就是这么排的。这里的伸缩比只
+        # 在栏比两块内容加起来还短时起作用：挤压先落到数据集列表，管线的六步保持完整。
+        left.setStretchFactor(index, 1 if index == 0 else 0)

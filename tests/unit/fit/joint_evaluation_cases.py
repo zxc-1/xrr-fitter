@@ -14,11 +14,7 @@ from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, ModelEvaluation, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import (
-    ParameterReference,
-    ParameterSetting,
-    SharingRule,
-)
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterReference, ParameterSetting, SharingRule
 from xrr_fitter.model.structure import LayerSpec
 
 SHARED_NAME = "component.0.density_scale"
@@ -49,7 +45,7 @@ def _problem(*, seed: int, size: int, scale_prior: bool = False):
             definition.initial,
             definition.lower if definition.name in free_names else definition.initial,
             definition.upper if definition.name in free_names else definition.initial,
-            locked=definition.name not in free_names,
+            freedom=ParameterFreedom.from_locked(definition.name not in free_names),
         )
         for definition in base.parameter_definitions
     )
@@ -113,7 +109,7 @@ def _tie_problem(*, seed: int, size: int):
                     definition.initial,
                     definition.initial,
                     definition.initial,
-                    locked=True,
+                    freedom=ParameterFreedom.FIXED,
                 )
             )
     return compile_fit_problem(
@@ -175,7 +171,7 @@ def _unequal_roughness_problem(*, thickness_a: float, seed: int, size: int):
             (thickness_a * 1.5 if definition.name == "component.0.thickness_a" else definition.upper)
             if definition.name in free_names
             else definition.initial,
-            locked=definition.name not in free_names,
+            freedom=ParameterFreedom.from_locked(definition.name not in free_names),
         )
         for definition in base.parameter_definitions
     )
@@ -229,6 +225,7 @@ __all__ = [
     "InstrumentSpec",
     "LayerSpec",
     "ModelEvaluation",
+    "ParameterFreedom",
     "ParameterReference",
     "ParameterSetting",
     "SHARED_NAME",

@@ -117,8 +117,13 @@ def run_export(arguments) -> int:
     """Publish an existing project's results atomically."""
     project = _load(arguments.project)
     _require_fresh_sources(project)
+    # ``--ort`` stays a flag on the command line -- that is the shape a shell user
+    # already scripted against -- and is translated here into the format set the API
+    # takes. The default set is spelled by the API rather than restated, so adding a
+    # default format never leaves this call publishing the older tree.
+    formats = (*api.DEFAULT_FORMATS, *((api.ExportFormat.ORT,) if arguments.ort else ()))
     try:
-        manifest = api.export_result(project, arguments.output_dir, include_ort=arguments.ort)
+        manifest = api.export_result(project, arguments.output_dir, formats=formats)
         record = _export_manifest_record(manifest)
     except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
         raise CommandError(f"结果导出失败：{error}", exit_codes.INVALID_INPUT) from error

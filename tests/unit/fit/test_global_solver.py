@@ -11,7 +11,7 @@ from tests.support.model_cases import prepared_data, simple_structure
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 
 
 def _api():
@@ -38,7 +38,7 @@ def _problem(*, seed: int = 709):
             definition.initial,
             definition.lower if definition.name == target else definition.initial,
             definition.upper if definition.name == target else definition.initial,
-            locked=definition.name != target,
+            freedom=ParameterFreedom.from_locked(definition.name != target),
         )
         for definition in base.parameter_definitions
     )
@@ -53,6 +53,32 @@ def _problem(*, seed: int = 709):
 
 def _population() -> np.ndarray:
     return np.asarray([[0.05], [0.25], [0.45], [0.65], [0.85]], dtype=float)
+
+
+def test_global_solver_counts_its_generations_and_evaluations_for_the_callback() -> None:
+    """DE 的代数与函数评估数必须由求解器自己报，不能让上层从进度条反推。
+
+    上层唯一知道的是"第几个 launch 完成了"，那是任务计数，不是求解器的迭代计数。要在界面
+    上写"迭代次数 / 函数评估"，只有这里数得准：代数 = DE 回调次数，运行中评估数 = 目标函数
+    被调用的次数。
+    """
+    api = _api()
+    observed: list[tuple[int, int]] = []
+
+    api.solve_global(
+        _problem(),
+        np.asarray([0.5]),
+        population=_population(),
+        seed=911,
+        maxiter=3,
+        generation_callback=lambda _xk, _best, generation, nfev: observed.append((generation, nfev)),
+    )
+
+    assert observed, "DE ran without ever reporting a generation"
+    assert [generation for generation, _ in observed] == list(range(1, len(observed) + 1))
+    evaluations = [nfev for _, nfev in observed]
+    assert evaluations == sorted(evaluations)
+    assert evaluations[0] >= len(_population())
 
 
 def test_global_solver_replays_seed_population_and_trace_deterministically() -> None:

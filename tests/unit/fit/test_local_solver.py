@@ -11,7 +11,7 @@ from tests.support.model_cases import prepared_data, simple_structure
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 
 
 def _api():
@@ -41,7 +41,7 @@ def _fixed_problem(*, scale_prior: bool = False):
             definition.initial,
             definition.initial,
             definition.initial,
-            locked=True,
+            freedom=ParameterFreedom.FIXED,
         )
         for definition in problem.parameter_definitions
     )
@@ -52,6 +52,33 @@ def _fixed_problem(*, scale_prior: bool = False):
         problem.config,
         settings,
     )
+
+
+def test_local_solver_reports_its_iteration_evaluation_and_step_length() -> None:
+    """信赖域求解器要自报迭代数、评估数和实际步长。
+
+    ``least_squares(method="trf")`` 不暴露信赖域半径，所以"步长"只能取真正走过的那一步：
+    相邻两次回调之间 ‖x_k − x_{k-1}‖。第一次回调没有上一步可比，必须留 ``None`` 而不是 0
+    ——0 会在界面上读成"求解器卡住了"。迭代数取雅可比调用次数，因为 trf 每迭代算一次 J。
+    """
+    api = _api()
+    observed: list[tuple[int, int, float | None]] = []
+
+    api.solve_local(
+        _problem(),
+        np.asarray([0.4] * len(_problem().variables)),
+        max_nfev=12,
+        callback_interval=1,
+        iteration_callback=lambda _v, iteration, nfev, step: observed.append((iteration, nfev, step)),
+    )
+
+    assert len(observed) >= 2, f"solver reported {len(observed)} iterations"
+    assert observed[0][2] is None
+    assert all(step is not None and step >= 0.0 for _i, _n, step in observed[1:])
+    evaluations = [nfev for _i, nfev, _s in observed]
+    assert evaluations == list(range(1, len(observed) + 1))
+    iterations = [iteration for iteration, _n, _s in observed]
+    assert iterations == sorted(iterations)
 
 
 def test_local_solver_reduces_objective_deterministically() -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType
 
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 from xrr_fitter.model.structure import LayerSpec, MaterialSpec, StructureSpec
 
 INITIAL_DENSITY_TABLE_VERSION = "initial-density-v2"
@@ -100,7 +100,7 @@ def automatic_structure(
                     1.0,
                     1.0,
                     1.0,
-                    locked=True,
+                    freedom=ParameterFreedom.FIXED,
                 )
             )
         if layer.name == "SiO2 native oxide":
@@ -117,7 +117,7 @@ def automatic_structure(
                         1.0,
                         1.0,
                         1.0,
-                        locked=True,
+                        freedom=ParameterFreedom.FIXED,
                     ),
                 )
             )

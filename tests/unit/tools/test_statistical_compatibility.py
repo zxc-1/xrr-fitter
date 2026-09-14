@@ -16,6 +16,13 @@ INPUTS = (
     "tools/package-manifests/macos-arm64-py312.json",
     "tools/package-manifests/refnx-source.json",
     "tools/package-manifests/refnx-build-macos-arm64-py312.json",
+    "tools/package-manifests/qt-cocoa-macos-arm64-py312.json",
+    "tools/qt-cocoa/ownership.patch",
+    "tools/qt-cocoa/cocoa.pro",
+    "tools/qt-cocoa/qcocoaresources.qrc",
+    "tools/qt-cocoa/ownership_regression.mm",
+    "tools/qt-cocoa/ownership_regression.pro",
+    "tools/qt-cocoa/NOTICE.txt",
 )
 
 
@@ -145,9 +152,17 @@ def test_claimed_input_hashes_must_match_the_producers_own_commit(source_pair, l
         load_tool_module("statistical_compatibility").verify_compatibility(root, producer, consumer)
 
 
-def test_locked_inputs_cannot_change_even_when_runtime_versions_match(source_pair, load_tool_module):
+@pytest.mark.parametrize(
+    "name",
+    [
+        "tools/bootstrap-requirements.lock",
+        "tools/package-manifests/qt-cocoa-macos-arm64-py312.json",
+        "tools/qt-cocoa/ownership.patch",
+    ],
+)
+def test_locked_inputs_cannot_change_even_when_runtime_versions_match(source_pair, load_tool_module, name):
     root, producer, _ = source_pair
-    path = root / INPUTS[2]
+    path = root / name
     path.write_bytes(path.read_bytes() + b"\n")
     _commit(root)
     with pytest.raises(ValueError, match="NEEDS_NEW_FIT.*locked"):

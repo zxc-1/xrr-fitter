@@ -93,7 +93,7 @@ from xrr_fitter.fit.tasking import TaskRunner
 from xrr_fitter.fit.tasking import run_tasks as _run_tasks
 from xrr_fitter.model.data import PreparedData
 from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext, FitProgress, FitStageSummary, ModelEvaluation
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +135,7 @@ def _parameter_settings(problem: FitEvaluationContext) -> tuple[ParameterSetting
             definition.initial,
             definition.lower,
             definition.upper,
-            definition.locked,
+            ParameterFreedom.from_locked(definition.locked),
         )
         for definition in problem.parameter_definitions
     )
@@ -336,6 +336,9 @@ def _evaluate_stage_a_pool(
         # Always emit the current incumbent so the preview curve stays alive
         # even during long stretches without improvement. The panel-side
         # throttle (50ms) prevents canvas flicker.
+        # One pool member costs exactly one full evaluation, so ``nfev`` is the
+        # scan position. There is no ``iteration``: this is a one-shot sweep of a
+        # declared pool, not a population advancing through generations.
         _emit(
             progress,
             dataset_id,
@@ -345,6 +348,7 @@ def _evaluate_stage_a_pool(
             best,
             message,
             incumbent,
+            nfev=index + 1,
         )
     return tuple(evaluated), rejected_count, invalid_count
 
@@ -481,7 +485,7 @@ def _stage_b_candidate(
         #
         # B gen callback
         #
-        def _b_gen_callback(xk: np.ndarray, best_obj: float) -> None:
+        def _b_gen_callback(xk: np.ndarray, best_obj: float, generation: int, nfev: int) -> None:
             preview = _published_candidate(problem, coarse_problem, xk, f"B-{index}", index, "running", 0)
             _emit(
                 progress,
@@ -492,6 +496,8 @@ def _stage_b_candidate(
                 best_obj,
                 f"DE generation (launch {index + 1})",
                 preview,
+                iteration=generation,
+                nfev=nfev,
             )
 
         solved = solve_global(
@@ -705,7 +711,7 @@ def _local_stage_candidate(
     candidate_id: str,
     seed_index: int,
     cancelled: Callable[[], bool] | None,
-    iteration_callback: Callable[[np.ndarray], None] | None = None,
+    iteration_callback: Callable[[np.ndarray, int, int, float | None], None] | None = None,
 ) -> FitCandidate:
     maximum = max(
         problem.config.budget.local_min_nfev,
@@ -795,11 +801,11 @@ def run_local_stage(
             cid: str,
             sidx: int,
             _completed: int = completed,
-        ) -> Callable[[np.ndarray], None]:
+        ) -> Callable[[np.ndarray, int, int, float | None], None]:
             #
             # Cb
             #
-            def _cb(unit_vector: np.ndarray) -> None:
+            def _cb(unit_vector: np.ndarray, iteration: int, nfev: int, step: float | None) -> None:
                 preview = _published_candidate(
                     problem,
                     stg_problem,
@@ -818,6 +824,9 @@ def run_local_stage(
                     preview.objective,
                     message,
                     preview,
+                    iteration=iteration,
+                    nfev=nfev,
+                    step_size=step,
                 )
 
             return _cb
@@ -1014,7 +1023,7 @@ def _stage_e_local_candidate(
     candidate_id: str,
     seed_index: int,
     cancelled: Callable[[], bool] | None,
-    iteration_callback: Callable[[np.ndarray], None] | None = None,
+    iteration_callback: Callable[[np.ndarray, int, int, float | None], None] | None = None,
 ) -> FitCandidate:
     maximum = max(
         problem.config.budget.local_min_nfev,
@@ -1056,11 +1065,11 @@ def _run_stage_e_locals(
     # Result positions retain start order so winner selection and nfev totals
     # are independent of worker completion timing.
 
-    def _make_e_local_cb(cid: str, sidx: int) -> Callable[[np.ndarray], None]:
+    def _make_e_local_cb(cid: str, sidx: int) -> Callable[[np.ndarray, int, int, float | None], None]:
         #
         # Cb
         #
-        def _cb(unit_vector: np.ndarray) -> None:
+        def _cb(unit_vector: np.ndarray, iteration: int, nfev: int, step: float | None) -> None:
             preview = _published_candidate(
                 problem,
                 setup.full_problem,
@@ -1079,6 +1088,9 @@ def _run_stage_e_locals(
                 preview.objective,
                 f"local refinement (seed {seed_index + 1})",
                 preview,
+                iteration=iteration,
+                nfev=nfev,
+                step_size=step,
             )
 
         return _cb
@@ -1140,7 +1152,7 @@ def _stage_e_seed(
     #
     # E gen callback
     #
-    def _e_gen_callback(xk: np.ndarray, best_obj: float) -> None:
+    def _e_gen_callback(xk: np.ndarray, best_obj: float, generation: int, nfev: int) -> None:
         preview = _published_candidate(
             problem,
             setup.coarse_problem,
@@ -1159,6 +1171,8 @@ def _stage_e_seed(
             best_obj,
             f"DE generation (seed {seed_index + 1})",
             preview,
+            iteration=generation,
+            nfev=nfev,
         )
 
     solved = solve_global(

@@ -1,13 +1,13 @@
 """Theme-aware vector glyphs for the plot interaction controls.
 
-The plot toolbar drives eight commands -- three interaction modes, three
-navigation actions and two one-shot zooms -- and each reached the user as a bare
-text button, so a graphical tool advertised itself as a wall of words.  A glyph
-belongs to each command here, painted rather than loaded: the bundled Matplotlib
-toolbar PNGs are a fixed black that vanishes on a dark canvas, and QStyle carries
-no standard pixmap for "select a fit range" or "toggle a point mask".  Painting
-from the active palette's text colour instead keeps every glyph legible in both
-the light and the dark theme.
+The plot toolbar drives nine commands -- three interaction modes, three
+navigation actions, two one-shot zooms and the all-datasets overlay -- and each
+reached the user as a bare text button, so a graphical tool advertised itself as
+a wall of words.  A glyph belongs to each command here, painted rather than
+loaded: the bundled Matplotlib toolbar PNGs are a fixed black that vanishes on a
+dark canvas, and QStyle carries no standard pixmap for "select a fit range" or
+"toggle a point mask".  Painting from the active palette's text colour instead
+keeps every glyph legible in both the light and the dark theme.
 """
 
 from __future__ import annotations
@@ -31,6 +31,10 @@ from PySide6.QtWidgets import QApplication
 # coordinates serves every device pixel ratio.
 GRID = 16.0
 
+# 单位对角线的一个分量，``1/√2``。斜向的箭头头部要按它往回量：``_arrow_head`` 是沿单位向量
+# 退 2.5 格取底边的，喂进去 1.0 的话头会比杆长出四成。
+DIAGONAL = 0.7071
+
 
 def _text_color() -> QColor:
     """The active palette's text colour, so glyphs flip with the theme.
@@ -52,10 +56,17 @@ def _pen(color: QColor, width: float = 1.8) -> QPen:
 
 
 def _arrow_head(painter: QPainter, tip: QPointF, dx: float, dy: float, color: QColor) -> None:
-    """Fill a small triangle at ``tip`` pointing along the unit vector (dx, dy)."""
-    back = QPointF(tip.x() - dx * 3.2, tip.y() - dy * 3.2)
-    left = QPointF(back.x() - dy * 2.0, back.y() + dx * 2.0)
-    right = QPointF(back.x() + dy * 2.0, back.y() - dx * 2.0)
+    """Fill a small triangle at ``tip`` pointing along the unit vector (dx, dy).
+
+    Kept deliberately small: on a 16px grid a head reaching 3.2 units back with a
+    2.0 half-width is a 4x3 solid wedge, and the glyphs that terminate four
+    shafts at once -- pan, reset_zoom -- merged theirs into one central blob with
+    the shafts swallowed inside it.  These proportions still read as a head at
+    the 16px the toolbar ships while leaving the shaft visible.
+    """
+    back = QPointF(tip.x() - dx * 2.5, tip.y() - dy * 2.5)
+    left = QPointF(back.x() - dy * 1.4, back.y() + dx * 1.4)
+    right = QPointF(back.x() + dy * 1.4, back.y() - dx * 1.4)
     painter.setBrush(color)
     painter.drawPolygon(QPolygonF([tip, left, right]))
     painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -77,23 +88,20 @@ def _paint_view(p: QPainter, c: QColor) -> None:
 
 
 def _paint_range(p: QPainter, c: QColor) -> None:
-    # Two uprights with a translucent band between: a selected angle window.
-    fill = QColor(c)
-    fill.setAlpha(40)
-    p.fillRect(QRectF(5.0, 2.5, 6.0, 11.0), fill)
-    p.setPen(_pen(c, 2.2))
-    p.drawLine(QPointF(5.0, 2.0), QPointF(5.0, 14.0))
-    p.drawLine(QPointF(11.0, 2.0), QPointF(11.0, 14.0))
-    p.setPen(_pen(c))
+    # 设计稿 ``.modebar`` 的第四枚是 ``▭``：一个空心的横矩形，正是拖出来的那个角度窗口。
+    # 框住的东西要在框里看得见，所以里面不铺底色；此前是两根竖线夹一层淡底色、上下都不封口，
+    # 在 16px 上读成一个暂停符号——而暂停恰好是同一屏上另一列的意思。
+    p.drawRect(QRectF(2.0, 5.0, 12.0, 6.0))
 
 
 def _paint_mask(p: QPainter, c: QColor) -> None:
-    # A single point struck through: toggling one point in or out of the fit.
-    p.setBrush(c)
-    p.drawEllipse(QPointF(8.0, 8.0), 3.0, 3.0)
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    p.setPen(_pen(c, 2.2))
-    p.drawLine(QPointF(3.0, 13.0), QPointF(13.0, 3.0))
+    # A hollow point struck through: toggling one point in or out of the fit.  The
+    # ring is drawn open rather than filled because a filled dot and the stroke
+    # over it are the same ink, so at 16px the two merged into one lozenge and the
+    # "struck out" reading -- the whole point of the glyph -- was lost.
+    p.drawEllipse(QPointF(8.0, 8.0), 3.4, 3.4)
+    p.setPen(_pen(c, 2.0))
+    p.drawLine(QPointF(3.4, 12.6), QPointF(12.6, 3.4))
     p.setPen(_pen(c))
 
 
@@ -110,13 +118,13 @@ def _paint_pan(p: QPainter, c: QColor) -> None:
 
 
 def _paint_zoom(p: QPainter, c: QColor) -> None:
-    # A magnifier with a "+" lens.
-    p.drawEllipse(QPointF(7.0, 7.0), 4.5, 4.5)
-    p.setPen(_pen(c, 2.2))
-    p.drawLine(QPointF(10.2, 10.2), QPointF(14.0, 14.0))
+    # 设计稿 ``.modebar`` 的第二枚是 ``⤢``：一支左下—右上的双头箭头。框选放大做的是「拖出
+    # 一个矩形，视野收到那块上」，箭头指的就是那两个角；此前画的是放大镜（镜筒压在左上、镜柄
+    # 斜到右下、镜片里还有个 ``+``），说的是「放大多少」，而这一条不问倍数。
     p.setPen(_pen(c, 1.6))
-    p.drawLine(QPointF(7.0, 5.0), QPointF(7.0, 9.0))
-    p.drawLine(QPointF(5.0, 7.0), QPointF(9.0, 7.0))
+    p.drawLine(QPointF(3.3, 12.7), QPointF(12.7, 3.3))
+    _arrow_head(p, QPointF(13.4, 2.6), DIAGONAL, -DIAGONAL, c)
+    _arrow_head(p, QPointF(2.6, 13.4), -DIAGONAL, DIAGONAL, c)
     p.setPen(_pen(c))
 
 
@@ -137,28 +145,55 @@ def _paint_home(p: QPainter, c: QColor) -> None:
 
 
 def _paint_zoom_to_range(p: QPainter, c: QColor) -> None:
-    # Brackets closing inward on a span: pull the view onto the fit range.
+    # Brackets closing inward on a span: pull the view onto the fit range.  The
+    # shafts start clear of the uprights and stop short of the middle so the two
+    # arrows read as two arrows rather than as one bowtie.
     p.drawLine(QPointF(2.5, 3.5), QPointF(2.5, 12.5))
     p.drawLine(QPointF(13.5, 3.5), QPointF(13.5, 12.5))
-    p.drawLine(QPointF(4.6, 8.0), QPointF(7.2, 8.0))
-    p.drawLine(QPointF(11.4, 8.0), QPointF(8.8, 8.0))
-    _arrow_head(p, QPointF(4.3, 8.0), -1.0, 0.0, c)
-    _arrow_head(p, QPointF(11.7, 8.0), 1.0, 0.0, c)
+    p.drawLine(QPointF(4.0, 8.0), QPointF(6.6, 8.0))
+    p.drawLine(QPointF(12.0, 8.0), QPointF(9.4, 8.0))
+    _arrow_head(p, QPointF(3.6, 8.0), -1.0, 0.0, c)
+    _arrow_head(p, QPointF(12.4, 8.0), 1.0, 0.0, c)
 
 
 def _paint_reset_zoom(p: QPainter, c: QColor) -> None:
-    # Four corners opening outward: restore the complete view.
+    # Four corner brackets: the full extent of the data, the way a "fit to frame"
+    # mark reads.  The arrowheads this used to plant on each corner were four
+    # solid wedges that hid the very brackets they pointed along, and the corners
+    # alone carry the meaning.
     corners = (
-        ((5.2, 2.6), (2.6, 2.6), (2.6, 5.2), (-1.0, -1.0)),
-        ((10.8, 2.6), (13.4, 2.6), (13.4, 5.2), (1.0, -1.0)),
-        ((5.2, 13.4), (2.6, 13.4), (2.6, 10.8), (-1.0, 1.0)),
-        ((10.8, 13.4), (13.4, 13.4), (13.4, 10.8), (1.0, 1.0)),
+        ((6.0, 2.8), (2.8, 2.8), (2.8, 6.0)),
+        ((10.0, 2.8), (13.2, 2.8), (13.2, 6.0)),
+        ((6.0, 13.2), (2.8, 13.2), (2.8, 10.0)),
+        ((10.0, 13.2), (13.2, 13.2), (13.2, 10.0)),
     )
-    for (ax, ay), (bx, by), (cx, cy), (dx, dy) in corners:
-        p.drawLine(QPointF(ax, ay), QPointF(bx, by))
-        p.drawLine(QPointF(bx, by), QPointF(cx, cy))
-        norm = (dx * dx + dy * dy) ** 0.5
-        _arrow_head(p, QPointF(bx, by), dx / norm, dy / norm, c)
+    p.setPen(_pen(c, 2.0))
+    for (ax, ay), (bx, by), (cx, cy) in corners:
+        path = QPainterPath()
+        path.moveTo(ax, ay)
+        path.lineTo(bx, by)
+        path.lineTo(cx, cy)
+        p.drawPath(path)
+    p.setPen(_pen(c))
+
+
+def _paint_overlay(p: QPainter, c: QColor) -> None:
+    # Two decaying curves on one pair of axes: every dataset drawn at once.  The
+    # second is faint so the pair reads as "another curve laid over this one"
+    # rather than as a single thick stroke, and so it cannot be mistaken for the
+    # single wavy curve that marks imported data.
+    upper = QPainterPath()
+    upper.moveTo(2.0, 3.4)
+    upper.cubicTo(6.2, 4.2, 7.4, 8.4, 14.0, 9.6)
+    p.drawPath(upper)
+    faint = QColor(c)
+    faint.setAlpha(120)
+    p.setPen(_pen(faint))
+    lower = QPainterPath()
+    lower.moveTo(2.0, 7.0)
+    lower.cubicTo(6.2, 7.8, 7.4, 12.0, 14.0, 13.2)
+    p.drawPath(lower)
+    p.setPen(_pen(c))
 
 
 # --- Guidance step icon painters ---
@@ -343,6 +378,7 @@ PAINTERS: dict[str, Callable[[QPainter, QColor], None]] = {
     "home": _paint_home,
     "zoom_to_range": _paint_zoom_to_range,
     "reset_zoom": _paint_reset_zoom,
+    "overlay": _paint_overlay,
     "data_curve": _paint_data_curve,
     "layer_stack": _paint_layer_stack,
     "fit_progress": _paint_fit_progress,

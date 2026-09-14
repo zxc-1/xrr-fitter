@@ -13,8 +13,8 @@ from math import isfinite
 import numpy as np
 from matplotlib.backend_bases import NavigationToolbar2
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QButtonGroup, QGraphicsDropShadowEffect, QHBoxLayout, QToolButton, QWidget
+from PySide6.QtGui import QAction, QActionGroup
+from PySide6.QtWidgets import QHBoxLayout, QToolButton, QWidget
 
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.plots.diagnostics import ANALYSIS_KEYS, REFLECTIVITY_KEYS
@@ -28,14 +28,23 @@ MODE_SPECS = (
     ("mask", "plotModeMask", "掩膜", "切换单个预处理点的掩膜"),
 )
 
+# 三档模式里只有「范围」在设计稿的条上留了字形（``▭``）；查看与掩膜从条的右键菜单进。
+# 决定谁上条的是这一行，不是 ``MODE_SPECS`` 的顺序。
+BAR_MODES = ("range",)
+
 # Deliberately not prefixed "plotMode": these are not members of the exclusive
-# mode group, and the panel tests assert that prefix selects exactly the three
-# interaction modes.
+# mode group -- they answer "how do I move around this plot", not "what does
+# clicking it do" -- and the panel tests read the "plotMode" prefix as "the mode
+# glyph the design kept on the bar".
 NAVIGATION_SPECS = (
     ("pan", "plotNavPan", "平移", "按住左键拖动图像，按住右键拖动缩放"),
     ("zoom", "plotNavZoom", "框选放大", "拖出一个矩形，放大到该区域"),
     ("home", "plotNavHome", "复位", "恢复当前图刚绘制时的坐标范围"),
 )
+
+# 设计稿 ``.modebar`` 容器的 title 把条上那四枚念了一遍，所以这一句既是条的说明，也是
+# 「这一条摆了哪四枚」的凭据。
+MODEBAR_TOOLTIP = "平移 / 缩放 / 复位 / 选择拟合范围"
 
 PAN_MODE = "pan/zoom"
 
@@ -53,12 +62,21 @@ GLYPH_PX = 16
 def _wear_glyph(button: QToolButton, glyph: str) -> None:
     """Wear the painted glyph alone, with the name kept for hover and screen readers.
 
-    These controls float over the plot itself, the way every peer charting tool
-    puts its mode bar, and a floating bar has to stay small enough not to cover
-    the data it acts on.  Labels are what made it wide, so the glyph carries the
+    These controls share the plot's tab row, the way every peer charting tool puts
+    its mode bar on the chart's own header, and that row has to hold four view
+    tabs beside them.  Labels are what made the bar wide, so the glyph carries the
     meaning and the words move to the tooltip and the accessible name.
     """
     button.setIcon(plot_icon(glyph, size=GLYPH_PX))
+    _wear_bar_chrome(button)
+
+
+def _wear_bar_chrome(button: QToolButton) -> None:
+    """条上一枚字形的穿法，图标由谁给不管。
+
+    ``setDefaultAction`` 会替按钮抄来 action 的图标，但抄不走 iconSize、按钮样式、
+    autoRaise 和光标，所以这四样单独留在按钮上。
+    """
     button.setIconSize(QSize(GLYPH_PX, GLYPH_PX))
     button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
     button.setAutoRaise(True)
@@ -139,7 +157,14 @@ class PlotNavigator(NavigationToolbar2):
 
 
 class PlotInteractionToolbar(QWidget):
-    """Own one exclusive, programmatically validated plot mode."""
+    """Own one exclusive, programmatically validated plot mode.
+
+    设计稿的 ``.modebar`` 是四枚字形——``✥ ⤢ ⌂ ▭``，平移 / 框选放大 / 复位，加上
+    「框出拟合范围」。此前这里排了九枚，和四个 tab 抢同一行。收窄不是砍功能：查看 ·
+    掩膜 · 缩放到拟合范围 · 恢复完整视图 · 叠加对比 变成这一条自己的右键菜单（同一批
+    ``QAction`` 也挂进 视图 菜单），落点选在条上而不是图里，因为图 body 的右键归
+    pyqtgraph 的 ViewBox——那里有它自己的菜单和右键拖动缩放。
+    """
 
     mode_changed = Signal(str)
     zoom_to_range_requested = Signal()
@@ -151,41 +176,71 @@ class PlotInteractionToolbar(QWidget):
         super().__init__(parent)
         self.setObjectName("plotInteractionToolbar")
         self.setAccessibleName("绘图交互模式")
+        self.setToolTip(MODEBAR_TOOLTIP)
+        # The theme gives this bar the design's grouping pill -- a background and a
+        # 1px border -- but Qt only auto-styles the background of a plain QWidget;
+        # measured on the built window, the border stroke was absent (row 0 and
+        # row 1 both alpha 12) until this attribute made the widget paint its own
+        # background, after which they read 50 against 23.  Without it the four
+        # glyphs sit loose on the tab row instead of inside one pill.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        # 条自己就是那五条搬走的命令的落点。
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+        # 先把模式记成 view，再去勾那条 QAction：勾选会走 ``_mode_triggered``，而它要读
+        # ``self._mode``——次序反了就会在构造中途发一次 mode_changed，那时谁都还没接线。
+        self._mode = "view"
+        self._mode_actions: dict[str, QAction] = {}
         self._buttons: dict[str, QToolButton] = {}
-        self._group = QButtonGroup(self)
+        self._group = QActionGroup(self)
         self._group.setExclusive(True)
         layout = QHBoxLayout(self)
-        # Padding of its own, because the bar floats over the plot as a card
-        # rather than sitting in a row that already carries the panel's margins.
+        # Padding of its own, because the bar sits in the tab row's corner slot
+        # rather than in a body row that already carries the panel's margins.
         layout.setContentsMargins(theme.SPACE_XS, theme.SPACE_XS, theme.SPACE_XS, theme.SPACE_XS)
         layout.setSpacing(2)
-        for index, (mode, name, text, description) in enumerate(MODE_SPECS):
+        self._install_mode_actions()
+        # 设计稿里这四枚紧挨着，一个 pill 里不再分组——所以没有组间空隙。也没有尾部
+        # stretch：条与视图 tab 同处一行，stretch 会让它吃掉 tab 剩下的每一个像素。
+        self._install_navigation_buttons(layout)
+        self._install_mode_buttons(layout)
+        self._install_zoom_actions()
+        self._mode_actions["view"].setChecked(True)
+
+    def _install_mode_actions(self) -> None:
+        """三档交互模式做成一组互斥 ``QAction``，而不是一组按钮。
+
+        状态存在 action 上，条上的 ``▭`` 与菜单里的「范围」才不会各记一份勾选，出现
+        「条上亮着、菜单里没勾」这种自相矛盾的画面。
+        """
+        for mode, _name, text, description in MODE_SPECS:
+            action = QAction(text, self)
+            action.setObjectName(f"plotToolAction:{mode}")
+            action.setCheckable(True)
+            action.setToolTip(f"{text}：{description}")
+            action.setIcon(plot_icon(mode, size=GLYPH_PX))
+            action.triggered.connect(lambda _checked=False, key=mode: self._mode_triggered(key))
+            self._group.addAction(action)
+            self.addAction(action)
+            self._mode_actions[mode] = action
+
+    def _install_mode_buttons(self, layout: QHBoxLayout) -> None:
+        """把留在条上的那一档摆成一枚字形（设计稿里是 ``▭``）。
+
+        用 ``setDefaultAction`` 而不是另建一颗独立按钮：勾选、可用性、字形都由 action
+        一处决定，两个入口天然同步。``accessibleName`` 不在 Qt 的同步清单里，得在按钮
+        上单独说一遍。
+        """
+        for mode, name, text, _description in MODE_SPECS:
+            if mode not in BAR_MODES:
+                continue
             button = QToolButton(self)
             button.setObjectName(name)
-            button.setCheckable(True)
+            button.setDefaultAction(self._mode_actions[mode])
             button.setAccessibleName(text)
-            button.setToolTip(f"{text}：{description}")
-            _wear_glyph(button, mode)
-            self._group.addButton(button, index)
+            button.setProperty("plotMode", mode)
+            _wear_bar_chrome(button)
             self._buttons[mode] = button
             layout.addWidget(button)
-            button.setProperty("plotMode", mode)
-            button.clicked.connect(self._button_clicked)
-        # Three related groups read as three groups because of the gaps between
-        # them.  No trailing stretch: the bar is sized to its contents so it can
-        # be placed as a card in the plot's corner, and a stretch would make it
-        # claim the full width and curtain the data behind it.
-        layout.addSpacing(theme.SPACE_SM)
-        self._install_navigation_buttons(layout)
-        layout.addSpacing(theme.SPACE_SM)
-        self._install_zoom_buttons(layout)
-        self._buttons["view"].setChecked(True)
-        self._mode = "view"
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(12)
-        shadow.setOffset(0, 2)
-        shadow.setColor(QColor(0, 0, 0, 40))
-        self.setGraphicsEffect(shadow)
 
     def _install_navigation_buttons(self, layout: QHBoxLayout) -> None:
         """Add the pan, box-zoom and reset controls onto the same row.
@@ -226,57 +281,75 @@ class PlotInteractionToolbar(QWidget):
             if button.isCheckable():
                 button.setChecked(action == mode)
 
-    def _install_zoom_buttons(self, layout: QHBoxLayout) -> None:
-        """Add non-exclusive zoom actions distinct from the mode button group.
+    def _menu_action(self, key: str, text: str, tooltip: str, glyph: str) -> QAction:
+        """一条只在菜单里露面的命令：字形留着，因为 视图 菜单也认它。
+
+        ``plotToolAction:`` 这个前缀和 视图 菜单里视图项的 ``plotViewAction:`` 是同一套
+        约定——菜单栏那份「这一栏只该有这几条」的断言靠前缀把借来的命令认出来。
+        """
+        action = QAction(text, self)
+        action.setObjectName(f"plotToolAction:{key}")
+        action.setToolTip(tooltip)
+        action.setIcon(plot_icon(glyph, size=GLYPH_PX))
+        self.addAction(action)
+        return action
+
+    def _install_zoom_actions(self) -> None:
+        """Add non-exclusive zoom actions distinct from the mode action group.
 
         Zooming to the fit range is a one-shot action, not a persistent mode,
         so these stay outside the exclusive group; pressing one must not clear
-        the active view/range/mask mode the user is working in.
+        the active view/range/mask mode the user is working in.  它们在菜单里排在
+        三档模式后面，用分隔线隔开——一次性动作和「点下去会一直是这样」的模式不是一类。
         """
-        self._zoom_to_range = QToolButton(self)
-        self._zoom_to_range.setObjectName("plotZoomToRange")
-        self._zoom_to_range.setAccessibleName("缩放到拟合范围")
-        self._zoom_to_range.setToolTip("缩放拟合区：将反射率视图缩放到当前拟合角度范围")
-        _wear_glyph(self._zoom_to_range, "zoom_to_range")
-        self._zoom_to_range.clicked.connect(lambda: self.zoom_to_range_requested.emit())
-        self._reset_zoom = QToolButton(self)
-        self._reset_zoom.setObjectName("plotResetZoom")
-        self._reset_zoom.setAccessibleName("恢复完整视图")
-        self._reset_zoom.setToolTip("全览：恢复到完整角度范围")
-        _wear_glyph(self._reset_zoom, "reset_zoom")
-        self._reset_zoom.clicked.connect(lambda: self.reset_zoom_requested.emit())
-        layout.addWidget(self._zoom_to_range)
-        layout.addWidget(self._reset_zoom)
-        layout.addSpacing(theme.SPACE_SM)
-        self._overlay_toggle = QToolButton(self)
-        self._overlay_toggle.setObjectName("plotOverlayToggle")
-        self._overlay_toggle.setCheckable(True)
-        self._overlay_toggle.setAccessibleName("叠加对比")
-        self._overlay_toggle.setToolTip("叠加对比：显示所有数据集的反射率曲线")
-        _wear_glyph(self._overlay_toggle, "home")
-        self._overlay_toggle.toggled.connect(self.overlay_toggled.emit)
-        layout.addWidget(self._overlay_toggle)
+        separator = QAction(self)
+        separator.setSeparator(True)
+        self.addAction(separator)
+        self.zoom_to_range_action = self._menu_action(
+            "zoom_to_range", "缩放到拟合范围", "缩放拟合区：将反射率视图缩放到当前拟合角度范围", "zoom_to_range"
+        )
+        self.zoom_to_range_action.triggered.connect(lambda _checked=False: self.zoom_to_range_requested.emit())
+        self.reset_zoom_action = self._menu_action(
+            "reset_zoom", "恢复完整视图", "全览：恢复到完整角度范围", "reset_zoom"
+        )
+        self.reset_zoom_action.triggered.connect(lambda _checked=False: self.reset_zoom_requested.emit())
+        trailing = QAction(self)
+        trailing.setSeparator(True)
+        self.addAction(trailing)
+        self.overlay_action = self._menu_action(
+            "overlay", "叠加对比", "叠加对比：显示所有数据集的反射率曲线", "overlay"
+        )
+        self.overlay_action.setCheckable(True)
+        self.overlay_action.toggled.connect(self.overlay_toggled.emit)
+
+    def tool_actions(self) -> tuple[QAction, ...]:
+        """条上这一份右键菜单，按菜单里的先后顺序。"""
+        return tuple(self.actions())
+
+    def mode_actions(self) -> dict[str, QAction]:
+        return dict(self._mode_actions)
 
     def buttons(self) -> dict[str, QToolButton]:
+        """留在条上的模式字形——设计稿收窄之后只剩 ``▭``。"""
         return dict(self._buttons)
 
     def mode(self) -> str:
         return self._mode
 
     def set_mode(self, mode: str) -> None:
-        if mode not in self._buttons:
+        if mode not in self._mode_actions:
             raise ValueError(f"unsupported plot interaction mode: {mode}")
         if mode == self._mode:
             return
-        self._buttons[mode].setChecked(True)
+        # ``setChecked`` 不发 triggered，所以这里不会绕回 ``_mode_triggered`` 再发一次。
+        self._mode_actions[mode].setChecked(True)
         self._mode = mode
         self.mode_changed.emit(mode)
 
-    def _button_clicked(self, checked: bool) -> None:
-        button = self.sender()
-        mode = str(button.property("plotMode"))
-        if not checked:
-            self._buttons[self._mode].setChecked(True)
+    def _mode_triggered(self, mode: str) -> None:
+        # 互斥组里那条勾着的 action 点不掉（Qt6 直接拒绝取消勾选），所以点重复的一档就是
+        # 什么都没变——早退，别发一次空的 mode_changed。
+        if mode == self._mode:
             return
         self._mode = mode
         self.mode_changed.emit(mode)
@@ -371,6 +444,10 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         panel.installEventFilter(self)
         for child in panel.findChildren(QWidget):
             child.installEventFilter(self)
+        # 设计稿开局亮着 ``✥``，而一张刚画好的 pyqtgraph 面板本来就在平移态：左键拖就是
+        # 平移，没有「什么都不做」这一档。换 tab 时这一句已经在跑；开局不跑，条上四枚全灰，
+        # 读者据此以为得先点一下才能拖。
+        self._sync_navigation_after_tab_change()
         self.watch_parent()
 
     def _live_panes(self) -> tuple[LiveReflectivityPlot, ...]:
@@ -418,8 +495,13 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         self._apply_tabs(enabled, self._requested_reflectivity_index, self._requested_analysis_index)
 
     def apply_workspace(self, expert_mode: bool, tab_index: int, analysis_tab_index: int = 0) -> None:
+        # A saved index is clamped rather than rejected: the strip has gained and
+        # lost tabs across releases, so a project saved under an older layout can
+        # name an index the bar no longer has.  Refusing to open such a project
+        # would make a layout change break the reader's own files; falling back to
+        # the leading view costs them one click.
         if not 0 <= tab_index < self._reflectivity_tabs.count():
-            raise IndexError("plot tab index is out of range")
+            tab_index = 0
         if not 0 <= analysis_tab_index < self._analysis_tabs.count():
             analysis_tab_index = 0
         self._requested_reflectivity_index = tab_index
@@ -679,7 +761,7 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         pane = self._current_live_pane()
         if pane is None:
             return
-        _title, xlabel, ylabel = pane.axis_labels()
+        xlabel, ylabel = pane.axis_labels()
         panel.set_cursor_readout(f"{xlabel} {x_view:.4g} · {ylabel} {y_view:.4g}")
 
     def _pg_cursor_left(self) -> None:
@@ -725,10 +807,13 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         The SLD profile left the tab bar for a permanent pane, so expert mode
         now shows or hides that pane. Every tab stays selectable in both modes,
         which means a persisted selection can always be honoured.
+
+        交给面板记下来再由它统一落可见性，而不是在这里直接 ``setVisible``：那块面板上还有一道
+        按流程步的闸（``STEP_PLOT_PANES``），两处各自写同一个属性的话，谁后跑谁说话。
         """
         self._projecting_tabs = True
         try:
-            self._panel.sld_pane.setVisible(expert_mode)
+            self._panel.set_expert_pane_scope(expert_mode)
             self._reflectivity_tabs.setCurrentIndex(ref_index)
             self._analysis_tabs.setCurrentIndex(ana_index)
         finally:

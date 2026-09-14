@@ -15,7 +15,7 @@ from xrr_fitter.fit.parameters import _periodic_definitions, thickness_bounds
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 from xrr_fitter.model.structure import DriftSpec, StructureSpec
 from xrr_fitter.physics.stack import expand_structure, rebuild_structure
 
@@ -148,7 +148,7 @@ def test_roughness_drift_upper_endpoint_remains_constructible_with_exact_bases()
             definition.initial,
             definition.initial,
             definition.initial,
-            locked=True,
+            freedom=ParameterFreedom.FIXED,
         )
         for definition in initial.parameter_definitions
         if definition.name.startswith("component.0.layer.")

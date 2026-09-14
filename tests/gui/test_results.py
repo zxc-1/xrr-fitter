@@ -502,6 +502,41 @@ def test_every_confidence_level_reaches_a_distinct_painted_kind(qtbot, level: st
     assert panel.confidence_label.property("statusKind") == kind
 
 
+def test_confidence_marker_glyph_is_sourced_from_theme(qtbot, monkeypatch) -> None:
+    """The badge glyph is theme's, not a second hardcoded copy in the panel.
+
+    Two literal glyph tables drift the instant one is edited, and theme already
+    owns the canonical shapes (the design spec pins them). Repointing a verdict's
+    theme glyph and watching the rendered marker follow is what proves there is
+    one source, not two that merely happen to agree today.
+    """
+    import xrr_fitter.gui.theme as theme
+
+    monkeypatch.setitem(theme.CONFIDENCE_GLYPHS, "多解", "✦")
+    result = _two_candidate_result()
+    multiple = replace(result, confidence=type(result.confidence).MULTIPLE)
+    panel = _panel(qtbot, _project_with_result(multiple))
+
+    assert panel.confidence_marker.text() == "✦"
+
+
+def test_unclassified_marker_glyph_is_sourced_from_theme(qtbot, monkeypatch) -> None:
+    """The "no result yet" glyph is theme's too, not a literal left at the call site.
+
+    A dataset with no result is the first thing a new project renders, so its
+    marker is the one users see most and the one least likely to be noticed
+    drifting. Repointing only the fallback and watching the badge follow proves
+    the fifth shape shares the single source the other four already use.
+    """
+    import xrr_fitter.gui.theme as theme
+
+    monkeypatch.setattr(theme, "CONFIDENCE_FALLBACK_GLYPH", "✧")
+    panel = _panel(qtbot, _project_with_result())
+
+    assert panel.confidence_label.text() == "不可用"
+    assert panel.confidence_marker.text() == "✧"
+
+
 def test_mcmc_configuration_tracks_selected_candidate_free_dimension(qtbot) -> None:
     panel = _panel(qtbot, _project_with_result(_two_candidate_result(), expert=True))
 

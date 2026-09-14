@@ -1,0 +1,10 @@
+TEMPLATE = app
+CONFIG += console c++17
+CONFIG -= app_bundle
+QT += widgets core-private gui-private
+TARGET = native_ownership_regression
+QMAKE_MACOSX_DEPLOYMENT_TARGET = 13.0
+QMAKE_APPLE_DEVICE_ARCHS = arm64
+SOURCES += ownership_regression.mm
+LIBS += -framework AppKit -framework Foundation
+INCLUDEPATH += $$PWD/../source

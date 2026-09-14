@@ -8,7 +8,7 @@ import pytest
 from tests.support.model_cases import final_fit_result, simple_structure
 
 import xrr_fitter.api as api
-from xrr_fitter.io.xy import xy_bytes
+from xrr_fitter.io.xy import scan_angle_convention, xy_bytes
 from xrr_fitter.model.analysis import StructureEvidence
 from xrr_fitter.model.automation import (
     AutomaticRole,
@@ -21,6 +21,7 @@ from xrr_fitter.model.parameters import (
     RESERVED_DATASET_ID,
     ConstraintNode,
     ConstraintRule,
+    ParameterFreedom,
     ParameterPrior,
     ParameterReference,
     ParameterSetting,
@@ -33,6 +34,7 @@ from xrr_fitter.services.datasets import (
 )
 from xrr_fitter.services.datasets import (
     add_dataset,
+    detect_angle_convention,
     preview_source_update,
     remove_dataset,
     set_fit_mask,
@@ -571,7 +573,7 @@ def test_source_update_retains_only_parameter_sidecars_valid_for_current_definit
         scale.initial,
         scale.lower,
         scale.upper,
-        scale.locked,
+        ParameterFreedom.from_locked(scale.locked),
     )
     missing = ParameterSetting(
         "component.99.thickness_a",
@@ -676,14 +678,14 @@ def test_instrument_change_reconciles_parameter_sidecars(tmp_path: Path) -> None
         scale.initial,
         scale.lower,
         scale.upper,
-        scale.locked,
+        ParameterFreedom.from_locked(scale.locked),
     )
     footprint_setting = ParameterSetting(
         footprint.name,
         footprint.initial,
         footprint.lower,
         footprint.upper,
-        footprint.locked,
+        ParameterFreedom.from_locked(footprint.locked),
     )
     scale_prior = ParameterPrior(
         scale.name,
@@ -809,3 +811,75 @@ def test_source_update_drops_constraint_when_new_bounds_reject_target(
     )
 
     assert updated.constraint_rules == ()
+
+
+def test_theta_convention_survives_the_reread_that_validates_the_source(
+    tmp_path: Path,
+) -> None:
+    """约定必须跟着数据集存下来，否则重读一次角度就掉回一半。
+
+    ``set_fit_mask`` 会照着数据集记下的导入声明重新读源文件核对哈希；如果
+    ``angle_convention`` 不在那份声明里，重读得到的是未变换的入射角，掩码与拟合
+    区间就落在错的轴上。
+    """
+    source = _write_curve(tmp_path / "theta.xy")
+    project = add_dataset(
+        new_project(),
+        source,
+        _instrument(),
+        angle_convention="theta",
+    )
+    dataset = project.datasets[0]
+    assert dataset.angle_convention == "theta"
+
+    mask = np.asarray(dataset.fit_mask, dtype=bool)
+    mask[-1] = False
+    reread = set_fit_mask(project, dataset.dataset_id, mask)
+
+    assert reread.datasets[0].angle_convention == "theta"
+    # 两条路径吃同一份掩码，差别只在约定：入射角重读成散射角，拟合区间就整段翻倍。
+    # 拿 ``plain`` 走一遍同样的重读来比，而不是跟未掩码的原始上界比——掩码关掉了末点，
+    # 上界本来就落回倒数第二个角。
+    plain = add_dataset(new_project(), source, _instrument())
+    plain_reread = set_fit_mask(plain, plain.datasets[0].dataset_id, mask)
+    assert reread.datasets[0].fit_range_two_theta_deg == pytest.approx(
+        tuple(2.0 * value for value in plain_reread.datasets[0].fit_range_two_theta_deg)
+    )
+
+
+def test_the_default_dataset_convention_stays_two_theta(tmp_path: Path) -> None:
+    project = add_dataset(new_project(), _write_curve(tmp_path / "plain.xy"), _instrument())
+
+    assert project.datasets[0].angle_convention == "two_theta"
+
+
+def test_detecting_the_angle_convention_forwards_the_readers_verdict(tmp_path: Path) -> None:
+    """服务层只转交读取器的判定，不另立一套判据。
+
+    格式知识归 io：表头长什么样、编码怎么解、数据区从哪一行开始，都只有一处说法。
+    服务层这一行的价值是给 GUI 一个不跨层的入口——``gui`` 只准 import ``api``。
+    """
+    path = tmp_path / "incident.xy"
+    path.write_text("# Omega Intensity\n0.05 1.0\n0.06 0.5\n", encoding="utf-8")
+
+    evidence = detect_angle_convention(path)
+
+    assert evidence == scan_angle_convention(path)
+    assert evidence.convention == "theta"
+    assert evidence.declared is True
+
+
+def test_detecting_the_angle_convention_needs_no_successful_import(tmp_path: Path) -> None:
+    """检测的入口是路径，不是 ``PreparedData``。
+
+    若签名收 ``PreparedData``，就得先用某个猜出来的约定成功解析一遍才能问「该用哪个
+    约定」——顺序颠倒了。点数不足、甚至读不出曲线的文件，同样应该答得出轴。
+    """
+    path = tmp_path / "too-thin.xy"
+    path.write_text("# 2theta_deg intensity\n0.05 1.0\n", encoding="utf-8")
+
+    evidence = detect_angle_convention(path)
+
+    assert evidence.convention == "two_theta"
+    assert evidence.declared is True
+    assert evidence.header_line == "# 2theta_deg intensity"

@@ -79,19 +79,24 @@ def test_project_buttons_route_through_public_main_window_workflows(
         "newProjectButton": ("new_project_dialog", "new"),
         "openProjectButton": ("open_project_dialog", "open"),
         "saveProjectButton": ("save_project_dialog", "save"),
-        "saveAsProjectButton": ("save_project_as_dialog", "save-as"),
-        "reloadSourceButton": ("reload_source_dialog", "reload"),
-        "relinkSourceButton": ("relink_source_dialog", "relink"),
     }
-    for callback, value in callbacks.values():
+    # 命令栏按设计稿只摆 新建/打开/保存，保存为 没了按钮但留着 文件 菜单里那条带
+    # Ctrl+Shift+S 的 QAction，所以它的接线改从 QAction 那一侧核——否则删掉按钮
+    # 等于把这条命令的回归覆盖一起删了。
+    menu_only = {"saveAsProjectAction": ("save_project_as_dialog", "save-as")}
+    for callback, value in (*callbacks.values(), *menu_only.values()):
         monkeypatch.setattr(window, callback, lambda value=value: calls.append(value))
 
     for object_name in callbacks:
         button = _button(window, object_name)
         button.setEnabled(True)
         button.click()
+    for object_name in menu_only:
+        action = _action(window, object_name)
+        action.setEnabled(True)
+        action.trigger()
 
-    assert calls == ["new", "open", "save", "save-as", "reload", "relink"]
+    assert calls == ["new", "open", "save", "save-as"]
 
 
 def test_project_file_dialogs_call_document_workflows(qtbot, tmp_path, monkeypatch) -> None:

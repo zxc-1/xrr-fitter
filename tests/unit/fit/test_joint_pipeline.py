@@ -34,7 +34,7 @@ from xrr_fitter.model.fitting import (
     candidate_selection_objective,
 )
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterReference, ParameterSetting, SharingRule
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterReference, ParameterSetting, SharingRule
 from xrr_fitter.model.project import validate_project
 
 SHARED_NAME = "component.0.density_scale"
@@ -60,7 +60,7 @@ def _problem(*, seed: int, size: int):
             definition.initial,
             definition.lower if definition.name == SHARED_NAME else definition.initial,
             definition.upper if definition.name == SHARED_NAME else definition.initial,
-            locked=definition.name != SHARED_NAME,
+            freedom=ParameterFreedom.from_locked(definition.name != SHARED_NAME),
         )
         for definition in base.parameter_definitions
     )
@@ -102,7 +102,7 @@ def _fully_locked_problem(*, seed: int, size: int):
             definition.initial,
             definition.initial,
             definition.initial,
-            locked=True,
+            freedom=ParameterFreedom.FIXED,
         )
         for definition in problem.parameter_definitions
     )
@@ -148,7 +148,7 @@ def _staged_problem(*, seed: int, size: int):
             definition.initial,
             definition.lower if definition.name in free_names else definition.initial,
             definition.upper if definition.name in free_names else definition.initial,
-            locked=definition.name not in free_names,
+            freedom=ParameterFreedom.from_locked(definition.name not in free_names),
         )
         for definition in problem.parameter_definitions
     )

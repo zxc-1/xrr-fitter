@@ -20,8 +20,10 @@ from xrr_fitter.model.operations import OperationError, OperationEvent
 from xrr_fitter.model.project import XrrProject
 from xrr_fitter.services.fitting import (
     automatic_worker_handler,
+    build_cancellation_probe,
     fit_worker_handler,
     mcmc_worker_handler,
+    pause_aware_probe,
 )
 from xrr_fitter.services.projects import save_project
 
@@ -59,11 +61,21 @@ def _operation_error(error: BaseException) -> OperationError:
     )
 
 
+# 暂停/跳过探针的实现住在 ``services.fitting``：抛 ``StageSkipped`` 是一次对 ``fit`` 的
+# 依赖，而架构门禁只允许那一个模块跨过去。这里留两个入口，进程边界的读者不必换地方找。
+def _pause_aware_probe(cancellation, pause, skip=None, **kwargs):
+    return pause_aware_probe(cancellation, pause, skip, **kwargs)
+
+
+def _probe(cancellation, pause, skip=None):
+    return build_cancellation_probe(cancellation, pause, skip)
+
+
 def _put(queue, kind: str, payload) -> None:
     queue.put((kind, payload))
 
 
-def _run_fit_worker(request: _FitJobRequest, queue, cancellation) -> None:
+def _run_fit_worker(request: _FitJobRequest, queue, cancellation, pause=None, skip=None) -> None:
     try:
 
         def progress(value) -> None:
@@ -78,7 +90,7 @@ def _run_fit_worker(request: _FitJobRequest, queue, cancellation) -> None:
             request.project,
             progress,
             checkpoint,
-            cancellation.is_set,
+            _probe(cancellation, pause, skip),
         )
         if result.cancelled:
             _put(queue, "cancelled", "requested")
@@ -94,6 +106,8 @@ def _run_automatic_fit_worker(
     request: _AutomaticFitJobRequest,
     queue,
     cancellation,
+    pause=None,
+    skip=None,
 ) -> None:
     try:
 
@@ -110,7 +124,7 @@ def _run_automatic_fit_worker(
             request.import_batch_id,
             progress,
             checkpoint,
-            cancellation.is_set,
+            _probe(cancellation, pause, skip),
         )
         if result.cancelled:
             _put(queue, "cancelled", "requested")
@@ -122,7 +136,7 @@ def _run_automatic_fit_worker(
         _put(queue, "stopped", None)
 
 
-def _run_mcmc_worker(request: _McmcJobRequest, queue, cancellation) -> None:
+def _run_mcmc_worker(request: _McmcJobRequest, queue, cancellation, pause=None, skip=None) -> None:
     try:
         result = mcmc_worker_handler(
             request.project,
@@ -130,7 +144,7 @@ def _run_mcmc_worker(request: _McmcJobRequest, queue, cancellation) -> None:
             request.candidate_id,
             request.config,
             lambda value: _put(queue, "progress", value),
-            cancellation.is_set,
+            _probe(cancellation, pause, skip),
         )
         _put(queue, "mcmc_result", result)
     except BaseException as error:
@@ -159,10 +173,12 @@ def _event(sequence: int, kind: str, payload) -> OperationEvent:
 class OperationJob:
     """One concrete process job with a validated event stream."""
 
-    def __init__(self, process, queue, cancellation) -> None:
+    def __init__(self, process, queue, cancellation, pause=None, skip=None) -> None:
         self._process = process
         self._queue = queue
         self._cancellation = cancellation
+        self._pause = pause
+        self._skip = skip
         self._sequence = 0
         self._pending_terminal: tuple[str, object] | None = None
         self._protocol_failed = False
@@ -296,7 +312,27 @@ class OperationJob:
         self._finish_exited(events)
         return tuple(events)
 
+    @property
+    def is_paused(self) -> bool:
+        return self._pause is not None and bool(self._pause.is_set())
+
+    def pause(self) -> None:
+        """让 worker 在下一个阶段边界停住，已跑完的阶段和当前最优都留着。"""
+        if self._pause is not None and self.is_running:
+            self._pause.set()
+
+    def resume(self) -> None:
+        if self._pause is not None:
+            self._pause.clear()
+
+    def skip_stage(self) -> None:
+        """作废当前这一个阶段，搜索接着往下跑；已跑完的阶段与候选都留着。"""
+        if self._skip is not None and self.is_running:
+            self._skip.set()
+
     def cancel(self) -> None:
+        # 暂停中按停止：先放开停车点，否则 worker 永远走不到听见取消的那一步。
+        self.resume()
         if self.is_running:
             self._cancellation.set()
 
@@ -327,7 +363,9 @@ def _start(target, request) -> OperationJob:
     context = _spawn_context()
     queue = context.Queue()
     cancellation = context.Event()
-    process = context.Process(target=target, args=(request, queue, cancellation))
+    pause = context.Event()
+    skip = context.Event()
+    process = context.Process(target=target, args=(request, queue, cancellation, pause, skip))
     try:
         process.start()
     except BaseException:
@@ -338,7 +376,7 @@ def _start(target, request) -> OperationJob:
         except ValueError:
             pass
         raise
-    return OperationJob(process, queue, cancellation)
+    return OperationJob(process, queue, cancellation, pause, skip)
 
 
 def start_fit_job(

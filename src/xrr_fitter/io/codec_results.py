@@ -34,13 +34,16 @@ from xrr_fitter.model.fitting import FitCheckpoint
 
 
 def _profile_to_dict(value: ParameterProfile) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "name": value.name,
         "values": _real_array_to_list(value.values),
         "objectives": _real_array_to_list(value.objectives),
         "lower_closed": value.lower_closed,
         "upper_closed": value.upper_closed,
     }
+    if value.objective_threshold is not None:
+        payload["objective_threshold"] = value.objective_threshold
+    return payload
 
 
 def _profile_from_dict(value: object) -> ParameterProfile:
@@ -48,6 +51,7 @@ def _profile_from_dict(value: object) -> ParameterProfile:
         value,
         {"name", "values", "objectives", "lower_closed", "upper_closed"},
         "parameter profile",
+        optional={"objective_threshold"},
     )
     return ParameterProfile(
         name=payload["name"],
@@ -55,6 +59,7 @@ def _profile_from_dict(value: object) -> ParameterProfile:
         objectives=_real_array_from_list(payload["objectives"]),
         lower_closed=payload["lower_closed"],
         upper_closed=payload["upper_closed"],
+        objective_threshold=payload.get("objective_threshold"),
     )
 
 
@@ -248,6 +253,10 @@ def _uncertainty_to_dict(
     # existed re-encode byte-identically and older readers keep loading them.
     if value.parameter_sigma is not None:
         payload["parameter_sigma"] = _real_array_to_list(value.parameter_sigma)
+    # Emitted only when recorded so reports written before the resample count
+    # existed re-encode byte-identically and older readers keep loading them.
+    if value.bootstrap_sample_count:
+        payload["bootstrap_sample_count"] = value.bootstrap_sample_count
     return payload
 
 
@@ -275,7 +284,7 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         value,
         required | {"bootstrap_performed"},
         "uncertainty report",
-        {"candidate_id", "sld_bands", "prior_conflicts", "parameter_sigma"},
+        {"candidate_id", "sld_bands", "prior_conflicts", "parameter_sigma", "bootstrap_sample_count"},
     )
     return UncertaintyReport(
         correlation_names=tuple(_sequence(payload["correlation_names"], "correlation names")),
@@ -302,6 +311,7 @@ def _uncertainty_from_dict(value: object) -> UncertaintyReport | None:
         parameter_sigma=(
             None if payload.get("parameter_sigma") is None else _real_array_from_list(payload["parameter_sigma"])
         ),
+        bootstrap_sample_count=int(payload.get("bootstrap_sample_count", 0)),
     )
 
 
@@ -324,6 +334,7 @@ def fit_result_to_dict(value: FitResult | None) -> dict[str, object] | None:
         "region_weights": _real_array_to_list(value.region_weights),
         "uncertainty": _uncertainty_to_dict(value.uncertainty),
         "classification_evidence": list(value.classification_evidence),
+        **({"skipped_stages": list(value.skipped_stages)} if value.skipped_stages else {}),
     }
 
 
@@ -350,7 +361,7 @@ def fit_result_from_dict(value: object) -> FitResult | None:
         "region_weights",
         "uncertainty",
     }
-    payload = _mapping(value, required, "fit result", {"classification_evidence"})
+    payload = _mapping(value, required, "fit result", {"classification_evidence", "skipped_stages"})
     candidates = tuple(_candidate_from_dict(item) for item in _sequence(payload["candidates"], "fit candidates"))
     return FitResult(
         parameter_definitions=tuple(
@@ -370,6 +381,7 @@ def fit_result_from_dict(value: object) -> FitResult | None:
         region_weights=_real_array_from_list(payload["region_weights"]),
         uncertainty=_uncertainty_from_dict(payload["uncertainty"]),
         classification_evidence=_classification_evidence(payload),
+        skipped_stages=tuple(_sequence(payload.get("skipped_stages", []), "skipped stages")),
     )
 
 
@@ -391,6 +403,7 @@ def _checkpoint_to_dict(value: FitCheckpoint | None) -> dict[str, object] | None
             value.candidates,
         ),
         "joint_layout_fingerprint": value.joint_layout_fingerprint,
+        **({"skipped_stages": list(value.skipped_stages)} if value.skipped_stages else {}),
     }
 
 
@@ -413,7 +426,7 @@ def _checkpoint_from_dict(value: object) -> FitCheckpoint | None:
         value,
         required,
         "fit checkpoint",
-        {"joint_layout_fingerprint"},
+        {"joint_layout_fingerprint", "skipped_stages"},
     )
     candidates = tuple(_candidate_from_dict(item) for item in _sequence(payload["candidates"], "checkpoint candidates"))
     return FitCheckpoint(
@@ -428,4 +441,5 @@ def _checkpoint_from_dict(value: object) -> FitCheckpoint | None:
         runtime_warnings=tuple(_sequence(payload["runtime_warnings"], "runtime warnings")),
         stage_summaries=_stages_from_list(payload["stage_summaries"], candidates),
         joint_layout_fingerprint=payload.get("joint_layout_fingerprint", ""),
+        skipped_stages=tuple(_sequence(payload.get("skipped_stages", []), "skipped stages")),
     )

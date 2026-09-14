@@ -12,6 +12,7 @@ from xrr_fitter.model.parameters import (
     ConstraintRule,
     ParameterCoordinate,
     ParameterDefinition,
+    ParameterFreedom,
     ParameterReference,
     ParameterSetting,
     ParameterValue,
@@ -289,6 +290,46 @@ def test_parameter_settings_and_values_are_finite_immutable_values() -> None:
         setting.initial = 2.0
     with pytest.raises(ValueError, match="finite"):
         ParameterSetting("scale", float("nan"), 0.5, 1.5)
+
+
+def test_a_setting_defaults_to_free_and_only_fixed_reads_as_locked() -> None:
+    """三档里只有 ``FIXED`` 是「拟合器完全不动」。
+
+    ``locked`` 这个属性还在，是因为下游有大量「动/不动」的二分判断；把 ``RANGE_ONLY`` 也算
+    进去的话，「仅范围」会静默退化成「固定」——那个量根本不再参与拟合，而没有任何地方报错。
+    """
+    assert ParameterSetting("scale", 1.0, 0.5, 1.5).freedom is ParameterFreedom.FREE
+
+    locked_by_gear = {gear: ParameterSetting("scale", 1.0, 0.5, 1.5, gear).locked for gear in ParameterFreedom}
+
+    assert locked_by_gear == {
+        ParameterFreedom.FREE: False,
+        ParameterFreedom.RANGE_ONLY: False,
+        ParameterFreedom.FIXED: True,
+    }
+
+
+def test_from_locked_is_the_two_state_bridge_and_never_invents_range_only() -> None:
+    """声明侧只有 ``locked``，两态装不下第三档，所以桥只在 FREE/FIXED 之间来回。
+
+    往回猜「仅范围」会让一个从没设过区间的量凭空多出一条 ``soft_range`` 先验。
+    """
+    assert ParameterFreedom.from_locked(True) is ParameterFreedom.FIXED
+    assert ParameterFreedom.from_locked(False) is ParameterFreedom.FREE
+    assert ParameterFreedom.RANGE_ONLY not in {
+        ParameterFreedom.from_locked(True),
+        ParameterFreedom.from_locked(False),
+    }
+
+
+def test_a_setting_refuses_a_bare_string_gear() -> None:
+    """档位必须是枚举本身。
+
+    ``ParameterFreedom`` 是 StrEnum，``"fixed"`` 会一路通过等值比较却不是同一个对象；靠
+    ``is`` 判档的下游（``freedom is ParameterFreedom.RANGE_ONLY``）于是全部落空。
+    """
+    with pytest.raises(TypeError, match="freedom must be ParameterFreedom"):
+        ParameterSetting("scale", 1.0, 0.5, 1.5, "fixed")
 
 
 def test_sharing_rules_copy_members_and_reject_malformed_references() -> None:

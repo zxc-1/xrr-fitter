@@ -64,7 +64,11 @@ from xrr_fitter.model.parameters import (
     ParameterDefinition,
     ParameterValue,
 )
-from xrr_fitter.model.progress import FitProgress  # noqa: F401 -- re-exported via xrr_fitter.api
+from xrr_fitter.model.progress import (
+    FitProgress,  # noqa: F401 -- re-exported via xrr_fitter.api
+    normalize_skipped_stages,
+    search_terminated_early,
+)
 from xrr_fitter.model.slab_stack import SlabStack
 from xrr_fitter.model.structure import StructureSpec
 
@@ -550,7 +554,7 @@ class FitStageSummary:
 
 @dataclass(frozen=True, slots=True)
 class FitCheckpoint:
-    """Resume state bound to exact data, structure, config, and seed lineage."""
+    """Identity-bound state after the last handled stage, including explicit skips."""
 
     data_sha256: str
     structure_fingerprint: str
@@ -563,6 +567,7 @@ class FitCheckpoint:
     runtime_warnings: tuple[str, ...] = ()
     stage_summaries: tuple[FitStageSummary, ...] = ()
     joint_layout_fingerprint: str = ""
+    skipped_stages: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for field in ("data_sha256", "structure_fingerprint", "config_fingerprint"):
@@ -579,6 +584,7 @@ class FitCheckpoint:
         object.__setattr__(self, "child_seeds", seeds)
         object.__setattr__(self, "runtime_warnings", tuple(self.runtime_warnings))
         object.__setattr__(self, "stage_summaries", summaries)
+        object.__setattr__(self, "skipped_stages", normalize_skipped_stages(self.skipped_stages))
 
 
 def candidate_selection_objective(candidate: FitCandidate) -> float:
@@ -664,6 +670,7 @@ class FitSearchResult:
     region_labels: np.ndarray
     region_weights: np.ndarray
     provenance_sha256: str | None = None
+    skipped_stages: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # Normalize every owned sequence before validating cross-record edges.
@@ -691,11 +698,17 @@ class FitSearchResult:
         object.__setattr__(self, "warnings", tuple(self.warnings))
         object.__setattr__(self, "child_seeds", seeds)
         object.__setattr__(self, "stage_summaries", summaries)
+        object.__setattr__(self, "skipped_stages", normalize_skipped_stages(self.skipped_stages))
         object.__setattr__(self, "region_labels", labels)
         object.__setattr__(self, "region_weights", weights)
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)
+
+    @property
+    def terminated_early(self) -> bool:
+        """Whether a skip ended the search without a complete final ensemble."""
+        return search_terminated_early(self.skipped_stages)
 
     @property
     def best_candidate(self) -> FitCandidate | None:

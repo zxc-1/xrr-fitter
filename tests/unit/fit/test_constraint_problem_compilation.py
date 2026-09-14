@@ -17,6 +17,7 @@ from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
     ConstraintNode,
     ConstraintRule,
+    ParameterFreedom,
     ParameterReference,
     ParameterSetting,
 )
@@ -298,7 +299,7 @@ def test_locked_flag_gates_variables_independently() -> None:
         baseline.structure,
         baseline.instrument,
         baseline.config,
-        (ParameterSetting("instrument.scale", 1.25, 1.25, 1.25, locked=True),),
+        (ParameterSetting("instrument.scale", 1.25, 1.25, 1.25, freedom=ParameterFreedom.FIXED),),
         (),
     )
     definition = _definition(locked_only, "instrument.scale")
@@ -315,7 +316,7 @@ def test_locked_and_constrained_flags_both_remain_visible() -> None:
         baseline.structure,
         baseline.instrument,
         baseline.config,
-        (ParameterSetting("instrument.background", 0.0, 0.0, 0.0, locked=True),),
+        (ParameterSetting("instrument.background", 0.0, 0.0, 0.0, freedom=ParameterFreedom.FIXED),),
         (_scaled_thickness_rule("instrument.background", 0.0),),
     )
     definition = _definition(both, "instrument.background")

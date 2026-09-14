@@ -111,7 +111,7 @@ def test_shared_roughness_empty_member_domain_is_an_invalid_joint_candidate() ->
                         definition.initial,
                         definition.initial,
                         definition.initial,
-                        locked=True,
+                        freedom=ParameterFreedom.FIXED,
                     )
                 )
         return compile_fit_problem(

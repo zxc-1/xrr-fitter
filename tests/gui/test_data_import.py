@@ -13,48 +13,13 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
-    QDialogButtonBox,
-    QDoubleSpinBox,
     QFileDialog,
-    QLabel,
-    QPushButton,
-    QSpinBox,
     QTreeWidget,
 )
+from tests.gui.data_import_support import _instrument, _panel, _saved_preset, _write_curve
 
 import xrr_fitter.api as api
-
-
-def _saved_preset() -> api.MeasurementPreset:
-    return api.MeasurementPreset(
-        "gui-lab",
-        api.BeamSpec("monochromatic", wavelength_a=1.5406),
-        api.InstrumentSpec(instrument_id="gui-lab"),
-    )
-
-
-def _write_curve(path: Path, *, scale: float = 1000.0) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "\n".join(f"{0.05 + index * 0.02:.6f} {scale / (index + 1):.12g}" for index in range(32)) + "\n",
-        encoding="utf-8",
-    )
-    return path
-
-
-def _panel(qtbot, document=None):
-    from xrr_fitter.gui.data.panel import DataPanel
-    from xrr_fitter.gui.document import ProjectDocument
-
-    panel = DataPanel(ProjectDocument() if document is None else document)
-    qtbot.addWidget(panel)
-    return panel
-
-
-def _instrument() -> api.InstrumentSpec:
-    return api.InstrumentSpec(instrument_id="gui-import")
 
 
 def test_saved_measurement_preset_skips_the_full_import_dialog(
@@ -379,136 +344,42 @@ def test_data_panel_shows_source_beam_and_instrument_summaries(qtbot, tmp_path) 
     assert item.toolTip(5) == panel.sha256_text("sample")
 
 
-def test_import_dialog_requires_explicit_beam_choice(qtbot, tmp_path) -> None:
-    from xrr_fitter.gui.data.import_dialog import ImportDialog
+def test_the_dataset_row_says_how_many_points_it_carries(qtbot, tmp_path) -> None:
+    """设计稿每一帧的数据集行都写着点数：「θ/2θ · 512 点 · 已拟合」。
 
-    dialog = ImportDialog((_write_curve(tmp_path / "sample.xy"),))
-    qtbot.addWidget(dialog)
+    点数是读者判断这条曲线值不值得拟合的第一个数，也是「可拟合 / 数据点不足」这句判定
+    的依据——只给判定不给数，读者看到「数据点不足」也不知道差多少。它和判定同格，因为
+    分开两列会让 264px 的紧凑视图再挤掉一列名字的宽度。
 
-    assert dialog.beam_kind() is None
-    assert dialog.import_button().isEnabled() is False
-    assert dialog.validation_text() == "请选择光路类型：单色 / 混合 Kα"
-
-    dialog.select_beam_kind("mixed_kalpha")
-
-    assert dialog.import_button().isEnabled() is True
-    assert dialog.beam_spec() == api.BeamSpec("mixed_kalpha")
-
-
-def test_import_dialog_displays_and_uses_monochromatic_wavelength(
-    qtbot,
-    tmp_path,
-) -> None:
-    from xrr_fitter.gui.data.import_dialog import ImportDialog
-
-    dialog = ImportDialog((_write_curve(tmp_path / "sample.xy"),))
-    qtbot.addWidget(dialog)
-    dialog.select_beam_kind("monochromatic")
-    editor = dialog.findChild(QDoubleSpinBox, "monochromaticWavelengthEditor")
-    assert editor is not None
-    editor.setValue(1.2345)
-
-    assert dialog.beam_spec().wavelength_a == pytest.approx(1.2345)
-
-
-def test_import_dialog_column_mapping_cancel_and_validation(qtbot, tmp_path) -> None:
-    from xrr_fitter.gui.data.import_dialog import ImportDialog
-
-    dialog = ImportDialog((_write_curve(tmp_path / "sample.xy"),))
-    qtbot.addWidget(dialog)
-    assert dialog.column_mapping() is None
-
-    dialog.set_column_mapping(
-        two_theta=2,
-        intensity=3,
-        intensity_sigma=4,
-        resolution=5,
-        resolution_kind="sigma_q_a_inv",
-    )
-    assert dialog.column_mapping() == api.DataColumnMapping(2, 3, 4, 5, "sigma_q_a_inv")
-
-    dialog.cancel_column_mapping()
-    assert dialog.column_mapping() is None
-    with pytest.raises(ValueError, match="distinct nonnegative"):
-        dialog.set_column_mapping(two_theta=0, intensity=0)
-
-
-def test_column_mapping_dialog_blocks_invalid_mapping_with_inline_error(qtbot) -> None:
-    from xrr_fitter.gui.data.import_dialog import ColumnMappingDialog
-
-    dialog = ColumnMappingDialog()
-    qtbot.addWidget(dialog)
-    dialog.findChild(QSpinBox, "twoThetaColumnEditor").setValue(0)
-    dialog.findChild(QSpinBox, "intensityColumnEditor").setValue(0)
-    buttons = dialog.findChild(QDialogButtonBox)
-
-    qtbot.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Ok), Qt.LeftButton)
-
-    error = dialog.findChild(QLabel, "columnMappingError")
-    assert dialog.result() != QDialog.DialogCode.Accepted
-    assert error is not None and error.isVisible()
-    assert "distinct nonnegative" in error.text()
-
-
-def test_import_dialog_exposes_real_instrument_choices_and_geometry_fields(
-    qtbot,
-    tmp_path,
-) -> None:
-    from xrr_fitter.gui.data.import_dialog import ImportDialog
-
-    dialog = ImportDialog((_write_curve(tmp_path / "sample.xy"),))
-    qtbot.addWidget(dialog)
-    footprint = dialog.findChild(QComboBox, "footprintModeEditor")
-    background = dialog.findChild(QComboBox, "backgroundModelEditor")
-    resolution = dialog.findChild(QComboBox, "resolutionDomainEditor")
-    assert [footprint.itemData(index) for index in range(footprint.count())] == [
-        "geometry",
-        "fit",
-        "none",
-    ]
-    footprint.setCurrentIndex(footprint.findData("geometry"))
-    dialog.findChild(QDoubleSpinBox, "sampleLengthEditor").setValue(10.0)
-    dialog.findChild(QDoubleSpinBox, "beamWidthEditor").setValue(0.1)
-    background.setCurrentIndex(background.findData("powerlaw"))
-    resolution.setCurrentIndex(resolution.findData("theta"))
-
-    instrument = dialog.instrument_spec()
-
-    assert instrument.footprint_mode == "geometry"
-    assert instrument.footprint_spill_angle_deg == pytest.approx(degrees(asin(0.01)))
-    assert instrument.background_kind == "powerlaw"
-    assert instrument.resolution_domain == "theta"
-
-
-def test_import_action_keeps_parented_dialog_as_modal_window(
-    qtbot,
-    tmp_path,
-    monkeypatch,
-) -> None:
-    from xrr_fitter.gui.data.import_dialog import ImportDialog
-
+    数的是掩码长度而不是参与拟合的点数：这一行报的是这个文件里有多少点，范围裁剪之后
+    还剩多少是画布上那件事。
+    """
     source = _write_curve(tmp_path / "sample.xy")
     panel = _panel(qtbot)
-    observed: dict[str, object] = {}
-    monkeypatch.setattr(
-        QFileDialog,
-        "getOpenFileNames",
-        lambda *_args, **_kwargs: ([str(source)], ""),
-    )
 
-    def reject(dialog):
-        observed.update(
-            parent=dialog.parent(),
-            is_window=dialog.isWindow(),
-            is_modal=dialog.isModal(),
-        )
-        return QDialog.DialogCode.Rejected
+    panel.add_paths((source,), beam=api.BeamSpec("monochromatic"), instrument=_instrument())
 
-    monkeypatch.setattr(ImportDialog, "exec", reject)
+    tree = panel.findChild(QTreeWidget, "datasetTree")
+    assert tree is not None
+    assert panel.point_count_text("sample") == "32 点"
+    assert tree.topLevelItem(0).text(4) == "32 点 · 可拟合"
 
-    panel.findChild(QPushButton, "importFilesButton").click()
 
-    assert observed == {"parent": panel, "is_window": True, "is_modal": True}
+def test_the_point_count_leads_a_failed_source_status_too(qtbot, tmp_path) -> None:
+    """源文件出问题时点数还是它上一次记下的那个数，判定换成故障那句。
+
+    这一格的两半答的是两件事：有多少点，以及这条曲线现在能不能用。源文件缺失只推翻
+    后者——存档里那份点数是导入当时数出来的，不因为文件被移开而变成未知。
+    """
+    source = _write_curve(tmp_path / "sample.xy")
+    panel = _panel(qtbot)
+    panel.add_paths((source,), beam=api.BeamSpec("monochromatic"), instrument=_instrument())
+    source.unlink()
+    panel.document.refresh_sources()
+
+    tree = panel.findChild(QTreeWidget, "datasetTree")
+    assert tree is not None
+    assert tree.topLevelItem(0).text(4) == "⛔ 32 点 · 源文件缺失"
 
 
 def test_import_shortcuts_do_not_conflict_with_project_open(qtbot) -> None:
@@ -594,6 +465,36 @@ def test_data_panel_shows_fit_status_per_dataset(qtbot) -> None:
     assert "未拟合" in rows["pending"].text(fit_column)
 
 
+def test_dataset_row_glyph_is_sourced_from_theme(qtbot, monkeypatch) -> None:
+    # The dataset row and the results badge state the same verdict, so they must
+    # state it with the same shape. Two literal glyph tables agree only until one
+    # is edited, and theme is where the design's shapes are authored — repointing
+    # a verdict there and watching the row follow is what proves the row reads
+    # that source rather than keeping a copy of its own.
+    from dataclasses import replace
+
+    from tests.support.model_cases import (
+        dataset_project,
+        final_fit_result,
+        fit_candidate,
+        project,
+    )
+
+    import xrr_fitter.gui.theme as theme
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.model.analysis import ConfidenceClass
+
+    monkeypatch.setitem(theme.CONFIDENCE_GLYPHS, "多解", "✦")
+    multiple = replace(
+        final_fit_result(fit_candidate("candidate-a", 0.2)),
+        confidence=ConfidenceClass.MULTIPLE,
+    )
+    value = replace(project(dataset_project("fitted", result=multiple)), base_directory="/private/tmp")
+    panel = _panel(qtbot, ProjectDocument(value))
+
+    assert panel.fit_status_marker("fitted") == "✦"
+
+
 def test_active_dataset_row_stays_emphasised_when_tree_loses_focus(qtbot) -> None:
     # Qt's selection highlight fades when the tree loses focus, so after clicking
     # into the plot or parameters the user can no longer tell which dataset is
@@ -642,3 +543,147 @@ def test_data_panel_summarises_dataset_overview(qtbot, tmp_path) -> None:
     first.unlink()
     panel.document.refresh_sources()
     assert panel.import_summary_text() == "共 2 个数据集 · 可拟合 1 · 需注意 1"
+
+
+def _stack() -> api.StructureSpec:
+    """一叠最简单的层：一层 SiO₂ 压在硅基底上。"""
+    return api.StructureSpec(
+        api.MaterialSpec("Air", None, None, 0.0j),
+        (api.LayerSpec("film", api.MaterialSpec("SiO2", "SiO2", 2.2), 20.0, roughness_a=2.0),),
+        api.MaterialSpec("Si", "Si", 2.329),
+        backing_roughness_a=3.0,
+    )
+
+
+def test_the_structure_step_says_what_the_structure_covers_instead_of_the_census(qtbot, tmp_path) -> None:
+    """设计稿帧③ 的页脚不清点数据集，写的是「结构对全部可拟合数据集共享 · 每集独立仪器/标度」。
+
+    帧① 那句「共 4 个数据集 · 可拟合 3 · 需注意 1」（HTML 381）回答的是「导进来这批能用几
+    条」——那是数据那一步的问题。到了结构这一步（HTML 640），读者要知道的是「我在编的这叠
+    层管着哪几条曲线，哪些东西不跟着走」；没有这一句，改一处层厚会被读成只改了当前这一集，
+    而改仪器又会被读成一起改了别的集。
+
+    共享是能量的事实，不是标语：``services/structures.set_structure`` 只在联合批量下把结构
+    传播给全部数据集，独立模式下只落在指名的那一集。所以这句话只在真的每条可拟合曲线都拿着
+    同一叠层时才写，否则退回清点——写一句假的比不写更糟。
+    """
+    panel = _panel(qtbot)
+    panel.add_paths(
+        (_write_curve(tmp_path / "first.xy"), _write_curve(tmp_path / "second.xy")),
+        beam=api.BeamSpec("monochromatic"),
+        instrument=_instrument(),
+    )
+    first_id, second_id = (dataset.dataset_id for dataset in panel.document.project.datasets)
+
+    panel.set_step(1)
+    # 还没有结构：这一步无从说「共享」什么。
+    assert panel.summary_text() == "共 2 个数据集 · 全部可拟合"
+
+    stack = _stack()
+    panel.document.replace_project(api.set_structure(panel.document.project, first_id, stack))
+    # 只有一条拿着这叠层，「对全部可拟合数据集共享」此刻是假的。
+    assert panel.summary_text() == "共 2 个数据集 · 全部可拟合"
+
+    panel.document.replace_project(api.set_structure(panel.document.project, second_id, stack))
+    assert panel.summary_text() == "结构对全部可拟合数据集共享 · 每集独立仪器/标度"
+    assert panel.summary_label.text() == "结构对全部可拟合数据集共享 · 每集独立仪器/标度"
+
+    # 别的步骤仍旧清点：这句话回答的是结构那一步的问题。
+    panel.set_step(4)
+    assert panel.summary_text() == "共 2 个数据集 · 全部可拟合"
+    assert panel.summary_label.text() == "共 2 个数据集 · 全部可拟合"
+
+
+def test_the_chosen_angle_convention_reaches_the_imported_datasets(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """对话框里选的约定必须一路走到数据集，否则这个开关只是个装饰。
+
+    通道是 ``MeasurementPreset``：``import_angle_offset_deg`` 已经在那里，两者都是「这台
+    仪器输出的角度列怎么解释」。preset 跟项目一起存下来，所以下一批同仪器的数据默认沿用
+    同一个约定，不必每次重选。
+    """
+    from xrr_fitter.gui.data.import_dialog import ImportDialog
+
+    panel = _panel(qtbot)
+    source = _write_curve(tmp_path / "P1 Zr.xy")
+
+    def accept(dialog: ImportDialog):
+        dialog.select_beam_kind("monochromatic")
+        dialog.instrument_id.setText("grazing-lab")
+        dialog.theta_convention.setChecked(True)
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(ImportDialog, "exec", accept)
+
+    panel._confirm_import((source,), folder=False)
+
+    project = panel.document.project
+    assert project.measurement_preset.angle_convention == "theta"
+    assert project.datasets[0].angle_convention == "theta"
+    # 同一份文件按 2θ 读一遍来比：入射角归一到散射角，拟合区间正好翻倍。
+    plain = api.add_dataset(api.new_project(), source, _instrument())
+    assert project.datasets[0].fit_range_two_theta_deg == tuple(
+        2.0 * value for value in plain.datasets[0].fit_range_two_theta_deg
+    )
+
+
+def test_the_batch_preview_lists_the_dataset_and_stack_each_filename_declares(qtbot, tmp_path) -> None:
+    """批量导入把「这个文件成了哪个数据集、认出了哪叠层」逐行摆出来。
+
+    已存预设的批量导入一个对话框都不弹（``_confirm_import`` 直接走 ``import_paths``），
+    而数据集编号和整叠层都是从文件名推的。推成什么样此前只有一个个点开数据集反推得出来，
+    二十个文件就是二十次。
+    """
+    from dataclasses import replace
+
+    from xrr_fitter.gui.data.panel import BATCH_PREVIEW_HEADERS
+    from xrr_fitter.gui.document import ProjectDocument
+
+    project = replace(api.new_project(), measurement_preset=_saved_preset())
+    panel = _panel(qtbot, ProjectDocument(project))
+
+    # 没导过东西就没有预览可看——这张表跟 ``failure_table`` 一样默认不占位。
+    assert panel.batch_preview_table.isHidden()
+
+    panel.import_paths(
+        (
+            _write_curve(tmp_path / "P1 Zr.xy"),
+            _write_curve(tmp_path / "P2 Nb.xy"),
+        )
+    )
+
+    table = panel.batch_preview_table
+    assert not table.isHidden()
+    assert [table.horizontalHeaderItem(column).text() for column in range(table.columnCount())] == list(
+        BATCH_PREVIEW_HEADERS
+    )
+    assert table.rowCount() == 2
+    # 第一列必须是磁盘上的文件名，不是 ``display_name``——后者已经是解析结果，跟第二列
+    # 一字不差，两列写同一个值就等于少了一列。
+    assert [table.item(row, 0).text() for row in range(2)] == ["P1 Zr.xy", "P2 Nb.xy"]
+    assert [table.item(row, 1).text() for row in range(2)] == ["P1", "P2"]
+    assert [table.item(row, 2).text() for row in range(2)] == ["Zr", "Nb"]
+
+
+def test_the_batch_preview_says_so_when_a_filename_declares_no_stack(qtbot, tmp_path) -> None:
+    """文件名里没有材料就把这件事写出来，而不是留一格空白。
+
+    这样的文件照样导入成功，只是没有自动结构。空白格看起来跟「还没算出来」一个样，而这一
+    格的实际含义是「这一条得手工建层」——一批里混进几个，导入前看见与导完逐个点开发现，
+    差的是整批的返工。
+    """
+    from dataclasses import replace
+
+    from xrr_fitter.gui.data.panel import BATCH_PREVIEW_NO_STACK
+    from xrr_fitter.gui.document import ProjectDocument
+
+    project = replace(api.new_project(), measurement_preset=_saved_preset())
+    panel = _panel(qtbot, ProjectDocument(project))
+
+    result = panel.import_paths((_write_curve(tmp_path / "unnamed.xy"),))
+
+    assert result.imported_dataset_ids == ("unnamed",)
+    assert panel.batch_preview_table.item(0, 2).text() == BATCH_PREVIEW_NO_STACK

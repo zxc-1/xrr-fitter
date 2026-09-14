@@ -16,7 +16,7 @@ Both paths preserve the deterministic child-seed lineage.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -48,9 +48,10 @@ from xrr_fitter.fit.joint_solvers import (
 from xrr_fitter.fit.joint_solvers import (
     solve_joint_global as _solve_joint_global,
 )
+from xrr_fitter.fit.local_search import StageSkipped
 from xrr_fitter.fit.pipeline import FitSearchRequest, run_fit_search
 from xrr_fitter.fit.resume import validate_resume_checkpoint
-from xrr_fitter.fit.stage_schedule import reserve_child_seeds
+from xrr_fitter.fit.stage_schedule import committed_parent_summary, reserve_child_seeds
 from xrr_fitter.model.fitting import (
     FitCandidate,
     FitCheckpoint,
@@ -104,6 +105,14 @@ class _JointState:
     candidates: tuple[tuple[FitCandidate, ...], ...]
     warnings: tuple[str, ...]
     summaries: tuple[FitStageSummary, ...]
+    skipped_stages: tuple[str, ...] = ()
+
+    def skip(self, stage: str) -> _JointState:
+        return replace(
+            self,
+            warnings=self.warnings + (f"Stage {stage} skipped by user.",),
+            skipped_stages=self.skipped_stages + (stage,),
+        )
 
 
 def _project_candidate(
@@ -173,6 +182,7 @@ def _append_stage(
         tuple(existing + additions for existing, additions in zip(state.candidates, by_dataset, strict=True)),
         state.warnings,
         state.summaries + (summary,),
+        state.skipped_stages,
     )
 
 
@@ -197,6 +207,23 @@ def _append_stage_e(
         tuple(existing + (addition,) for existing, addition in zip(state.candidates, candidate, strict=True)),
         state.warnings,
         state.summaries[:-1] + (summary,),
+        state.skipped_stages,
+    )
+
+
+def _dataset_objectives(
+    problem: JointFitProblem,
+    valued: Sequence[object],
+) -> tuple[tuple[str, float], ...]:
+    """Pair every dataset id with the local objective already computed for it.
+
+    The joint evaluation keeps one member evaluation per dataset, and every stage
+    reads that list to project its candidates. Reporting the same numbers keeps the
+    breakdown identical to the projected candidates instead of risking a second,
+    separately computed set.
+    """
+    return tuple(
+        (dataset_id, float(value.objective)) for dataset_id, value in zip(problem.dataset_ids, valued, strict=True)
     )
 
 
@@ -207,9 +234,20 @@ def _emit(
     total: int,
     best: float,
     message: str,
+    objectives: tuple[tuple[str, float], ...] | None = None,
 ) -> None:
     if callback is not None:
-        callback(FitProgress(None, stage, completed, total, best, message))
+        callback(
+            FitProgress(
+                None,
+                stage,
+                completed,
+                total,
+                best,
+                message,
+                dataset_objectives=objectives,
+            )
+        )
 
 
 def _local_budget(problem: JointFitProblem) -> int:
@@ -238,7 +276,15 @@ def _append_solution(
         solved.evaluation.objective if solved.evaluation.valid and not solved.objective_increased else float("inf")
     )
     current_best = min(best, objective)
-    _emit(progress, stage, completed, total, current_best, f"joint {stage}")
+    _emit(
+        progress,
+        stage,
+        completed,
+        total,
+        current_best,
+        f"joint {stage}",
+        _dataset_objectives(problem, solved.evaluation.local_evaluations),
+    )
     return current_best
 
 
@@ -358,7 +404,7 @@ def _vectors_from_state(
     state: _JointState,
     stage: str,
 ) -> tuple[np.ndarray, ...]:
-    summary = next(value for value in reversed(state.summaries) if value.stage == stage)
+    summary = committed_parent_summary(state.summaries, state.skipped_stages, stage)
     return joint_candidate_vectors(problem, state.candidates, summary.candidate_ids)
 
 
@@ -375,7 +421,7 @@ def _checkpoint_batch(
     seeds: tuple[int, ...],
 ) -> tuple[FitCheckpoint, ...]:
     if stage == "E":
-        final_count = len(state.summaries[-1].candidate_ids)
+        final_count = _completed_stage_e(state)
         consumed = seeds[: final_count + 1]
     else:
         consumed = seeds[:1]
@@ -389,6 +435,7 @@ def _checkpoint_batch(
             runtime_warnings=state.warnings,
             stage_summaries=checkpoint_summaries,
             joint_layout_fingerprint=request.problem.layout_fingerprint,
+            skipped_stages=state.skipped_stages,
         )
         for local_problem, candidates in zip(request.problem.problems, state.candidates, strict=True)
     )
@@ -420,12 +467,14 @@ def _validate_joint_resume(
             plan.consumed_child_seeds,
             plan.runtime_warnings,
             plan.stage_summaries,
+            plan.skipped_stages,
         )
         != (
             first.completed_stage,
             first.consumed_child_seeds,
             first.runtime_warnings,
             first.stage_summaries,
+            first.skipped_stages,
         )
         for plan in plans[1:]
     ):
@@ -435,21 +484,26 @@ def _validate_joint_resume(
         tuple(initial + plan.candidates for initial, plan in zip(initial_state.candidates, plans, strict=True)),
         first.runtime_warnings,
         initial_state.summaries + first.stage_summaries,
+        first.skipped_stages,
     )
     validate_joint_candidate_alignment(request.problem, state.candidates, state.summaries)
     remaining = first.remaining_stages
-    if first.completed_stage == "E":
-        completed_final = len(first.stage_summaries[-1].candidate_ids)
+    if first.completed_stage == "E" and "E" not in first.skipped_stages:
+        completed_final = _completed_stage_e(state)
         final_count = request.problem.problems[0].config.final_seed_count
         remaining = ("E",) if completed_final < final_count else ()
     return state, remaining
+
+
+def _problem_warnings(problem: JointFitProblem) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(warning for value in problem.problems for warning in value.warnings))
 
 
 def _fresh_state(
     problem: JointFitProblem,
     initial_unit_vector: np.ndarray | None = None,
 ) -> tuple[_JointState, np.ndarray]:
-    warnings = tuple(dict.fromkeys(warning for value in problem.problems for warning in value.warnings))
+    warnings = _problem_warnings(problem)
     initial = initial_joint_vector(problem) if initial_unit_vector is None else initial_unit_vector
     evaluation = evaluate_joint_vector(problem, initial)
     solved = _SolvedJoint(initial, evaluation, "declared_initial", 1)
@@ -468,7 +522,10 @@ def _result_tuple(
     state: _JointState,
     seeds: tuple[int, ...],
 ) -> tuple[FitSearchResult, ...]:
-    eligible_ids = next(summary.candidate_ids for summary in reversed(state.summaries) if summary.stage == "E")
+    eligible_ids = next(
+        (summary.candidate_ids for summary in reversed(state.summaries) if summary.stage == "E"),
+        None,
+    )
     winner = best_candidate_index(state.candidates[0], eligible_ids=eligible_ids)
     results = tuple(
         FitSearchResult(
@@ -480,6 +537,7 @@ def _result_tuple(
             state.summaries,
             local_problem.region_labels,
             local_problem.weights,
+            skipped_stages=state.skipped_stages,
         )
         for local_problem, candidates in zip(request.problem.problems, state.candidates, strict=True)
     )
@@ -500,15 +558,32 @@ def _result_tuple(
 def _initial_joint_run(
     request: JointFitRequest,
     seeds: tuple[int, ...],
+    progress: Callable[[FitProgress], None] | None,
+    cancelled: Callable[[], bool] | None,
 ) -> tuple[_JointState, np.ndarray | None, tuple[str, ...]]:
-    if request.resume_checkpoints is None:
-        state, initial = _fresh_state(
-            request.problem,
-            request.initial_unit_vector,
-        )
-        return state, initial, ("B", "C", "D", "E")
-    state, remaining = _validate_joint_resume(request, seeds)
-    return state, None, remaining
+    if request.resume_checkpoints is not None:
+        state, remaining = _validate_joint_resume(request, seeds)
+        return state, None, remaining
+    try:
+        _poll(cancelled)
+    except StageSkipped:
+        state = _JointState(
+            tuple(() for _ in request.problem.problems),
+            _problem_warnings(request.problem),
+            (),
+        ).skip("A")
+        return state, None, ()
+    state, initial = _fresh_state(request.problem, request.initial_unit_vector)
+    _emit(
+        progress,
+        "A",
+        1,
+        1,
+        state.summaries[0].best_objective,
+        "joint A",
+        _dataset_objectives(request.problem, tuple(aligned[0] for aligned in state.candidates)),
+    )
+    return state, initial, ("B", "C", "D", "E")
 
 
 def _run_joint_stage(
@@ -555,12 +630,20 @@ def _run_stage_e_prefix(
         else next(summary for summary in reversed(state.summaries) if summary.stage == "E").best_objective
     )
     for index in range(completed, len(final_seeds)):
-        solved = _stage_e_solution(
-            request.problem,
-            start,
-            final_seeds[index],
-            cancelled,
-        )
+        try:
+            _poll(cancelled)
+            solved = _stage_e_solution(
+                request.problem,
+                start,
+                final_seeds[index],
+                cancelled,
+            )
+        except StageSkipped:
+            # This owner retains only the seed prefix already committed above.
+            state = state.skip("E")
+            if checkpoint is not None:
+                checkpoint(_checkpoint_batch(request, state, "E", seeds))
+            break
         projected: list[tuple[FitCandidate, ...]] = []
         best = _append_solution(
             request.problem,
@@ -591,13 +674,7 @@ def run_joint_fit(
     if not isinstance(request, JointFitRequest):
         raise TypeError("request must be a JointFitRequest")
     seeds = _seed_ledger(request.problem)
-    fresh = request.resume_checkpoints is None
-    if fresh:
-        _poll(cancelled)
-    state, initial, remaining = _initial_joint_run(request, seeds)
-    if fresh:
-        summary = state.summaries[0]
-        _emit(progress, "A", 1, 1, summary.best_objective, "joint A")
+    state, initial, remaining = _initial_joint_run(request, seeds, progress, cancelled)
     for stage in remaining:
         if stage == "E":
             state = _run_stage_e_prefix(
@@ -609,16 +686,23 @@ def run_joint_fit(
                 cancelled,
             )
             continue
-        projected, summary = _run_joint_stage(
-            request.problem,
-            state,
-            initial,
-            stage,
-            seeds,
-            progress,
-            cancelled,
-        )
-        state = _append_stage(state, projected, summary)
+        try:
+            _poll(cancelled)
+            projected, summary = _run_joint_stage(
+                request.problem,
+                state,
+                initial,
+                stage,
+                seeds,
+                progress,
+                cancelled,
+            )
+        except StageSkipped:
+            state = state.skip(stage)
+            if stage == "B":
+                break
+        else:
+            state = _append_stage(state, projected, summary)
         if checkpoint is not None:
             checkpoint(_checkpoint_batch(request, state, stage, seeds))
     return _result_tuple(request, state, seeds)

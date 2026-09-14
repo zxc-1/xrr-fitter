@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from importlib import import_module
 from importlib.util import find_spec
 from types import SimpleNamespace
@@ -7,6 +8,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from tests.support.model_cases import dataset_project, final_fit_result
+
+from xrr_fitter.model.parameters import ParameterDefinition, ParameterFreedom, ParameterSetting
 
 
 def _publication():
@@ -47,3 +50,13 @@ def test_publication_has_one_owner_used_by_batch():
     assert batch._commit_automatic_result is publication._commit_automatic_result
     assert batch._commit_success is publication._commit_success
     assert batch._replay_checkpoints is publication._replay_checkpoints
+
+
+@pytest.mark.parametrize("locked,freedom", [(False, ParameterFreedom.FREE), (True, ParameterFreedom.FIXED)])
+def test_winner_settings_persist_parameter_freedom(locked, freedom):
+    definition = ParameterDefinition("scale", "Scale", "", "scale", 0.75, 0.5, 1.5, "linear", locked)
+    fitted = replace(final_fit_result(), parameter_definitions=(definition,))
+
+    settings = _publication()._winner_settings((), fitted)
+
+    assert settings == (ParameterSetting("scale", 1.0, 0.5, 1.5, freedom=freedom),)

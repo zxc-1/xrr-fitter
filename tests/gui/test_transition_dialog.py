@@ -150,9 +150,12 @@ def test_layer_dialog_reports_incomplete_branch_row(qtbot) -> None:
     assert error.isVisible() is True
 
 
-def test_structure_tree_marks_transition_in_the_roughness_column(qtbot, tmp_path) -> None:
-    from xrr_fitter.gui.structure.editor import TREE_HEADERS
+def test_structure_tree_marks_transition_in_the_row_it_belongs_to(qtbot, tmp_path) -> None:
+    """梯度界面这件事挂在层行上：一行只有一列，提示就得落在那一列。
 
+    此前它写在「粗糙度」那一列的 tooltip 里。那六列已经压成设计稿的单列行了，提示要是
+    还留在第 5 列，它挂的是一个不存在的格子——鼠标停在行上什么也不会出现。
+    """
     graded = api.LayerSpec(
         "graded",
         SIO2,
@@ -168,5 +171,5 @@ def test_structure_tree_marks_transition_in_the_roughness_column(qtbot, tmp_path
     panel.set_structure(api.StructureSpec(AIR, (graded,), SI))
 
     tree = panel.findChild(QTreeWidget, "structureTree")
-    assert len(TREE_HEADERS) == 6
-    assert "erf" in tree.topLevelItem(1).toolTip(4)
+    assert tree.columnCount() == 1
+    assert "erf" in tree.topLevelItem(1).toolTip(0)

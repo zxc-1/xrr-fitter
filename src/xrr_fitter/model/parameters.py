@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from math import exp, isfinite, log, log1p
 
 import numpy as np
@@ -127,19 +128,63 @@ def _bounds(name: str, initial: float, lower: float, upper: float) -> None:
         raise ValueError(f"{name} initial value must be within bounds")
 
 
+class ParameterFreedom(StrEnum):
+    """一个参数在拟合里被允许怎么动。
+
+    旧的 ``locked: bool`` 只能表达两态,于是「在一段范围里受约束地动」这件事在界面上无处安放:
+    用户想说「别跑出这个区间」时只剩「固定」这一个开关,而固定会连区间内的调整一起掐掉。三态把
+    这个中间档说成一等状态。
+
+    落在 setting 侧而不是 ``ParameterDefinition``:
+    :func:`xrr_fitter.fit.checkpoint.checkpoint_identity` 对 ``parameter_definitions`` 逐字段
+    取指纹,definition 上加字段会让既有 checkpoint 的指纹漂移、旧 checkpoint 无法 resume;而
+    ``parameter_settings`` 不参与该指纹。
+    """
+
+    FREE = "free"
+    """自由变动:只受声明的上下限约束。"""
+    FIXED = "fixed"
+    """固定:不参与拟合,等价旧 ``locked=True``。"""
+    RANGE_ONLY = "range_only"
+    """仅范围:在 ``soft_range`` 先验内受限变动,不向区间外自由外推。
+
+    与 ``FREE`` 一样参与拟合(不是 locked),区别在服务层会为它保留/附加一条 ``soft_range``
+    先验——区间内平坦、区间外按高斯衰减,见 ``docs/algorithm.md``。
+    """
+
+    @classmethod
+    def from_locked(cls, locked: bool) -> ParameterFreedom:
+        """把旧的两态布尔翻成三态。
+
+        旧项目文件和内部按「动/不动」推导出来的意图都只有两态,不可能得到 ``RANGE_ONLY``;把这个
+        映射收在一处,读代码时不必在每个调用点重新确认「locked=False 到底是 FREE 还是仅范围」。
+        """
+        return cls.FIXED if locked else cls.FREE
+
+
 @dataclass(frozen=True, slots=True)
 class ParameterSetting:
     name: str
     initial: float
     lower: float
     upper: float
-    locked: bool = False
+    freedom: ParameterFreedom = ParameterFreedom.FREE
 
     def __post_init__(self) -> None:
         _name(self.name, "parameter name")
         _bounds(self.name, self.initial, self.lower, self.upper)
-        if not isinstance(self.locked, bool):
-            raise TypeError("locked must be bool")
+        if not isinstance(self.freedom, ParameterFreedom):
+            raise TypeError("freedom must be ParameterFreedom")
+
+    @property
+    def locked(self) -> bool:
+        """拟合是否完全不动这个参数。
+
+        只有 ``FIXED`` 为真：``RANGE_ONLY`` 仍然参与拟合，把它读成 locked 会让「仅范围」
+        静默退化成「固定」。保留这个属性是因为下游有大量「动/不动」的二分判断，让它们直接
+        问这一个问题比各自重新拼枚举比较更难写错。
+        """
+        return self.freedom is ParameterFreedom.FIXED
 
 
 @dataclass(frozen=True, slots=True)

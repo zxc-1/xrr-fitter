@@ -22,6 +22,7 @@ from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
     ConstraintNode,
     ConstraintRule,
+    ParameterFreedom,
     ParameterReference,
     ParameterSetting,
 )
@@ -168,7 +169,7 @@ def test_absorption_recompilation_preserves_locked_constraint_target() -> None:
                 target.initial,
                 target.lower,
                 target.upper,
-                locked=True,
+                freedom=ParameterFreedom.FIXED,
             ),
         ),
         (rule,),

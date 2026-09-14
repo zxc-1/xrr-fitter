@@ -14,6 +14,7 @@ from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
     ConstraintNode,
     ConstraintRule,
+    ParameterFreedom,
     ParameterPrior,
     ParameterReference,
     ParameterSetting,
@@ -115,6 +116,126 @@ def test_set_parameter_settings_reconciles_priors_against_effective_bounds(
 
     assert updated.datasets[0].parameter_settings == (setting,)
     assert updated.datasets[0].parameter_priors == ()
+
+
+def test_a_range_only_setting_grows_a_soft_range_prior_clamped_to_the_declaration(
+    tmp_path: Path,
+) -> None:
+    """「仅范围」那段区间是靠一条 ``soft_range`` 先验落实的，而且被裁进声明的硬边界。
+
+    第三档在拟合器眼里和「自由」一样——``locked`` 为假、搜索盒仍是声明的上下限——区间本身
+    不动盒子，所以它唯一的落点就是这条先验。先验不长出来的话，「仅范围」和「自由」在数值上
+    分毫不差，界面上多出来的那一档什么也没做。
+    区间允许比声明更宽（设置层不拦这件事），但先验必须裁回声明：``[1.0, 40.0]`` 里低于
+    7.12 Å 的那一段在硬边界之外，留着它等于宣称一处拟合器永远走不到的地方还有密度。
+    """
+    value = _structured_project(tmp_path)
+    thickness = _thickness(value)
+    assert thickness.lower > 1.0
+    setting = ParameterSetting(thickness.name, 20.0, 1.0, 40.0, ParameterFreedom.RANGE_ONLY)
+
+    updated = set_parameter_settings(value, "curve", (setting,))
+
+    assert updated.datasets[0].parameter_settings == (setting,)
+    assert updated.datasets[0].parameter_priors == (
+        ParameterPrior(
+            thickness.name,
+            PriorSpec("soft_range", (thickness.lower, 40.0, (40.0 - thickness.lower) / 10.0)),
+        ),
+    )
+
+
+def test_switching_to_range_only_keeps_a_hand_written_prior_on_the_same_parameter(
+    tmp_path: Path,
+) -> None:
+    """自己写过先验的量切到「仅范围」时，那条先验原样留着，不被派生的那条顶掉。
+
+    派生先验是「读者只说了一段区间」时的补齐动作。已经有一条明确分布在那里，就说明读者对这
+    个量的了解比一段区间更细；换成 ``soft_range`` 会把那份了解静默降级成「区间内等权」，而
+    读者只是点了一下档位，没说要丢掉自己调的先验。
+    """
+    value = _structured_project(tmp_path)
+    thickness = _thickness(value)
+    authored = ParameterPrior(thickness.name, PriorSpec("normal", (20.0, 5.0)))
+    value = set_parameter_priors(value, "curve", (authored,))
+    setting = ParameterSetting(thickness.name, 20.0, 1.0, 40.0, ParameterFreedom.RANGE_ONLY)
+
+    updated = set_parameter_settings(value, "curve", (setting,))
+
+    assert updated.datasets[0].parameter_priors == (authored,)
+
+
+def test_the_other_two_gears_do_not_grow_a_prior(tmp_path: Path) -> None:
+    """自由和固定不长先验：这条先验是「仅范围」的实现手段，不是每条 setting 的附赠品。
+
+    对这两档来说区间就是盒子本身（``_applied_definition`` 直接换掉上下限），再叠一条同区间的
+    ``soft_range`` 只会把已经等权的盒内密度乘上一个常数，白搭一次先验求值。
+    """
+    value = _structured_project(tmp_path)
+    thickness = _thickness(value)
+
+    for freedom in (ParameterFreedom.FREE, ParameterFreedom.FIXED):
+        setting = ParameterSetting(thickness.name, 20.0, 1.0, 40.0, freedom)
+
+        updated = set_parameter_settings(value, "curve", (setting,))
+
+        assert updated.datasets[0].parameter_settings == (setting,)
+        assert updated.datasets[0].parameter_priors == ()
+
+
+def test_editing_a_range_only_interval_moves_the_derived_prior_with_it(
+    tmp_path: Path,
+) -> None:
+    """改区间要连派生的那条先验一起改，否则拟合器仍按旧区间受罚。
+
+    这一档的区间只以先验的形式起作用。派生只挑「这个量还没有先验」的情形下手，所以第一次
+    改完之后名字上已经挂着一条——再改区间时若只顾着附加，新的一条根本轮不到长出来，界面显
+    示 ``[30, 60]`` 而拟合器按 ``[10, 40]`` 罚，两边差多少都不报错。
+    """
+    value = _structured_project(tmp_path)
+    thickness = _thickness(value)
+    first = ParameterSetting(thickness.name, 20.0, 10.0, 40.0, ParameterFreedom.RANGE_ONLY)
+    value = set_parameter_settings(value, "curve", (first,))
+    assert value.datasets[0].parameter_priors == (
+        ParameterPrior(thickness.name, PriorSpec("soft_range", (10.0, 40.0, 3.0))),
+    )
+
+    widened = ParameterSetting(thickness.name, 40.0, 30.0, 60.0, ParameterFreedom.RANGE_ONLY)
+    updated = set_parameter_settings(value, "curve", (widened,))
+
+    assert updated.datasets[0].parameter_priors == (
+        ParameterPrior(thickness.name, PriorSpec("soft_range", (30.0, 60.0, 3.0))),
+    )
+
+
+def test_leaving_range_only_takes_the_derived_prior_away_but_spares_an_authored_one(
+    tmp_path: Path,
+) -> None:
+    """离开这一档时派生的那条先验跟着走，读者自己写的那条留下。
+
+    区间是这一档的说法，档位换掉了说法就不成立；先验赖着不走的话，界面上写着「自由」而拟合
+    器仍在那段区间外面加罚，而这条罚项读者从没写过。反过来，自己写的先验跟档位无关，动它就
+    是替读者丢掉一份比区间更细的了解——两者的区别只能靠「是不是本模块会派生出来的那个值」来
+    认，所以这里同一个参数先走一遍派生、再走一遍手写。
+    """
+    value = _structured_project(tmp_path)
+    thickness = _thickness(value)
+    ranged = ParameterSetting(thickness.name, 20.0, 10.0, 40.0, ParameterFreedom.RANGE_ONLY)
+    derived = set_parameter_settings(value, "curve", (ranged,))
+    assert derived.datasets[0].parameter_priors != ()
+
+    freed = set_parameter_settings(derived, "curve", (replace(ranged, freedom=ParameterFreedom.FREE),))
+
+    assert freed.datasets[0].parameter_priors == ()
+
+    authored = ParameterPrior(thickness.name, PriorSpec("normal", (20.0, 5.0)))
+    kept = set_parameter_settings(
+        set_parameter_priors(derived, "curve", (authored,)),
+        "curve",
+        (replace(ranged, freedom=ParameterFreedom.FREE),),
+    )
+
+    assert kept.datasets[0].parameter_priors == (authored,)
 
 
 def test_set_parameter_settings_drops_sharing_rule_when_bounds_diverge(
@@ -385,7 +506,7 @@ def test_reconcile_parameter_sidecars_keeps_only_valid_unique_entries(
         thickness.initial,
         thickness.lower,
         thickness.upper,
-        thickness.locked,
+        ParameterFreedom.from_locked(thickness.locked),
     )
     prior = ParameterPrior(thickness.name, PriorSpec("normal", (thickness.initial, 5.0)))
     unknown_setting = ParameterSetting("component.99.thickness_a", 10.0, 2.0, 20.0)

@@ -1,4 +1,4 @@
-"""Deterministic headless PNG serialization for exported fit results."""
+"""Deterministic headless raster and vector serialization for exported fit results."""
 
 from __future__ import annotations
 
@@ -10,12 +10,21 @@ from typing import ParamSpec
 import numpy as np
 from matplotlib import font_manager, rc_context, rcParamsDefault
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.backends.backend_svg import FigureCanvasSVG
 from matplotlib.figure import Figure
 from matplotlib.text import Text
 
 from xrr_fitter.io.export_tables import DatasetExportData, _contexts
 
 PNG_SOFTWARE = "Matplotlib version3.11.1, https://matplotlib.org/"
+
+# The SVG backend derives clip-path and marker element ids from a salt that is
+# random per process unless pinned, and it stamps the wall clock into the RDF
+# ``<dc:date>`` block. Either one alone would make a re-export of an unchanged
+# fit publish different bytes, so ``_svg`` pins both. The salt has to be applied
+# inside the render's own style isolation: ``_default_matplotlib_style`` enters
+# ``rc_context(rc=rcParamsDefault)``, which discards any ambient salt.
+SVG_HASHSALT = "xrr-fitter-export"
 P = ParamSpec("P")
 
 # io cannot import the GUI font helper (the dependency contract forbids io->gui
@@ -80,6 +89,22 @@ def _png(figure: Figure, *, cjk_text: bool = False) -> bytes:
             _apply_cjk_font(figure)
         canvas = FigureCanvasAgg(figure)
         canvas.print_png(buffer, metadata={"Software": PNG_SOFTWARE})
+        return buffer.getvalue()
+    finally:
+        figure.clear()
+
+
+def _svg(figure: Figure, *, cjk_text: bool = False) -> bytes:
+    buffer = BytesIO()
+    try:
+        if cjk_text:
+            _apply_cjk_font(figure)
+        canvas = FigureCanvasSVG(figure)
+        # ``Date: None`` suppresses the ``<dc:date>`` element outright; passing a
+        # fixed date would still write a timestamp readers could mistake for the
+        # real export time.
+        with rc_context({"svg.hashsalt": SVG_HASHSALT}):
+            canvas.print_svg(buffer, metadata={"Date": None})
         return buffer.getvalue()
     finally:
         figure.clear()
@@ -151,9 +176,10 @@ def _selected_bands(context: DatasetExportData) -> object | None:
     return None if report is None else report.sld_bands
 
 
-@_default_matplotlib_style
-def sld_profile_png(context: DatasetExportData) -> bytes:
-    """Render real and imaginary selected SLD profiles with credible bands."""
+def _sld_profile_figure(context: DatasetExportData) -> tuple[Figure, bool]:
+    # Shared by the raster and vector renderers so the two formats cannot drift
+    # apart. The second element reports whether a CJK band caption was drawn,
+    # which is what decides the font swap in the serializers.
     value = _context(context)
     selected = value.selected
     figure = Figure(figsize=(6.4, 4.0), layout="constrained")
@@ -168,7 +194,21 @@ def sld_profile_png(context: DatasetExportData) -> bytes:
     axis.set_xlabel("Depth (Angstrom)")
     axis.set_ylabel("SLD (1/Angstrom^2)")
     axis.legend()
-    return _png(figure, cjk_text=bands is not None)
+    return figure, bands is not None
+
+
+@_default_matplotlib_style
+def sld_profile_png(context: DatasetExportData) -> bytes:
+    """Render real and imaginary selected SLD profiles with credible bands."""
+    figure, captioned = _sld_profile_figure(context)
+    return _png(figure, cjk_text=captioned)
+
+
+@_default_matplotlib_style
+def sld_profile_svg(context: DatasetExportData) -> bytes:
+    """Render the SLD profile as scalable vector output for publication figures."""
+    figure, captioned = _sld_profile_figure(context)
+    return _svg(figure, cjk_text=captioned)
 
 
 def _excluded_intervals(

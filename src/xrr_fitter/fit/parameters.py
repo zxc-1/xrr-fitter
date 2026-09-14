@@ -15,7 +15,7 @@ from xrr_fitter.fit.gradient_bounds import component_slab_count as _component_sl
 from xrr_fitter.model.data import PreparedData
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterDefinition, ParameterSetting
+from xrr_fitter.model.parameters import ParameterDefinition, ParameterFreedom, ParameterSetting
 from xrr_fitter.model.structure import (
     MAX_EXPANDED_SLABS,
     GradientLayerSpec,
@@ -627,6 +627,30 @@ def _validate_settings(
         _validate_setting(setting, definition)
 
 
+def _applied_definition(
+    definition: ParameterDefinition,
+    setting: ParameterSetting,
+) -> ParameterDefinition:
+    """Fold one setting into its declaration.
+
+    ``RANGE_ONLY`` keeps the *declared* bounds as the hard search box: its interval
+    is a preference, not a wall, and the service layer turns that interval into a
+    ``soft_range`` prior instead (see :class:`ParameterFreedom`).  Narrowing the box
+    here too would clip the prior back to a flat ``uniform`` — priors are truncated
+    to the definition's bounds, so an interval equal to the box carries no penalty
+    region at all and 「仅范围」 would silently mean nothing.
+    """
+    if setting.freedom is ParameterFreedom.RANGE_ONLY:
+        return replace(definition, initial=setting.initial, locked=False)
+    return replace(
+        definition,
+        initial=setting.initial,
+        lower=setting.lower,
+        upper=setting.upper,
+        locked=setting.locked,
+    )
+
+
 def apply_parameter_settings(
     definitions: tuple[ParameterDefinition, ...],
     settings: tuple[ParameterSetting, ...],
@@ -634,15 +658,7 @@ def apply_parameter_settings(
     _validate_settings(definitions, settings)
     by_name = {setting.name: setting for setting in settings}
     updated = tuple(
-        replace(
-            definition,
-            initial=by_name[definition.name].initial,
-            lower=by_name[definition.name].lower,
-            upper=by_name[definition.name].upper,
-            locked=by_name[definition.name].locked,
-        )
-        if definition.name in by_name
-        else definition
+        _applied_definition(definition, by_name[definition.name]) if definition.name in by_name else definition
         for definition in definitions
     )
     return _synchronize_derived_bounds(updated, settings)
@@ -804,7 +820,7 @@ def _stage_parameter_setting(
             definition.initial,
             definition.lower,
             definition.upper,
-            locked=definition.locked,
+            freedom=ParameterFreedom.from_locked(definition.locked),
         )
     if definition.locked:
         return ParameterSetting(
@@ -812,7 +828,7 @@ def _stage_parameter_setting(
             definition.initial,
             definition.lower,
             definition.upper,
-            locked=True,
+            freedom=ParameterFreedom.FIXED,
         )
     current = current_values[definition.name]
     free = stage_parameter_is_free(stage, definition)
@@ -821,7 +837,7 @@ def _stage_parameter_setting(
         current,
         definition.lower if free else current,
         definition.upper if free else current,
-        locked=not free,
+        freedom=ParameterFreedom.from_locked(not free),
     )
 
 

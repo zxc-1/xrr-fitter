@@ -17,7 +17,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QApplication, QSplashScreen
 
-from xrr_fitter.gui.theme import apply_theme
+from xrr_fitter.gui.theme import apply_theme, light_palette
 
 
 def _build_app_icon() -> QIcon:
@@ -116,6 +116,11 @@ def create_application(argv: Sequence[str] | None = None) -> QApplication:
     if existing is not None:
         raise RuntimeError("existing QCoreApplication is not a QApplication")
     application = QApplication(list(argv or ()))
+    # 壳、面板、机架三层洗色得先装进调色板，样式表才有得可读：``build_stylesheet`` 是从
+    # Window / Base / AlternateBase 三个角色里取这三层的，而平台默认的亮色板把它们给成同一
+    # 个白，机架那一层于是一个像素也画不出来。复用已有应用时不动它的板——那多半是深色外观，
+    # 或者是测试自己摆好的。
+    application.setPalette(light_palette())
     apply_theme(application)
     application.setWindowIcon(_build_app_icon())
     return application

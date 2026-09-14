@@ -26,6 +26,16 @@ class SearchCancelled(RuntimeError):
     _xrr_cooperative_cancellation = True
 
 
+class StageSkipped(RuntimeError):
+    """Raised by a cancellation probe to abandon the current stage only.
+
+    取消探针是求解器每到一个阶段边界都会问的那一句「要停了吗」。跳过复用同一批停车
+    点，只是走另一个出口：抛这个异常而不是返回 True，搜索作废当前阶段后接着往下走。
+    它刻意不带 ``_xrr_cooperative_cancellation``——那个标记的意思是「整次运行到此为
+    止」，而跳过恰恰相反。
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class LocalSearchResult:
     unit_vector: np.ndarray
@@ -79,16 +89,31 @@ def _poll(cancelled: Callable[[], bool] | None) -> None:
         raise SearchCancelled("search cancelled")
 
 
+def _step_length(previous: list[np.ndarray | None], value: np.ndarray) -> float | None:
+    """Return the distance actually travelled since the last reported point."""
+    last = previous[0]
+    previous[0] = np.array(value, dtype=float, copy=True)
+    return None if last is None else float(np.linalg.norm(previous[0] - last))
+
+
 def solve_local(
     problem: object,
     start: np.ndarray,
     *,
     max_nfev: int,
     cancelled: Callable[[], bool] | None = None,
-    iteration_callback: Callable[[np.ndarray], None] | None = None,
+    iteration_callback: Callable[[np.ndarray, int, int, float | None], None] | None = None,
     callback_interval: int = 10,
 ) -> LocalSearchResult:
-    """Optimize one compiled start using its exact analytic Jacobian."""
+    """Optimize one compiled start using its exact analytic Jacobian.
+
+    ``iteration_callback`` receives ``(unit_vector, iteration, nfev, step)``. The
+    iteration count is the number of Jacobian evaluations, which is what ``trf``
+    spends one of per iteration; ``step`` is the distance from the previously
+    reported point, and is ``None`` on the first report because no step has been
+    taken yet. SciPy's ``trf`` never exposes its trust-region radius, so that
+    travelled distance is the only step length available without inventing one.
+    """
     unit = _validated_unit(problem, start, "start")
     if isinstance(max_nfev, bool) or not isinstance(max_nfev, int) or max_nfev < 1:
         raise ValueError("max_nfev must be a positive integer")
@@ -99,16 +124,19 @@ def solve_local(
     start_evaluation = evaluate_vector(problem, unit)
     system_residual, system_jacobian = cached_least_squares_callbacks(partial(least_squares_system, problem))
     nfev_counter = [0]
+    njev_counter = [0]
+    reported: list[np.ndarray | None] = [None]
 
     def residual(value: np.ndarray) -> np.ndarray:
         _poll(cancelled)
         nfev_counter[0] += 1
         if iteration_callback is not None and nfev_counter[0] % callback_interval == 0:
-            iteration_callback(value)
+            iteration_callback(value, njev_counter[0], nfev_counter[0], _step_length(reported, value))
         return system_residual(value)
 
     def jacobian(value: np.ndarray) -> np.ndarray:
         _poll(cancelled)
+        njev_counter[0] += 1
         return system_jacobian(value)
 
     optimized = least_squares(

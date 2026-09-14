@@ -15,7 +15,7 @@ from xrr_fitter.evaluation import (
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 from xrr_fitter.model.structure import LayerSpec, PeriodicBlock
 
 
@@ -66,7 +66,7 @@ def _periodic_problem():
             definition.initial,
             definition.lower,
             definition.upper,
-            locked=definition.name not in targets,
+            freedom=ParameterFreedom.from_locked(definition.name not in targets),
         )
         for definition in initial.parameter_definitions
     )

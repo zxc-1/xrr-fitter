@@ -1,0 +1,15 @@
+XRR Fitter Qt Cocoa source derivative
+
+Based on Qt 6.11.2 Cocoa platform sources published by The Qt Company Ltd.
+The source files retain their original SPDX identifiers and copyright notices.
+The upstream PySide6/Qt license notices remain unchanged in this wheel.
+
+XRR changes: native accessibility snapshot ownership and invalidation, supplied
+as ownership.patch alongside the original Cocoa source files and build recipe.
+This is a locally built arm64 derivative, not an unmodified PyPI release.
+The source manifest records the official source/SDK URLs and SHA-256 digests.
+The Apple toolchain and unchanged Qt frameworks are external build inputs.
+
+To rebuild, use tools/qt_cocoa_build.py from the matching XRR Fitter source
+checkout. Do not apply the patch by modifying an installed wheel in place.
+The private Qt ABI requires Qt 6.11.2. Do not relabel this output universal2.

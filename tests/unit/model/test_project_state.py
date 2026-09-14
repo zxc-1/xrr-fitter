@@ -97,6 +97,7 @@ def test_project_and_dataset_serialization_field_order_is_stable() -> None:
         "display_name",
         "automation",
         "parameter_priors",
+        "angle_convention",
     ]
 
 

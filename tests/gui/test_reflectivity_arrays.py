@@ -49,17 +49,14 @@ def test_log_pane_arrays_match_draw_log():
     arrays = reflectivity_pane_arrays(data, data.fit_mask, candidate)
     views = build_scratch_views()
     draw_log(views["log"], data, candidate)
-    observed = _line(views["log"], "归一化数据").get_ydata()
-    model = _line(views["log"], "当前候选模型").get_ydata()
+    observed = _line(views["log"], "观测数据").get_ydata()
+    model = _line(views["log"], "当前拟合模型").get_ydata()
     # draw_log floors for display; the struct carries the unfloored values and the
     # widget floors on show, so parity compares the floored projection.
     assert arrays.r_floor == data.r_floor
     assert np.allclose(np.maximum(arrays.log_observed, arrays.r_floor), observed)
     assert arrays.log_model is not None
     assert np.allclose(np.maximum(arrays.log_model, arrays.r_floor), model)
-    # The bottom-right J=… · 平均残差 … note the pg pane will set as its quality
-    # caption must read byte-identically to the matplotlib overlay draw_log wrote.
-    assert arrays.quality_caption == views["log"].axes.texts[-1].get_text()
 
 
 def test_raw_pane_arrays_match_draw_raw():
@@ -73,7 +70,7 @@ def test_raw_pane_arrays_match_draw_raw():
     assert np.allclose(_line(views["raw"], "拟合点").get_ydata(), raw[finite & keep])
     assert np.allclose(_line(views["raw"], "排除点").get_ydata(), raw[finite & ~keep])
     assert arrays.raw_model is not None
-    assert np.allclose(_line(views["raw"], "当前候选模型").get_ydata(), arrays.raw_model)
+    assert np.allclose(_line(views["raw"], "当前拟合模型").get_ydata(), arrays.raw_model)
 
 
 def test_qz4_pane_arrays_match_draw_qz4():
@@ -84,8 +81,8 @@ def test_qz4_pane_arrays_match_draw_qz4():
     data_qz, data_values, model_qz, model_values = arrays.qz4
     views = build_scratch_views()
     draw_qz4(views["qz4"], data, candidate)
-    obs = _line(views["qz4"], "归一化数据")
-    mod = _line(views["qz4"], "当前候选模型")
+    obs = _line(views["qz4"], "观测数据")
+    mod = _line(views["qz4"], "当前拟合模型")
     assert np.allclose(obs.get_xdata(), data_qz) and np.allclose(obs.get_ydata(), data_values)
     assert np.allclose(mod.get_xdata(), model_qz) and np.allclose(mod.get_ydata(), model_values)
     # The pg pane takes its dynamic y-label from the arrays; it must equal the axis
@@ -114,10 +111,8 @@ def test_without_candidate_dependent_panes_are_empty():
     assert arrays.raw_model is None
     assert arrays.qz4 is None
     assert arrays.residual is None
-    # The fit-quality annotations are candidate-derived, so a bare dataset carries
-    # neither the qz⁴ label nor the quality caption and the panes stay unannotated.
+    # qz⁴ 那个轴标题是候选推出来的，光有数据集时它就是 None，那张面板也就不带标注。
     assert arrays.qz4_ylabel is None
-    assert arrays.quality_caption is None
     # The observed series each pane keeps regardless of a candidate stays present.
     assert np.allclose(arrays.log_observed, data.intensity_normalized)
     assert np.allclose(arrays.raw_intensity, data.intensity_raw)

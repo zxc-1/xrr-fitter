@@ -7,7 +7,7 @@ from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.analysis import McmcConfig
 from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
-from xrr_fitter.model.parameters import ParameterDefinition, ParameterSetting
+from xrr_fitter.model.parameters import ParameterDefinition, ParameterFreedom, ParameterSetting
 
 LOCKED_NAME = "component.0.thickness_a"
 
@@ -19,7 +19,7 @@ def _locked_setting(definition: ParameterDefinition) -> ParameterSetting:
         locked_value,
         locked_value if definition.name == LOCKED_NAME else definition.lower,
         locked_value if definition.name == LOCKED_NAME else definition.upper,
-        locked=definition.name != "component.0.density_scale",
+        freedom=ParameterFreedom.from_locked(definition.name != "component.0.density_scale"),
     )
 
 

@@ -1,8 +1,8 @@
 """Structural layout invariants for the content-sized GUI widgets under extreme
 window sizes and an enlarged font.
 
-The shipped MainWindow is a QDockWidget layout, so the QSplitter checks in
-test_workspace.py exercise a synthetic widget tree that no longer mirrors it.
+The shipped MainWindow is now a QSplitter of three fixed columns, whose own
+width budgets are pinned in test_workspace_columns.py against the real window.
 These contracts instead pin the size behaviour of the widgets this overhaul
 added -- the content-sized trees (sizing.ContentSizedTree) and the stack
 diagram (structure.stack) -- at the size extremes and font scale where a

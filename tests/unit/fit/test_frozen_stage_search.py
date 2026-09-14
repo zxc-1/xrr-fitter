@@ -20,7 +20,7 @@ from xrr_fitter.io.project_codec import project_from_bytes
 from xrr_fitter.io.xy import read_xy_bytes
 from xrr_fitter.model.data import with_fit_mask
 from xrr_fitter.model.fitting import FitConfig, SearchBudget
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 
 
 def _frozen_single_layer_problem():
@@ -50,7 +50,7 @@ def _frozen_single_layer_problem():
             definition.initial,
             definition.lower,
             definition.upper,
-            locked=definition.name != target,
+            freedom=ParameterFreedom.from_locked(definition.name != target),
         )
         for definition in base.parameter_definitions
     )

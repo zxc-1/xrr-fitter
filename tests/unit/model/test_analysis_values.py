@@ -60,6 +60,24 @@ def test_analysis_arrays_are_copied_read_only_and_shape_checked() -> None:
         ParameterProfile("bad", np.ones(2), np.ones(3), True, True)
 
 
+def test_profile_carries_the_objective_that_closed_its_interval() -> None:
+    """A profile curve without its closure threshold cannot be read as an interval.
+
+    The scan decides ``lower_closed``/``upper_closed`` by comparing objectives to one
+    number; publishing the flags but not the number leaves a reader with a curve, two
+    booleans, and no way to see where the crossing was.
+    """
+    values, objectives = np.array([1.0, 2.0, 3.0]), np.array([3.0, 2.0, 3.0])
+
+    open_ended = ParameterProfile("thickness", values, objectives, True, True)
+    closed = ParameterProfile("thickness", values, objectives, True, True, 2.5)
+
+    assert open_ended.objective_threshold is None
+    assert closed.objective_threshold == 2.5
+    with pytest.raises(ValueError, match="objective threshold"):
+        ParameterProfile("thickness", values, objectives, True, True, float("nan"))
+
+
 def test_uncertainty_report_rejects_empty_candidate_owner() -> None:
     report = UncertaintyReport(
         correlation_names=(),
@@ -79,6 +97,52 @@ def test_uncertainty_report_rejects_empty_candidate_owner() -> None:
     assert report.bootstrap_performed is True
     with pytest.raises(TypeError, match="bootstrap_performed"):
         replace(report, bootstrap_performed=1)
+
+
+def _bare_report() -> UncertaintyReport:
+    """一份不带任何证据的报告，给只考字段校验的用例用。"""
+    return UncertaintyReport(
+        correlation_names=(),
+        correlation_matrix=np.empty((0, 0)),
+        profiles=(),
+        bootstrap_intervals=(),
+        bootstrap_failure_rate=0.0,
+        boundary_hits=(),
+        strong_correlations=(),
+        systematic_residual=False,
+        diagnostics=(),
+    )
+
+
+def test_uncertainty_report_carries_how_many_resamples_were_requested() -> None:
+    """失败率只说丢了几成，说不出基数——两样都在手才读得出「200 次里丢了 4 次」。
+
+    这个数在报告内反解不出来：``bootstrap_intervals`` 数的是参数不是样本，样本矩阵不进
+    报告，请求数原本只在 ``config.budget`` 里而报告不带 config。所以它得自己是个字段。
+    """
+    report = _bare_report()
+
+    assert report.bootstrap_sample_count == 0
+    assert replace(report, bootstrap_sample_count=200).bootstrap_sample_count == 200
+
+    with pytest.raises(ValueError, match="bootstrap_sample_count"):
+        replace(report, bootstrap_sample_count=-1)
+    with pytest.raises(TypeError, match="bootstrap_sample_count"):
+        replace(report, bootstrap_sample_count=200.0)
+    with pytest.raises(TypeError, match="bootstrap_sample_count"):
+        replace(report, bootstrap_sample_count=True)
+
+
+def test_a_report_that_ran_no_bootstrap_cannot_claim_resamples() -> None:
+    """没跑过自助抽样又报出次数，是两个字段互相打脸——界面读哪一个都会错。
+
+    ``bootstrap_performed=False`` 说的是「这一步没走」，此时唯一自洽的次数是 0。
+    """
+    unperformed = replace(_bare_report(), bootstrap_performed=False)
+
+    assert unperformed.bootstrap_sample_count == 0
+    with pytest.raises(ValueError, match="bootstrap_sample_count"):
+        replace(unperformed, bootstrap_sample_count=200)
 
 
 def test_parameter_profile_preserves_nan_objective_evidence() -> None:

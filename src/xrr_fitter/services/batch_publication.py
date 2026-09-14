@@ -13,7 +13,7 @@ from xrr_fitter.model.analysis import FitResult
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
 from xrr_fitter.model.fitting import FitCheckpoint
 from xrr_fitter.model.operations import DatasetFitResult
-from xrr_fitter.model.parameters import ParameterSetting
+from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting
 from xrr_fitter.model.project import DatasetProject, ScalePriorState, XrrProject
 from xrr_fitter.services.fitting_phases.common import AutomaticPreparedResult, PreparedDatasetFit
 
@@ -170,7 +170,7 @@ def _winner_settings(
             values[definition.name],
             definition.lower,
             definition.upper,
-            locked=definition.locked,
+            freedom=ParameterFreedom.from_locked(definition.locked),
         )
         for definition in fit_result.parameter_definitions
     )

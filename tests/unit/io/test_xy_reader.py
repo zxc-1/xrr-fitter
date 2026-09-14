@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from xrr_fitter.io.xy import _merged_intensity, read_xy, resolution_to_sigma_q, xy_bytes
+from xrr_fitter.io.xy import _merged_intensity, read_xy, resolution_to_sigma_q, scan_angle_convention, xy_bytes
 from xrr_fitter.model.data import BeamSpec, DataColumnMapping, with_fit_mask
 
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures/source/header_and_duplicates.xy"
@@ -326,3 +326,175 @@ def test_column_mapping_rejects_invalid_indices_and_kind(
 ) -> None:
     with pytest.raises(ValueError):
         DataColumnMapping(**mapping)
+
+
+def test_theta_convention_doubles_the_angle_column_into_two_theta(
+    tmp_path: Path,
+) -> None:
+    """``angle_convention="theta"`` 说的是「源文件第一列是入射角」。
+
+    模型原生轴是 ``two_theta_deg``，所以这一支在导入时把角度列 ×2 归一，而不是
+    记一个偏移——2θ↔θ 是轴变换，加性的 ``import_angle_offset_deg`` 表达不了它。
+    """
+    path = tmp_path / "theta-convention.xy"
+    angles = np.linspace(0.05, 1.95, 40)
+    intensities = np.geomspace(1.0, 1e-6, angles.size)
+    _write_numeric_curve(path, angles, intensities)
+
+    incident = read_xy(path, beam=MONO, angle_convention="theta")
+    scattering = read_xy(path, beam=MONO)
+
+    assert np.allclose(incident.two_theta_deg, 2.0 * scattering.two_theta_deg)
+    assert incident.angle_convention == "theta"
+    # 源字节没变，哈希就不该变：约定描述的是怎么读这份文件，不是换了一份文件。
+    assert incident.source_sha256 == scattering.source_sha256
+
+
+def test_the_default_convention_reads_the_angle_column_as_two_theta(
+    tmp_path: Path,
+) -> None:
+    """默认必须是现状：输入即 2θ，一点变换都不做。"""
+    path = tmp_path / "default-convention.xy"
+    angles = np.linspace(0.05, 1.95, 40)
+    intensities = np.geomspace(1.0, 1e-6, angles.size)
+    _write_numeric_curve(path, angles, intensities)
+
+    data = read_xy(path, beam=MONO)
+
+    assert data.angle_convention == "two_theta"
+    assert np.allclose(data.two_theta_deg, angles)
+
+
+def test_an_unknown_angle_convention_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "bad-convention.xy"
+    angles = np.linspace(0.05, 1.95, 40)
+    _write_numeric_curve(path, angles, np.geomspace(1.0, 1e-6, angles.size))
+
+    with pytest.raises(ValueError):
+        read_xy(path, beam=MONO, angle_convention="omega")
+
+
+def _write_headed_curve(path: Path, *header: str) -> None:
+    angles = np.linspace(0.05, 1.95, 40)
+    intensities = np.geomspace(1.0, 1e-6, angles.size)
+    rows = [*header] + [f"{angle:.17g} {intensity:.17g}" for angle, intensity in zip(angles, intensities, strict=True)]
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+def test_scanning_the_canonical_export_header_declares_two_theta(tmp_path: Path) -> None:
+    """本项目导出的文件是自述 2θ 的，扫描要认得自己写的那一行。
+
+    ``xy_bytes`` 写的头就是 ``# 2theta_deg intensity``；连自己的导出都读不出轴来，
+    这个检测在最该确定的场合先失效。
+    """
+    path = tmp_path / "canonical.xy"
+    angles = np.linspace(0.05, 1.95, 8)
+    path.write_bytes(xy_bytes(angles, np.geomspace(1.0, 1e-6, angles.size)))
+
+    evidence = scan_angle_convention(path)
+
+    assert evidence.convention == "two_theta"
+    assert evidence.declared is True
+    assert evidence.header_line == "# 2theta_deg intensity"
+    assert evidence.warning is None
+
+
+@pytest.mark.parametrize(
+    ("header", "convention"),
+    (
+        ("# 2Theta Intensity", "two_theta"),
+        ("# 2-theta  I", "two_theta"),
+        ("# two_theta counts", "two_theta"),
+        ("# TTH counts", "two_theta"),
+        ("# Theta Intensity", "theta"),
+        ("# Omega counts", "theta"),
+        ("# alpha_i R", "theta"),
+        ("# incident angle / R", "theta"),
+    ),
+)
+def test_the_scan_reads_the_axis_the_header_names(
+    tmp_path: Path,
+    header: str,
+    convention: str,
+) -> None:
+    """判定只取表头自己写的轴名，不去猜数值范围。
+
+    按角度上限猜「小于 5° 大概是 θ」会在半数真实文件上翻车——2θ 扫到 4° 收尾的
+    薄膜曲线很常见。文件自己写了轴名才算证据，这也是 ``θ`` 组必须在 ``2θ`` 组之后
+    匹配的原因：``theta`` 是 ``2theta`` 的子串。
+    """
+    path = tmp_path / "headed.xy"
+    _write_headed_curve(path, header)
+
+    evidence = scan_angle_convention(path)
+
+    assert evidence.convention == convention
+    assert evidence.declared is True
+    assert evidence.header_line == header
+    assert evidence.warning is None
+
+
+def test_a_header_that_never_names_an_axis_is_reported_as_undecided(tmp_path: Path) -> None:
+    """没写轴名就不定论，回落到既有默认并说明原因。
+
+    ``# angle intensity`` 这种头是最常见的一类：它确实提到了角度，但没说是哪一个。
+    此处若默默判成某一档，用户就会拿到一条整段差一倍的曲线而毫无提示。
+    """
+    path = tmp_path / "unnamed-axis.xy"
+    _write_headed_curve(path, "# angle intensity")
+
+    evidence = scan_angle_convention(path)
+
+    assert evidence.convention == "two_theta"
+    assert evidence.declared is False
+    assert evidence.header_line is None
+    assert evidence.warning is not None
+
+
+def test_a_header_naming_both_axes_is_reported_as_ambiguous(tmp_path: Path) -> None:
+    """θ 与 2θ 同时出现时，出示那一行而不是挑一个。
+
+    三列文件（θ、2θ、强度）的头正是这样；此时列映射说的才是读哪一列，而这个扫描
+    答不了。所以 ``declared`` 为假——但 ``header_line`` 仍给出来，用户看得见冲突在
+    哪一行。
+    """
+    path = tmp_path / "both-axes.xy"
+    _write_headed_curve(path, "# Theta 2Theta Intensity")
+
+    evidence = scan_angle_convention(path)
+
+    assert evidence.convention == "two_theta"
+    assert evidence.declared is False
+    assert evidence.header_line == "# Theta 2Theta Intensity"
+    assert evidence.warning is not None
+
+
+def test_the_scan_finds_the_axis_in_any_header_row(tmp_path: Path) -> None:
+    """表头可以有好几行，轴名不一定在第一行。
+
+    仪器导出常先写两三行元数据再写列名。数据区的起点沿用读取器的判据（第一对连续
+    数值行），所以这里认的表头范围与 ``read_xy`` 认的是同一个。
+    """
+    path = tmp_path / "multi-row-header.xy"
+    _write_headed_curve(path, "# Instrument: SmartLab", "# scan: coupled", "# Omega Intensity")
+
+    evidence = scan_angle_convention(path)
+
+    assert evidence.convention == "theta"
+    assert evidence.declared is True
+    assert evidence.header_line == "# Omega Intensity"
+
+
+def test_the_scan_survives_a_file_the_reader_cannot_parse(tmp_path: Path) -> None:
+    """读不出曲线的文件也要给出证据，而不是抛异常。
+
+    这个检测的用处正在导入之前：``read_xy`` 对没有连续数值行的文件是直接抛的，若
+    扫描跟着抛，「先看看这份文件是什么轴」在最需要它的时候用不了。
+    """
+    path = tmp_path / "no-data-rows.xy"
+    path.write_text("# Omega Intensity\nnot a number at all\n", encoding="utf-8")
+
+    evidence = scan_angle_convention(path)
+
+    assert evidence.convention == "theta"
+    assert evidence.declared is True

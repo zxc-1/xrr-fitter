@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from xrr_fitter.model.fitting import FitStageSummary
+
 STAGE_ORDER = ("A", "B", "C", "D", "E")
 
 
@@ -46,6 +48,21 @@ def reserve_child_seeds(
         for stream_id, child in zip(canonical, spawned, strict=True)
     }
     return tuple(ChildSeed(stream_id, by_stream[stream_id]) for stream_id in requested)
+
+
+def committed_parent_summary(
+    summaries: tuple[FitStageSummary, ...],
+    skipped_stages: tuple[str, ...],
+    stage: str,
+) -> FitStageSummary:
+    """Resolve a parent only across explicit skips, never across future stages."""
+    by_stage = {summary.stage: summary for summary in summaries}
+    for parent in reversed(STAGE_ORDER[1 : STAGE_ORDER.index(stage) + 1]):
+        if parent in by_stage:
+            return by_stage[parent]
+        if parent not in skipped_stages:
+            raise ValueError(f"missing committed parent stage: {parent}")
+    raise ValueError(f"stage {stage} has no committed search parent")
 
 
 def remaining_stages(completed_stage: str | None) -> tuple[str, ...]:

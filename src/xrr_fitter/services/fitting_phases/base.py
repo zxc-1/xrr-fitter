@@ -206,7 +206,7 @@ def _search_with_profile_recovery(
         task_runner=task_runner,
     )
     candidate = search.best_candidate
-    if candidate is None:
+    if candidate is None or search.terminated_early:
         return search
     objective = candidate_selection_objective(candidate)
     if progress is not None:
@@ -293,6 +293,8 @@ def fit_prepared_dataset(
             recover_profile_basin=recover_profile_basin,
             continue_profile_basin=continue_profile_basin,
         )
+        if search.terminated_early:
+            return FitResult.from_incomplete_search(search)
         return run_analysis(
             analysis_request(
                 prepared.dataset_id,

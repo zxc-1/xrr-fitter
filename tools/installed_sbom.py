@@ -52,7 +52,7 @@ def _package_component(package: dict, native: dict) -> dict:
         ),
         "components": [_file_component(wheel, file, native["files"]) for file in inventory["files"]],
     }
-    if package["provenance"] != "refnx-source-build":
+    if package["provenance"] not in {"refnx-source-build", "qt-cocoa-source-build"}:
         result["purl"] = f"pkg:pypi/{wheel['name']}@{quote(wheel['version'], safe='')}"
     if "url" in wheel:
         result["externalReferences"] = [{"type": "distribution", "url": wheel["url"]}]
@@ -177,6 +177,7 @@ def report_installation(args) -> dict:
             args.wheel_dir,
             args.pip_wheel,
             refnx_build=args.refnx_build,
+            qt_build=args.qt_build,
             auxiliary_directory=args.auxiliary_dir,
         )
         layout = current_layout(manifest["target"])
@@ -219,6 +220,7 @@ def main(argv=None) -> int:
     for name in ("manifest", "wheel-dir", "pip-wheel", "report-dir"):
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--refnx-build", type=Path)
+    parser.add_argument("--qt-build", type=Path)
     parser.add_argument("--auxiliary-dir", type=Path)
     for name in ("artifact-manifest", "artifact-dir", "executable", "executable-evidence"):
         parser.add_argument(f"--{name}", type=Path)

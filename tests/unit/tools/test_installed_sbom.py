@@ -42,18 +42,21 @@ def test_installed_sbom_binds_actual_files_and_derivations_to_wheel_bytes(tmp_pa
     assert str(tmp_path) not in json.dumps(bom)
 
 
-def test_refnx_observed_wheel_version_is_not_presented_as_a_pypi_release(tmp_path, load_tool_module):
+@pytest.mark.parametrize(
+    "name,provenance", [("refnx", "refnx-source-build"), ("pyside6-essentials", "qt-cocoa-source-build")]
+)
+def test_derived_wheel_version_is_not_presented_as_a_pypi_release(tmp_path, load_tool_module, name, provenance):
     module = load_tool_module("installed_sbom")
     inventory = _inventory(load_tool_module, tmp_path)
     package = inventory["packages"][1]
-    package["wheel"]["name"] = package["inventory"]["name"] = "refnx"
-    package["provenance"] = "refnx-source-build"
+    package["wheel"]["name"] = package["inventory"]["name"] = name
+    package["provenance"] = provenance
     for item in inventory["files"]:
         for claim in item["claims"]:
             if claim["package"] == "sample":
-                claim["package"] = "refnx"
+                claim["package"] = name
     bom = module.assemble_installed_sbom(inventory, {}, {"source_commit": "a" * 40, "source_tree": "b" * 40})
-    component = next(c for c in bom["components"] if c["name"] == "refnx")
+    component = next(c for c in bom["components"] if c["name"] == name)
     assert "purl" not in component
     assert component["version"] == "1.0"
 
@@ -140,3 +143,18 @@ def test_installed_cli_failure_retains_bounded_byte_diagnostics(tmp_path, load_t
     failure = json.loads((tmp_path / "report/failure.json").read_bytes())
     assert failure["verification"] == {"path": "sample/file.py"}
     assert not (tmp_path / "report/summary.json").exists()
+
+
+def test_installed_cli_passes_qt_build_to_input_binding(tmp_path, load_tool_module, monkeypatch):
+    module, argv = _cli_fixture(tmp_path, load_tool_module, monkeypatch)
+    original = module.load_installation_inputs
+    calls = []
+
+    def load(*args, **kwargs):
+        calls.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "load_installation_inputs", load)
+    receipt = tmp_path / "qt-build/build.json"
+    assert module.main([*argv, "--qt-build", str(receipt)]) == 0
+    assert calls[0]["qt_build"] == receipt

@@ -11,10 +11,11 @@ from xrr_fitter.evaluation import (
     EvaluationConstraintError,
     evaluate_model,
 )
-from xrr_fitter.fit.candidates import best_candidate_index
+from xrr_fitter.fit.candidates import CandidateStart, best_candidate_index
 from xrr_fitter.fit.checkpoint import build_checkpoint
+from xrr_fitter.fit.local_search import StageSkipped
 from xrr_fitter.fit.resume import ResumePlan, validate_resume_checkpoint
-from xrr_fitter.fit.stage_schedule import reserve_child_seeds
+from xrr_fitter.fit.stage_schedule import committed_parent_summary, reserve_child_seeds
 from xrr_fitter.fit.stages import (
     StageOutcome,
     compile_coarse_problem,
@@ -55,6 +56,7 @@ class _SearchState:
     base_warnings: tuple[str, ...] = ()
     runtime_warnings: tuple[str, ...] = ()
     summaries: tuple[FitStageSummary, ...] = ()
+    skipped_stages: tuple[str, ...] = ()
 
     def append(self, outcome: StageOutcome) -> _SearchState:
         return _SearchState(
@@ -62,6 +64,14 @@ class _SearchState:
             self.base_warnings,
             self.runtime_warnings + outcome.warnings,
             self.summaries + (outcome.summary,),
+            self.skipped_stages,
+        )
+
+    def skip(self, stage: str) -> _SearchState:
+        return replace(
+            self,
+            runtime_warnings=self.runtime_warnings + (f"Stage {stage} skipped by user.",),
+            skipped_stages=self.skipped_stages + (stage,),
         )
 
 
@@ -111,17 +121,18 @@ def _state_from_resume(plan: ResumePlan, base_warnings: tuple[str, ...]) -> _Sea
         base_warnings,
         plan.runtime_warnings,
         plan.stage_summaries,
+        plan.skipped_stages,
     )
 
 
 def _stage_candidates(state: _SearchState, stage: str) -> tuple[FitCandidate, ...]:
-    summary = next(value for value in reversed(state.summaries) if value.stage == stage)
+    summary = committed_parent_summary(state.summaries, state.skipped_stages, stage)
     by_id = {candidate.candidate_id: candidate for candidate in state.candidates}
     return tuple(by_id[candidate_id] for candidate_id in summary.candidate_ids)
 
 
-def _consumed_seeds(stage: str, seeds: tuple[int, ...]) -> tuple[int, ...]:
-    return seeds if stage == "E" else seeds[:2]
+def _consumed_seeds(stage: str, seeds: tuple[int, ...], skipped_stages: tuple[str, ...]) -> tuple[int, ...]:
+    return seeds if stage == "E" and stage not in skipped_stages else seeds[:2]
 
 
 def _publish_checkpoint(
@@ -138,16 +149,19 @@ def _publish_checkpoint(
             request.problem,
             stage=stage,
             candidates=state.candidates,
-            child_seeds=_consumed_seeds(stage, seeds),
+            child_seeds=_consumed_seeds(stage, seeds, state.skipped_stages),
             runtime_warnings=state.runtime_warnings,
             stage_summaries=state.summaries,
+            skipped_stages=state.skipped_stages,
         )
     )
 
 
 def _result(request: FitSearchRequest, state: _SearchState, seeds: tuple[int, ...]) -> FitSearchResult:
-    eligible = _stage_candidates(state, "E")
-    eligible_ids = tuple(candidate.candidate_id for candidate in eligible)
+    eligible_ids = next(
+        (summary.candidate_ids for summary in reversed(state.summaries) if summary.stage == "E"),
+        None,
+    )
     result = FitSearchResult(
         parameter_definitions=request.problem.parameter_definitions,
         candidates=state.candidates,
@@ -157,8 +171,94 @@ def _result(request: FitSearchRequest, state: _SearchState, seeds: tuple[int, ..
         stage_summaries=state.summaries,
         region_labels=request.problem.region_labels,
         region_weights=request.problem.weights,
+        skipped_stages=state.skipped_stages,
     )
     return _seal_result(request.problem, result)
+
+
+# C 从 B 的候选出发、D 从 C 的，两者挑父代的算法也不同：B→C 要按谱系把扰动配额分下去，
+# C→D 是逐个续。摆成一张表而不是写成两层 ``if``，因为「哪一层的父代是哪一层」是这条流水线
+# 的形状，读者该一眼看到全部两条，而不是从分支里拼出来。
+LOCAL_STAGE_PARENTS = {
+    "C": ("B", stage_b_continuation),
+    "D": ("C", local_stage_continuation),
+}
+
+
+def _advance_stage_a(
+    request: FitSearchRequest,
+    state: _SearchState,
+    coarse_problem: object,
+    *,
+    progress: Callable[[FitProgress], None] | None,
+    cancelled: Callable[[], bool] | None,
+) -> tuple[_SearchState, tuple[CandidateStart, ...]]:
+    """阶段 A 独立于其余四段：它交出的是起点，不是候选，所以不走 ``state.append``。"""
+    starts, summary, warnings = run_stage_a(
+        request.problem,
+        request.dataset_id,
+        coarse_problem=coarse_problem,
+        progress=progress,
+        cancelled=cancelled,
+    )
+    state = _SearchState(
+        state.candidates,
+        state.base_warnings,
+        state.runtime_warnings + warnings,
+        state.summaries + (summary,),
+        state.skipped_stages,
+    )
+    return state, starts
+
+
+def _stage_outcome(
+    request: FitSearchRequest,
+    stage: str,
+    state: _SearchState,
+    *,
+    starts: tuple[CandidateStart, ...] | None,
+    seeds: tuple[int, ...],
+    perturbation_counts: tuple[int, ...],
+    progress: Callable[[FitProgress], None] | None,
+    cancelled: Callable[[], bool] | None,
+    task_runner: TaskRunner | None,
+) -> StageOutcome:
+    """B/C/D/E 各跑一段：都是「挑父代、产一批新候选」，只有父代从哪来不一样。"""
+    if stage == "B":
+        if starts is None:
+            raise RuntimeError("stage B requires committed stage-A starts")
+        return run_stage_b(
+            request.problem,
+            request.dataset_id,
+            starts,
+            seeds[:2],
+            progress=progress,
+            cancelled=cancelled,
+        )
+    if stage in LOCAL_STAGE_PARENTS:
+        parent_stage, continuation = LOCAL_STAGE_PARENTS[stage]
+        parents, counts = continuation(_stage_candidates(state, parent_stage), perturbation_counts)
+        return run_local_stage(
+            request.problem,
+            request.dataset_id,
+            stage,
+            parents,
+            perturbation_counts=counts,
+            progress=progress,
+            cancelled=cancelled,
+            task_runner=task_runner,
+        )
+    # 阶段 E 不带配额：final seeds 是给每个父代各来一遍，没有「这一支分几个」这回事。
+    parents, _counts = local_stage_continuation(_stage_candidates(state, "D"))
+    return run_stage_e(
+        request.problem,
+        request.dataset_id,
+        parents,
+        seeds[2:],
+        progress=progress,
+        cancelled=cancelled,
+        task_runner=task_runner,
+    )
 
 
 def run_fit_search(
@@ -190,69 +290,35 @@ def run_fit_search(
     starts = None
     perturbation_counts: tuple[int, ...] = ()
     for stage in remaining:
-        if stage == "A":
-            starts, summary, warnings = run_stage_a(
-                request.problem,
-                request.dataset_id,
-                coarse_problem=coarse_problem,
-                progress=progress,
-                cancelled=cancelled,
-            )
-            state = _SearchState(
-                state.candidates,
-                state.base_warnings,
-                state.runtime_warnings + warnings,
-                state.summaries + (summary,),
-            )
-            continue
-        if stage == "B":
-            if starts is None:
-                raise RuntimeError("stage B requires committed stage-A starts")
-            outcome = run_stage_b(
-                request.problem,
-                request.dataset_id,
-                starts,
-                seeds[:2],
-                progress=progress,
-                cancelled=cancelled,
-            )
-            perturbation_counts = outcome.perturbation_counts
-        elif stage in {"C", "D"}:
-            parent_stage = "B" if stage == "C" else "C"
-            stage_candidates = _stage_candidates(state, parent_stage)
-            if stage == "C":
-                parents, counts = stage_b_continuation(
-                    stage_candidates,
-                    perturbation_counts,
+        try:
+            if stage == "A":
+                state, starts = _advance_stage_a(
+                    request,
+                    state,
+                    coarse_problem,
+                    progress=progress,
+                    cancelled=cancelled,
                 )
-            else:
-                parents, counts = local_stage_continuation(
-                    stage_candidates,
-                    perturbation_counts,
-                )
-            outcome = run_local_stage(
-                request.problem,
-                request.dataset_id,
+                continue
+            outcome = _stage_outcome(
+                request,
                 stage,
-                parents,
-                perturbation_counts=counts,
+                state,
+                starts=starts,
+                seeds=seeds,
+                perturbation_counts=perturbation_counts,
                 progress=progress,
                 cancelled=cancelled,
                 task_runner=task_runner,
             )
-        else:
-            parents, _counts = local_stage_continuation(_stage_candidates(state, "D"))
-            outcome = run_stage_e(
-                request.problem,
-                request.dataset_id,
-                parents,
-                seeds[2:],
-                progress=progress,
-                cancelled=cancelled,
-                task_runner=task_runner,
-            )
-        state = state.append(outcome)
-        perturbation_counts = outcome.perturbation_counts
+            state = state.append(outcome)
+            perturbation_counts = outcome.perturbation_counts
+        except StageSkipped:
+            state = state.skip(stage)
+            if not state.candidates:
+                break
+            # A skipped transition has no committed continuation allocation.
+            perturbation_counts = ()
         _publish_checkpoint(request, state, stage, seeds, checkpoint)
     return _result(request, state, seeds)
 
@@ -361,6 +427,7 @@ def _replace_profile_stage(
         stage_summaries=summaries,
         region_labels=search_result.region_labels,
         region_weights=search_result.region_weights,
+        skipped_stages=search_result.skipped_stages,
     )
     return _seal_result(problem, result)
 
@@ -385,6 +452,7 @@ def _profile_checkpoint(
         child_seeds=search_result.child_seeds,
         runtime_warnings=_profile_runtime_warnings(problem, search_result),
         stage_summaries=search_result.stage_summaries,
+        skipped_stages=search_result.skipped_stages,
     )
 
 
@@ -428,7 +496,7 @@ def continue_profile_basin(
         parameter_name,
     )
     _raise_if_cancelled(cancelled)
-    if not _validated_profile_center(problem, search_result, center_unit):
+    if search_result.terminated_early or not _validated_profile_center(problem, search_result, center_unit):
         return search_result
     originals = _profile_stage_candidates(search_result)
     final_count = problem.config.final_seed_count
