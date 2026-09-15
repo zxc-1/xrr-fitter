@@ -625,7 +625,7 @@ def _install_fit_menu(window: QWidget, bar: QMenuBar) -> None:
 
 
 def _install_result_actions(window: QWidget, menu: QMenu) -> None:
-    """Give the two result operations the design's inspector drops a menu home.
+    """Give result operations and read-only evidence a menu home.
 
     设计稿帧① 的右栏到候选解为止：清除结果与不确定度分析都不在那一栏里画。撤掉控件不等于
     撤掉命令——这两条做的是「对已经拿到的这份结果」的操作，所以排在开始 / 取消 / 强制停止
@@ -640,6 +640,14 @@ def _install_result_actions(window: QWidget, menu: QMenu) -> None:
     )
     window.chrome_actions["clearResultsAction"] = clear
     menu.addAction(clear)
+    evidence = _action(
+        window,
+        "viewInferenceEvidenceAction",
+        "查看推断证据…",
+        lambda: window.result_panel.open_uncertainty_dialog(sampling=False).show(),
+    )
+    window.chrome_actions["viewInferenceEvidenceAction"] = evidence
+    menu.addAction(evidence)
     uncertainty = _action(
         window,
         "openUncertaintyAction",
@@ -664,6 +672,7 @@ def _sync_result_actions(window: QWidget) -> None:
     actions = window.chrome_actions
     panel = window.result_panel
     actions["clearResultsAction"].setEnabled(panel.clear_button.isEnabled())
+    actions["viewInferenceEvidenceAction"].setEnabled(panel.candidates.result is not None)
     actions["openUncertaintyAction"].setVisible(not panel.uncertainty_button.isHidden())
 
 
@@ -843,9 +852,8 @@ def _fit_quality(window: QWidget) -> tuple[str, str, str]:
 def _fit_metrics_text(window: QWidget) -> str:
     """帧① 底栏中间那一段：``J = 1.83 · χ²ᵥ = 1.14``。
 
-    两个数各自可能报不出来：没有候选解就没有 J，ν ≤ 0 或加权残差全是非有限值就没有
-    χ²ᵥ。报不出来的那半就不写，两个都没有时整段留空由段自己藏起来——这一行是读数，
-    不是占位。
+    J 与噪声模式、残差单位一起读。只有 Gaussian 标准化残差才能解释成 χ²ᵥ；ν ≤ 0 或
+    残差全是非有限值时也不写它。没有候选解时整段留空——这一行是读数，不是占位。
     """
     result = _active_result(window)
     if result is None:
@@ -853,10 +861,11 @@ def _fit_metrics_text(window: QWidget) -> str:
     candidate = _reported_candidate(window, result)
     if candidate is None:
         return ""
-    parts = [f"J = {candidate.objective:g}"]
-    chi = reduced_chi_squared(candidate.weighted_residuals, free_parameter_count(result))
-    if chi is not None:
-        parts.append(f"χ²ᵥ = {chi:.3g}")
+    parts = [f"J = {candidate.objective:g}", f"{candidate.noise_model} [{candidate.residual_unit}]"]
+    if candidate.noise_model == "gaussian":
+        chi = reduced_chi_squared(candidate.weighted_residuals, free_parameter_count(result))
+        if chi is not None:
+            parts.append(f"χ²ᵥ = {chi:.3g}")
     return " · ".join(parts)
 
 

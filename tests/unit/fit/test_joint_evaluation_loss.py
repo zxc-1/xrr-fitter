@@ -26,7 +26,7 @@ def test_joint_loss_handles_extreme_positive_robust_scale_without_underflow() ->
     assert not any(item.category is RuntimeWarning for item in caught)
 
 
-def test_joint_loss_keeps_subnormal_residual_curvature_finite() -> None:
+def test_joint_loss_rejects_unrepresentable_dimensionless_curvature() -> None:
     api = import_module("xrr_fitter.fit.joint_evaluation")
     baseline = _joint()
     joint = replace(
@@ -40,24 +40,9 @@ def test_joint_loss_keeps_subnormal_residual_curvature_finite() -> None:
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        rho = api.joint_least_squares_loss(joint)(squared)
+        with pytest.raises(FloatingPointError, match="robust loss"):
+            api.joint_least_squares_loss(joint)(squared)
 
-    total_data = sum(sizes)
-    expected_blocks = []
-    for size, problem in zip(sizes, joint.problems, strict=True):
-        weights = problem.weights[problem.data.fit_mask]
-        c_decades = problem.config.c_decades
-        radius = np.hypot(c_decades, np.sqrt(np.full(size, 1e-320)))
-        alpha = total_data / (len(sizes) * size)
-        inverse_curvature_scale = ((c_decades / radius) / radius) / radius
-        expected_blocks.append(-alpha * weights**2 * inverse_curvature_scale)
-    np.testing.assert_allclose(
-        rho[2],
-        np.concatenate(expected_blocks),
-        rtol=1e-15,
-        atol=0.0,
-    )
-    assert np.all(np.isfinite(rho))
     assert not any(item.category is RuntimeWarning for item in caught)
 
 

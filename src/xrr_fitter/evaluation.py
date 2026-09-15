@@ -11,6 +11,7 @@ import xrr_fitter.evaluation_priors as _priors_impl
 import xrr_fitter.evaluation_solver as _solver_impl
 from xrr_fitter.evaluation_geometry import _fill_missing_roughness_caps as _fill_missing_roughness_caps
 from xrr_fitter.evaluation_geometry import _gradient_slab_counts as _gradient_slab_counts
+from xrr_fitter.evaluation_inference import statistical_information as statistical_information
 from xrr_fitter.evaluation_instrument_jacobian import (
     _background_jacobian as _background_jacobian,
 )
@@ -131,6 +132,8 @@ from xrr_fitter.evaluation_objective import (
 from xrr_fitter.evaluation_objective import (
     robust_log_cost as robust_log_cost,
 )
+from xrr_fitter.evaluation_objective import robust_loss_rho as robust_loss_rho
+from xrr_fitter.evaluation_objective import robust_score_information as robust_score_information
 from xrr_fitter.evaluation_objective import (
     scale_prior_penalty as scale_prior_penalty,
 )
@@ -262,6 +265,21 @@ from xrr_fitter.evaluation_solver import (
 )
 from xrr_fitter.evaluation_solver import (
     cached_least_squares_callbacks as cached_least_squares_callbacks,
+)
+from xrr_fitter.evaluation_statistics import (
+    StatisticalUnavailableError as StatisticalUnavailableError,
+)
+from xrr_fitter.evaluation_statistics import (
+    data_loss_rho as data_loss_rho,
+)
+from xrr_fitter.evaluation_statistics import (
+    data_score_information as data_score_information,
+)
+from xrr_fitter.evaluation_statistics import (
+    poisson_deviance as poisson_deviance,
+)
+from xrr_fitter.evaluation_statistics import (
+    validate_noise_data as validate_noise_data,
 )
 from xrr_fitter.model.parameters import PhysicalValueError as PhysicalValueError
 from xrr_fitter.model.parameters import physical_to_unit as physical_to_unit
@@ -420,3 +438,8 @@ def problem_log_probability(*args, **kwargs):
 def _parameter_prior_log_density(*args, **kwargs):
     _sync_compatibility_hooks()
     return _priors_impl._parameter_prior_log_density(*args, **kwargs)
+
+
+def problem_objective_total(problem, unit_vector) -> float:
+    """Return the complete-data total Q used by inference and search."""
+    return evaluate_model(problem, unit_vector, fit_only=True).objective * problem.objective_point_count

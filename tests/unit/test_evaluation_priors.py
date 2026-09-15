@@ -3,16 +3,17 @@ from __future__ import annotations
 from tests.unit.evaluation_prior_cases import *
 
 
-def test_problem_log_probability_is_bitwise_unchanged_without_priors() -> None:
+def test_problem_log_probability_is_the_total_objective_without_parameter_priors() -> None:
     problem = _prior_problem()
     unit = np.full(len(problem.variables), 0.45)
     residual = evaluation.least_squares_residual(problem, unit)
     weights = problem.weights[problem.data.fit_mask]
     c = problem.config.c_decades
-    baseline = -float(np.sum(weights**2 * 2.0 * c**2 * (np.sqrt(1.0 + (residual / c) ** 2) - 1.0))) / (2.0 * c**2)
+    baseline = -float(np.sum(weights**2 * (np.sqrt(1.0 + (residual / c) ** 2) - 1.0)))
 
     assert all(definition.prior is None for definition in problem.parameter_definitions)
-    assert evaluation.problem_log_probability(problem, unit) == baseline
+    assert evaluation.problem_log_probability(problem, unit) == pytest.approx(baseline, rel=1e-15)
+    assert evaluation.problem_log_probability(problem, unit) == -0.5 * evaluation.problem_objective_total(problem, unit)
 
 
 def test_physical_uniform_prior_includes_log_parameter_coordinate_jacobian() -> None:

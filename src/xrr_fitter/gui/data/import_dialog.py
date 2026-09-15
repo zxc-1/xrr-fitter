@@ -34,8 +34,8 @@ from PySide6.QtWidgets import (
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.accessibility import localize_standard_buttons
+from xrr_fitter.gui.noise import NOISE_MODE_LABELS, NOISE_MODE_REQUIREMENTS
 from xrr_fitter.gui.sizing import CompactDoubleSpinBox, ContentSizedTable
-from xrr_fitter.io.xy import read_xy
 
 LOG = logging.getLogger(__name__)
 
@@ -280,11 +280,13 @@ class ImportDialog(QDialog):
         paths: tuple[Path, ...] | list[Path],
         *,
         folder_mode: bool = False,
+        noise_model: str = "robust_log",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._paths = tuple(Path(path) for path in paths)
         self._column_mapping: api.DataColumnMapping | None = None
+        self._noise_model = noise_model
         self._failed_count = 0
         self.setObjectName("importDialog")
         self.setWindowTitle("导入 XRR 数据")
@@ -323,6 +325,11 @@ class ImportDialog(QDialog):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for column in range(1, len(PREVIEW_HEADERS)):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        self.noise_label = QLabel(f"噪声模式：{NOISE_MODE_LABELS[self._noise_model]}")
+        self.noise_label.setObjectName("importNoiseModel")
+        self.noise_requirements = QLabel(NOISE_MODE_REQUIREMENTS[self._noise_model])
+        self.noise_requirements.setObjectName("importNoiseRequirements")
+        self.noise_requirements.setWordWrap(True)
         self.recursive_check = QCheckBox("递归导入子目录")
         self.recursive_check.setObjectName("recursiveFolderImportCheck")
         self.recursive_check.setVisible(bool(folder_mode))
@@ -466,11 +473,12 @@ class ImportDialog(QDialog):
         """
         convention = self.angle_convention()
         try:
-            data = read_xy(
+            data = api.import_data(
                 path,
                 beam,
                 column_mapping=self._column_mapping,
                 angle_convention=convention,
+                noise_model=self._noise_model,
             )
         except Exception as exc:
             LOG.debug("preview scan failed for %s: %s", path, exc)
@@ -571,6 +579,8 @@ class ImportDialog(QDialog):
         layout.addWidget(self.heading)
         layout.addWidget(self.preview_help)
         layout.addWidget(self.preview_table)
+        layout.addWidget(self.noise_label)
+        layout.addWidget(self.noise_requirements)
         layout.addWidget(self.recursive_check)
         convention_grid = _wrap2()
         _wrap2_field(convention_grid, 0, ANGLE_CAPTION, self.angle_row)
@@ -617,6 +627,7 @@ class ImportDialog(QDialog):
     def _refresh_validation(self, _button: object, _checked: bool) -> None:
         selected = self.beam_kind() is not None
         self._import_button.setEnabled(selected)
+        self.validation_label.setText("" if selected else VALIDATION_TEXT)
         self.validation_label.setVisible(not selected)
         self._refresh_preview()
 

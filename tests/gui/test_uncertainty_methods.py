@@ -1,11 +1,11 @@
 """左栏「结果」那一步下面展开的不确定度方法子管线。
 
 设计稿帧⑤ 的左栏在数据集列表下面换了一段抬头：不是「分析管线」而是「不确定度方法」，下面
-四行还是同一种 ``.pstep``——相关矩阵、自助抽样、Profile 似然、MCMC 后验，前三行 ✓，第四行
+四行还是同一种 ``.pstep``——相关矩阵、自助抽样、参数剖面、MCMC 后验，前三行 ✓，第四行
 是当前那一步。四种证据各自答的是同一个问题的一面（谁和谁纠缠、边界撞没撞、单参数的谷有多
 宽、后验长什么样），所以它们摆成一列而不是四个并列的按钮：读者要知道自己走到了哪一种。
 
-三态不是另算一遍，而是读报告里那四样在不在：相关矩阵有名字、自助抽样跑过、profiles 非空、
+三态不是另算一遍，而是读报告里那四样在不在：协方差证据可用、自助抽样跑过、profiles 非空、
 ``mcmc`` 不是 ``None``。缺席的第一样是当前那一步，它后面的还没轮到。这样"哪一步没做"这件
 事只有一个出处——报告本身，而不是界面自己记的一份进度。
 
@@ -19,10 +19,12 @@ from __future__ import annotations
 from dataclasses import replace
 
 import numpy as np
+from tests.support.bootstrap_cases import bootstrap_evidence
 
 import xrr_fitter.api as api
+from xrr_fitter.model.inference import CovarianceEvidence
 
-METHOD_NAMES = ["相关矩阵", "自助抽样", "Profile 似然", "MCMC 后验"]
+METHOD_NAMES = ["相关矩阵", "自助抽样", "参数剖面", "MCMC 后验"]
 
 
 def _profile(name: str) -> api.ParameterProfile:
@@ -52,10 +54,12 @@ def _mcmc(walkers: int = 4) -> api.McmcReport:
     )
 
 
-def _report(**changes) -> api.UncertaintyReport:
+def _report(*, attempted_count=400, **changes) -> api.UncertaintyReport:
     values = {
         "correlation_names": ("scale", "thickness"),
         "correlation_matrix": np.eye(2),
+        "covariance_evidence": CovarianceEvidence(("scale", "thickness"), np.eye(2), "gaussian_known_sigma", 2),
+        "parameter_sigma": np.ones(2),
         "profiles": (),
         "bootstrap_intervals": (),
         "bootstrap_failure_rate": 0.0,
@@ -67,6 +71,13 @@ def _report(**changes) -> api.UncertaintyReport:
         "candidate_id": "candidate-a",
     }
     values.update(changes)
+    if values["bootstrap_performed"]:
+        evidence = bootstrap_evidence(
+            values["bootstrap_intervals"],
+            failure_rate=values["bootstrap_failure_rate"],
+            attempted_count=attempted_count,
+        )
+        values.update(bootstrap_evidence=evidence, bootstrap_intervals=evidence.intervals)
     return api.UncertaintyReport(**values)
 
 
@@ -85,7 +96,7 @@ def _captions(report) -> dict[str, str]:
 
 
 def test_the_four_methods_keep_the_order_the_design_walks_them_in() -> None:
-    """相关矩阵 → 自助抽样 → Profile 似然 → MCMC 后验，由便宜到贵。
+    """相关矩阵 → 自助抽样 → 参数剖面 → MCMC 后验，由便宜到贵。
 
     这个顺序不是随手排的：相关矩阵是拟合末尾那个 Hessian 顺带给的，自助抽样要重跑几百次，
     Profile 要逐参数扫，MCMC 要采上万步。读者从上往下走，每往下一步换来的确定性更多、代价
@@ -103,7 +114,7 @@ def test_every_method_that_left_evidence_reads_done() -> None:
     """设计稿帧⑤ 的那一屏：前三样都在，MCMC 正等着——四行里只剩它不是 ✓。"""
     report = _report(
         bootstrap_performed=True,
-        bootstrap_intervals=(("scale", 0.9, 1.1),),
+        bootstrap_intervals=(("scale", 0.9, 1.1), ("thickness", 39.0, 41.0)),
         bootstrap_failure_rate=0.02,
         profiles=(_profile("scale"), _profile("thickness")),
     )
@@ -115,7 +126,7 @@ def test_a_finished_mcmc_leaves_no_step_to_walk() -> None:
     """四样齐了，四行全是 ✓——这一列到底了，没有「当前」那一步。"""
     report = _report(
         bootstrap_performed=True,
-        bootstrap_intervals=(("scale", 0.9, 1.1),),
+        bootstrap_intervals=(("scale", 0.9, 1.1), ("thickness", 39.0, 41.0)),
         profiles=(_profile("scale"),),
         mcmc=_mcmc(),
     )
@@ -156,7 +167,7 @@ def test_each_method_reports_the_number_this_report_actually_carries() -> None:
     )
 
     captions = _captions(report)
-    assert captions["Profile 似然"] == "2 参数"
+    assert captions["参数剖面"] == "2 参数"
     assert captions["MCMC 后验"] == "32 walkers"
     assert "2%" in captions["自助抽样"]
 
@@ -170,30 +181,28 @@ def test_the_bootstrap_line_reads_the_resample_count_the_design_asks_for() -> No
         bootstrap_performed=True,
         bootstrap_intervals=(("scale", 0.9, 1.1), ("thickness", 39.0, 41.0)),
         bootstrap_failure_rate=0.02,
-        bootstrap_sample_count=200,
+        attempted_count=200,
     )
 
     assert _captions(report)["自助抽样"] == "200 次 · 失败 2%"
 
 
-def test_the_bootstrap_line_falls_back_to_the_parameter_count_without_a_recorded_total() -> None:
-    """这个字段之前存下的工程文件不带次数，那时报参数数——总比把「0 次」摆出来像个读数好。"""
+def test_the_bootstrap_line_counts_attempts_when_interval_calibration_is_unavailable() -> None:
+    """成功样本不足时仍有实际次数，不能用区间参数数代替重采样基数。"""
     report = _report(
         bootstrap_performed=True,
         bootstrap_intervals=(("scale", 0.9, 1.1), ("thickness", 39.0, 41.0)),
         bootstrap_failure_rate=0.02,
+        attempted_count=150,
     )
 
-    assert _captions(report)["自助抽样"] == "2 参数 · 失败 2%"
+    assert report.bootstrap_intervals == ()
+    assert _captions(report)["自助抽样"] == "150 次 · 失败 2%"
 
 
 def test_the_correlation_line_says_where_the_matrix_came_from() -> None:
-    """相关矩阵那行报的是出处——它是 Hessian 派生的，不是采样得来的。
-
-    这个区别决定读者该多信它：Hessian 只在最优点附近展开一次，谷子一歪，那几个 ρ 就偏。
-    设计稿在这一行写的正是这句话，而不是矩阵有多大。
-    """
-    assert _captions(_report())["相关矩阵"] == "Hessian 派生"
+    """出处来自本报告的协方差方法，不把 Gaussian、Poisson、sandwich 都叫 Hessian。"""
+    assert _captions(_report())["相关矩阵"] == "gaussian_known_sigma"
 
 
 def test_a_method_that_has_not_run_says_so_rather_than_explaining_itself() -> None:
@@ -201,7 +210,7 @@ def test_a_method_that_has_not_run_says_so_rather_than_explaining_itself() -> No
     captions = _captions(_report())
 
     assert captions["自助抽样"] == "未运行"
-    assert captions["Profile 似然"] == "未运行"
+    assert captions["参数剖面"] == "未运行"
     assert captions["MCMC 后验"] == "未运行"
 
 
@@ -233,6 +242,7 @@ def _project(tmp_path, *, uncertainty=None):
         qz_a_inv=np.linspace(0.015, 0.25, size),
         model_normalized=np.geomspace(0.9, 2e-5, size),
         log_residuals_decades=np.full(size, 0.1),
+        residuals=np.full(size, 0.1),
         weighted_residuals=np.zeros(size),
     )
     result = api.FitResult.from_search(
@@ -280,11 +290,11 @@ def test_the_methods_band_follows_the_report_on_the_project(qtbot, tmp_path) -> 
     """报告里有什么，四行就报什么——界面不自己记一份进度。"""
     report = _report(
         bootstrap_performed=True,
-        bootstrap_intervals=(("scale", 0.9, 1.1),),
+        bootstrap_intervals=(("scale", 0.9, 1.1), ("thickness", 39.0, 41.0)),
         bootstrap_failure_rate=0.02,
-        bootstrap_sample_count=200,
+        attempted_count=200,
         profiles=(_profile("scale"), _profile("thickness")),
     )
     nav = _nav(qtbot, _project(tmp_path, uncertainty=report))
 
-    assert nav.method_captions() == ("Hessian 派生", "200 次 · 失败 2%", "2 参数", "未运行")
+    assert nav.method_captions() == ("gaussian_known_sigma", "200 次 · 失败 2%", "2 参数", "未运行")

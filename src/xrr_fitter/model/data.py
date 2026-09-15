@@ -13,6 +13,33 @@ from typing import Any, Literal, get_args
 
 import numpy as np
 
+NOISE_MODELS = frozenset({"robust_log", "gaussian", "poisson"})
+
+
+def validate_noise_model(value: str) -> None:
+    if value not in NOISE_MODELS:
+        raise ValueError(f"unsupported noise_model: {value}")
+
+
+class ResidualMetadata:
+    """Shared labels derived from an evidence snapshot's declared noise mode."""
+
+    __slots__ = ()
+    noise_model: str
+
+    @property
+    def residual_name(self) -> str:
+        return {
+            "robust_log": "log_reflectivity",
+            "gaussian": "standardized_intensity",
+            "poisson": "signed_poisson_deviance",
+        }[self.noise_model]
+
+    @property
+    def residual_unit(self) -> str:
+        return "decade" if self.noise_model == "robust_log" else "1"
+
+
 # 源文件第一列量的是什么角。模型原生轴是 ``two_theta_deg``，所以 ``"two_theta"``
 # 是「照原样读」，也是唯一向后兼容的默认；``"theta"`` 说的是那一列是入射角，导入时
 # ×2 归一到散射角。这是轴变换而非加性偏移，``import_angle_offset_deg`` 表达不了它。

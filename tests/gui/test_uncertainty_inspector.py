@@ -16,9 +16,11 @@ from operator import itemgetter
 
 import numpy as np
 from PySide6.QtWidgets import QFrame, QLabel, QWidget
+from tests.support.bootstrap_cases import bootstrap_evidence
 from tests.support.model_cases import dataset_project, final_fit_result
 
 import xrr_fitter.api as api
+from xrr_fitter.model.inference import CovarianceEvidence
 
 # 六个自由参数，连它们在图上与卡抬头上的短名。短名的素材是 ``parameter_definitions``——与
 # 相关矩阵的刻度、强相关那一行同一处出处（见 ``tests/gui/test_correlation_labels.py``）。
@@ -104,9 +106,14 @@ def _uncertainty(*, mcmc: api.McmcReport | None = None) -> api.UncertaintyReport
     matrix = np.eye(len(NAMES))
     for row, column, value in (STRONGEST, RUNNER_UP):
         matrix[row, column] = matrix[column, row] = value
+    bootstrap = bootstrap_evidence(
+        tuple((name, 0.9, 1.1) for name in NAMES), failure_rate=BOOTSTRAP_FAILURE_RATE, attempted_count=BOOTSTRAP_COUNT
+    )
     return api.UncertaintyReport(
         correlation_names=NAMES,
         correlation_matrix=matrix,
+        covariance_evidence=CovarianceEvidence(NAMES, matrix, "gaussian_known_sigma", len(NAMES)),
+        parameter_sigma=np.ones(len(NAMES)),
         profiles=(),
         bootstrap_intervals=(),
         bootstrap_failure_rate=BOOTSTRAP_FAILURE_RATE,
@@ -116,7 +123,8 @@ def _uncertainty(*, mcmc: api.McmcReport | None = None) -> api.UncertaintyReport
         diagnostics=(),
         mcmc=_mcmc_report() if mcmc is None else mcmc,
         candidate_id="candidate-0",
-        bootstrap_sample_count=BOOTSTRAP_COUNT,
+        bootstrap_performed=True,
+        bootstrap_evidence=bootstrap,
     )
 
 
@@ -223,7 +231,7 @@ def test_the_uncertainty_view_swaps_the_inspector_to_the_three_sections_frame_fi
     """切到不确定度那一页，右栏换成帧⑤ 画的三段。
 
     帧① 与帧⑤ 在实现里是同一个流程步（都是 ``RESULT_STEP_INDEX``），右栏此前只按步骤索引
-    切段，于是两帧共用一栏。读者在中栏读相关矩阵、Profile 似然、后验直方图，右栏报的却是
+    切段，于是两帧共用一栏。读者在中栏读相关矩阵、参数剖面、后验直方图，右栏报的却是
     「参数 · 结果值」和「候选解」——三段证据里没有一段说得上这条链收敛没收敛。
     """
     window = _uncertainty_window(qtbot)

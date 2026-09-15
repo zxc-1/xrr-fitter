@@ -15,6 +15,7 @@ from xrr_fitter.analysis.binary_coordinates import (
     decode_binary_unit,
     encode_binary_unit,
 )
+from xrr_fitter.analysis.profile_calibration import problem_profile_options
 from xrr_fitter.evaluation import (
     EvaluationConstraintError,
     cached_least_squares_callbacks,
@@ -78,6 +79,7 @@ def build_binary_profile[T](
     profile_builder: Callable[..., T],
     observer: Callable[[float, float, float], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    interval_options: dict[str, object] | None = None,
 ) -> T:
     specifications = {item.name: item for item in binary_derived_profiles(problem)}
     if name not in specifications:
@@ -98,7 +100,7 @@ def build_binary_profile[T](
 
     def objective(transformed: np.ndarray) -> float:
         try:
-            evaluation = evaluate_model(problem, observe(transformed))
+            evaluation = evaluate_model(problem, observe(transformed), fit_only=True)
         except EvaluationConstraintError:
             return np.inf
         return evaluation.objective if evaluation.valid else np.inf
@@ -117,7 +119,9 @@ def build_binary_profile[T](
         problem.config.budget.local_min_nfev,
         problem.config.budget.local_nfev_per_parameter * max(1, len(problem.variables)),
     )
-    steps = 11 if problem.config.budget.bootstrap_samples < 100 else 41
+    steps = problem.config.profile_steps
+    if interval_options is None:
+        interval_options = problem_profile_options(problem, unit_vector)
     return profile_builder(
         objective,
         center,
@@ -130,4 +134,5 @@ def build_binary_profile[T](
         least_squares_max_nfev=maximum,
         steps=steps,
         cancelled=cancelled,
+        **interval_options,
     )

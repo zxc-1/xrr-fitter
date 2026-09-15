@@ -96,6 +96,7 @@ def _fitted_project(
         qz_a_inv=data.qz_a_inv,
         model_normalized=data.intensity_normalized,
         log_residuals_decades=np.zeros(data.qz_a_inv.size),
+        residuals=np.zeros(data.qz_a_inv.size),
         weighted_residuals=np.zeros(data.qz_a_inv.size),
         # A joint projection must claim the mean of the aligned local objectives;
         # every dataset here shares one candidate, so the mean is its own objective.

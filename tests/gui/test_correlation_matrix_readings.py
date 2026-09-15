@@ -19,6 +19,7 @@ import pytest
 from tests.support.model_cases import final_fit_result
 
 import xrr_fitter.api as api
+from xrr_fitter.model.inference import CovarianceEvidence
 
 # 设计稿帧⑤ 画的那 6 个参数，以及矩阵轴上该出现的短名。挑的是一层氧化加一层 aSi 的厚度、
 # 密度、粗糙度，再加仪器标度——也就是「厚度与密度纠缠」这件事看得见的最小规模。
@@ -87,6 +88,8 @@ def _report(names: tuple[str, ...], matrix: np.ndarray) -> api.UncertaintyReport
     return api.UncertaintyReport(
         correlation_names=names,
         correlation_matrix=matrix,
+        covariance_evidence=CovarianceEvidence(names, matrix, "gaussian_known_sigma", len(names)),
+        parameter_sigma=np.ones(len(names)),
         profiles=(),
         bootstrap_intervals=(),
         bootstrap_failure_rate=0.0,
@@ -448,7 +451,7 @@ def test_the_panel_says_what_a_strong_pair_costs_the_reader(qtbot) -> None:
     note = next((line for line in lines if "±1σ" in line), "")
 
     assert "低估" in note, lines
-    assert "Profile 似然" in note, note
+    assert "参数剖面" in note, note
 
 
 def test_the_readings_never_split_a_number_or_a_latin_word_across_lines(qtbot) -> None:
@@ -493,7 +496,7 @@ def test_the_readings_all_fit_the_column_at_the_designed_scale(qtbot) -> None:
     ``_correlation_hint`` 于是多写一句「薄层的电子密度与厚度难以同时唯一确定」，同一段折成七行、
     高 126.9px。四段内容合起来 253.8px，栏高 261.5px——装得下，可实测跨了 286.4px 溢出 25.1px，
     多出来的 32.6px 全是三个段间隙（``SUMMARY_BLOCK_GAP`` 按行高的固定倍数给）。被栏底裁掉的正是
-    「需结合 Profile 似然判读」这半句：读者要带走的下一步动作没了。
+    「需结合 参数剖面判读」这半句：读者要带走的下一步动作没了。
 
     间隙是这里唯一可让的东西——内容不能删（那半句物理解释是这对参数为什么纠缠的原因），字号不能
     再小（9pt 已是全图最小档）。所以判据只说「四段都在栏内」，怎么腾出这 25px 不管。

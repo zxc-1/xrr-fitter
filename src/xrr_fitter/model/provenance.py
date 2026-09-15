@@ -29,7 +29,9 @@ from math import isfinite
 
 import numpy as np
 
-from xrr_fitter.model.fitting import FitEvaluationContext, FitSearchResult
+from xrr_fitter.model.diagnostic_calibration import RESIDUAL_ADVISORY_CODES, DiagnosticCalibration
+from xrr_fitter.model.evaluation import ModelEvaluation
+from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext, FitSearchResult
 
 POST_FREEZE_OMITTED_DEFAULTS: dict[tuple[str, str], object] = {
     ("ParameterDefinition", "constrained"): False,
@@ -183,3 +185,89 @@ def bootstrap_provenance_sha256(
         problem,
         {"candidate": candidate, "bootstrap": payload},
     )
+
+
+def _diagnostic_context_identity(problem: FitEvaluationContext) -> dict[str, object]:
+    """Bind full numerical sampling without changing search/bootstrap identity."""
+    identity = _context_identity(problem)
+    identity.pop("warnings")
+    identity["data"] = _dataclass_payload(problem.data, frozenset({"source_path", "warnings"}))
+    identity["objective_point_count"] = problem.objective_point_count
+    identity["sampling_multipliers"] = problem.sampling_multipliers
+    return identity
+
+
+def _diagnostic_numeric_identity(value: object, names: tuple[str, ...]) -> dict[str, object]:
+    identity = {name: getattr(value, name) for name in names}
+    identity["diagnostics"] = tuple(item for item in value.diagnostics if item.code not in RESIDUAL_ADVISORY_CODES)
+    return identity
+
+
+def residual_owner_sha256(
+    problem: FitEvaluationContext,
+    candidate: FitCandidate,
+    dataset_id: str | None = None,
+) -> str:
+    """Own residual evidence by exact context and numerical winner, not labels."""
+    names = ("candidate_id", "unit_vector", "model_normalized", "residuals", "objective", "noise_model", "valid")
+    return _identity_sha256(
+        {
+            "context": _diagnostic_context_identity(problem),
+            "candidate": _diagnostic_numeric_identity(candidate, names),
+            "dataset_id": dataset_id,
+        }
+    )
+
+
+def _joint_diagnostic_members(
+    problems: tuple[FitEvaluationContext, ...],
+    dataset_ids: tuple[str, ...],
+    evaluations: tuple[ModelEvaluation, ...],
+) -> tuple[dict[str, object], ...]:
+    if not problems or not len(problems) == len(dataset_ids) == len(evaluations):
+        raise ValueError("joint diagnostic context, dataset, and evaluation axes must match")
+    if any(not isinstance(value, str) or not value.strip() for value in dataset_ids):
+        raise ValueError("joint diagnostic dataset_ids must be nonempty strings")
+    if len(set(dataset_ids)) != len(dataset_ids):
+        raise ValueError("joint diagnostic dataset_ids must be unique")
+    names = (
+        "valid",
+        "parameters",
+        "qz_a_inv",
+        "model_normalized",
+        "fit_residuals",
+        "fit_weighted_residuals",
+        "objective",
+        "noise_model",
+    )
+    return tuple(
+        {
+            "dataset_id": dataset_id,
+            "context": _diagnostic_context_identity(problem),
+            "evaluation": _diagnostic_numeric_identity(evaluation, names),
+        }
+        for problem, dataset_id, evaluation in zip(problems, dataset_ids, evaluations, strict=True)
+    )
+
+
+def joint_residual_owner_sha256(
+    problems: tuple[FitEvaluationContext, ...],
+    dataset_ids: tuple[str, ...],
+    unit_vector: np.ndarray,
+    local_evaluations: tuple[ModelEvaluation, ...],
+    layout_fingerprint: str,
+) -> str:
+    """Bind one joint diagnostic family to ordered members and global layout."""
+    members = _joint_diagnostic_members(tuple(problems), tuple(dataset_ids), tuple(local_evaluations))
+    return _identity_sha256(
+        {
+            "members": members,
+            "unit_vector": np.asarray(unit_vector, dtype=float),
+            "layout_fingerprint": layout_fingerprint,
+        }
+    )
+
+
+def diagnostic_calibration_sha256(evidence: DiagnosticCalibration) -> str:
+    """Seal all calibration fields; construction validates syntax, not this seal."""
+    return _identity_sha256(_dataclass_payload(evidence, frozenset({"provenance_sha256"})))

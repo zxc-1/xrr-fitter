@@ -829,18 +829,25 @@ def test_the_verdict_badges_wrap_instead_of_widening_the_column(qtbot) -> None:
 def _wide_uncertainty() -> api.UncertaintyReport:
     """判定徽章文案最长的那一档：命中边界、有强相关、自助跑过但收敛率不满。"""
     import numpy as np
+    from tests.support.bootstrap_cases import bootstrap_evidence
 
+    from xrr_fitter.model.inference import CovarianceEvidence
+
+    evidence = bootstrap_evidence((("thickness", 39.0, 41.0), ("roughness", 2.0, 3.0)), failure_rate=0.12)
     return api.UncertaintyReport(
         correlation_names=("thickness", "roughness"),
         correlation_matrix=np.eye(2),
+        covariance_evidence=CovarianceEvidence(("thickness", "roughness"), np.eye(2), "gaussian_known_sigma", 2),
+        parameter_sigma=np.ones(2),
         profiles=(),
-        bootstrap_intervals=(),
+        bootstrap_intervals=evidence.intervals,
         bootstrap_failure_rate=0.12,
         boundary_hits=("thickness", "density", "roughness", "scale"),
         strong_correlations=(("thickness", "roughness", -0.93), ("density", "scale", 0.71)),
         systematic_residual=False,
         diagnostics=(),
         bootstrap_performed=True,
+        bootstrap_evidence=evidence,
     )
 
 

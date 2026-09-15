@@ -18,6 +18,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QLabel, QVBoxLayout, QWidget
 
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.results.inference_text import correlation_unavailable_reason
 from xrr_fitter.gui.wrapping import wrapping_row
 
 OBJECTIVE_LABEL = "目标值 J"
@@ -93,6 +94,8 @@ def _correlation(report: object) -> tuple[str, str]:
     按绝对值取最强：负相关一样是纠缠，按带符号取最大会把 -0.93 让给 0.71，报出
     一个偏乐观的数。
     """
+    if correlation_unavailable_reason(report) is not None:
+        return "— 相关不可用", ""
     pairs = tuple(report.strong_correlations)
     if not pairs:
         return "✓ 无强相关", "ok"
@@ -192,18 +195,26 @@ class VerdictEvidence(QWidget):
             badge.setText(text)
             theme.set_status_kind(badge, kind)
             badge.setVisible(True)
+        correlation_reason = correlation_unavailable_reason(report) or ""
+        self._badges[2].setToolTip(correlation_reason)
+        self._badges[2].setAccessibleDescription(correlation_reason)
         objective = self._objective
         self._metric_rows[0][1].setText(UNAVAILABLE_TEXT if objective is None else f"{objective:.6g}")
         chi_squared = self._reduced_chi_squared
         # χ²ᵥ 的判读区间在 1 附近，三位有效数字就够；再多几位是把数值噪声当成信息。
         self._metric_rows[1][1].setText(UNAVAILABLE_TEXT if chi_squared is None else f"{chi_squared:.3g}")
-        self._metric_rows[2][1].setText(_percent(float(report.bootstrap_failure_rate)))
+        bootstrap = report.bootstrap_evidence
+        self._metric_rows[2][1].setText(
+            UNAVAILABLE_TEXT if bootstrap is None else _percent(float(bootstrap.failure_rate))
+        )
         self._set_metrics_visible(True)
         self.setVisible(True)
 
     def _hide_all(self) -> None:
         for badge in self._badges:
             badge.setText("")
+            badge.setToolTip("")
+            badge.setAccessibleDescription("")
             badge.setVisible(False)
         self._set_metrics_visible(False)
         self.setVisible(False)

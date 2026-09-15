@@ -234,13 +234,14 @@ def residuals_png(context: DatasetExportData) -> bytes:
     value = _context(context)
     selected = value.selected
     figure = Figure(figsize=(6.4, 4.0), layout="constrained")
-    log_axis, weighted_axis = figure.subplots(2, 1, squeeze=False).ravel()
+    residual_axis, weighted_axis = figure.subplots(2, 1, squeeze=False).ravel()
     intervals = _excluded_intervals(selected.qz_a_inv, value.dataset.fit_mask)
-    log_axis.plot(selected.qz_a_inv, selected.log_residuals_decades)
+    residual_axis.plot(selected.qz_a_inv, selected.residuals)
     weighted_axis.plot(selected.qz_a_inv, selected.weighted_residuals)
-    log_axis.set_ylabel("Log residual (decades)")
-    weighted_axis.set_ylabel("Weighted residual")
-    for axis in (log_axis, weighted_axis):
+    residual_label = f"{selected.residual_name} ({selected.residual_unit})"
+    residual_axis.set_ylabel(residual_label.replace("_", "_\n", 1))
+    weighted_axis.set_ylabel(f"Weighted residual ({selected.residual_unit})")
+    for axis in (residual_axis, weighted_axis):
         axis.set_xlabel("qz (1/Angstrom)")
         for lower, upper in intervals:
             axis.axvspan(lower, upper, alpha=0.08)

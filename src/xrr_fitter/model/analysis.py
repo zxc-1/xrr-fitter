@@ -51,20 +51,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 from enum import StrEnum
+from itertools import chain
 from math import isfinite
 
 import numpy as np
 
+from xrr_fitter.model.bootstrap import MIN_BOOTSTRAP_SUCCESS as MIN_BOOTSTRAP_SUCCESS
+from xrr_fitter.model.bootstrap import BootstrapResult as BootstrapResult
 from xrr_fitter.model.fitting import (
     FitCandidate,
     FitSearchResult,
     FitStageSummary,
     PhysicsDiagnostic,
 )
+from xrr_fitter.model.inference import CovarianceEvidence as CovarianceEvidence
+from xrr_fitter.model.inference import ResidualEvidence as ResidualEvidence
+from xrr_fitter.model.joint_bootstrap_provenance import validate_joint_bootstrap_report
 from xrr_fitter.model.mcmc_samples import McmcReport as McmcReport
 from xrr_fitter.model.mcmc_sampling import EnsembleSamples as EnsembleSamples
 from xrr_fitter.model.mcmc_sampling import McmcConfig as McmcConfig
-from xrr_fitter.model.parameters import ParameterDefinition
+from xrr_fitter.model.parameters import ParameterDefinition, ParameterReference
+from xrr_fitter.model.profile import ParameterProfile as ParameterProfile
 
 # Re-exported so analysis values keep one import entry point; the band lives in
 # its own module only to keep both files inside the maintainability gate.
@@ -95,95 +102,9 @@ def _positive_values(values: object, field: str) -> tuple[float, ...]:
     return result
 
 
-def _bootstrap_names(values: object) -> tuple[str, ...]:
-    names = tuple(values)
-    if any(not isinstance(value, str) or not value.strip() for value in names):
-        raise ValueError("bootstrap parameter names must contain nonempty strings")
-    if len(names) != len(set(names)):
-        raise ValueError("bootstrap parameter names must be unique")
-    return names
-
-
-def _bootstrap_intervals(
-    names: tuple[str, ...],
-    values: object,
-) -> tuple[tuple[str, float, float], ...]:
-    """Normalize optional bounds without erasing a gated empty result."""
-    intervals = tuple(values)
-    if not intervals:
-        return ()
-    valid_rows = all(isinstance(value, (tuple, list)) and len(value) == 3 for value in intervals)
-    if not valid_rows:
-        raise ValueError("bootstrap intervals must contain name, lower, and upper")
-    interval_names = tuple(value[0] for value in intervals)
-    if interval_names != names:
-        raise ValueError("bootstrap interval names must match parameter names in order")
-    bounds = _bootstrap_interval_bounds(intervals)
-    return tuple((name, lower, upper) for name, (lower, upper) in zip(interval_names, bounds, strict=True))
-
-
-def _bootstrap_interval_bounds(
-    intervals: tuple[object, ...],
-) -> tuple[tuple[float, float], ...]:
-    try:
-        bounds = tuple((float(value[1]), float(value[2])) for value in intervals)
-    except (TypeError, ValueError, OverflowError) as error:
-        raise ValueError("bootstrap interval bounds must be finite numbers") from error
-    invalid = any(not isfinite(lower) or not isfinite(upper) or lower > upper for lower, upper in bounds)
-    if invalid:
-        raise ValueError("bootstrap interval bounds must be finite and ordered")
-    return bounds
-
-
-def _bootstrap_samples(names: tuple[str, ...], values: object) -> np.ndarray:
-    samples = _readonly(values, float, "bootstrap samples", 2)
-    if samples.shape[1] != len(names):
-        raise ValueError("bootstrap samples do not match parameter names")
-    if np.any(~np.isfinite(samples)):
-        raise ValueError("bootstrap samples must be finite")
-    return samples
-
-
-def _validate_bootstrap_failure_rate(value: float) -> None:
-    if not isfinite(value) or not 0.0 <= value <= 1.0:
-        raise ValueError("failure_rate must be in [0, 1]")
-
-
-def _validate_bootstrap_owner(
-    candidate_id: str | None,
-    provenance_sha256: str | None,
-) -> None:
-    """Require a complete candidate/provenance pair when ownership is sealed."""
-    if (candidate_id is None) != (provenance_sha256 is None):
-        raise ValueError("bootstrap candidate_id and provenance_sha256 must be paired")
-    if candidate_id is None:
-        return
-    if not isinstance(candidate_id, str) or not candidate_id.strip():
-        raise ValueError("bootstrap candidate_id must be nonempty or None")
-    if not isinstance(provenance_sha256, str):
-        raise ValueError("bootstrap provenance_sha256 must be a lowercase SHA-256")
-    valid = len(provenance_sha256) == 64 and all(value in "0123456789abcdef" for value in provenance_sha256)
-    if not valid:
-        raise ValueError("bootstrap provenance_sha256 must be a lowercase SHA-256")
-
-
 def _validate_optional_sld_bands(value: SldUncertaintyBands | None) -> None:
     if value is not None and not isinstance(value, SldUncertaintyBands):
         raise TypeError("sld_bands must be a SldUncertaintyBands")
-
-
-def _validate_bootstrap_sample_count(value: object, performed: bool) -> None:
-    """请求的重采样次数：非负整数，且没跑过时只能是 0。
-
-    最后那一条是防两个字段互相打脸：``bootstrap_performed=False`` 说的是「这一步没走」，
-    此时还报出个次数，界面读哪一个都会错。
-    """
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError("bootstrap_sample_count must be int")
-    if value < 0:
-        raise ValueError("bootstrap_sample_count must be nonnegative")
-    if not performed and value:
-        raise ValueError("bootstrap_sample_count must be 0 when no bootstrap ran")
 
 
 class ConfidenceClass(StrEnum):
@@ -233,67 +154,6 @@ class ProfileBasinDecision:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class ParameterProfile:
-    """Profile coordinates, objective evidence, and closure flags.
-
-    ``objective_threshold`` is the objective the scan compared against when it set
-    the two closure flags.  Publishing the flags without the number leaves a reader
-    with a curve and two booleans and no way to see where the crossing was, so the
-    threshold travels with the curve; it is ``None`` for a profile recorded before
-    the scan reported it.
-    """
-
-    name: str
-    values: np.ndarray
-    objectives: np.ndarray
-    lower_closed: bool
-    upper_closed: bool
-    objective_threshold: float | None = None
-
-    def __post_init__(self) -> None:
-        if not self.name.strip():
-            raise ValueError("profile name must not be empty")
-        values = _readonly(self.values, float, "profile values", 1)
-        objectives = _readonly(self.objectives, float, "profile objectives", 1)
-        if values.shape != objectives.shape:
-            raise ValueError("profile values and objectives must have the same shape")
-        if values.size == 0 or np.any(~np.isfinite(values)):
-            raise ValueError("profile arrays contain invalid values")
-        if self.objective_threshold is not None and not isfinite(self.objective_threshold):
-            raise ValueError("profile objective threshold must be finite")
-        object.__setattr__(self, "values", values)
-        object.__setattr__(self, "objectives", objectives)
-
-    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
-        return type(self), _pickle_values(self)
-
-
-@dataclass(frozen=True, slots=True)
-class BootstrapResult:
-    """Successful physical bootstrap samples and interval summary."""
-
-    parameter_names: tuple[str, ...]
-    samples: np.ndarray
-    intervals: tuple[tuple[str, float, float], ...]
-    failure_rate: float
-    candidate_id: str | None = None
-    provenance_sha256: str | None = None
-
-    def __post_init__(self) -> None:
-        names = _bootstrap_names(self.parameter_names)
-        samples = _bootstrap_samples(names, self.samples)
-        _validate_bootstrap_failure_rate(self.failure_rate)
-        intervals = _bootstrap_intervals(names, self.intervals)
-        _validate_bootstrap_owner(self.candidate_id, self.provenance_sha256)
-        object.__setattr__(self, "parameter_names", names)
-        object.__setattr__(self, "samples", samples)
-        object.__setattr__(self, "intervals", intervals)
-
-    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
-        return type(self), _pickle_values(self)
-
-
 def _parameter_sigma(
     value: np.ndarray | None,
     dimension: int,
@@ -308,6 +168,22 @@ def _parameter_sigma(
     return sigma
 
 
+def _parameter_members(value: object, dimension: int) -> tuple[tuple[ParameterReference, ...], ...] | None:
+    if value is None:
+        return None
+    members = tuple(tuple(group) for group in value)
+    if len(members) != dimension:
+        raise ValueError("parameter_members must match the correlation axis")
+    if any(not group for group in members):
+        raise ValueError("parameter_members groups must not be empty")
+    references = tuple(chain.from_iterable(members))
+    if any(not isinstance(reference, ParameterReference) for reference in references):
+        raise TypeError("parameter_members must contain ParameterReference values")
+    if len(set(references)) != len(references):
+        raise ValueError("parameter_members references must be globally unique")
+    return members
+
+
 @dataclass(frozen=True, slots=True)
 class UncertaintyReport:
     """Combined covariance, profile, bootstrap, residual, and MCMC evidence."""
@@ -319,19 +195,22 @@ class UncertaintyReport:
     bootstrap_failure_rate: float
     boundary_hits: tuple[str, ...]
     strong_correlations: tuple[tuple[str, str, float], ...]
-    systematic_residual: bool
+    systematic_residual: bool | None
     diagnostics: tuple[PhysicsDiagnostic, ...]
-    residual_autocorrelation: bool = False
+    residual_autocorrelation: bool | None = None
     mcmc: McmcReport | None = None
     candidate_id: str | None = None
-    bootstrap_performed: bool = True
+    bootstrap_performed: bool = False
     sld_bands: SldUncertaintyBands | None = None
     prior_conflicts: tuple[str, ...] = ()
-    # Optional calibration metadata is validated without changing legacy reports.
     parameter_sigma: np.ndarray | None = None
-    # 请求的重采样次数——失败率的基数。缺了它「丢了 2%」读不出量级；0 读作「未记录」，
-    # 这个字段加进来之前存下的工程文件就是这样。
-    bootstrap_sample_count: int = 0
+    covariance_evidence: CovarianceEvidence | None = None
+    member_residuals: tuple[ResidualEvidence, ...] = ()
+    search_parameter_spread: np.ndarray | None = None
+    bootstrap_evidence: BootstrapResult | None = None
+    # None is a local-name axis; joint publication binds every ordered global
+    # axis to the exact dataset/parameter references used by the compiled fit.
+    parameter_members: tuple[tuple[ParameterReference, ...], ...] | None = None
 
     def __post_init__(self) -> None:
         names = tuple(self.correlation_names)
@@ -353,32 +232,89 @@ class UncertaintyReport:
             raise ValueError("candidate_id must be a nonempty string or None")
         if not isinstance(self.bootstrap_performed, bool):
             raise TypeError("bootstrap_performed must be bool")
-        _validate_bootstrap_sample_count(self.bootstrap_sample_count, self.bootstrap_performed)
         _validate_optional_sld_bands(self.sld_bands)
         object.__setattr__(self, "diagnostics", diagnostics)
         object.__setattr__(self, "prior_conflicts", tuple(self.prior_conflicts))
         sigma = _parameter_sigma(self.parameter_sigma, len(names))
         if sigma is not None:
             object.__setattr__(self, "parameter_sigma", sigma)
+        object.__setattr__(self, "parameter_members", _parameter_members(self.parameter_members, len(names)))
+        self._validate_inference(names)
+        self._validate_bootstrap_summary()
+        self._validate_owned_bootstrap()
+
+    def _validate_bootstrap_summary(self) -> None:
+        evidence = self.bootstrap_evidence
+        if evidence is None:
+            if self.bootstrap_performed or self.bootstrap_intervals:
+                raise ValueError("performed bootstrap requires sampling evidence")
+            return
+        if not isinstance(evidence, BootstrapResult) or evidence.parameter_names != self.correlation_names:
+            raise ValueError("bootstrap evidence must match the report parameter axis")
+        if (
+            not self.bootstrap_performed
+            or self.bootstrap_intervals != evidence.intervals
+            or self.bootstrap_failure_rate != evidence.failure_rate
+        ):
+            raise ValueError("bootstrap summary must agree with sampling evidence")
+
+    @property
+    def bootstrap_sample_count(self) -> int:
+        """The actual attempted refits, including failures, from the sampling record."""
+        return 0 if self.bootstrap_evidence is None else self.bootstrap_evidence.attempted_count
+
+    def _validate_owned_bootstrap(self) -> None:
+        evidence = self.bootstrap_evidence
+        if evidence is not None and (self.parameter_members is not None or evidence.joint_owner_sha256 is not None):
+            validate_joint_bootstrap_report(self)
+
+    def _validate_inference(self, names: tuple[str, ...]) -> None:
+        evidence = self.covariance_evidence
+        if evidence is not None:
+            if not isinstance(evidence, CovarianceEvidence) or evidence.names != names:
+                raise ValueError("covariance evidence names must match correlation names")
+            if evidence.matrix is None and self.parameter_sigma is not None:
+                raise ValueError("unavailable covariance cannot publish parameter sigma")
+            if evidence.matrix is not None:
+                self._validate_covariance_summary(evidence.matrix)
+        residuals = tuple(self.member_residuals)
+        if any(not isinstance(value, ResidualEvidence) for value in residuals):
+            raise TypeError("member_residuals must contain ResidualEvidence values")
+        object.__setattr__(self, "member_residuals", residuals)
+        self._validate_residual_summary(residuals)
+        spread = _parameter_sigma(self.search_parameter_spread, len(names))
+        object.__setattr__(self, "search_parameter_spread", spread)
+
+    def _validate_covariance_summary(self, covariance: np.ndarray) -> None:
+        sigma = self.parameter_sigma
+        expected = np.sqrt(np.diag(covariance))
+        if sigma is None or not np.allclose(sigma, expected, rtol=1e-10, atol=0.0):
+            raise ValueError("parameter sigma must agree with covariance evidence")
+        correlation = covariance / sigma[:, None] / sigma[None, :]
+        if not np.allclose(self.correlation_matrix, correlation, rtol=1e-10, atol=1e-14):
+            raise ValueError("correlation matrix must agree with covariance evidence")
+
+    def _validate_residual_summary(self, residuals: tuple[ResidualEvidence, ...]) -> None:
+        for summary, field in (
+            (self.systematic_residual, "systematic"),
+            (self.residual_autocorrelation, "autocorrelation"),
+        ):
+            if summary is not None and not isinstance(summary, bool):
+                raise TypeError("residual summary must be boolean or unknown")
+            if not residuals:
+                continue
+            values = tuple(getattr(item, field) for item in residuals)
+            expected = True if True in values else (False if all(value is False for value in values) else None)
+            if summary is not expected:
+                raise ValueError("residual summary must agree with member evidence")
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)
 
     @property
     def covariance(self) -> np.ndarray | None:
-        """协方差 ``sigma ⊗ correlation``（只读），缺逐参数 sigma 时为 ``None``。
-
-        公式与 ``analysis.derivatives.covariance_from_correlation`` 逐字一致，放在
-        model 层是因为架构门禁禁止 ``services.exports`` 依赖 ``analysis`` 或 numpy；
-        ``io.orso`` 由此拿到矩阵而无需服务层做数组运算。``parameter_sigma`` 与
-        ``correlation_matrix`` 已在 ``__post_init__`` 校验为只读、且维度对齐。
-        """
-        if self.parameter_sigma is None:
-            return None
-        sigma = self.parameter_sigma
-        covariance = sigma[:, None] * self.correlation_matrix * sigma[None, :]
-        covariance.setflags(write=False)
-        return covariance
+        """Return only the matrix with an explicit statistical provenance."""
+        return None if self.covariance_evidence is None else self.covariance_evidence.matrix
 
 
 def _validate_incomplete_result(search: FitSearchResult, confidence: ConfidenceClass, uncertainty: object) -> None:

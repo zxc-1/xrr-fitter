@@ -180,6 +180,7 @@ def test_shared_problem_log_probability_uses_the_soft_l1_data_likelihood() -> No
     residual = evaluation.least_squares_residual(problem, unit)
     weights = problem.weights[problem.data.fit_mask]
     c = problem.config.c_decades
-    expected = -float(np.sum(weights**2 * 2.0 * c**2 * (np.sqrt(1.0 + (residual / c) ** 2) - 1.0))) / (2.0 * c**2)
+    expected = -float(np.sum(weights**2 * (np.sqrt(1.0 + (residual / c) ** 2) - 1.0)))
 
-    assert evaluation.problem_log_probability(problem, unit) == expected
+    assert evaluation.problem_log_probability(problem, unit) == pytest.approx(expected, rel=1e-15)
+    assert evaluation.problem_log_probability(problem, unit) == -0.5 * evaluation.problem_objective_total(problem, unit)

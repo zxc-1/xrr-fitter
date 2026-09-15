@@ -48,7 +48,7 @@ def test_reliable_plateau_adds_the_versioned_scale_prior() -> None:
 
     result = evaluate_vector(problem, encode_physical_vector(problem, physical))
     data_cost = robust_log_cost(
-        result.fit_log_residuals_decades,
+        result.fit_residuals,
         problem.weights[problem.data.fit_mask],
         problem.config.c_decades,
     )
@@ -80,7 +80,7 @@ def test_expert_scale_prior_off_switch_preserves_data_and_reason() -> None:
 
     result = evaluate_vector(problem, encode_physical_vector(problem, physical))
     data_cost = robust_log_cost(
-        result.fit_log_residuals_decades,
+        result.fit_residuals,
         problem.weights[problem.data.fit_mask],
         problem.config.c_decades,
     )

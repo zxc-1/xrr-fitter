@@ -20,6 +20,7 @@ parameter uncertainty.
   side by side.
 - Global screening followed by local least-squares refinement with checkpointed,
   resumable fits.
+- Explicit robust-log, known-sigma Gaussian, and raw-count Poisson objectives.
 - Uncertainty analysis: bootstrap resampling, MCMC sampling, and parameter
   correlation diagnostics.
 - Joint fitting across multiple datasets with shared parameters.
@@ -99,6 +100,40 @@ mode**, then enable **Expert mode** to use manual independent/joint fitting,
 profile diagnostics, MCMC, and explicit result export; automatic fitting itself
 does not export files.
 
+### Fitting algorithm V2
+
+Projects use algorithm `xrr-fit-v2`, objective version `2`, and project schema
+`3`. Older algorithm, project, and checkpoint versions are rejected rather
+than silently migrated. This is an algorithm change, not a release or tag.
+
+Choose the noise model in the fitting panel, through `api.set_fit_config`, or
+explicitly on the CLI:
+
+```bash
+python -m xrr_fitter.cli.main fit project.xrrproj.json --noise-model gaussian --output fitted.xrrproj.json
+```
+
+- `robust_log` (default): exploratory robust log loss; intensity plus the
+  stabilizing floor must be positive. Zero intensity can be valid.
+- `gaussian`: every fitted row needs a known, finite, positive intensity
+  standard deviation in the same units as the observation. Finite negative
+  observations are allowed.
+- `poisson`: unmerged, nonnegative integer **raw counts**, including zeros;
+  normalized intensities, count rates, and background-subtracted values are
+  not interchangeable with counts.
+
+Omitting `--noise-model` keeps the project's saved mode. Changing the mode
+invalidates old results and checkpoints without re-enabling excluded rows.
+CLI mode requirements are written to stderr, leaving JSON progress on stdout.
+
+Reports distinguish statistical covariance from search-start spread and retain
+unavailable reasons. Robust loss-support profiles and fast exploratory
+bootstrap samples are not labelled as 95% confidence intervals. Formal
+percentile bootstrap intervals require at least 200 successful samples;
+Gaussian/Poisson likelihood-ratio profiles additionally require the recorded
+regularity conditions. Exported CSV, workbooks, JSON, and ORSO use the saved
+evidence and residual units rather than recomputing uncertainty.
+
 ## Public API
 
 `xrr_fitter.api` is the only supported Python API. Everything else under
@@ -125,6 +160,7 @@ conventions.
 - `docs/user-guide.md` — end-user workflows
 - `docs/algorithm.md` — fitting algorithm and physics
 - `docs/architecture/r23-clean-break.md` — architecture and dependency graph
+- `docs/acceptance/fitting-algorithm-v2.md` — V2 validation evidence and limits
 
 ## License
 

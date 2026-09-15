@@ -1,18 +1,8 @@
-"""新增可选字段过 codec 的三条规矩：默认不落键、非默认往返、老文件缺键落回默认。
+"""Current import declarations, parameter freedom and explicit profile metadata.
 
-R22/R23 往两处加了字段——数据集与 preset 的 ``angle_convention``，以及 profile 曲线的
-``objective_threshold``；参数 setting 的 ``freedom`` 是第三处，它还多一条：旧文件里同一件事
-存的是 ``locked: bool``，所以那个键得继续读得进来。几处的规矩是同一条，所以摆在一个文件里：
-
-1. **默认值不写出来。** 老项目文件重存一遍必须逐位相同，凭空多一个 ``"angle_convention":
-   "two_theta"`` 就不是了；导出的逐位不变是这套 codec 对得住 provenance 的根据。
-2. **非默认值必须活过一次往返。** ``"theta"`` 说的是源文件那一列是入射角，重读时不照原样
-   解释一次，角度就掉回一半——而这个错不会报，只会让层厚整体差一倍。
-3. **缺键的老文件照旧能开。** 字段是后加的，此前存下的文件里没有这个键；解码得落回默认，
-   而不是拿字段集校验把文件判成坏的。
-
-这三条一起才管得住一个可选字段：只守往返，默认值会被写进文件；只守不落键，非默认值可能
-根本没存；只守这两条，老文件会打不开。
+Acquisition fields retain their established optional encoding. V2 profile
+evidence instead requires every inference field, including an explicit null
+when the actual closure threshold is unavailable; no older evidence is inferred.
 """
 
 from __future__ import annotations
@@ -126,34 +116,42 @@ def test_profile_roundtrips_the_interval_closure_threshold() -> None:
     assert _restored_profile(project_to_dict(tuned)).objective_threshold == 0.225
 
 
-def test_profile_without_a_closure_threshold_omits_the_key() -> None:
-    """扫描没报阈值时那个键不写出来——写一个 ``null`` 进去，老文件重存就不再逐位相同。"""
+def test_profile_without_a_closure_threshold_encodes_explicit_v2_metadata() -> None:
+    """Unavailable thresholds are explicit rather than inferred from older shapes."""
     results = import_module("xrr_fitter.io.codec_results")
     profile = _project_with_profile(None).datasets[0].last_valid_result.uncertainty.profiles[0]
 
     payload = results._profile_to_dict(profile)
 
     assert profile.objective_threshold is None
+    assert payload["objective_threshold"] is None
     assert set(payload) == {
         "name",
         "values",
         "objectives",
         "lower_closed",
         "upper_closed",
+        "interval_kind",
+        "confidence_level",
+        "method",
+        "unavailable_reason",
+        "delta_total",
+        "objective_point_count",
+        "objective_threshold",
     }
 
 
-def test_old_profile_without_the_threshold_key_still_decodes() -> None:
-    """字段是后加的：此前存下的 profile 没有这个键，解码得落回 ``None`` 而不是判文件坏。"""
+def test_profile_without_the_threshold_key_is_incomplete_v2_evidence() -> None:
+    """Current evidence must declare whether its closure threshold is available."""
     payload = project_to_dict(_project_with_profile(0.225))
     for dataset in payload["datasets"]:
         result = dataset["last_valid_result"]
         if result is not None and result["uncertainty"] is not None:
             for profile in result["uncertainty"]["profiles"]:
-                # 造的这份里键确实在，拿掉它才是「老文件」——原本就没有的话这一步会空转。
                 assert profile.pop("objective_threshold") == 0.225
 
-    assert _restored_profile(payload).objective_threshold is None
+    with pytest.raises(ProjectSchemaError, match="objective_threshold"):
+        _restored_profile(payload)
 
 
 def _project_with_setting(freedom: ParameterFreedom):
@@ -167,14 +165,14 @@ def _restored_setting(payload: dict[str, object]) -> ParameterSetting:
 
 
 def test_codec_omits_the_free_freedom_and_round_trips_the_other_two() -> None:
-    """``FREE`` 不落键，另外两档必须往返。
-
-    第三态是往 v2 里加的：默认那一档写进文件的话，既有项目重存一遍就不再逐位相同；而
-    ``fixed``/``range_only`` 掉了键会静默读成「自由」——拟合器于是去推一个读者钉死了的量，
-    或者把「优先待在这段区间内」整条丢掉，两种都不报错。
-    """
-    default_document = project_to_dict(_project_with_setting(ParameterFreedom.FREE))
+    """FREE 的规范编码省略默认键，FIXED / RANGE_ONLY 必须保留声明并完整往返。"""
+    free = _project_with_setting(ParameterFreedom.FREE)
+    default_document = project_to_dict(free)
     assert "freedom" not in default_document["datasets"][0]["parameter_settings"][0]
+    assert project_from_bytes(project_to_bytes(free)) == free
+
+    default_document["datasets"][0]["parameter_settings"][0]["freedom"] = "free"
+    assert _restored_setting(default_document).freedom is ParameterFreedom.FREE
 
     for freedom in (ParameterFreedom.FIXED, ParameterFreedom.RANGE_ONLY):
         pinned = _project_with_setting(freedom)
@@ -186,37 +184,39 @@ def test_codec_omits_the_free_freedom_and_round_trips_the_other_two() -> None:
         assert restored == pinned
 
 
-def test_old_setting_written_with_locked_decodes_into_the_matching_gear() -> None:
-    """旧文件里第三态还不存在，自由度是一个 ``locked: bool``——两个值都得落到对应那一档。
-
-    这个键在 v2 里原本是必填的，现在的写出路径不再产生它；把它读成「未知字段」会让此前
-    存下的每一份工程都打不开。
-    """
+@pytest.mark.parametrize("locked", [False, True])
+def test_setting_rejects_locked_in_current_schema(locked: bool) -> None:
     payload = project_to_dict(_project_with_setting(ParameterFreedom.FREE))
     stored = payload["datasets"][0]["parameter_settings"][0]
     assert "freedom" not in stored
-
-    stored["locked"] = True
-    assert _restored_setting(payload).freedom is ParameterFreedom.FIXED
-
-    stored["locked"] = False
     assert _restored_setting(payload).freedom is ParameterFreedom.FREE
 
-    stored.pop("locked")
-    assert _restored_setting(payload).freedom is ParameterFreedom.FREE
+    stored["locked"] = locked
+
+    with pytest.raises(ProjectSchemaError, match=r"extra=\['locked'\]"):
+        project_from_dict(payload)
 
 
-def test_a_setting_carrying_both_keys_is_refused_rather_than_silently_picking_one() -> None:
-    """两个键同时在的文件没法确定读者的本意，所以判坏而不是挑一个。
+@pytest.mark.parametrize("locked", [False, True])
+@pytest.mark.parametrize("freedom", list(ParameterFreedom))
+def test_a_setting_carrying_both_keys_is_refused_rather_than_silently_picking_one(
+    freedom: ParameterFreedom, locked: bool
+) -> None:
+    payload = project_to_dict(_project_with_setting(freedom))
+    stored = payload["datasets"][0]["parameter_settings"][0]
+    stored["freedom"] = freedom.value
+    stored["locked"] = locked
 
-    挑 ``freedom`` 会让一份 ``locked: true`` + ``freedom: "free"`` 的文件把钉死的量放开，
-    挑 ``locked`` 会让「仅范围」退成两态；两种都不报错，而这种文件只能是被手改或被两个
-    版本先后写过，本身就该拦下来。
-    """
+    with pytest.raises(ProjectSchemaError, match=r"extra=\['locked'\]"):
+        project_from_dict(payload)
+
+
+@pytest.mark.parametrize("freedom", [False, 1, 1.0, [], {}])
+def test_a_non_string_freedom_is_refused(freedom: object) -> None:
     payload = project_to_dict(_project_with_setting(ParameterFreedom.FIXED))
-    payload["datasets"][0]["parameter_settings"][0]["locked"] = True
+    payload["datasets"][0]["parameter_settings"][0]["freedom"] = freedom
 
-    with pytest.raises(ProjectSchemaError, match="both freedom and locked"):
+    with pytest.raises(ProjectSchemaError, match="parameter setting freedom must be a string"):
         project_from_dict(payload)
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import xrr_fitter.api as api
@@ -49,6 +50,20 @@ def _progress_sink(as_json: bool) -> Callable[[api.FitProgress], None]:
     return lambda event: print(progress_module.render_text(event), file=sys.stderr, flush=True)
 
 
+def _noise_mode_message(noise_model: str) -> str:
+    requirements = {
+        "robust_log": (
+            "稳健对数（探索）；输入要求：拟合点归一化强度有限，且强度加稳定下限后大于 0（允许零强度）；"
+            "稳健评分不是正式似然。"
+        ),
+        "gaussian": "Gaussian（已知标准差）；输入要求：每个拟合点提供有限、严格为正且与强度同单位的标准差 sigma。",
+        "poisson": (
+            "Poisson（原始整数计数）；输入要求：未合并的原始非负整数计数；不能使用归一化强度、计数率或背景扣除值。"
+        ),
+    }
+    return f"噪声模式：{noise_model}；{requirements[noise_model]}"
+
+
 def run_validate(arguments) -> int:
     """Check sources and fit readiness without running any optimizer."""
     project = _load(arguments.project)
@@ -62,6 +77,9 @@ def run_fit(arguments) -> int:
     """Run the fit pipeline, resuming automatically from any stored checkpoint."""
     project = _load(arguments.project)
     _require_fresh_sources(project)
+    if arguments.noise_model is not None:
+        project = api.set_fit_config(project, replace(project.fit_config, noise_model=arguments.noise_model))
+    print(_noise_mode_message(project.fit_config.noise_model), file=sys.stderr, flush=True)
     sink = _progress_sink(arguments.json_progress)
     result = _fit_result(project, arguments, sink)
     if arguments.output is not None:

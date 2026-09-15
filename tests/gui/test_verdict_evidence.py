@@ -11,9 +11,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from PySide6.QtGui import QColor, QPalette
+from tests.support.bootstrap_cases import bootstrap_evidence
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
+from xrr_fitter.model.inference import CovarianceEvidence
 
 
 def _palette(window: str) -> QPalette:
@@ -29,17 +31,21 @@ def _report(
     strong: tuple[tuple[str, str, float], ...] = (),
     performed: bool = True,
 ) -> api.UncertaintyReport:
+    evidence = bootstrap_evidence((("a", 0.9, 1.1), ("b", 0.9, 1.1)), failure_rate=failure_rate) if performed else None
     return api.UncertaintyReport(
         correlation_names=("a", "b"),
         correlation_matrix=np.eye(2),
+        covariance_evidence=CovarianceEvidence(("a", "b"), np.eye(2), "gaussian_known_sigma", 2),
+        parameter_sigma=np.ones(2),
         profiles=(),
-        bootstrap_intervals=(),
+        bootstrap_intervals=() if evidence is None else evidence.intervals,
         bootstrap_failure_rate=failure_rate,
         boundary_hits=boundary_hits,
         strong_correlations=strong,
         systematic_residual=False,
         diagnostics=(),
         bootstrap_performed=performed,
+        bootstrap_evidence=evidence,
     )
 
 
@@ -309,7 +315,9 @@ def test_the_panel_feeds_the_chi_squared_from_the_visible_candidate(qtbot) -> No
     from xrr_fitter.gui.results.panel import ResultsPanel
 
     # χ² = 4×1.2 = 4.8；``parameter_definitions`` 为空所以 ν = 4，χ²ᵥ = 1.2
-    candidate = replace(fit_candidate(objective=1.83), weighted_residuals=np.sqrt(np.full(4, 1.2)))
+    candidate = replace(
+        fit_candidate(objective=1.83), weighted_residuals=np.sqrt(np.full(4, 1.2)), noise_model="gaussian"
+    )
     result = replace(final_fit_result(candidate), uncertainty=_report())
     value = replace(project(dataset_project(result=result)), base_directory="/private/tmp")
     value = api.select_active_dataset(value, "curve")

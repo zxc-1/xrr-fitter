@@ -50,8 +50,7 @@ def test_joint_candidate_alignment_accepts_a_finite_rank_with_overflowing_local_
     ranking = objectives[0] / len(objectives) + objectives[1] / len(objectives)
     candidates = tuple((SimpleNamespace(objective=objective, ranking_objective=ranking),) for objective in objectives)
 
-    # The validator only consumes the aligned objective/ranking fields.
-    candidates_api._validate_candidate_rankings(candidates, ("shared",))
+    candidates_api._validate_candidate_rankings(_joint(), candidates, ("shared",))
 
 
 def test_joint_residual_gives_each_dataset_equal_mass(
@@ -60,13 +59,13 @@ def test_joint_residual_gives_each_dataset_equal_mass(
     api = import_module("xrr_fitter.fit.joint_evaluation")
     joint = _joint()
     c_decades = joint.problems[0].config.c_decades
-    objective = 2.0 * c_decades**2 * (np.sqrt(1.0 + 1.0 / c_decades**2) - 1.0)
+    objective = 2.0 * (np.sqrt(1.0 + 1.0 / c_decades**2) - 1.0)
     by_identity = {id(problem): _evaluation(problem, objective=objective, residual=1.0) for problem in joint.problems}
     monkeypatch.setattr(api, "evaluate_vector", lambda problem, _unit: by_identity[id(problem)])
 
     result = api.evaluate_joint_vector(joint, np.asarray([0.5]))
 
-    first_size = len(by_identity[id(joint.problems[0])].fit_log_residuals_decades)
+    first_size = len(by_identity[id(joint.problems[0])].fit_residuals)
     first = result.residuals[:first_size]
     second = result.residuals[first_size:]
     np.testing.assert_array_equal(first, np.ones(first.size))
@@ -76,7 +75,7 @@ def test_joint_residual_gives_each_dataset_equal_mass(
     assert result.objective == pytest.approx(objective)
 
 
-def test_joint_loss_scales_data_mass_and_each_active_scale_prior_row() -> None:
+def test_joint_loss_balances_data_without_reweighting_scale_prior_rows() -> None:
     api = import_module("xrr_fitter.fit.joint_evaluation")
     joint = _joint(scale_prior=True)
     data_sizes = tuple(int(np.count_nonzero(problem.data.fit_mask)) for problem in joint.problems)
@@ -94,20 +93,20 @@ def test_joint_loss_scales_data_mass_and_each_active_scale_prior_row() -> None:
         scaled = 1.0 + data_squared / problem.config.c_decades**2
         np.testing.assert_allclose(
             rho[0, offset : offset + size],
-            4.0 * alpha * weights**2 * problem.config.c_decades**2 * (np.sqrt(scaled) - 1.0),
+            4.0 * alpha * weights**2 * (np.sqrt(scaled) - 1.0),
         )
         np.testing.assert_allclose(
             rho[1, offset : offset + size],
-            2.0 * alpha * weights**2 / np.sqrt(scaled),
+            2.0 * alpha * weights**2 / problem.config.c_decades**2 / np.sqrt(scaled),
         )
         np.testing.assert_allclose(
             rho[2, offset : offset + size],
-            -(alpha * weights**2 / problem.config.c_decades**2) * scaled ** (-1.5),
+            -(alpha * weights**2 / problem.config.c_decades**4) * scaled ** (-1.5),
         )
         prior_index = offset + size
         np.testing.assert_allclose(
             rho[:, prior_index],
-            (2.0 * alpha * squared[prior_index], 2.0 * alpha, 0.0),
+            (2.0 * squared[prior_index], 2.0, 0.0),
         )
         offset = prior_index + 1
 

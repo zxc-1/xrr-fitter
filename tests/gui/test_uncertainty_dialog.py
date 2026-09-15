@@ -14,9 +14,11 @@ from math import log
 import numpy as np
 import pytest
 from PySide6.QtCore import Qt
+from tests.support.bootstrap_cases import bootstrap_evidence
 from tests.support.model_cases import dataset_project, final_fit_result, fit_candidate, project
 
 import xrr_fitter.api as api
+from xrr_fitter.model.inference import CovarianceEvidence
 
 
 def _uncertainty(candidate_id: str = "candidate-a") -> api.UncertaintyReport:
@@ -26,6 +28,8 @@ def _uncertainty(candidate_id: str = "candidate-a") -> api.UncertaintyReport:
         profiles=(),
         bootstrap_intervals=(("scale", 0.8, 1.2),),
         bootstrap_failure_rate=0.125,
+        bootstrap_performed=True,
+        bootstrap_evidence=bootstrap_evidence((("scale", 0.8, 1.2),), failure_rate=0.125),
         boundary_hits=("scale",),
         strong_correlations=(),
         systematic_residual=False,
@@ -469,10 +473,17 @@ def _full_report(candidate_id: str = "candidate-a") -> api.UncertaintyReport:
         lower_closed=True,
         upper_closed=True,
     )
+    intervals = (("component.0.thickness_a", 35.0, 48.0), ("instrument.scale", 0.8, 1.2))
+    names = tuple(name for name, *_ in intervals)
+    matrix = np.array([[1.0, -0.65], [-0.65, 1.0]])
     return replace(
         _uncertainty(candidate_id),
-        correlation_names=("component.0.thickness_a", "instrument.scale"),
-        correlation_matrix=np.array([[1.0, -0.65], [-0.65, 1.0]]),
+        correlation_names=names,
+        correlation_matrix=matrix,
+        covariance_evidence=CovarianceEvidence(names, matrix, "gaussian_known_sigma", 2),
+        parameter_sigma=np.ones(2),
+        bootstrap_intervals=intervals,
+        bootstrap_evidence=bootstrap_evidence(intervals, failure_rate=0.125),
         profiles=(profile,),
         sld_bands=_bands(),
         mcmc=_mcmc_report(candidate_id=candidate_id),
@@ -509,11 +520,8 @@ def test_uncertainty_view_carries_the_four_evidence_pages(qtbot) -> None:
 
     titles = tuple(pages.tabText(index) for index in range(pages.count()))
     assert titles == UNCERTAINTY_PAGE_TITLES
-    # 逐字取设计稿帧⑤ 的 ``.canvas-top``（HTML L911）。第二页叫「Profile 似然」而不是
-    # 「参数剖面」：设计稿八处都用前者（帧⑤ 标题、左栏子管线那一步、画布内标题、能力对照
-    # 表），G22 的方法表 ``navigation/methods.py`` 也是，标签写成别的名字会让同一份证据在
-    # 导航里和画布里叫两个名。
-    assert UNCERTAINTY_PAGE_TITLES == ("相关矩阵", "Profile 似然", "SLD 可信带", "MCMC 后验")
+    # 页面与导航使用同一个中性名称：探索性的损失支持区间不能因排版迁移被称为似然区间。
+    assert UNCERTAINTY_PAGE_TITLES == ("相关矩阵", "参数剖面", "SLD 可信带", "MCMC 后验")
 
 
 def test_the_evidence_text_stays_in_the_card_beside_the_pages(qtbot) -> None:
@@ -635,19 +643,31 @@ def test_the_inspector_states_how_many_resamples_the_bootstrap_asked_for(qtbot) 
 
     顺序不是排版偏好：失败率是个比例，先给基数才读得出到底丢了几次。这一段此前只报比例。
     """
-    view = _view(qtbot, replace(_full_report(), bootstrap_sample_count=200))
+    report = _full_report()
+    evidence = bootstrap_evidence(report.bootstrap_intervals, failure_rate=1 / 201, attempted_count=201)
+    view = _view(qtbot, replace(report, bootstrap_evidence=evidence, bootstrap_failure_rate=evidence.failure_rate))
 
     text = view.text()
     lines = text.splitlines()
 
-    assert "Bootstrap 重采样次数：200" in text
+    assert "Bootstrap 重采样次数：201" in text
+    assert "成功样本 200/201" in text
     count_at = next(index for index, line in enumerate(lines) if "重采样次数" in line)
     rate_at = next(index for index, line in enumerate(lines) if "失败率" in line)
     assert count_at < rate_at
 
 
-def test_the_inspector_says_the_resample_count_is_unrecorded_when_it_is(qtbot) -> None:
-    """这个字段加进来之前存的工程文件不带次数，此时报「未记录」——报 0 会被读成一次都没抽。"""
-    view = _view(qtbot, _full_report())
+def test_the_inspector_distinguishes_no_sampling_from_unavailable_intervals(qtbot) -> None:
+    """没有 sampling evidence 才是未执行，不能伪装成次数没记录的旧格式。"""
+    report = replace(
+        _full_report(),
+        bootstrap_performed=False,
+        bootstrap_intervals=(),
+        bootstrap_evidence=None,
+        bootstrap_failure_rate=0.0,
+    )
+    view = _view(qtbot, report)
 
-    assert "Bootstrap 重采样次数：未记录" in view.text()
+    assert "Bootstrap：未执行" in view.text()
+    assert "Bootstrap 重采样次数：未执行" in view.text()
+    assert "未记录" not in view.text()

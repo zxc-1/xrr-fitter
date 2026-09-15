@@ -14,9 +14,11 @@ import warnings
 from dataclasses import replace
 
 import numpy as np
+from tests.support.bootstrap_cases import bootstrap_evidence
 from tests.support.model_cases import final_fit_result
 
 import xrr_fitter.api as api
+from xrr_fitter.model.inference import CovarianceEvidence
 
 # 帧⑤ 的证据对话框实际给相关矩阵的画布：400×202 px @ dpi 100。名字读不读得全取决于这个
 # 真实预算，而不是测试里随手给的一块大画布——够大的画布装得下机器路径，屏上那块装不下。
@@ -96,6 +98,8 @@ def _result() -> api.FitResult:
     report = api.UncertaintyReport(
         correlation_names=names,
         correlation_matrix=matrix,
+        covariance_evidence=CovarianceEvidence(names, matrix, "gaussian_known_sigma", len(names)),
+        parameter_sigma=np.ones(len(names)),
         profiles=(),
         bootstrap_intervals=(),
         bootstrap_failure_rate=0.0,
@@ -266,10 +270,13 @@ def _profiled_result() -> api.FitResult:
         )
         for name in names
     )
+    intervals = tuple((name, 0.92, 1.08) for name in result.uncertainty.correlation_names)
     report = replace(
         result.uncertainty,
         profiles=profiles,
-        bootstrap_intervals=tuple((name, 0.92, 1.08) for name in names),
+        bootstrap_intervals=intervals,
+        bootstrap_performed=True,
+        bootstrap_evidence=bootstrap_evidence(intervals),
     )
     return replace(result, uncertainty=report)
 
@@ -296,16 +303,19 @@ def _fully_profiled_result() -> api.FitResult:
         )
         for name in names
     )
+    intervals = tuple((name, 0.92, 1.08) for name in names)
     report = replace(
         result.uncertainty,
         profiles=profiles,
-        bootstrap_intervals=tuple((name, 0.92, 1.08) for name in names),
+        bootstrap_intervals=intervals,
+        bootstrap_performed=True,
+        bootstrap_evidence=bootstrap_evidence(intervals),
     )
     return replace(result, uncertainty=report)
 
 
 def _profile_page(qtbot):
-    """帧⑤ 那只 Profile 似然页，画布同样收到屏上真实的那块预算。
+    """帧⑤ 那只 参数剖面页，画布同样收到屏上真实的那块预算。
 
     与 ``_correlation_page`` 共用 ``_page_view()``，所以两页拿到的是同一块画布——名字放不放
     得下这件事在两页上是同一道题。
@@ -497,7 +507,7 @@ def test_the_readings_survive_a_full_profile_run_at_the_designed_scale(qtbot) ->
     的替身（``_profiled_result``），那一档图例不溢出、矩阵不被压、读数栏 240px 高够装四段。
     但真实规模是 17 条：18 项图例撑大 Profile 那格的 tightbbox，``constrained_layout`` 为它让出
     高度，反过来把矩阵从 379.9 压到 211.8px——读数栏挂在矩阵坐标上，跟着从 235.5 矮到 131.3px，
-    而四段总跨 175.0px，溢出 43.7px，末段「需结合 Profile 似然判读」被 ``clip_on=True`` 从
+    而四段总跨 175.0px，溢出 43.7px，末段「需结合 参数剖面判读」被 ``clip_on=True`` 从
     栏底裁掉。这条 RED 坐实这件事，之后改图例排布两处一起绿。
     """
     from xrr_fitter.gui.plots.correlation import SUMMARY_AXES_LABEL

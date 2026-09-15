@@ -57,11 +57,9 @@ QUANTILE_DIGITS = 4
 # The page titles, in tab order.  Read left to right they are the order the
 # evidence is meant to be judged in: what is entangled, how far each parameter
 # can move on its own, what that does to the structure, and finally the full
-# posterior when sampling was actually run.  The second one keeps the design's
-# own word 「Profile 似然」(帧⑤ HTML L911) rather than a translation: the guided
-# sub-pipeline in ``navigation/methods.py`` names the same evidence that way, and
-# two names for one page reads as two kinds of evidence.
-UNCERTAINTY_PAGE_TITLES = ("相关矩阵", "Profile 似然", "SLD 可信带", "MCMC 后验")
+# posterior when sampling was actually run. The generic profile title does not
+# relabel exploratory loss-support evidence as calibrated likelihood inference.
+UNCERTAINTY_PAGE_TITLES = ("相关矩阵", "参数剖面", "SLD 可信带", "MCMC 后验")
 
 # Matplotlib's default figure is 6.4x4.8in, which a canvas turns into a 480px
 # height request -- taller than the verdict and the fitted values put together,

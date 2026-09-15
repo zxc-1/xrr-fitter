@@ -10,6 +10,13 @@ from math import isfinite
 import numpy as np
 from scipy.optimize import least_squares
 
+from xrr_fitter.analysis.bootstrap_generation import (
+    BOOTSTRAP_METHODS,
+    Recompile,
+    bootstrap_source,
+    draw_replicates,
+    poll_cancelled,
+)
 from xrr_fitter.analysis.bootstrap_samples import (
     BootstrapFit as BootstrapFit,
 )
@@ -33,9 +40,6 @@ from xrr_fitter.analysis.bootstrap_samples import (
     validated_sample_count as _validated_sample_count,
 )
 from xrr_fitter.analysis.residual_resampling import (
-    moving_block_draw as _moving_block_draw,
-)
-from xrr_fitter.analysis.residual_resampling import (
     residual_block_length as residual_block_length,
 )
 from xrr_fitter.evaluation import (
@@ -49,27 +53,6 @@ from xrr_fitter.evaluation import (
 from xrr_fitter.model.analysis import BootstrapResult
 from xrr_fitter.model.fitting import FitEvaluationContext
 from xrr_fitter.model.provenance import bootstrap_provenance_sha256
-
-
-def _sorted_fit_indices(problem: object) -> np.ndarray:
-    fit_indices = np.flatnonzero(problem.data.fit_mask)
-    order = np.argsort(problem.data.qz_a_inv[fit_indices], kind="stable")
-    return fit_indices[order]
-
-
-def _candidate_center(problem: object, candidate: object, indices: np.ndarray):
-    residuals = np.asarray(candidate.log_residuals_decades, dtype=float)[indices]
-    model = np.asarray(candidate.model_normalized, dtype=float)[indices]
-    if (
-        residuals.shape != model.shape
-        or residuals.size < 3
-        or np.any(~np.isfinite(residuals))
-        or np.any(~np.isfinite(model))
-    ):
-        raise ValueError("bootstrap candidate has invalid fitted residuals")
-    names = tuple(variable.name for variable in problem.variables)
-    physical = {parameter.name: parameter.value for parameter in candidate.parameters}
-    return names, physical, residuals, model
 
 
 def _owned_bootstrap(
@@ -87,22 +70,7 @@ def _owned_bootstrap(
     )
 
 
-def _synthetic_context(
-    problem: object,
-    sorted_indices: np.ndarray,
-    synthetic_fit: np.ndarray,
-):
-    normalized = np.array(problem.data.intensity_normalized, copy=True)
-    normalized[sorted_indices] = synthetic_fit
-    data = replace(
-        problem.data,
-        intensity_normalized=normalized,
-        intensity_raw=normalized * problem.data.normalization,
-    )
-    return replace(problem, data=data)
-
-
-def _local_bootstrap_fit(problem: object, start: np.ndarray) -> np.ndarray | None:
+def _local_bootstrap_fit(problem: object, start: np.ndarray) -> np.ndarray | str:
     if start.size == 0:
         return np.array(start, copy=True)
     maximum = max(
@@ -126,13 +94,19 @@ def _local_bootstrap_fit(problem: object, start: np.ndarray) -> np.ndarray | Non
             gtol=1e-10,
         )
         fitted = evaluate_model(problem, np.asarray(optimized.x, dtype=float))
-    except (EvaluationConstraintError, FloatingPointError):
-        return None
+    except (EvaluationConstraintError, FloatingPointError) as error:
+        return f"{type(error).__name__}:{error}"
+    return _converged_result(initial, optimized, fitted)
+
+
+def _converged_result(initial, optimized, fitted) -> np.ndarray | str:
+    if not optimized.success:
+        return f"optimizer_nonconvergence:{optimized.message}"
     tolerance = max(1e-12, 1e-8 * initial.objective)
     if not fitted.valid or not isfinite(fitted.objective):
-        return None
+        return f"invalid_fit:{fitted.reason}"
     if fitted.objective > initial.objective + tolerance:
-        return np.array(start, copy=True)
+        return "local_objective_increased"
     return np.asarray(optimized.x, dtype=float)
 
 
@@ -141,13 +115,15 @@ def _fit_problem_bootstrap_sample(
     candidate: object,
     names: tuple[str, ...],
     cancelled: Callable[[], bool] | None,
-) -> np.ndarray | None:
-    if cancelled is not None and cancelled():
-        raise InterruptedError("cancelled")
+) -> np.ndarray | str | None:
+    poll_cancelled(cancelled)
+    if isinstance(problem, str):
+        return problem
     start = np.asarray(candidate.unit_vector, dtype=float)
     fitted = _local_bootstrap_fit(problem, start)
-    if fitted is None:
-        return None
+    poll_cancelled(cancelled)
+    if fitted is None or isinstance(fitted, str):
+        return fitted
     mapped = values_by_name(problem, fitted)
     return np.asarray([mapped[name] for name in names], dtype=float)
 
@@ -158,36 +134,23 @@ def bootstrap_problem_local(
     *,
     sample_count: int,
     child_seed: int,
+    recompile: Recompile,
     cancelled: Callable[[], bool] | None = None,
     progress: BootstrapProgress | None = None,
     task_runner: TaskRunner | None = None,
 ) -> BootstrapResult:
     """Bootstrap one accepted candidate and refit every synthetic curve."""
-    sorted_indices = _sorted_fit_indices(problem)
-    names, physical, residuals, model = _candidate_center(problem, candidate, sorted_indices)
-    names = _validated_names(names)
+    if not candidate.valid or candidate.noise_model != problem.config.noise_model:
+        raise ValueError("bootstrap requires a valid candidate in the declared noise model")
+    names = _validated_names(tuple(variable.name for variable in problem.variables))
     count = _validated_sample_count(sample_count)
-    sigma = problem.data.intensity_sigma_normalized
-    explicit_sigma = None if sigma is None else np.asarray(sigma, dtype=float)[sorted_indices]
-    block_length = residual_block_length(residuals)
+    source = bootstrap_source(problem, candidate.model_normalized, candidate.residuals[problem.data.fit_mask])
     rng = np.random.default_rng(child_seed)
-    contexts = []
-    for _sample_index in range(count):
-        if cancelled is not None and cancelled():
-            raise InterruptedError("cancelled")
-        if explicit_sigma is not None:
-            synthetic_fit = rng.normal(model, explicit_sigma)
-        else:
-            sampled = _moving_block_draw(residuals, block_length, rng)
-            synthetic_fit = (model + problem.data.r_floor) * 10.0 ** (-sampled) - problem.data.r_floor
-        synthetic_fit = np.clip(synthetic_fit, problem.data.r_floor, np.inf)
-        contexts.append(_synthetic_context(problem, sorted_indices, synthetic_fit))
-
-    del physical
+    contexts = draw_replicates((source,), count, rng, recompile, cancelled)
     tasks = tuple(
         partial(
             _fit_problem_bootstrap_sample,
-            context,
+            context if isinstance(context, str) else context[0],
             candidate,
             names,
             cancelled,
@@ -195,5 +158,8 @@ def bootstrap_problem_local(
         for context in contexts
     )
     fitted_values = _run_tasks(tasks, task_runner)
-    result = _bootstrap_result(names, fitted_values, count, progress)
+    poll_cancelled(cancelled)
+    result = _bootstrap_result(
+        names, fitted_values, count, progress, method=BOOTSTRAP_METHODS[problem.config.noise_model]
+    )
     return _owned_bootstrap(problem, candidate, result)

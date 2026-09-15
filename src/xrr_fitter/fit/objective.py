@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import xrr_fitter.evaluation as evaluation
-from xrr_fitter.model.fitting import ModelEvaluation
+from xrr_fitter.model.evaluation import ModelEvaluation
 from xrr_fitter.model.parameters import PhysicalValueError
 from xrr_fitter.model.structure import ExpandedSlabLimitError
 
@@ -33,18 +33,19 @@ def _invalid_evaluation(
         parameters=(),
         qz_a_inv=qz,
         model_normalized=model,
-        fit_log_residuals_decades=residual,
+        fit_residuals=residual,
         fit_weighted_residuals=weighted,
         objective=float("inf"),
         expanded_stack=None,
         diagnostics=error.diagnostics,
+        noise_model=problem.config.noise_model,
     )
 
 
-def evaluate_vector(problem: object, unit_vector: np.ndarray) -> ModelEvaluation:
+def evaluate_vector(problem: object, unit_vector: np.ndarray, *, fit_only: bool = False) -> ModelEvaluation:
     """Evaluate a candidate and convert only declared physical failures."""
     try:
-        return evaluation.evaluate_model(problem, unit_vector)
+        return evaluation.evaluate_model(problem, unit_vector, fit_only=fit_only)
     except evaluation.EvaluationConstraintError as error:
         return _invalid_evaluation(problem, error)
 

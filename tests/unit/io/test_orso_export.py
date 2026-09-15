@@ -22,6 +22,7 @@ import pytest
 from jsonschema import ValidationError
 from orsopy import fileio
 from orsopy.fileio.base import _read_header_data, _validate_header_data
+from tests.support.bootstrap_cases import bootstrap_evidence
 from tests.support.model_cases import (
     dataset_project,
     final_fit_result,
@@ -33,7 +34,7 @@ from tests.support.model_cases import (
 import xrr_fitter.io.orso as orso_module
 from xrr_fitter.io.export_tables import DatasetExportData, ExportReplayIdentity
 from xrr_fitter.io.orso import orso_bytes
-from xrr_fitter.model.analysis import UncertaintyReport
+from xrr_fitter.model.analysis import CovarianceEvidence, UncertaintyReport
 from xrr_fitter.model.data import BeamSpec
 from xrr_fitter.model.export import ExportFileRecord
 from xrr_fitter.model.parameters import ParameterValue
@@ -84,7 +85,7 @@ from tests.unit.io.test_orso_export import _load_single, _orso_context
 from xrr_fitter.io.orso import orso_bytes
 from xrr_fitter.version import __version__
 
-loaded = _load_single(orso_bytes(_orso_context(), covariance=None))
+loaded = _load_single(orso_bytes(_orso_context()))
 assert loaded.info.reduction.software.version == __version__
 """
     environment = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
@@ -115,6 +116,7 @@ def _orso_context(
     sigma_q_a_inv: np.ndarray | None = None,
     beam: BeamSpec | None = None,
     fit_mask: np.ndarray | None = None,
+    with_covariance: bool = True,
 ) -> DatasetExportData:
     data = prepared_data(two_theta_deg=two_theta_deg, beam=beam, fit_mask=fit_mask)
     if with_sigma:
@@ -132,6 +134,7 @@ def _orso_context(
         qz_a_inv=data.qz_a_inv,
         model_normalized=model,
         log_residuals_decades=residual,
+        residuals=residual,
         weighted_residuals=residual / 0.05,
     )
     uncertainty = UncertaintyReport(
@@ -140,11 +143,21 @@ def _orso_context(
         profiles=(),
         bootstrap_intervals=(("scale", 0.9, 1.1), ("instrument.background", 2.0e-7, 3.0e-7)),
         bootstrap_failure_rate=0.0,
+        bootstrap_performed=True,
+        bootstrap_evidence=bootstrap_evidence((("scale", 0.9, 1.1), ("instrument.background", 2.0e-7, 3.0e-7))),
         boundary_hits=(),
         strong_correlations=(),
         systematic_residual=False,
         diagnostics=(),
-        parameter_sigma=np.array([0.05, 1.0e-8]),
+        parameter_sigma=np.array([0.05, 1.0e-8]) if with_covariance else None,
+        covariance_evidence=CovarianceEvidence(
+            ("scale", "instrument.background"),
+            np.diag(np.array([0.05, 1e-8]) ** 2),
+            "robust_log_sandwich",
+            2,
+        )
+        if with_covariance
+        else None,
         candidate_id=candidate.candidate_id,
     )
     result = replace(
@@ -236,7 +249,7 @@ def test_orso_bytes_roundtrips_data_parameters_and_extension() -> None:
     sigma = context.result.uncertainty.parameter_sigma
     covariance = np.diag(sigma**2)
 
-    raw = orso_bytes(context, covariance=covariance)
+    raw = orso_bytes(context)
     loaded = _load_single(raw)
 
     # 层 2: header 通过 ORSO schema 校验。``Orso.to_dict()`` 直出 datetime，
@@ -265,7 +278,7 @@ def test_orso_bytes_does_not_reencode_the_complete_project(
         raising=False,
     )
 
-    loaded = _load_single(orso_bytes(context, covariance=None))
+    loaded = _load_single(orso_bytes(context))
 
     assert loaded.info.user_data["xrr_fitter.reduction"]["project_master_seed"] == context.project.master_seed
 
@@ -275,7 +288,7 @@ def test_orso_bytes_roundtrips_pointwise_q_resolution_as_standard_error_column()
     sigma_q = np.linspace(1.0e-4, 4.0e-4, base.data.qz_a_inv.size)
     context = _orso_context(sigma_q_a_inv=sigma_q)
 
-    raw = orso_bytes(context, covariance=None)
+    raw = orso_bytes(context)
     loaded = _load_single(raw)
 
     header_dicts, _rows, _version = _read_header_data(io.StringIO(raw.decode("utf-8")))
@@ -300,7 +313,7 @@ def test_orso_bytes_excludes_rows_without_finite_pointwise_q_resolution() -> Non
     sigma_q[7] = np.nan
     context = _orso_context(sigma_q_a_inv=sigma_q)
 
-    loaded = _load_single(orso_bytes(context, covariance=None))
+    loaded = _load_single(orso_bytes(context))
 
     expected_mask = context.data.validation_mask & np.isfinite(context.data.sigma_q_a_inv)
     assert loaded.data.shape[0] == int(expected_mask.sum())
@@ -315,7 +328,7 @@ def test_orso_bytes_keeps_q_resolution_in_reduction_extension_without_reflectivi
     sigma_q = np.linspace(1.0e-4, 4.0e-4, base.data.qz_a_inv.size)
     context = _orso_context(with_sigma=False, sigma_q_a_inv=sigma_q)
 
-    loaded = _load_single(orso_bytes(context, covariance=None))
+    loaded = _load_single(orso_bytes(context))
 
     assert [column.to_dict() for column in loaded.info.columns] == [
         {"name": "Qz", "unit": "1/angstrom"},
@@ -345,7 +358,7 @@ def test_orso_bytes_keeps_prepared_and_fitted_qz_axes_distinct() -> None:
         selected=selected,
     )
 
-    loaded = _load_single(orso_bytes(changed, covariance=None))
+    loaded = _load_single(orso_bytes(changed))
     mask = changed.data.validation_mask
     assert np.array_equal(loaded.data[:, 0], changed.data.qz_a_inv[mask])
     assert np.array_equal(
@@ -363,7 +376,7 @@ def test_orso_bytes_normalizes_schema_validation_failure(monkeypatch) -> None:
     monkeypatch.setattr(orso_module, "_validate_header_data", reject_schema)
 
     with pytest.raises(ValueError, match="ORSO schema validation failed"):
-        orso_bytes(context, covariance=None)
+        orso_bytes(context)
 
 
 def test_orso_bytes_excludes_nonpositive_angle_rows() -> None:
@@ -371,7 +384,7 @@ def test_orso_bytes_excludes_nonpositive_angle_rows() -> None:
     mask = context.data.validation_mask
     assert not bool(mask.all())  # 构造确实含被排除的非正角度行
 
-    raw = orso_bytes(context, covariance=None)
+    raw = orso_bytes(context)
     loaded = _load_single(raw)
 
     assert loaded.data.shape[0] == int(mask.sum())
@@ -391,7 +404,7 @@ def test_orso_bytes_excludes_valid_rows_without_finite_fit_residuals() -> None:
     fit_mask[5] = False
     context = _orso_context(fit_mask=fit_mask)
 
-    loaded = _load_single(orso_bytes(context, covariance=None))
+    loaded = _load_single(orso_bytes(context))
     model = loaded.info.user_data["xrr_fitter.model"]
     excluded = loaded.info.user_data["xrr_fitter.confidence"]["excluded_rows"]
 
@@ -402,9 +415,9 @@ def test_orso_bytes_excludes_valid_rows_without_finite_fit_residuals() -> None:
 
 
 def test_orso_bytes_omits_covariance_when_none() -> None:
-    context = _orso_context()
+    context = _orso_context(with_covariance=False)
 
-    raw = orso_bytes(context, covariance=None)
+    raw = orso_bytes(context)
     confidence = _load_single(raw).info.user_data["xrr_fitter.confidence"]
 
     assert "covariance" not in confidence
@@ -413,23 +426,11 @@ def test_orso_bytes_omits_covariance_when_none() -> None:
 
 def test_orso_bytes_rejects_nonfinite_bootstrap_interval() -> None:
     context = _orso_context()
-    uncertainty = replace(
-        context.result.uncertainty,
-        bootstrap_intervals=(
-            ("scale", float("nan"), 1.1),
-            ("instrument.background", 2.0e-7, 3.0e-7),
-        ),
-    )
-    result = replace(context.result, uncertainty=uncertainty)
-    dataset = replace(context.dataset, last_valid_result=result)
-    invalid = replace(
-        context,
-        project=replace(context.project, datasets=(dataset,)),
-        dataset=dataset,
-    )
-
-    with pytest.raises(ValueError, match="bootstrap intervals"):
-        orso_bytes(invalid, covariance=uncertainty.covariance)
+    with pytest.raises(ValueError, match="bootstrap"):
+        replace(
+            context.result.uncertainty,
+            bootstrap_intervals=(("scale", float("nan"), 1.1), ("instrument.background", 2.0e-7, 3.0e-7)),
+        )
 
 
 @pytest.mark.parametrize(
@@ -446,10 +447,10 @@ def test_orso_bytes_rejects_invalid_covariance(covariance: np.ndarray) -> None:
     context = _orso_context()
 
     with pytest.raises(ValueError, match="covariance"):
-        orso_bytes(context, covariance=covariance)
+        CovarianceEvidence(context.result.uncertainty.correlation_names, covariance, "robust_log_sandwich", 2)
 
 
-def test_orso_bytes_symmetrizes_covariance_within_numeric_tolerance() -> None:
+def test_orso_bytes_preserves_saved_covariance_without_resymmetrizing() -> None:
     context = _orso_context()
     covariance = np.array(
         [
@@ -458,19 +459,22 @@ def test_orso_bytes_symmetrizes_covariance_within_numeric_tolerance() -> None:
         ]
     )
 
-    loaded = _load_single(orso_bytes(context, covariance=covariance))
+    evidence = CovarianceEvidence(context.result.uncertainty.correlation_names, covariance, "robust_log_sandwich", 2)
+    report = replace(
+        context.result.uncertainty,
+        covariance_evidence=evidence,
+        parameter_sigma=np.ones(2),
+        correlation_matrix=covariance,
+    )
+    dataset = replace(context.dataset, last_valid_result=replace(context.result, uncertainty=report))
+    changed = replace(context, project=project(dataset), dataset=dataset)
+    loaded = _load_single(orso_bytes(changed))
     exported = np.asarray(
         loaded.info.user_data["xrr_fitter.confidence"]["covariance"]["matrix"],
         dtype=float,
     )
 
-    np.testing.assert_array_equal(exported, exported.T)
-    np.testing.assert_allclose(
-        exported,
-        (covariance + covariance.T) / 2.0,
-        rtol=0.0,
-        atol=0.0,
-    )
+    np.testing.assert_array_equal(exported, evidence.matrix)
 
 
 def test_orso_bytes_omits_uncertainty_owned_by_another_candidate() -> None:
@@ -498,7 +502,7 @@ def test_orso_bytes_omits_uncertainty_owned_by_another_candidate() -> None:
         selected=selected,
     )
 
-    raw = orso_bytes(mismatched, covariance=np.eye(2))
+    raw = orso_bytes(mismatched)
     confidence = _load_single(raw).info.user_data["xrr_fitter.confidence"]
 
     assert confidence["parameters"][0]["value"] == selected.parameters[0].value
@@ -518,7 +522,7 @@ def test_orso_bytes_records_source_hash_package_version_and_mixed_kalpha() -> No
     )
     context = _orso_context(beam=beam)
 
-    loaded = _load_single(orso_bytes(context, covariance=None))
+    loaded = _load_single(orso_bytes(context))
     source = loaded.info.data_source.measurement.data_files[0]
     reduction = loaded.info.user_data["xrr_fitter.reduction"]
 

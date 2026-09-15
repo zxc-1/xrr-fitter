@@ -17,7 +17,7 @@ from xrr_fitter.evaluation import (
     least_squares_system,
 )
 from xrr_fitter.fit.objective import evaluate_jacobian, evaluate_vector
-from xrr_fitter.model.fitting import ModelEvaluation
+from xrr_fitter.model.evaluation import ModelEvaluation
 
 
 class SearchCancelled(RuntimeError):
@@ -67,7 +67,7 @@ def local_residual(problem: object, unit_vector: np.ndarray) -> np.ndarray:
     return least_squares_residual(
         problem,
         _validated_unit(problem, unit_vector, "unit vector"),
-        evaluator=evaluate_vector,
+        evaluator=partial(evaluate_vector, fit_only=True),
     )
 
 
@@ -148,7 +148,8 @@ def solve_local(
         max_nfev=max_nfev,
         method="trf",
         x_scale="jac",
-        ftol=1e-10,
+        # Irreducible Poisson misfit must not hide resolvable absolute Q/KL differences.
+        ftol=None if problem.config.noise_model == "poisson" else 1e-10,
         xtol=1e-10,
         gtol=1e-10,
     )

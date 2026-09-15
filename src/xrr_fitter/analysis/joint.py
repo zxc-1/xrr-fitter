@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from math import isfinite
 
 import numpy as np
@@ -11,8 +12,14 @@ from xrr_fitter.analysis.classification import (
     classify_candidate_evidence_with_reasons,
     cluster_unit_vectors,
 )
-from xrr_fitter.model.analysis import ConfidenceClass, UncertaintyReport
+from xrr_fitter.analysis.covariance import covariance_method, covariance_summary, joint_covariance
+from xrr_fitter.analysis.diagnostics import aggregate_residual_flag, build_residual_evidence
+from xrr_fitter.analysis.residual_calibration import validate_residual_owner
+from xrr_fitter.evaluation import EvaluationConstraintError
+from xrr_fitter.model.analysis import ConfidenceClass, CovarianceEvidence, ResidualEvidence, UncertaintyReport
 from xrr_fitter.model.fitting import ConfidenceThresholds
+from xrr_fitter.model.joint_bootstrap_provenance import validate_joint_bootstrap
+from xrr_fitter.model.provenance import joint_residual_owner_sha256
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,32 +58,6 @@ def _scaled_columns(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             where=scales > 0.0,
         )
     return normalized, scales
-
-
-def _correlation(values: np.ndarray, dimension: int) -> np.ndarray:
-    if dimension == 0:
-        return np.empty((0, 0), dtype=float)
-    if values.shape[0] < 2:
-        return np.eye(dimension, dtype=float)
-    normalized, _scales = _scaled_columns(values)
-    centered = normalized - np.mean(normalized, axis=0)
-    centered_scale = np.max(np.abs(centered), axis=0)
-    centered = np.divide(
-        centered,
-        centered_scale,
-        out=np.zeros_like(centered),
-        where=centered_scale > 0.0,
-    )
-    norms = np.sqrt(np.sum(centered * centered, axis=0))
-    denominator = np.outer(norms, norms)
-    correlation = np.divide(
-        centered.T @ centered,
-        denominator,
-        out=np.zeros((dimension, dimension), dtype=float),
-        where=denominator > 0.0,
-    )
-    np.fill_diagonal(correlation, 1.0)
-    return correlation
 
 
 def _parameter_spread(values: np.ndarray) -> np.ndarray:
@@ -154,20 +135,34 @@ def _boundary_hits(
     )
 
 
+def _joint_calibration(names: tuple[str, ...], best_vector: np.ndarray | None, point_evidence: Callable | None):
+    if best_vector is not None and point_evidence is not None:
+        return point_evidence(best_vector)
+    return CovarianceEvidence(names, None, "not_evaluated", 0, (), "joint_numerical_evidence_missing"), ()
+
+
+def _best_joint_diagnostics(ensemble: _JointEnsemble, best_index: int | None, residuals: tuple[ResidualEvidence, ...]):
+    if residuals:
+        return tuple(item for member in residuals for item in member.diagnostics)
+    return () if best_index is None else ensemble.diagnostics[best_index]
+
+
 def _uncertainty_report(
     ensemble: _JointEnsemble,
     thresholds: ConfidenceThresholds,
+    point_evidence: Callable | None,
 ) -> UncertaintyReport:
     eligible = _eligible_indices(ensemble)
     values = ensemble.physical[np.asarray(eligible, dtype=int)] if eligible else ensemble.physical[:0]
-    correlation = _correlation(values, ensemble.width)
     best_index = min(
         eligible,
         key=lambda index: float(ensemble.costs[index]),
         default=None,
     )
     best_vector = None if best_index is None else ensemble.vectors[best_index]
-    sigma = _parameter_spread(values) if values.shape[0] >= 2 else None
+    spread = _parameter_spread(values) if values.shape[0] >= 2 else None
+    covariance, residuals = _joint_calibration(ensemble.names, best_vector, point_evidence)
+    correlation, sigma = covariance_summary(covariance)
     return UncertaintyReport(
         correlation_names=ensemble.names,
         correlation_matrix=correlation,
@@ -184,13 +179,34 @@ def _uncertainty_report(
             correlation,
             thresholds.strong_correlation,
         ),
-        systematic_residual=False,
-        diagnostics=() if best_index is None else ensemble.diagnostics[best_index],
-        residual_autocorrelation=False,
+        systematic_residual=aggregate_residual_flag(residuals, "systematic"),
+        diagnostics=_best_joint_diagnostics(ensemble, best_index, residuals),
+        residual_autocorrelation=aggregate_residual_flag(residuals, "autocorrelation"),
         candidate_id=None if best_index is None else ensemble.identifiers[best_index],
         bootstrap_performed=False,
         prior_conflicts=(),
         parameter_sigma=sigma,
+        covariance_evidence=covariance,
+        member_residuals=residuals,
+        search_parameter_spread=spread,
+    )
+
+
+def _with_bootstrap(report, vectors, candidate_ids, bootstrap, bootstrap_owner):
+    if bootstrap is None or report.candidate_id is None or not report.correlation_names:
+        return report
+    if bootstrap_owner is None:
+        raise ValueError("joint bootstrap requires an independent numerical owner check")
+    vector = vectors[candidate_ids.index(report.candidate_id)]
+    expected = bootstrap_owner(report.candidate_id, vector)
+    sampling = bootstrap(report.candidate_id, vector)
+    validate_joint_bootstrap(sampling, report.candidate_id, expected, report.correlation_names)
+    return replace(
+        report,
+        bootstrap_evidence=sampling,
+        bootstrap_intervals=sampling.intervals,
+        bootstrap_failure_rate=sampling.failure_rate,
+        bootstrap_performed=True,
     )
 
 
@@ -204,6 +220,9 @@ def analyze_joint_ensemble(
     valid: tuple[bool, ...],
     diagnostics: tuple[tuple[object, ...], ...],
     thresholds: ConfidenceThresholds,
+    point_evidence: Callable | None = None,
+    bootstrap: Callable | None = None,
+    bootstrap_owner: Callable | None = None,
 ) -> tuple[UncertaintyReport, ConfidenceClass, tuple[str, ...]]:
     """Build and classify one global Stage-E candidate ensemble."""
     ensemble = _validated_ensemble(
@@ -215,9 +234,12 @@ def analyze_joint_ensemble(
         valid,
         diagnostics,
     )
-    report = _uncertainty_report(ensemble, thresholds)
+    report = _uncertainty_report(ensemble, thresholds, point_evidence)
     if ensemble.count == 0:
         return report, ConfidenceClass.UNTRUSTED, ("no_active_candidates",)
+    report = _with_bootstrap(report, ensemble.vectors, ensemble.identifiers, bootstrap, bootstrap_owner)
+    if report.bootstrap_performed and report.bootstrap_failure_rate > 0.20:
+        return report, ConfidenceClass.UNTRUSTED, ("bootstrap_failure_rate",)
     clusters = (
         (tuple(range(ensemble.count)),)
         if ensemble.width == 0
@@ -231,6 +253,7 @@ def analyze_joint_ensemble(
         boundary_hits=report.boundary_hits,
         strong_correlations=report.strong_correlations,
         systematic_residual=report.systematic_residual,
+        covariance_available=report.covariance is not None,
         diagnostics=report.diagnostics,
         distinct_cluster_distance=thresholds.distinct_cluster_distance,
         equivalent_cost_fraction=thresholds.equivalent_cost_fraction,
@@ -239,4 +262,57 @@ def analyze_joint_ensemble(
     return report, confidence, evidence
 
 
-__all__ = ["analyze_joint_ensemble"]
+def _joint_residual_evidence(
+    dataset_ids,
+    problems,
+    unit_vector,
+    evaluations,
+    residual_evidence,
+    layout_fingerprint,
+) -> tuple[ResidualEvidence, ...]:
+    if residual_evidence is not None:
+        evidence = tuple(residual_evidence)
+        if layout_fingerprint is None or len(evidence) != len(dataset_ids):
+            raise ValueError("joint residual evidence requires an aligned member axis and layout identity")
+        owner = joint_residual_owner_sha256(problems, dataset_ids, unit_vector, evaluations, layout_fingerprint)
+        for dataset_id, member in zip(dataset_ids, evidence, strict=True):
+            validate_residual_owner(member, owner, dataset_id)
+        return evidence
+    residuals = []
+    for dataset_id, problem, evaluation in zip(dataset_ids, problems, evaluations, strict=True):
+        values = np.full(problem.data.fit_mask.shape, np.nan)
+        if evaluation.valid:
+            values[problem.data.fit_mask] = evaluation.fit_residuals
+        residuals.append(build_residual_evidence(problem, values, evaluation.diagnostics, dataset_id=dataset_id))
+    return tuple(residuals)
+
+
+def analyze_joint_point(
+    names: tuple[str, ...],
+    dataset_ids: tuple[str, ...],
+    problems: tuple,
+    unit_vector: np.ndarray,
+    local_evaluations: tuple,
+    inference_layout: Callable,
+    *,
+    residual_evidence: tuple[ResidualEvidence, ...] | None = None,
+    layout_fingerprint: str | None = None,
+) -> tuple[CovarianceEvidence, tuple[ResidualEvidence, ...]]:
+    """Use one owned joint family for covariance; low-level calls never invent calibration."""
+    evidence = _joint_residual_evidence(
+        dataset_ids,
+        problems,
+        unit_vector,
+        local_evaluations,
+        residual_evidence,
+        layout_fingerprint,
+    )
+    try:
+        covariance = joint_covariance(names, unit_vector, problems, inference_layout(), evidence)
+    except (EvaluationConstraintError, FloatingPointError, np.linalg.LinAlgError) as error:
+        method = covariance_method(tuple(problem.config.noise_model for problem in problems))
+        covariance = CovarianceEvidence(names, None, method, 0, (), f"{type(error).__name__}:{error}")
+    return covariance, evidence
+
+
+__all__ = ["analyze_joint_ensemble", "analyze_joint_point"]

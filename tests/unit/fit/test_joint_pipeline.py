@@ -27,7 +27,7 @@ import numpy as np
 import pytest
 from tests.support.model_cases import dataset_project, prepared_data, project, simple_structure
 
-from xrr_fitter.fit.problem import compile_fit_problem
+from xrr_fitter.fit.problem import compile_fit_problem, recompile_resampled_problem
 from xrr_fitter.model.fitting import (
     FitConfig,
     SearchBudget,
@@ -385,7 +385,7 @@ def test_joint_analysis_publishes_coherent_shared_ranking_history() -> None:
     assert all(best is not None for best in best_candidates)
     assert all(candidate_selection_objective(best) != best.objective for best in best_candidates)
     results = tuple(
-        analysis_api.analyze_search_result(problem, search, profile_names=())
+        analysis_api.analyze_search_result(problem, search, profile_names=(), recompile=recompile_resampled_problem)
         for problem, search in zip(joint.problems, searches, strict=True)
     )
 
@@ -403,9 +403,16 @@ def test_joint_analysis_results_are_publishable_as_one_project() -> None:
     joint = _joint_problem()
     searches = fit_api.run_joint_fit(fit_api.JointFitRequest(joint))
     results = tuple(
-        analysis_api.analyze_search_result(problem, search, profile_names=())
+        analysis_api.analyze_search_result(
+            problem,
+            search,
+            profile_names=(),
+            bootstrap_enabled=False,
+            recompile=recompile_resampled_problem,
+        )
         for problem, search in zip(joint.problems, searches, strict=True)
     )
+    assert all(result.uncertainty.bootstrap_evidence is None for result in results)
     datasets = tuple(
         dataset_project(dataset_id, result=result)
         for dataset_id, result in zip(joint.dataset_ids, results, strict=True)
@@ -424,9 +431,16 @@ def test_joint_analysis_publishes_dataset_local_evidence_to_one_project() -> Non
     joint = _asymmetric_joint_problem()
     searches = fit_api.run_joint_fit(fit_api.JointFitRequest(joint))
     results = tuple(
-        analysis_api.analyze_search_result(problem, search, profile_names=())
+        analysis_api.analyze_search_result(
+            problem,
+            search,
+            profile_names=(),
+            bootstrap_enabled=False,
+            recompile=recompile_resampled_problem,
+        )
         for problem, search in zip(joint.problems, searches, strict=True)
     )
+    assert all(result.uncertainty.bootstrap_evidence is None for result in results)
     assert tuple(len(problem.variables) for problem in joint.problems) == (1, 2)
     assert results[0].best_candidate.objective != results[1].best_candidate.objective
     assert results[0].best_candidate.ranking_objective == results[1].best_candidate.ranking_objective
@@ -483,7 +497,7 @@ def test_joint_pipeline_uses_one_global_layout_short_and_full_de_then_local_refi
         local_calls.append(start.size)
         residual(start)
         jac(start)
-        return SimpleNamespace(x=start, message="captured local", nfev=1)
+        return SimpleNamespace(x=start, message="captured local", nfev=1, success=True)
 
     monkeypatch.setattr(solvers, "differential_evolution", fake_de)
     monkeypatch.setattr(solvers, "least_squares", fake_local)

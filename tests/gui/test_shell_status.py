@@ -65,6 +65,7 @@ def _fitted_window(qtbot, tmp_path, confidence, objective):
         qz_a_inv=np.linspace(0.015, 0.25, size),
         model_normalized=np.geomspace(0.9, 2e-5, size),
         log_residuals_decades=np.full(size, 0.1),
+        residuals=np.full(size, 0.1),
         weighted_residuals=np.zeros(size),
     )
     result = api.FitResult.from_search(

@@ -27,6 +27,12 @@ READINESS_TEXTS = {
     "ready": READY_TEXT,
     "project has no datasets": "项目中还没有数据集，请先导入 XRR 数据",
     "source validation failed": "数据源校验失败，请检查源文件后重试",
+    "Gaussian fitting requires known intensity sigma at every selected point": (
+        "Gaussian 拟合需要每个拟合点的有效标准差 sigma，请设置强度不确定度列"
+    ),
+    "Poisson fitting requires finite nonnegative integer raw counts": (
+        "Poisson 拟合需要原始非负整数 counts，请确认不是归一化强度或计数率"
+    ),
     "automatic fit requires a measurement preset": ("自动拟合需要测量预设，请通过导入对话框设置光路与仪器"),
     # 拖窄拟合范围最容易撞上的那一条。``fit/problem.py`` 抛的 ``ValueError`` 只说「没就绪」，
     # 而读者要知道的是把范围放回去——掩码里剩不下 30 点，拟合就无从谈起。

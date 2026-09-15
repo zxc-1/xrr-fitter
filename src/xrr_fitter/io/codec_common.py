@@ -25,6 +25,39 @@ OPTIONAL_FIELDS = frozenset(
         "bulk_density_g_cm3",
         "candidate_id",
         "checkpoint",
+        "covariance_evidence",
+        "bootstrap_evidence",
+        "confidence_level",
+        "delta_total",
+        "provenance_sha256",
+        "joint_owner_sha256",
+        "interval_ranks",
+        "monte_carlo_assurance",
+        "matrix",
+        "search_parameter_spread",
+        "parameter_sigma",
+        "parameter_members",
+        "systematic_residual",
+        "residual_autocorrelation",
+        "dataset_id",
+        "systematic",
+        "autocorrelation",
+        "unavailable_reason",
+        "diagnostic_unavailable_reason",
+        "raw_systematic",
+        "raw_autocorrelation",
+        "calibration",
+        "owner_sha256",
+        "center",
+        "scale",
+        "adjusted_p_value",
+        "tail_count",
+        "tie_count",
+        "observed_score",
+        "null_statistics_sha256",
+        "refit_discrepancy",
+        "p_value",
+        "rejected",
         "expanded_stack",
         "formula",
         "fit_group_id",
@@ -35,6 +68,7 @@ OPTIONAL_FIELDS = frozenset(
         "measurement_preset",
         "mcmc",
         "objective",
+        "objective_threshold",
         "ranking_objective",
         "reason",
         "resolution",
@@ -56,11 +90,14 @@ NULLABLE_ARRAY_FIELDS = frozenset(
     {
         "acceptance_fraction",
         "correlation_matrix",
+        "coarse_objectives",
         "depth_a",
         "effective_sample_size",
         "imaginary",
         "log_probability",
         "log_residuals_decades",
+        "full_objectives",
+        "residuals",
         "model_normalized",
         "objectives",
         "parameter_sigma",
@@ -117,11 +154,22 @@ def _reject_constant(value: str) -> object:
     raise ProjectSchemaError(f"nonstandard JSON numeric constant: {value}")
 
 
+def _diagnostic_solver_status_null(path):
+    return (
+        len(path) >= 7
+        and (path[-7], path[-5], path[-3], path[-1]) == ("calibration", "paths", "stages", "status")
+        and path[-6] in {"observed_work", "null_work"}
+        and all(type(path[index]) is int and path[index] >= 0 for index in (-4, -2))
+    )
+
+
 def _allows_null(path: tuple[str | int, ...]) -> bool:
     field = path[-1]
     if isinstance(field, str) and field in OPTIONAL_FIELDS:
         return True
-    return any(isinstance(part, str) and part in NULLABLE_ARRAY_FIELDS for part in path)
+    return _diagnostic_solver_status_null(path) or any(
+        isinstance(part, str) and part in NULLABLE_ARRAY_FIELDS for part in path
+    )
 
 
 def _linked_path(path: tuple[str | int, ...]) -> object | None:
@@ -185,6 +233,12 @@ def _real_array_to_list(value: np.ndarray) -> list[Any]:
 
 def _real_array_from_list(value: object, dtype: type = float) -> np.ndarray:
     return np.asarray(_sequence(value, "numeric array"), dtype=dtype)
+
+
+def _square_array_from_list(value: object) -> np.ndarray:
+    """Restore the unambiguous empty matrix axis lost by JSON list encoding."""
+    result = _real_array_from_list(value)
+    return result.reshape((0, 0)) if result.shape == (0,) else result
 
 
 def _complex_to_dict(value: complex | None) -> dict[str, float] | None:

@@ -72,6 +72,7 @@ def test_problem_log_probability_preserves_tiny_nonzero_residual_likelihood(
     c_decades = 0.05
     problem = SimpleNamespace(
         variables=(),
+        objective_point_count=1,
         data=SimpleNamespace(fit_mask=np.array([True])),
         weights=np.ones(1),
         config=SimpleNamespace(c_decades=c_decades),
@@ -80,8 +81,8 @@ def test_problem_log_probability_preserves_tiny_nonzero_residual_likelihood(
     )
     observed = SimpleNamespace(
         valid=True,
-        objective=1.0,
-        fit_log_residuals_decades=np.array([residual]),
+        objective=evaluation.robust_log_cost(np.asarray([residual]), np.ones(1), c_decades),
+        fit_residuals=np.array([residual]),
         parameters=(),
     )
     monkeypatch.setattr(evaluation, "evaluate_model", lambda *_args, **_kwargs: observed)

@@ -42,7 +42,7 @@ from tests.support.model_cases import prepared_data, simple_structure
 from xrr_fitter.evaluation import encode_physical_vector, evaluate_model
 from xrr_fitter.fit.candidates import candidate_from_evaluation
 from xrr_fitter.fit.objective import evaluate_vector
-from xrr_fitter.fit.problem import compile_fit_problem
+from xrr_fitter.fit.problem import compile_fit_problem, recompile_resampled_problem
 from xrr_fitter.model.analysis import BootstrapResult, ConfidenceClass, UncertaintyReport
 from xrr_fitter.model.fitting import (
     FitConfig,
@@ -206,6 +206,7 @@ def _assert_analysis_pickle_contract(api, request, restored) -> None:
         "bootstrap",
         "bootstrap_enabled",
         "parameter_priors",
+        "residual_evidence",
     )
     assert restored.dataset_id == "curve"
     assert restored.problem.data.qz_a_inv.flags.writeable is False
@@ -317,6 +318,7 @@ def test_twelve_parameter_default_profiles_use_preliminary_evidence(
     monkeypatch.setattr(module, "select_profile_names", select)
     candidates = (object(),)
     bootstrap = object()
+    residual, covariance = object(), object()
 
     selected = module._selected_profile_names(
         problem,
@@ -325,6 +327,9 @@ def test_twelve_parameter_default_profiles_use_preliminary_evidence(
         bootstrap,
         ("warning",),
         None,
+        "curve",
+        residual,
+        covariance,
     )
 
     assert selected == ("parameter.0",)
@@ -335,6 +340,9 @@ def test_twelve_parameter_default_profiles_use_preliminary_evidence(
             "profile_names": (),
             "bootstrap": bootstrap,
             "cancelled": None,
+            "dataset_id": "curve",
+            "residual_evidence": residual,
+            "covariance_evidence": covariance,
         },
     )
     assert observed["select"] == (
@@ -378,6 +386,8 @@ def test_analysis_request_rejects_bootstrap_parameter_ownership_drift() -> None:
         np.ones((2, len(names))),
         (),
         0.0,
+        2,
+        unavailable_reason="insufficient_successful_samples",
     )
 
     with pytest.raises(ValueError, match="bootstrap.*parameter|parameter.*bootstrap"):
@@ -464,13 +474,14 @@ def test_analysis_request_rejects_tampered_bootstrap_payload() -> None:
     candidate = search.best_candidate
     assert candidate is not None
     names = tuple(variable.name for variable in problem.variables)
-    samples = np.ones((2, len(names)))
+    samples = np.ones((200, len(names)))
     intervals = tuple((name, 0.5, 1.5) for name in names)
     unsealed = BootstrapResult(
         names,
         samples,
         intervals,
         0.0,
+        200,
     )
     bootstrap = replace(
         unsealed,
@@ -504,7 +515,7 @@ def test_analysis_accepts_expected_invalid_stage_e_evidence() -> None:
     search = _search_result(problem, candidates)
 
     request = api.AnalysisRequest("curve", problem, search, profile_names=())
-    result = api.run_analysis(request)
+    result = api.run_analysis(request, recompile=recompile_resampled_problem)
 
     assert result.best_candidate.candidate_id == "E-0"
     assert result.candidates[1].stop_reason == "nonpositive_fitted_incident_angle"
@@ -537,7 +548,10 @@ def _empty_owned_bootstrap(problem, search) -> BootstrapResult:
         names,
         np.empty((0, len(names))),
         (),
-        0.0,
+        1.0,
+        1,
+        ((0, "fit_failed"),),
+        unavailable_reason="excessive_fit_failures",
     )
     return replace(
         unsealed,
@@ -608,58 +622,12 @@ def test_build_report_rejects_none_lineage_for_identified_candidate() -> None:
         _api().build_uncertainty_report(problem, (identified, missing), profile_names=())
 
 
-def test_build_report_allows_missing_lineage_for_legacy_candidate_double() -> None:
+def test_owned_diagnostics_require_candidate_lineage_even_for_a_single_test_double() -> None:
     problem = _problem()
-    legacy = _legacy(_candidate(problem, "E-0"))
+    missing = _legacy(_candidate(problem, "E-0"))
 
-    report = _api().build_uncertainty_report(problem, (legacy,), profile_names=())
-
-    assert report.candidate_id is None
-
-
-def test_build_report_reads_the_requested_resample_count_off_the_bootstrap() -> None:
-    """报告要报得出「200 次里丢了 4%」，而 ``BootstrapResult`` 只带成功样本与失败率。
-
-    请求数原本只在 ``config.budget`` 里，但读数必须来自手上这份证据——调用方完全可以递进
-    一份用别的 ``sample_count`` 跑出来的 bootstrap，那时预算说的不是这份证据的数。所以从
-    「成功数 ÷（1 − 失败率）」反解；采样器保证 ``kept == count - failures``（见
-    ``_collect_bootstrap_samples`` 的两条 RuntimeError），这道算术是精确的而不是估计。
-    """
-    problem = _problem()
-    candidate = _candidate(problem, "E-0")
-    names = tuple(variable.name for variable in problem.variables)
-    bootstrap = BootstrapResult(names, np.zeros((192, len(names))), (), 0.04)
-
-    report = _api().build_uncertainty_report(problem, (candidate,), bootstrap=bootstrap)
-
-    assert report.bootstrap_sample_count == 200
-    assert report.bootstrap_performed is True
-
-
-def test_build_report_records_no_resample_count_without_a_bootstrap() -> None:
-    """没跑自助抽样就不能编一个次数出来：0 读作「未记录」，与 ``bootstrap_performed=False`` 自洽。"""
-    problem = _problem()
-    candidate = _candidate(problem, "E-0")
-
-    report = _api().build_uncertainty_report(problem, (candidate,), profile_names=())
-
-    assert report.bootstrap_sample_count == 0
-
-
-def test_build_report_survives_a_bootstrap_that_lost_every_sample() -> None:
-    """全军覆没时「÷（1 − 1.0）」会炸，而这种报告确实存在（跑过、一个样本没收住）。
-
-    次数在这一种情形下反解不出来，记 0（未记录）；跑没跑过仍由 ``bootstrap_performed`` 说。
-    """
-    problem = _problem()
-    candidate = _candidate(problem, "E-0")
-    names = tuple(variable.name for variable in problem.variables)
-    bootstrap = BootstrapResult(names, np.zeros((0, len(names))), (), 1.0)
-
-    report = _api().build_uncertainty_report(problem, (candidate,), bootstrap=bootstrap)
-
-    assert report.bootstrap_sample_count == 0
-    assert report.bootstrap_performed is True
+    with pytest.raises(AttributeError, match="candidate_id"):
+        _api().build_uncertainty_report(problem, (missing,), profile_names=())
 
 
 def test_build_report_selects_the_persisted_global_ranking_winner(
@@ -673,17 +641,7 @@ def test_build_report_selects_the_persisted_global_ranking_winner(
         replace(_candidate(problem, "E-2"), objective=0.30, ranking_objective=20.0),
         replace(_candidate(problem, "E-3"), objective=0.40, ranking_objective=30.0),
     )
-    monkeypatch.setattr(
-        module,
-        "_correlation_evidence",
-        lambda _problem, _unit, names: (np.eye(len(names)), (), (), np.ones(len(names))),
-    )
-    monkeypatch.setattr(module, "_profiles", lambda *_args: ())
-    monkeypatch.setattr(
-        module,
-        "_residual_evidence",
-        lambda _problem, _candidate: (False, (), False),
-    )
+    monkeypatch.setattr(module, "_profiles", lambda *_args, **_options: ())
 
     report = module.build_uncertainty_report(problem, candidates, profile_names=())
 
@@ -695,7 +653,7 @@ def test_fit_dataset_real_uncertainty_report_is_attached() -> None:
     candidates = _analysis_candidates(problem)
     search = _search_result(problem, candidates)
 
-    result = _api().analyze_search_result(problem, search, profile_names=())
+    result = _api().analyze_search_result(problem, search, profile_names=(), recompile=recompile_resampled_problem)
 
     assert result.uncertainty is not None
     assert result.uncertainty.candidate_id == search.best_candidate.candidate_id
@@ -728,6 +686,7 @@ def _assert_bootstrap_invocation(
         "sample_count": problem.config.budget.bootstrap_samples,
         "child_seed": module.uncertainty_seed(problem.config),
         "cancelled": None,
+        "recompile": recompile_resampled_problem,
     }
 
 
@@ -788,6 +747,7 @@ def test_fit_dataset_runs_uncertainty_before_classifying_result(monkeypatch) -> 
         search,
         profile_names=("component.0.thickness_a",),
         dataset_id="curve",
+        recompile=recompile_resampled_problem,
         progress=progress.append,
         task_runner=task_runner,
     )

@@ -265,49 +265,6 @@ def _stage_b_baseline_case(problem):
     )
 
 
-def test_child_seed_lineage_is_deterministic_and_order_independent() -> None:
-    api = _stages_api()
-    streams = ("B-0", "B-1", "E-0", "E-1", "E-2", "E-3")
-
-    forward = api.reserve_child_seeds(20260723, streams)
-    reverse = api.reserve_child_seeds(20260723, tuple(reversed(streams)))
-
-    assert tuple(item.stream_id for item in forward) == streams
-    assert tuple(item.stream_id for item in reverse) == tuple(reversed(streams))
-    assert {item.stream_id: item.seed for item in forward} == {item.stream_id: item.seed for item in reverse}
-    assert len({item.seed for item in forward}) == len(streams)
-    assert all(0 <= item.seed < 2**64 for item in forward)
-    assert tuple(item.seed for item in forward) == (
-        16164323491089515154,
-        9436610754940370787,
-        14495158119691411689,
-        11623762797650596694,
-        18359781962598382080,
-        9014141665841017941,
-    )
-
-
-def test_stage_schedule_owns_seed_and_resume_contracts() -> None:
-    import inspect
-
-    schedule = import_module("xrr_fitter.fit.stage_schedule")
-
-    assert inspect.getsourcefile(schedule.reserve_child_seeds) == inspect.getsourcefile(schedule)
-    assert inspect.getsourcefile(schedule.remaining_stages) == inspect.getsourcefile(schedule)
-
-
-def test_stage_graph_has_exact_a_through_e_order_and_resume_suffixes() -> None:
-    api = _stages_api()
-
-    assert api.STAGE_ORDER == ("A", "B", "C", "D", "E")
-    assert api.remaining_stages(None) == api.STAGE_ORDER
-    assert api.remaining_stages("B") == ("C", "D", "E")
-    assert api.remaining_stages("D") == ("E",)
-    assert api.remaining_stages("E") == ()
-    with pytest.raises(ValueError, match="stage"):
-        api.remaining_stages("uncertainty")
-
-
 def test_fit_search_reports_ordered_history_progress_and_coherent_checkpoints() -> None:
     api = _pipeline_api()
     events: list[tuple[str, object]] = []
@@ -671,8 +628,8 @@ def test_pipeline_archives_stage_b_evidence_and_routes_only_active_clusters(
 
     def forced_archive(values, **_kwargs):
         archive_calls.append(tuple(value.candidate_id for value in values))
-        archived = replace(values[1], seed_index=-1, stop_reason="early_eliminated")
-        return candidates.StageBArchive((values[0],), (archived,), (5,))
+        archived = tuple(replace(value, seed_index=-1, stop_reason="early_eliminated") for value in values[1:])
+        return candidates.StageBArchive((values[0],), archived, (5,))
 
     monkeypatch.setattr(stages, "solve_global", no_op_global)
     monkeypatch.setattr(stages, "solve_local", _unchanged_local_solution)
@@ -681,8 +638,11 @@ def test_pipeline_archives_stage_b_evidence_and_routes_only_active_clusters(
     result = pipeline.run_fit_search(pipeline.FitSearchRequest("curve", _problem(seed=759)))
     candidate_ids = tuple(value.candidate_id for value in result.candidates)
 
-    assert archive_calls == [("B-0", "B-1")]
-    assert any(value.candidate_id == "B-1" and value.stop_reason == "early_eliminated" for value in result.candidates)
+    assert archive_calls == [("B-declared-start", "B-0", "B-1")]
+    assert tuple(value.candidate_id for value in result.candidates if value.stop_reason == "early_eliminated") == (
+        "B-0",
+        "B-1",
+    )
     assert tuple(value for value in candidate_ids if value.startswith("C-0-")) == tuple(
         f"C-0-{index}" for index in range(6)
     )

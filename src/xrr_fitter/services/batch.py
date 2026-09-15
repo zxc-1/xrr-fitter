@@ -19,6 +19,7 @@ from functools import partial
 from threading import Lock
 from typing import Protocol, cast
 
+from xrr_fitter.io.source import validate_sources as inspect_sources
 from xrr_fitter.model.analysis import FitResult
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
 from xrr_fitter.model.fitting import FitCheckpoint, FitProgress
@@ -43,7 +44,6 @@ from xrr_fitter.services.batch_routing import automatic_physical_signature
 from xrr_fitter.services.datasets import ServiceSeedBranches
 from xrr_fitter.services.fitting_phases.common import AutomaticPreparedResult, PreparedDatasetFit
 from xrr_fitter.services.parallel import OrderedTaskRunner
-from xrr_fitter.services.projects import inspect_sources
 
 _SeedBranches = Callable[[XrrProject], ServiceSeedBranches]
 _PrepareDataset = Callable[[XrrProject, str, int], PreparedDatasetFit]

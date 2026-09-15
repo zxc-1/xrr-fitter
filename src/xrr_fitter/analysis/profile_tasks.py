@@ -22,11 +22,13 @@ from functools import partial
 import numpy as np
 
 from xrr_fitter.analysis.bootstrap_samples import TaskRunner, run_tasks
+from xrr_fitter.analysis.profile_calibration import problem_profile_options
 from xrr_fitter.evaluation import (
     EvaluationConstraintError,
 )
 from xrr_fitter.model.analysis import ParameterProfile
-from xrr_fitter.model.fitting import FitEvaluationContext, ModelEvaluation
+from xrr_fitter.model.evaluation import ModelEvaluation
+from xrr_fitter.model.fitting import FitEvaluationContext
 
 Vector = Callable[[np.ndarray], np.ndarray]
 System = Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]]
@@ -42,6 +44,7 @@ def _problem_profile_plan[Plan](
     least_squares_system: Callable[[FitEvaluationContext, np.ndarray], tuple[np.ndarray, np.ndarray]],
     least_squares_loss: Callable[[FitEvaluationContext], Vector],
     values_by_name: Callable[[FitEvaluationContext, np.ndarray], dict[str, float]],
+    interval_options: dict[str, object],
     cancelled: Callable[[], bool] | None = None,
 ) -> Plan:
     """Bind one declared parameter to a prepared generic profile plan."""
@@ -58,6 +61,7 @@ def _problem_profile_plan[Plan](
             name,
             profile_builder=prepare_plan,
             cancelled=cancelled,
+            interval_options=interval_options,
         )
     names = tuple(variable.name for variable in problem.variables)
     if name not in names:
@@ -75,7 +79,7 @@ def _problem_profile_plan[Plan](
         problem.config.budget.local_min_nfev,
         problem.config.budget.local_nfev_per_parameter * max(1, len(problem.variables)),
     )
-    steps = 11 if problem.config.budget.bootstrap_samples < 100 else 41
+    steps = problem.config.profile_steps
     residual, jacobian = cache_callbacks(partial(least_squares_system, problem))
     return prepare_plan(
         objective,
@@ -89,7 +93,23 @@ def _problem_profile_plan[Plan](
         least_squares_max_nfev=maximum,
         steps=steps,
         cancelled=cancelled,
+        **interval_options,
     )
+
+
+def _execute_profile_plans[Plan, Scan](
+    plans: tuple[Plan, ...],
+    scan_plan_direction: Callable[[Plan, int], Scan],
+    finish_plan: Callable[[Plan, tuple[Scan, Scan]], tuple[ParameterProfile, np.ndarray, float, float]],
+    task_runner: TaskRunner | None,
+) -> tuple[ParameterProfile, ...]:
+    """Run both directions before finalizing profiles in declaration order."""
+    direction_tasks = tuple(partial(scan_plan_direction, plan, direction) for plan in plans for direction in (-1, 1))
+    directional = run_tasks(direction_tasks, task_runner)
+    scans = tuple(zip(directional[::2], directional[1::2], strict=True))
+    finish_tasks = tuple(partial(finish_plan, plan, scan) for plan, scan in zip(plans, scans, strict=True))
+    finished = run_tasks(finish_tasks, task_runner)
+    return tuple(result[0] for result in finished)
 
 
 def build_problem_profiles[Plan, Scan](
@@ -107,6 +127,7 @@ def build_problem_profiles[Plan, Scan](
     values_by_name: Callable[[FitEvaluationContext, np.ndarray], dict[str, float]],
     cancelled: Callable[[], bool] | None = None,
     task_runner: TaskRunner | None = None,
+    interval_options: dict[str, object] | None = None,
 ) -> tuple[ParameterProfile, ...]:
     """Build profiles through flattened direction and refinement task batches.
 
@@ -114,6 +135,8 @@ def build_problem_profiles[Plan, Scan](
     two declares exactly one finalization task per profile. Both runner results
     are indexed rather than observed by completion time.
     """
+    if interval_options is None:
+        interval_options = problem_profile_options(problem, unit_vector) if names else {}
     plans = tuple(
         _problem_profile_plan(
             problem,
@@ -125,13 +148,9 @@ def build_problem_profiles[Plan, Scan](
             least_squares_system,
             least_squares_loss,
             values_by_name,
+            interval_options,
             cancelled,
         )
         for name in names
     )
-    direction_tasks = tuple(partial(scan_plan_direction, plan, direction) for plan in plans for direction in (-1, 1))
-    directional = run_tasks(direction_tasks, task_runner)
-    scans = tuple(zip(directional[::2], directional[1::2], strict=True))
-    finish_tasks = tuple(partial(finish_plan, plan, scan) for plan, scan in zip(plans, scans, strict=True))
-    finished = run_tasks(finish_tasks, task_runner)
-    return tuple(result[0] for result in finished)
+    return _execute_profile_plans(plans, scan_plan_direction, finish_plan, task_runner)

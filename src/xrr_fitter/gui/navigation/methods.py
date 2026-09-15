@@ -2,20 +2,18 @@
 
 四种证据答的是同一个问题的四面：谁和谁纠缠（相关矩阵）、重采样后区间有多宽（自助抽样）、
 单参数的谷有多宽（Profile 似然）、后验整体长什么样（MCMC）。它们摆成一列而不是四个并列的
-按钮，因为代价是递增的——相关矩阵是拟合末尾那个 Hessian 顺带给的，MCMC 要采上万步——所以
+按钮，因为代价是递增的——相关矩阵读拟合末尾的协方差估计，MCMC 要采上万步——所以
 从上往下就是建议的顺序，读者要知道自己走到了哪一种。
 
-三态不另算一遍：读报告里那四样在不在即可（``correlation_names`` / ``bootstrap_performed``
+三态不另算一遍：读报告里那四样在不在即可（可用的 ``covariance_evidence`` / ``bootstrap_performed``
 / ``profiles`` / ``mcmc``）。缺席的第一样是当前那一步，它后面的还没轮到。这样"哪一步没做"
 只有一个出处——报告本身，而不是界面自己记的一份进度；界面记进度就会出现报告说没跑、左栏
 说跑过的两份说法。
 
 小字报的是这份报告此刻的数（Profile 覆盖几个参数、MCMC 几条链、自助抽样抽了多少次、失败
 率多少），没跑过的报「未运行」。设计稿在自助抽样那行写的「200 次」读的是
-``UncertaintyReport.bootstrap_sample_count``——报告落地时由 ``analysis/report.py`` 从证据反
-解（成功样本数 ÷（1 − 失败率）），而不是回头去问预算 ``problem.config.budget``，GUI 也就不
-必触达配置。这个字段之前存下的工程文件读出 0，此时退回报参数个数：宁可换一种读数，也不编一
-个看着像次数的数字。
+``UncertaintyReport.bootstrap_sample_count``——直接来自 sampling evidence 的实际尝试次数，
+不从失败率反推，也不读取配置预算。没有 evidence 就是未运行。
 
 只有一件事读不出报告：链此刻在不在采。采样期间报告里还没有 ``mcmc``，按上面那套算的话第四行
 读成「当前 · 未运行」——读者刚按下 ``▶ 运行 MCMC``、链已经在跑，左栏却说这一步没开始；跑过一
@@ -34,6 +32,7 @@ import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.data.dataset_card import RUNNING_GLYPH
 from xrr_fitter.gui.navigation.steps import build_step
+from xrr_fitter.gui.results.inference_text import correlation_unavailable_reason
 
 METHOD_HEADING_TEXT = "不确定度方法"
 
@@ -41,13 +40,10 @@ METHOD_HEADING_TEXT = "不确定度方法"
 UNCERTAINTY_METHODS = (
     ("相关矩阵", "看参数之间的线性纠缠"),
     ("自助抽样", "重采样数据得出置信区间"),
-    ("Profile 似然", "逐参数扫描目标函数的谷宽"),
+    ("参数剖面", "逐参数扫描；区间类型、置信水平与方法见「拟合 → 查看推断证据…」"),
     ("MCMC 后验", "采样后验，给非对称区间"),
 )
 
-# 相关矩阵那行报的是出处而不是尺寸：Hessian 只在最优点附近展开一次，谷子一歪那几个 ρ 就偏，
-# 所以读者要先知道它不是采样得来的，才知道该多信它。
-CORRELATION_SOURCE = "Hessian 派生"
 NOT_RUN = "未运行"
 
 # 链正在采时第四行那句小字。walkers 数取自 spin box 此刻的值——运行期间那几个 spin box 是禁用
@@ -71,7 +67,7 @@ class MethodRow:
 
 
 def _correlation(report: api.UncertaintyReport) -> str | None:
-    return CORRELATION_SOURCE if len(report.correlation_names) else None
+    return report.covariance_evidence.method if correlation_unavailable_reason(report) is None else None
 
 
 def _bootstrap(report: api.UncertaintyReport) -> str | None:
@@ -79,9 +75,7 @@ def _bootstrap(report: api.UncertaintyReport) -> str | None:
     if not report.bootstrap_performed:
         return None
     rate = f"失败 {report.bootstrap_failure_rate:.0%}"
-    if report.bootstrap_sample_count:
-        return f"{report.bootstrap_sample_count} 次 · {rate}"
-    return f"{len(report.bootstrap_intervals)} 参数 · {rate}"
+    return f"{report.bootstrap_sample_count} 次 · {rate}"
 
 
 def _profiles(report: api.UncertaintyReport) -> str | None:
@@ -95,6 +89,13 @@ def _mcmc(report: api.UncertaintyReport) -> str | None:
 # 每种方法怎么从报告里读出自己那句小字，读不出来（``None``）就是没跑过。判据与文案是同一件
 # 事：能报出数说明证据在手，报不出说明这一步还没走——分成两处写就会出现"标成走过却没有数"。
 METHOD_READERS = (_correlation, _bootstrap, _profiles, _mcmc)
+
+
+def _method_caption(report: api.UncertaintyReport | None, index: int, caption: str | None) -> str:
+    """不可用原因是显示说明，不能进入已完成证据的连续前缀判定。"""
+    if index == 0 and report is not None and (reason := correlation_unavailable_reason(report)) is not None:
+        return f"不可用：{reason}"
+    return caption or NOT_RUN
 
 
 def _method_state(index: int, walked: int, sampling: int | None) -> tuple[str, str]:
@@ -131,7 +132,8 @@ def uncertainty_method_rows(
     rows = []
     for index, (title, _purpose) in enumerate(UNCERTAINTY_METHODS):
         state, glyph = _method_state(index, walked, sampling)
-        rows.append(MethodRow(title=title, state=state, caption=captions[index] or NOT_RUN, glyph=glyph))
+        caption = _method_caption(report, index, captions[index])
+        rows.append(MethodRow(title=title, state=state, caption=caption, glyph=glyph))
     return tuple(rows)
 
 

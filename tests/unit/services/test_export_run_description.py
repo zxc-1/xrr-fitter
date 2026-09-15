@@ -58,8 +58,8 @@ def _staged_result(
         warnings=(),
         child_seeds=(101,),
         stage_summaries=summaries,
-        region_labels=np.zeros(4, dtype=int),
-        region_weights=np.ones(4),
+        region_labels=np.zeros(candidate.qz_a_inv.size, dtype=int),
+        region_weights=np.ones(candidate.qz_a_inv.size),
     )
     return FitResult.from_search(
         search,
@@ -83,6 +83,7 @@ def _candidate_for(project, dataset, *, ranking_objective: float | None = None):
         qz_a_inv=data.qz_a_inv,
         model_normalized=data.intensity_normalized,
         log_residuals_decades=np.zeros(data.qz_a_inv.size),
+        residuals=np.zeros(data.qz_a_inv.size),
         weighted_residuals=np.zeros(data.qz_a_inv.size),
         ranking_objective=ranking_objective,
     )

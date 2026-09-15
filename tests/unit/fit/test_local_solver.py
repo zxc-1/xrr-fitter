@@ -241,12 +241,12 @@ def test_local_solver_uses_external_soft_l1_weights_and_a_gaussian_prior(
 
         np.testing.assert_allclose(
             rho[0, :-1],
-            4.0 * weights**2 * c_decades**2 * (np.sqrt(scaled) - 1.0),
+            4.0 * weights**2 * (np.sqrt(scaled) - 1.0),
         )
-        np.testing.assert_allclose(rho[1, :-1], 2.0 * weights**2 / np.sqrt(scaled))
+        np.testing.assert_allclose(rho[1, :-1], 2.0 * weights**2 / c_decades**2 / np.sqrt(scaled))
         np.testing.assert_allclose(
             rho[2, :-1],
-            -(weights**2 / c_decades**2) * scaled ** (-1.5),
+            -(weights**2 / c_decades**4) * scaled ** (-1.5),
         )
         np.testing.assert_allclose(rho[:, -1], (2.0 * residual[-1] ** 2, 2.0, 0.0))
         optimizer_objective = 0.5 * float(np.sum(rho[0])) / data_squared.size

@@ -1317,7 +1317,9 @@ class PlotPanel(QWidget):
         if arrays.residual is None:
             residual.show_placeholder("暂无当前候选")
         else:
-            residual.show_residual(*arrays.residual)
+            residual.show_residual(
+                *arrays.residual, ylabel=arrays.residual_ylabel, sigma_reference=arrays.residual_sigma_reference
+            )
 
     #
     # Draw range

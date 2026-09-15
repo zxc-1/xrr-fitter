@@ -261,7 +261,7 @@ def test_scale_prior_jacobian_rejects_unrepresentable_affine_span() -> None:
     )
 
     with pytest.raises(FloatingPointError, match="span"):
-        _scale_prior_jacobian(problem)
+        _scale_prior_jacobian(problem, np.asarray([0.5]))
 
 
 def test_dynamic_upper_at_declared_lower_uses_a_canonical_singleton_coordinate() -> None:

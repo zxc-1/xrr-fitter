@@ -16,25 +16,30 @@ from time import sleep as _sleep
 
 from xrr_fitter.analysis import sld_bands as _bands
 from xrr_fitter.analysis.automatic import assess_automatic_quality
-from xrr_fitter.analysis.joint import analyze_joint_ensemble
+from xrr_fitter.analysis.bootstrap_generation import poll_cancelled
+from xrr_fitter.analysis.joint import analyze_joint_ensemble, analyze_joint_point
+from xrr_fitter.analysis.joint_bootstrap import bootstrap_joint_local
 from xrr_fitter.analysis.mcmc import (
     prior_conflicts,
     run_problem_mcmc,
     with_parameter_priors,
 )
 from xrr_fitter.analysis.profiles import recover_profile_basin
-from xrr_fitter.analysis.report import AnalysisRequest, run_analysis
+from xrr_fitter.analysis.report import AnalysisRequest, uncertainty_seed
+from xrr_fitter.analysis.report import run_analysis as _run_analysis
+from xrr_fitter.analysis.residual_calibration import calibrate_residuals, qualify_poisson_bootstrap
 from xrr_fitter.fit.automatic import (
     candidate_from_physical_values,
     refit_from_physical_values,
 )
 from xrr_fitter.fit.candidates import best_candidate_index, candidate_from_evaluation
+from xrr_fitter.fit.diagnostic_refit import refit_diagnostic_joint, refit_diagnostic_single
 from xrr_fitter.fit.initialization import structure_evidence
 from xrr_fitter.fit.joint_candidates import (
     consensus_joint_vector,
     joint_candidate_vectors,
 )
-from xrr_fitter.fit.joint_evaluation import evaluate_joint_vector
+from xrr_fitter.fit.joint_evaluation import evaluate_joint_vector, joint_inference_layout
 from xrr_fitter.fit.joint_pipeline import JointFitRequest, run_joint_fit
 from xrr_fitter.fit.joint_problem import compile_joint_problem
 from xrr_fitter.fit.joint_sharing import (
@@ -43,6 +48,7 @@ from xrr_fitter.fit.joint_sharing import (
 from xrr_fitter.fit.joint_sharing import (
     validate_sharing_rules as validate_compiled_sharing_rules,
 )
+from xrr_fitter.fit.joint_solvers import refit_resampled_joint
 from xrr_fitter.fit.local_search import SearchCancelled, StageSkipped
 from xrr_fitter.fit.objective import evaluate_declared_initial, evaluate_vector
 from xrr_fitter.fit.parameters import (
@@ -54,10 +60,11 @@ from xrr_fitter.fit.pipeline import (
     continue_profile_basin,
     run_fit_search,
 )
-from xrr_fitter.fit.problem import compile_fit_problem
+from xrr_fitter.fit.problem import compile_fit_problem, recompile_resampled_problem
 from xrr_fitter.model.analysis import FitResult, McmcConfig, StructureEvidence
-from xrr_fitter.model.fitting import FitCheckpoint
+from xrr_fitter.model.fitting import FitCheckpoint, FitProgress
 from xrr_fitter.model.instrument import InstrumentSpec
+from xrr_fitter.model.joint_bootstrap_provenance import joint_bootstrap_owner_sha256
 from xrr_fitter.model.operations import FitReadiness, ProjectFitResult
 from xrr_fitter.model.parameters import (
     ParameterCoordinate,
@@ -67,7 +74,8 @@ from xrr_fitter.model.parameters import (
     SharingRule,
 )
 from xrr_fitter.model.project import DatasetProject, XrrProject
-from xrr_fitter.model.provenance import fit_search_provenance_sha256
+from xrr_fitter.model.provenance import fit_search_provenance_sha256, joint_residual_owner_sha256
+from xrr_fitter.services import bootstrap_ownership as _bootstrap_ownership
 from xrr_fitter.services.datasets import (
     SERVICE_SEED_TREE_VERSION,
     _prepared_current,
@@ -90,6 +98,17 @@ from xrr_fitter.services.fitting_phases.sharing import automatic_sharing_rules
 
 # 暂停期间探针醒来查看的周期。取消要在这个量级内被听见，而不是等到下一个阶段边界。
 PAUSE_POLL_SECONDS = 0.05
+
+
+def run_analysis(request, *, cancelled=None, progress=None, task_runner=None):
+    return _run_analysis(
+        request,
+        cancelled=cancelled,
+        progress=progress,
+        task_runner=task_runner,
+        recompile=recompile_resampled_problem,
+        diagnostic_refit=lambda members: refit_diagnostic_single(members[0], cancelled=cancelled),
+    )
 
 
 def pause_aware_probe(cancellation, pause, skip=None, *, sleep=_sleep):
@@ -402,6 +421,17 @@ def prepare_dataset_fit(
     )
 
 
+def validate_project_bootstrap_ownership(project: XrrProject) -> None:
+    """Rebuild joint persistence owners through the sole numerical composition root."""
+    _bootstrap_ownership.validate_project_bootstrap_ownership(
+        project,
+        prepare_dataset=prepare_dataset_fit,
+        compile_joint_problem=compile_joint_problem,
+        joint_candidate_vectors=joint_candidate_vectors,
+        uncertainty_seed=uncertainty_seed,
+    )
+
+
 def fit_prepared_dataset(
     prepared: PreparedDatasetFit,
     *,
@@ -496,15 +526,160 @@ def fit_automatic_prepared_dataset(
     )
 
 
-def _analyze_joint_searches(problem, searches, priors) -> tuple[FitResult, ...]:
+def _joint_diagnostic_progress(progress, objective):
+    def publish(completed, total):
+        if progress is not None:
+            progress(
+                FitProgress(
+                    None,
+                    "diagnostics",
+                    completed,
+                    total,
+                    objective,
+                    f"Poisson diagnostic calibration {completed}/{total}",
+                )
+            )
+
+    return publish
+
+
+def _joint_point_evidence(problem, vector, *, cancelled=None, progress=None, task_runner=None, cache=None):
+    poll_cancelled(cancelled)
+    evaluation = evaluate_joint_vector(problem, vector)
+    owner = joint_residual_owner_sha256(
+        problem.problems,
+        problem.dataset_ids,
+        vector,
+        evaluation.local_evaluations,
+        problem.layout_fingerprint,
+    )
+    poll_cancelled(cancelled)
+    if cache is not None and owner in cache:
+        return cache[owner]
+    residuals = calibrate_residuals(
+        problem.problems,
+        problem.dataset_ids,
+        vector,
+        evaluation.local_evaluations,
+        owner_sha256=owner,
+        refit=partial(refit_diagnostic_joint, problem, cancelled=cancelled),
+        recompile=recompile_resampled_problem,
+        cancelled=cancelled,
+        task_runner=task_runner,
+        progress=_joint_diagnostic_progress(progress, evaluation.objective),
+    )
+    evidence = analyze_joint_point(
+        tuple(variable.name for variable in problem.global_variables),
+        problem.dataset_ids,
+        problem.problems,
+        vector,
+        evaluation.local_evaluations,
+        lambda: joint_inference_layout(problem, vector),
+        residual_evidence=residuals,
+        layout_fingerprint=problem.layout_fingerprint,
+    )
+    poll_cancelled(cancelled)
+    if cache is not None:
+        cache[owner] = evidence
+    return evidence
+
+
+def _joint_winner_candidates(searches, candidate_id):
+    return tuple(
+        next(candidate for candidate in search.candidates if candidate.candidate_id == candidate_id)
+        for search in searches
+    )
+
+
+def _joint_bootstrap_owner(problem, searches, candidate_id, vector):
+    return joint_bootstrap_owner_sha256(
+        problem,
+        _joint_winner_candidates(searches, candidate_id),
+        vector,
+        uncertainty_seed(problem.problems[0].config),
+    )
+
+
+def _joint_bootstrap(
+    problem, searches, candidate_id, vector, *, cancelled=None, progress=None, task_runner=None, point_evidence=None
+):
+    evaluation = evaluate_joint_vector(problem, vector)
+    config = problem.problems[0].config
+    point = point_evidence or partial(
+        _joint_point_evidence,
+        cancelled=cancelled,
+        progress=progress,
+        task_runner=task_runner,
+    )
+    _covariance, residuals = point(problem, vector)
+
+    def publish(completed, total):
+        if progress is not None:
+            progress(
+                FitProgress(
+                    None, "bootstrap", completed, total, evaluation.objective, f"joint bootstrap {completed}/{total}"
+                )
+            )
+
+    publish(0, config.budget.bootstrap_samples)
+    sampling = bootstrap_joint_local(
+        problem,
+        _joint_winner_candidates(searches, candidate_id),
+        vector,
+        sample_count=config.budget.bootstrap_samples,
+        child_seed=uncertainty_seed(config),
+        recompile=recompile_resampled_problem,
+        refit=partial(refit_resampled_joint, problem, vector, cancelled=cancelled),
+        cancelled=cancelled,
+        progress=publish,
+        task_runner=task_runner,
+    )
+    return qualify_poisson_bootstrap(sampling, problem.problems, residuals)
+
+
+def _analyze_joint_searches(
+    problem,
+    searches,
+    priors,
+    *,
+    bootstrap_enabled=False,
+    cancelled=None,
+    progress=None,
+    task_runner=None,
+) -> tuple[FitResult, ...]:
+    # This operation alone owns the cache; even the bootstrap checks the exact
+    # numerical owner before reusing the common family and covariance evidence.
+    point_evidence = partial(
+        _joint_point_evidence,
+        cancelled=cancelled,
+        progress=progress,
+        task_runner=task_runner,
+        cache={},
+    )
+    bootstrap = (
+        partial(
+            _joint_bootstrap,
+            problem,
+            searches,
+            cancelled=cancelled,
+            progress=progress,
+            task_runner=task_runner,
+            point_evidence=point_evidence,
+        )
+        if bootstrap_enabled
+        else None
+    )
     return _joint_analysis._analyze_joint_searches(
         problem,
         searches,
         priors,
         joint_candidate_vectors=joint_candidate_vectors,
         analyze_joint_ensemble=analyze_joint_ensemble,
+        joint_point_evidence=point_evidence,
         with_parameter_priors=with_parameter_priors,
         prior_conflicts=prior_conflicts,
+        bootstrap=bootstrap,
+        bootstrap_owner=partial(_joint_bootstrap_owner, problem, searches),
     )
 
 

@@ -275,11 +275,18 @@ def test_joint_fit_workflow_publishes_one_aligned_result_transaction() -> None:
                 "E",
                 "E",
                 "finalizing",
+                "bootstrap",
+                "bootstrap",
                 "finalizing",
             ),
             "progress_dataset_ids": {None},
         },
     )
+    report = result.datasets[0].fit_result.uncertainty
+    assert report.bootstrap_performed is True
+    assert report.bootstrap_evidence.attempted_count == 1
+    assert report.bootstrap_evidence.confidence_level is None
+    assert report.bootstrap_evidence.intervals == ()
 
 
 def test_automatic_joint_workflow_refines_matching_points_with_shared_material(

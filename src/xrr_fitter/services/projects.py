@@ -30,6 +30,7 @@ from xrr_fitter.model.project import (
     with_workspace_state,
 )
 from xrr_fitter.services.datasets import _cleared, _dependent_fit_ids
+from xrr_fitter.services.fitting import validate_project_bootstrap_ownership
 
 SOURCE_RESTORE_ATTEMPTS = 2
 
@@ -40,15 +41,33 @@ def new_project() -> XrrProject:
     return replace(project, fit_config=FitConfig.fast(project.master_seed))
 
 
+def set_fit_config(project: XrrProject, config: FitConfig) -> XrrProject:
+    """Persist a configuration and invalidate evidence from the previous fit."""
+    if not isinstance(config, FitConfig):
+        raise TypeError("config must be a FitConfig")
+    if config == project.fit_config:
+        return project
+    clear_evidence = config.noise_model != project.fit_config.noise_model
+    return replace(
+        project,
+        fit_config=config,
+        datasets=tuple(_cleared(dataset, clear_evidence=clear_evidence) for dataset in project.datasets),
+        ui_state=replace(project.ui_state, selected_candidate_ids=()),
+    )
+
+
 def load_project(path: str | Path) -> XrrProject:
     """Load, source-validate, and invalidate one persisted workspace."""
-    return _prepare_source_snapshots(_load_project(path))
+    project = _prepare_source_snapshots(_load_project(path))
+    validate_project_bootstrap_ownership(project)
+    return project
 
 
 def save_project(project: XrrProject, path: str | Path) -> None:
     """Revalidate, relocate, and atomically persist a complete project."""
     target = Path(path)
     current = _prepare_source_snapshots(project)
+    validate_project_bootstrap_ownership(current)
     _save_project(_rebased_project(current, target.resolve().parent), target)
 
 
@@ -118,6 +137,8 @@ def _raced_source_ids(
                 dataset.beam,
                 dataset.import_angle_offset_deg,
                 dataset.column_mapping,
+                angle_convention=dataset.angle_convention,
+                noise_model=project.fit_config.noise_model,
             )
         except OSError:
             raced.add(dataset.dataset_id)

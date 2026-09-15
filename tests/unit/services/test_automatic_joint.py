@@ -15,7 +15,7 @@ from xrr_fitter.fit.joint_problem import compile_joint_problem
 from xrr_fitter.fit.local_search import SearchCancelled
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
-from xrr_fitter.model.analysis import ConfidenceClass, FitResult
+from xrr_fitter.model.analysis import ConfidenceClass, FitResult, ResidualEvidence, UncertaintyReport
 from xrr_fitter.model.automation import (
     AutomaticRole,
     AutomaticStatus,
@@ -91,6 +91,22 @@ def _rule_with_suffix(rules, suffix: str):
     return next(rule for rule in rules if any(member.parameter_name.endswith(suffix) for member in rule.members))
 
 
+def _clean_quality_report(dataset_id=None):
+    return UncertaintyReport(
+        (),
+        np.empty((0, 0)),
+        (),
+        (),
+        0.0,
+        (),
+        (),
+        False,
+        (),
+        False,
+        member_residuals=(ResidualEvidence(dataset_id, True, False, False, 80),),
+    )
+
+
 def _fit_result(
     prepared: fitting.PreparedDatasetFit,
     objective: float,
@@ -135,7 +151,7 @@ def _fit_result(
     return FitResult.from_search(
         search,
         confidence=ConfidenceClass.TRUSTED,
-        uncertainty=None,
+        uncertainty=_clean_quality_report(prepared.dataset_id),
     )
 
 
@@ -164,7 +180,7 @@ def _analysis_request(dataset_id, problem, search_result, **kwargs):
 
 
 def _passing_local_analysis(*_args, **_kwargs):
-    return SimpleNamespace(uncertainty=None)
+    return SimpleNamespace(uncertainty=_clean_quality_report())
 
 
 def _passing_quality(*_args):
@@ -180,7 +196,7 @@ def _stub_joint_searches(request, **_kwargs):
 
 
 def _constant_joint_analysis(results):
-    return lambda _problem, _searches, _priors: results
+    return lambda _problem, _searches, _priors, **_options: results
 
 
 class _JointProjectionHarness:
@@ -200,7 +216,7 @@ class _JointProjectionHarness:
         run, index = divmod(len(self.analysis_requests) - 1, 2)
         return self.local_results[run][index]
 
-    def analyze_joint(self, _problem, _searches, _priors):
+    def analyze_joint(self, _problem, _searches, _priors, **_options):
         return self.global_results[len(self.requests) - 1]
 
 
@@ -398,7 +414,7 @@ def test_joint_conflict_releases_roughness_once_and_restarts_from_projection() -
         requests.append(request)
         return tuple(object() for _item in request.problem.dataset_ids)
 
-    def analyze(_problem, _searches, _priors):
+    def analyze(_problem, _searches, _priors, **_options):
         return first_joint if len(requests) == 1 else second_joint
 
     results = _fit_joint_group(
@@ -444,10 +460,10 @@ def test_joint_projection_uses_dataset_local_quality_for_release_and_status() ->
     )
     local_results = (
         SimpleNamespace(
-            uncertainty=SimpleNamespace(systematic_residual=False),
+            uncertainty=SimpleNamespace(systematic_residual=False, residual_autocorrelation=False),
         ),
         SimpleNamespace(
-            uncertainty=SimpleNamespace(systematic_residual=True),
+            uncertainty=SimpleNamespace(systematic_residual=True, residual_autocorrelation=False),
         ),
     )
     harness = _JointProjectionHarness(

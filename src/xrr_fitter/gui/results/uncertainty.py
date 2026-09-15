@@ -32,8 +32,16 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.noise import candidate_mode_lines
 from xrr_fitter.gui.plots.parameter_labels import label_map, short_label
 from xrr_fitter.gui.plots.posterior import UncertaintyPages
+from xrr_fitter.gui.results.inference_text import (
+    bootstrap_metadata,
+    correlation_unavailable_reason,
+    covariance_metadata,
+    interval_metadata,
+    residual_diagnostic_lines,
+)
 
 CLASSIFICATION_LABELS = {
     "bootstrap_failure_rate": "Bootstrap 失败率超过阈值",
@@ -99,7 +107,7 @@ EVIDENCE_LINE_CEILING = 12
 # 个数对读数方式的要求——纠缠的两个参数各自的 ±1σ 偏窄，要换 Profile 似然去读。措辞
 # 不点名具体参数，因为一次拟合可能有多对强相关，而这条要求对每一对都一样。
 CORRELATION_CALLOUT_TEXT = (
-    "⚠ <b>存在强相关参数：</b>纠缠的参数难以同时唯一确定，单看 ±1σ 会低估真实不确定度，需结合 Profile 似然判读。"
+    "⚠ <b>存在强相关参数：</b>纠缠的参数难以同时唯一确定，单看 ±1σ 会低估真实不确定度，需结合参数剖面判读。"
 )
 
 
@@ -134,7 +142,7 @@ def _interval_text(interval: object) -> str:
 def _profile_text(profile: object) -> str:
     lower = "闭合" if profile.lower_closed else "开放"
     upper = "闭合" if profile.upper_closed else "开放"
-    return f"{profile.name}（下侧{lower}，上侧{upper}）"
+    return f"{profile.name}（下侧{lower}，上侧{upper}；{interval_metadata(profile)}）"
 
 
 def _correlation_text(report: object, definitions: Iterable[object]) -> str:
@@ -143,6 +151,9 @@ def _correlation_text(report: object, definitions: Iterable[object]) -> str:
     两处讲的是同一件事：读者拿着这一行里的一对参数去矩阵上找那一格。一边写机器路径、另一边
     写 ``d·ox``，中间就多了一次翻译，而它恰好发生在读者最需要相信「说的是同一对」的时候。
     """
+    reason = correlation_unavailable_reason(report)
+    if reason is not None:
+        return f"不可用：{reason}"
     labels = label_map(definitions)
     pairs = (
         f"{labels.get(left, short_label(left))}/{labels.get(right, short_label(right))}={value:.3g}"
@@ -156,19 +167,18 @@ def _report_lines(report: object, definitions: Iterable[object] = ()) -> list[st
     correlations = _correlation_text(report, definitions)
     profiles = _joined(_profile_text(profile) for profile in report.profiles)
     intervals = _joined(_interval_text(item) for item in report.bootstrap_intervals)
-    # 次数排在失败率前面：失败率是个比例，先给基数才读得出丢了几次。0 是「这份报告存下来时
-    # 还没有这个字段」，报「未记录」而不是 0——0 会被读成一次都没抽。
-    resamples = report.bootstrap_sample_count or "未记录"
+    # 次数来自 sampling evidence 的实际尝试数；没有证据就是未执行，不是旧格式缺字段。
+    resamples = report.bootstrap_sample_count if report.bootstrap_performed else "未执行"
     lines = [
+        *covariance_metadata(report),
         f"Bootstrap 重采样次数：{resamples}",
-        f"Bootstrap 失败率：{report.bootstrap_failure_rate:.3g}",
+        *bootstrap_metadata(report),
         f"边界命中（可疑）：{boundaries}",
         f"先验冲突（信息）：{_joined_or(report.prior_conflicts, '无')}",
         f"强相关：{correlations}",
         f"profile 区间：{profiles or '不可用'}",
         f"bootstrap 区间：{intervals or '不可用'}",
-        f"系统性残差：{'是' if report.systematic_residual else '否'}",
-        f"残差 ACF：{'是' if report.residual_autocorrelation else '否'}",
+        *residual_diagnostic_lines(report),
     ]
     return lines
 
@@ -352,6 +362,9 @@ def _evidence_lines(result: object, candidate_id: str | None) -> list[str]:
     lines = ["可信度仅针对当前结构模型", *_classification_lines(result)]
     if candidate_id is None:
         return [*lines, "尚未选择候选解"]
+    candidate = next((value for value in result.candidates if value.candidate_id == candidate_id), None)
+    if candidate is not None:
+        lines.extend(candidate_mode_lines(candidate))
     report = result.uncertainty
     if report is None:
         return [*lines, f"当前候选 {candidate_id} 暂无不确定度证据"]
@@ -381,7 +394,7 @@ def _has_owned_strong_correlation(result: object, candidate_id: str | None) -> b
     report = result.uncertainty
     if report is None or report.candidate_id != candidate_id:
         return False
-    return bool(report.strong_correlations)
+    return correlation_unavailable_reason(report) is None and bool(report.strong_correlations)
 
 
 def _spin(
@@ -425,6 +438,14 @@ class McmcControls(QGroupBox):
         self.cancel_button.setObjectName("cancelMcmcButton")
         self.force_button = QPushButton("强制停止")
         self.force_button.setObjectName("forceStopMcmcButton")
+        self._configuration_widgets = [
+            self.walkers,
+            self.burn_in,
+            self.production,
+            self.thin,
+            self.recommend_button,
+            self.run_button,
+        ]
         buttons = QHBoxLayout()
         buttons.addWidget(self.recommend_button)
         buttons.addWidget(self.run_button)
@@ -443,6 +464,7 @@ class McmcControls(QGroupBox):
             for column, (text, control) in enumerate(values):
                 label = QLabel(text)
                 label.setBuddy(control)
+                self._configuration_widgets.append(label)
                 form.addWidget(label, row, column * 2)
                 form.addWidget(control, row, column * 2 + 1)
             # QSS sets an explicit minimum below the native spin editor's hint.
@@ -504,6 +526,14 @@ class McmcControls(QGroupBox):
         self.recommend_button.setEnabled(not running)
         for widget in (self.walkers, self.burn_in, self.production, self.thin):
             widget.setEnabled(not running)
+
+    def set_sampling_visible(self, visible: bool) -> None:
+        """Hide configuration/start in read-only mode, preserving the same live controls."""
+        for widget in self._configuration_widgets:
+            widget.setVisible(visible)
+        for row, controls in enumerate(((self.walkers, self.burn_in), (self.production, self.thin))):
+            height = max(control.minimumSizeHint().height() for control in controls) if visible else 0
+            self.layout().setRowMinimumHeight(row, height)
 
 
 class UncertaintyView(QWidget):

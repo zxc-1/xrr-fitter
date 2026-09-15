@@ -65,7 +65,7 @@ def test_mcmc_scale_prior_is_a_separate_standard_gaussian_term() -> None:
     scale = 0.75 * problem.scale_prior_center
     unit = encode_physical_vector(problem, {"instrument.scale": scale})
     evaluation = evaluate_model(problem, unit)
-    residual = evaluation.fit_log_residuals_decades
+    residual = evaluation.fit_residuals
     weights = problem.weights[problem.data.fit_mask]
     c = problem.config.c_decades
     data_sum = np.sum(weights**2 * 2.0 * c**2 * (np.sqrt(1.0 + (residual / c) ** 2) - 1.0))

@@ -70,8 +70,8 @@ from xrr_fitter.evaluation_geometry import (
     _zero_roughness_values as _zero_roughness_values,
 )
 from xrr_fitter.evaluation_model import _masked_optional, _point_resolution_for_wavelength, _primary_wavelength
-from xrr_fitter.evaluation_objective import log_residuals
 from xrr_fitter.evaluation_parameters import EvaluationConstraintError, values_and_jacobians
+from xrr_fitter.evaluation_statistics import data_residual_model_derivative, data_residuals
 from xrr_fitter.model.fitting import FitEvaluationContext
 from xrr_fitter.model.parameters import (
     PhysicalValueError,
@@ -135,6 +135,8 @@ def _point_resolution_with_jacobian(
     angle_offset_deg: float,
     angle_jacobian: np.ndarray,
     wavelength_a: float,
+    *,
+    row_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     """Return per-row q widths and their angle-offset forward tangents.
 
@@ -146,6 +148,7 @@ def _point_resolution_with_jacobian(
         problem,
         angle_offset_deg,
         wavelength_a,
+        row_mask=row_mask,
     )
     if point_resolution is None:
         return None, None
@@ -156,11 +159,11 @@ def _point_resolution_with_jacobian(
     kind = problem.data.column_mapping.resolution_kind
     if kind in {"sigma_q_a_inv", "fwhm_q_a_inv"}:
         return point_resolution, point_jacobian
-    raw = np.asarray(problem.data.resolution_raw, dtype=float)
+    raw = np.asarray(_masked_optional(problem.data.resolution_raw, row_mask), dtype=float)
     if kind.startswith("fwhm"):
         raw = raw / (2.0 * np.sqrt(2.0 * np.log(2.0)))
     sigma_theta_rad = np.deg2rad(raw / 2.0)
-    theta_rad = np.deg2rad(problem.data.two_theta_deg / 2.0 + angle_offset_deg)
+    theta_rad = np.deg2rad(_masked_optional(problem.data.two_theta_deg, row_mask) / 2.0 + angle_offset_deg)
     cosine = np.cos(theta_rad)
     # The primal converter uses ``abs(cos(theta))``; its local derivative is
     # represented by sign(cosine) away from the exact cusp.
@@ -720,10 +723,9 @@ def _model_residual_jacobian(
     """Evaluate fitted residuals and their analytic Jacobian in one traversal.
 
     Values and coordinate tangents are decoded once; this function does not call
-    the primal evaluator. Positive-angle rows are differentiated through stack,
-    resolution, beam, footprint, scale, and background operations, then inserted
-    into full source order. The returned model values supply the residual from the
-    same physical traversal that supplied the Jacobian.
+    the primal evaluator. Only fitted rows are differentiated through stack,
+    resolution, beam, footprint, scale, and background operations. The returned
+    model values supply residuals from the same traversal as their Jacobian.
     """
     try:
         values, value_jacobians = values_and_jacobians(problem, unit_vector)
@@ -738,6 +740,7 @@ def _model_residual_jacobian(
     model_mask = np.isfinite(theta) & (theta > 0.0) & (theta <= 90.0)
     if np.any(problem.data.fit_mask & ~model_mask):
         raise ValueError("cannot differentiate nonpositive fitted angle")
+    model_mask = problem.data.fit_mask
     theta_model = theta[model_mask]
     angle_jacobian = value_jacobians["instrument.angle_offset_deg"]
     theta_jacobian = np.broadcast_to(
@@ -749,6 +752,7 @@ def _model_residual_jacobian(
         values["instrument.angle_offset_deg"],
         angle_jacobian,
         primary_wavelength,
+        row_mask=model_mask,
     )
     if problem.data.beam.kind == "mixed_kalpha":
         secondary_sigma, secondary_sigma_jacobian = _point_resolution_with_jacobian(
@@ -756,14 +760,15 @@ def _model_residual_jacobian(
             values["instrument.angle_offset_deg"],
             angle_jacobian,
             problem.data.beam.wavelength_2_a,
+            row_mask=model_mask,
         )
     else:
         secondary_sigma, secondary_sigma_jacobian = None, None
     point_inputs = (
-        _masked_optional(primary_sigma, model_mask),
-        _masked_optional(primary_sigma_jacobian, model_mask),
-        _masked_optional(secondary_sigma, model_mask),
-        _masked_optional(secondary_sigma_jacobian, model_mask),
+        primary_sigma,
+        primary_sigma_jacobian,
+        secondary_sigma,
+        secondary_sigma_jacobian,
     )
     model, model_jacobian = _instrument_model_jacobian(
         problem,
@@ -775,30 +780,14 @@ def _model_residual_jacobian(
         secondary_stack,
         point_inputs,
     )
-    full_model = np.full(problem.data.qz_a_inv.shape, np.nan, dtype=float)
-    full_model[model_mask] = model
-    full_jacobian = np.zeros(
-        (problem.data.qz_a_inv.size, len(problem.variables)),
-        dtype=float,
-    )
-    full_jacobian[model_mask] = model_jacobian
-    fit_model = full_model[problem.data.fit_mask]
-    residual = log_residuals(
-        fit_model,
-        problem.data.intensity_normalized[problem.data.fit_mask],
-        problem.data.r_floor,
-    )
-    # d(log10(model + floor)) = d(model) / ((model + floor) * ln(10)).
-    # Observations are constant, so they contribute no residual tangent.
+    residual = data_residuals(problem, model)
     with np.errstate(divide="ignore", invalid="ignore"):
-        residual_jacobian = full_jacobian[problem.data.fit_mask] / (
-            (fit_model + problem.data.r_floor)[:, None] * np.log(10.0)
-        )
+        derivative = data_residual_model_derivative(problem, model, residual)
+        residual_jacobian = model_jacobian * derivative[:, None]
     finite_values = np.concatenate(
         (
             model.ravel(),
             model_jacobian.ravel(),
-            fit_model,
             residual,
             residual_jacobian.ravel(),
         )
@@ -816,7 +805,7 @@ def evaluate_model_jacobian(
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
 ) -> np.ndarray:
-    """Return the analytic Jacobian of unweighted fitted log residuals."""
+    """Return the analytic Jacobian of unweighted fitted mode residuals."""
     _residual, jacobian, _scale = _model_residual_jacobian(problem, unit_vector)
     # Defensive copying prevents solver or analysis code from mutating a
     # derivative snapshot that may be shared with candidate publication.

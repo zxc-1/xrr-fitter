@@ -187,6 +187,7 @@ class ResultsPanel(QWidget):
         self.uncertainty_button.setToolTip("对当前候选解运行专家 MCMC 采样")
         self.uncertainty_button.clicked.connect(self._show_uncertainty_dialog)
         self._uncertainty_dialog: QDialog | None = None
+        self._uncertainty_sampling_requested = True
         self.walkers = self.mcmc_group.walkers
         self.burn_in = self.mcmc_group.burn_in
         self.production = self.mcmc_group.production
@@ -247,12 +248,13 @@ class ResultsPanel(QWidget):
         # 候选解那一段的横线跟着这件事变：下面还有东西时它是节界，没有了就成了整栏的封边。
         self._mark_sections()
 
-    def open_uncertainty_dialog(self) -> QDialog:
+    def open_uncertainty_dialog(self, *, sampling: bool = True) -> QDialog:
         """Reparent the owned MCMC controls and evidence into a reusable dialog.
 
         The dialog is built once and reused so the controls keep their identity
         across openings; a user's hand-edited sampling config therefore survives
-        closing and reopening the window.
+        closing and reopening the window. Read-only access hides sampling controls
+        without changing the project's expert mode or creating another evidence view.
 
         The evidence view comes along because the inspector column does not carry
         it: ``window_layout`` draws the three designed result sections and leaves
@@ -265,15 +267,26 @@ class ResultsPanel(QWidget):
         if dialog is None:
             dialog = QDialog(self)
             dialog.setObjectName("uncertaintyDialog")
-            dialog.setWindowTitle("不确定度分析")
-            dialog.setAccessibleName("不确定度分析")
             layout = QVBoxLayout(dialog)
             layout.addWidget(self.uncertainty, 1)
             layout.addWidget(self.mcmc_group)
             self._uncertainty_dialog = dialog
+        self._uncertainty_sampling_requested = sampling
         self.uncertainty.show()
-        self.mcmc_group.show()
+        self._refresh_mcmc_buttons()
         return dialog
+
+    def _project_uncertainty_dialog(self, *, running: bool) -> None:
+        dialog = self._uncertainty_dialog
+        if dialog is None:
+            return
+        sampling = self._uncertainty_sampling_requested and self.document.project.ui_state.expert_mode
+        title = "不确定度分析" if sampling else "推断证据"
+        dialog.setWindowTitle(title)
+        dialog.setAccessibleName(title)
+        self.mcmc_group.set_sampling_visible(sampling)
+        # 降低显示深度不能夺走正在运行任务的取消/强停入口。
+        self.mcmc_group.setVisible(sampling or running)
 
     def _show_uncertainty_dialog(self) -> None:
         self.open_uncertainty_dialog().show()
@@ -379,6 +392,8 @@ class ResultsPanel(QWidget):
 
     def start_mcmc(self) -> bool:
         self._require_idle("start MCMC")
+        if not self.document.project.ui_state.expert_mode:
+            raise ValueError("MCMC requires expert mode")
         dataset_id = self._require_active_dataset_id()
         candidate = self._selected_candidate()
         if not self._mcmc_ready(candidate):
@@ -537,7 +552,7 @@ class ResultsPanel(QWidget):
         # χ²ᵥ 与 J 同源：同一个候选解的残差，除以同一份声明数出来的自由度。
         self.verdict_evidence.set_reduced_chi_squared(
             None
-            if candidate is None or result is None
+            if candidate is None or result is None or candidate.noise_model != "gaussian"
             else reduced_chi_squared(candidate.weighted_residuals, free_parameter_count(result))
         )
 
@@ -609,8 +624,9 @@ class ResultsPanel(QWidget):
         self.clear_button.setEnabled(not active and self.candidates.result is not None)
         self.mcmc_group.set_operation_state(
             running=active,
-            ready=self._mcmc_ready(self._selected_candidate()),
+            ready=self.document.project.ui_state.expert_mode and self._mcmc_ready(self._selected_candidate()),
         )
+        self._project_uncertainty_dialog(running=active)
 
     def _mcmc_ready(self, candidate: object | None) -> bool:
         return candidate_is_mcmc_ready(candidate, self.candidates.result)

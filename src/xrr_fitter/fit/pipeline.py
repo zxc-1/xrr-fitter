@@ -14,13 +14,13 @@ from xrr_fitter.evaluation import (
 from xrr_fitter.fit.candidates import CandidateStart, best_candidate_index
 from xrr_fitter.fit.checkpoint import build_checkpoint
 from xrr_fitter.fit.local_search import StageSkipped
+from xrr_fitter.fit.profile_rescue import reconverge_profile_basin
 from xrr_fitter.fit.resume import ResumePlan, validate_resume_checkpoint
 from xrr_fitter.fit.stage_schedule import committed_parent_summary, reserve_child_seeds
 from xrr_fitter.fit.stages import (
     StageOutcome,
     compile_coarse_problem,
     local_stage_continuation,
-    reconverge_profile_basin,
     run_local_stage,
     run_stage_a,
     run_stage_b,
@@ -125,10 +125,16 @@ def _state_from_resume(plan: ResumePlan, base_warnings: tuple[str, ...]) -> _Sea
     )
 
 
-def _stage_candidates(state: _SearchState, stage: str) -> tuple[FitCandidate, ...]:
+def _stage_continuation(
+    state: _SearchState,
+    stage: str,
+    perturbation_counts: tuple[int, ...] = (),
+) -> tuple[tuple[FitCandidate, ...], tuple[int, ...]]:
     summary = committed_parent_summary(state.summaries, state.skipped_stages, stage)
     by_id = {candidate.candidate_id: candidate for candidate in state.candidates}
-    return tuple(by_id[candidate_id] for candidate_id in summary.candidate_ids)
+    candidates = tuple(by_id[candidate_id] for candidate_id in summary.candidate_ids)
+    continuation = stage_b_continuation if summary.stage == "B" else local_stage_continuation
+    return continuation(candidates, perturbation_counts)
 
 
 def _consumed_seeds(stage: str, seeds: tuple[int, ...], skipped_stages: tuple[str, ...]) -> tuple[int, ...]:
@@ -176,12 +182,11 @@ def _result(request: FitSearchRequest, state: _SearchState, seeds: tuple[int, ..
     return _seal_result(request.problem, result)
 
 
-# C 从 B 的候选出发、D 从 C 的，两者挑父代的算法也不同：B→C 要按谱系把扰动配额分下去，
-# C→D 是逐个续。摆成一张表而不是写成两层 ``if``，因为「哪一层的父代是哪一层」是这条流水线
-# 的形状，读者该一眼看到全部两条，而不是从分支里拼出来。
+# 合法跳过可能使名义父阶段回落到 B；延续规则必须跟随实际已提交的父阶段，
+# 才不会复活归档候选或把 B 的回收扰动预算当成局部阶段已用完的预算。
 LOCAL_STAGE_PARENTS = {
-    "C": ("B", stage_b_continuation),
-    "D": ("C", local_stage_continuation),
+    "C": "B",
+    "D": "C",
 }
 
 
@@ -236,8 +241,7 @@ def _stage_outcome(
             cancelled=cancelled,
         )
     if stage in LOCAL_STAGE_PARENTS:
-        parent_stage, continuation = LOCAL_STAGE_PARENTS[stage]
-        parents, counts = continuation(_stage_candidates(state, parent_stage), perturbation_counts)
+        parents, counts = _stage_continuation(state, LOCAL_STAGE_PARENTS[stage], perturbation_counts)
         return run_local_stage(
             request.problem,
             request.dataset_id,
@@ -249,7 +253,7 @@ def _stage_outcome(
             task_runner=task_runner,
         )
     # 阶段 E 不带配额：final seeds 是给每个父代各来一遍，没有「这一支分几个」这回事。
-    parents, _counts = local_stage_continuation(_stage_candidates(state, "D"))
+    parents, _counts = _stage_continuation(state, "D")
     return run_stage_e(
         request.problem,
         request.dataset_id,
@@ -398,6 +402,7 @@ def _profile_summary(
         min(candidate.objective for candidate in rebuilt),
         sum(candidate.nfev for candidate in rebuilt),
         tuple(candidate.stop_reason for candidate in rebuilt),
+        tuple(evidence for candidate in rebuilt for evidence in candidate.search_evidence),
     )
 
 

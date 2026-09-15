@@ -45,13 +45,17 @@ the opposite order.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from math import isfinite
+from types import MappingProxyType
 
 import numpy as np
 from scipy.optimize import least_squares, minimize, minimize_scalar
 
+from xrr_fitter.analysis.profile_paths import default_profile_path_merge as default_profile_path_merge
+from xrr_fitter.analysis.profile_paths import profile_covers_value as profile_covers_value
 from xrr_fitter.analysis.profile_selection import (
     _degeneracy_profile_names,  # noqa: F401
     _reported_profile_names,  # noqa: F401
@@ -74,7 +78,7 @@ from xrr_fitter.model.fitting import FitEvaluationContext
 
 Scalar = Callable[[np.ndarray], float]
 Vector = Callable[[np.ndarray], np.ndarray]
-# Profile closure never resolves an objective delta below 1e-5.
+# Scalar nuisance convergence tolerance; interval deltas have their own scale.
 PROFILE_SOLVER_TOLERANCE = 1e-6
 
 
@@ -129,6 +133,7 @@ class _ProfilePlan:
     residual_loss: object
     least_squares_max_nfev: int | None
     seek_basin: bool = False
+    interval_options: Mapping[str, object] | None = None
 
 
 def _profile_center(center_unit: np.ndarray) -> np.ndarray:
@@ -771,6 +776,7 @@ def _prepare_profile_plan(
     least_squares_max_nfev: int | None = None,
     cancelled: Callable[[], bool] | None = None,
     seek_basin: bool = False,
+    interval_options: Mapping[str, object] | None = None,
 ) -> _ProfilePlan:
     """Validate callbacks and freeze all state needed after task submission."""
     callbacks = _Callbacks(objective, value_mapper, gradient, residual, residual_jacobian, cancelled)
@@ -790,6 +796,7 @@ def _prepare_profile_plan(
         residual_loss,
         least_squares_max_nfev,
         seek_basin,
+        MappingProxyType(dict(interval_options or {})),
     )
 
 
@@ -847,13 +854,16 @@ def _finish_profile_plan(
     if np.any(~np.isfinite(values)):
         raise ValueError("profile value_mapper returned a nonfinite value")
     lower_closed, upper_closed = _closed_sides(setup, units, objectives)
+    metadata = dict(plan.interval_options or {})
     profile = ParameterProfile(
         setup.name,
         values,
         objectives,
         lower_closed,
         upper_closed,
-        _closure_threshold(setup),
+        delta_total=setup.delta * metadata.get("objective_point_count", 1),
+        **metadata,
+        objective_threshold=_closure_threshold(setup),
     )
     return profile, best_unit, best_objective, setup.delta
 
@@ -886,6 +896,7 @@ def profile_parameter(
     residual_loss: object = "linear",
     least_squares_max_nfev: int | None = None,
     cancelled: Callable[[], bool] | None = None,
+    interval_options: Mapping[str, object] | None = None,
 ) -> ParameterProfile:
     """Build one profile without requesting a fitting continuation.
 
@@ -910,6 +921,7 @@ def profile_parameter(
         least_squares_max_nfev=least_squares_max_nfev,
         cancelled=cancelled,
         seek_basin=False,
+        interval_options=interval_options,
     )[0]
 
 
@@ -955,99 +967,6 @@ def profile_parameter_with_decision(
     )
 
 
-def profile_covers_value(
-    profile: ParameterProfile,
-    value: float,
-    *,
-    objective_delta: float | None = None,
-) -> bool:
-    values = np.asarray(profile.values, dtype=float)
-    objectives = np.asarray(profile.objectives, dtype=float)
-    finite = np.isfinite(values) & np.isfinite(objectives)
-    if not np.any(finite):
-        return False
-    order = np.argsort(values[finite], kind="stable")
-    x, y = values[finite][order], objectives[finite][order]
-    best = float(np.min(y))
-    delta = max(0.02 * abs(best), 1e-5) if objective_delta is None else objective_delta
-    if value < x[0] or value > x[-1]:
-        return False
-    interpolated = float(np.interp(value, x, np.sqrt(np.maximum(0.0, y - best))))
-    return interpolated <= np.sqrt(delta) + 32.0 * np.finfo(float).eps
-
-
-def _path_objective(problem_or_objective: object) -> Scalar:
-    if callable(problem_or_objective):
-        return problem_or_objective
-
-    def objective(unit: np.ndarray) -> float:
-        evaluation = evaluate_model(problem_or_objective, unit)
-        return evaluation.objective if evaluation.valid else np.inf
-
-    return objective
-
-
-def default_profile_path_merge(
-    problem_or_objective: object,
-    first_unit: np.ndarray,
-    second_unit: np.ndarray,
-    threshold: float,
-) -> bool:
-    """Prove that two candidate endpoints share a sub-threshold profile path.
-
-    Eleven fixed fractions establish the coarse path. At each fraction SLSQP may
-    relax coordinates only on the hyperplane normal to the endpoint direction.
-    Bounded scalar maximization then searches every fraction interval for a
-    missed objective barrier.
-    """
-    first, second = np.asarray(first_unit, dtype=float), np.asarray(second_unit, dtype=float)
-    direction = second - first
-    if direction.shape != first.shape:
-        raise ValueError("profile path endpoints must have matching shapes")
-    if float(direction @ direction) <= 1e-24:
-        return True
-    objective = _path_objective(problem_or_objective)
-    penalty = threshold + max(1.0, abs(threshold))
-
-    def cost(fraction: float) -> float:
-        base = (1.0 - fraction) * first + fraction * second
-
-        def safe(unit: np.ndarray) -> float:
-            value = float(objective(np.asarray(unit, dtype=float)))
-            return value if isfinite(value) else penalty
-
-        constraint = {
-            "type": "eq",
-            "fun": lambda unit: float((np.asarray(unit) - base) @ direction),
-        }
-        optimized = minimize(
-            safe,
-            base,
-            method="SLSQP",
-            bounds=[(0.0, 1.0)] * base.size,
-            constraints=(constraint,),
-            options={"ftol": 1e-10, "maxiter": 100},
-        )
-        candidates = [base]
-        if optimized.x.shape == base.shape and np.all(np.isfinite(optimized.x)):
-            candidates.append(np.clip(optimized.x, 0.0, 1.0))
-        return min(safe(candidate) for candidate in candidates)
-
-    fractions = np.linspace(0.0, 1.0, 11)
-    if any(cost(float(fraction)) > threshold for fraction in fractions):
-        return False
-    for lower, upper in zip(fractions[:-1], fractions[1:], strict=True):
-        maximum = minimize_scalar(
-            lambda fraction: -cost(float(fraction)),
-            bounds=(float(lower), float(upper)),
-            method="bounded",
-            options={"xatol": 1e-5, "maxiter": 32},
-        )
-        if isfinite(maximum.fun) and -float(maximum.fun) > threshold:
-            return False
-    return True
-
-
 def build_problem_profiles(
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
@@ -1055,6 +974,7 @@ def build_problem_profiles(
     *,
     cancelled: Callable[[], bool] | None = None,
     task_runner=None,
+    interval_options: dict[str, object] | None = None,
 ) -> tuple[ParameterProfile, ...]:
     """Build ordered problem profiles through the shared two-phase task graph."""
     return _build_problem_profiles(
@@ -1064,13 +984,14 @@ def build_problem_profiles(
         prepare_plan=_prepare_profile_plan,
         scan_plan_direction=_scan_plan_direction,
         finish_plan=_finish_profile_plan,
-        evaluate=evaluate_model,
+        evaluate=partial(evaluate_model, fit_only=True),
         cache_callbacks=cached_least_squares_callbacks,
         least_squares_system=least_squares_system,
         least_squares_loss=least_squares_loss,
         values_by_name=values_by_name,
         cancelled=cancelled,
         task_runner=task_runner,
+        interval_options=interval_options,
     )
 
 
@@ -1098,8 +1019,9 @@ def recover_profile_basin(
     """Search thickness profiles for the first materially better basin.
 
     Already-good or invalid candidates do not trigger expensive recovery. Each
-    eligible thickness coordinate is scanned in compiler order, and the first
-    decision is returned for fit-owned four-path reconvergence.
+    eligible thickness coordinate uses the same bounded analytic residual system
+    as reported problem profiles. Coordinates are scanned in compiler order, and
+    the first decision is returned for fit-owned four-path reconvergence.
     """
     unit = np.asarray(candidate.unit_vector, dtype=float)
     if not candidate.valid or not isfinite(candidate.objective):
@@ -1112,17 +1034,26 @@ def recover_profile_basin(
 
         def objective(value: np.ndarray) -> float:
             try:
-                evaluation = evaluate_model(problem, value)
+                evaluation = evaluate_model(problem, value, fit_only=True)
             except EvaluationConstraintError:
                 return np.inf
             return evaluation.objective if evaluation.valid else np.inf
 
+        residual, jacobian = cached_least_squares_callbacks(partial(least_squares_system, problem))
+        maximum = max(
+            problem.config.budget.local_min_nfev,
+            problem.config.budget.local_nfev_per_parameter * max(1, len(problem.variables)),
+        )
         _profile, decision = profile_parameter_with_decision(
             objective,
             unit,
             parameter_index=index,
             name=name,
-            steps=11 if problem.config.budget.bootstrap_samples < 100 else 41,
+            steps=problem.config.profile_steps,
+            residual=residual,
+            residual_jacobian=jacobian,
+            residual_loss=least_squares_loss(problem),
+            least_squares_max_nfev=maximum,
             cancelled=cancelled,
         )
         if decision is not None:

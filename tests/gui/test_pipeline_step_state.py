@@ -189,6 +189,7 @@ def test_the_parameters_step_counts_the_free_parameters_once_it_is_behind_us(qtb
         qz_a_inv=np.linspace(0.015, 0.25, size),
         model_normalized=np.geomspace(0.9, 2e-5, size),
         log_residuals_decades=np.full(size, 0.1),
+        residuals=np.full(size, 0.1),
         weighted_residuals=np.zeros(size),
     )
     result = api.FitResult.from_search(

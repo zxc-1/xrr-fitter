@@ -223,6 +223,7 @@ def test_profile_basin_recovery_treats_physical_constraint_failures_as_invalid_p
     problem = SimpleNamespace(
         variables=(SimpleNamespace(name="component.0.thickness_a"),),
         config=SimpleNamespace(
+            profile_steps=11,
             budget=SimpleNamespace(
                 bootstrap_samples=8,
                 local_min_nfev=5,
@@ -241,12 +242,19 @@ def test_profile_basin_recovery_treats_physical_constraint_failures_as_invalid_p
         unit_vector=np.asarray([0.5]),
     )
 
-    def evaluate(_problem, unit):
+    def evaluate(_problem, unit, *, fit_only=False):
+        assert fit_only is True
         if unit[0] in {0.0, 1.0}:
             raise EvaluationConstraintError("constraint_violation:ValueError")
         return SimpleNamespace(valid=True, objective=float((unit[0] - 0.8) ** 2))
 
     monkeypatch.setattr(_api(), "evaluate_model", evaluate)
+    monkeypatch.setattr(
+        _api(),
+        "least_squares_system",
+        lambda _problem, unit: (np.asarray([unit[0] - 0.8]), np.ones((1, 1))),
+    )
+    monkeypatch.setattr(_api(), "least_squares_loss", lambda _problem: "linear")
 
     decision = recover_profile_basin(problem, candidate)
 
@@ -261,6 +269,8 @@ def test_direct_problem_profile_treats_physical_constraint_failures_as_invalid_p
     problem = SimpleNamespace(
         variables=(SimpleNamespace(name="component.0.thickness_a"),),
         config=SimpleNamespace(
+            profile_steps=11,
+            noise_model="robust_log",
             budget=SimpleNamespace(
                 bootstrap_samples=8,
                 local_min_nfev=5,
@@ -270,10 +280,13 @@ def test_direct_problem_profile_treats_physical_constraint_failures_as_invalid_p
         ),
         data=SimpleNamespace(fit_mask=np.ones(3, dtype=np.bool_)),
         weights=np.ones(3),
+        sampling_multipliers=np.ones(3),
+        objective_point_count=3,
         scale_prior_center=None,
     )
 
-    def evaluate(_problem, unit):
+    def evaluate(_problem, unit, *, fit_only=False):
+        assert fit_only is True
         if unit[0] in {0.0, 1.0}:
             raise EvaluationConstraintError("constraint_violation:ValueError")
         return SimpleNamespace(valid=True, objective=float((unit[0] - 0.5) ** 2))

@@ -8,6 +8,8 @@ import numpy as np
 from scipy import signal
 from scipy.stats import spearmanr
 
+from xrr_fitter.model.analysis import ResidualEvidence
+from xrr_fitter.model.diagnostic_calibration import RESIDUAL_ADVISORY_CODES
 from xrr_fitter.model.fitting import FitEvaluationContext
 from xrr_fitter.model.instrument import PhysicsDiagnostic
 
@@ -20,10 +22,10 @@ class _OrderedResiduals:
     residual: np.ndarray
 
 
-def _ordered_data(problem: object, candidate: object) -> _OrderedResiduals:
+def _ordered_data(problem: object, residuals: np.ndarray) -> _OrderedResiduals:
     qz = np.asarray(problem.data.qz_a_inv, dtype=float)
     fit_mask = np.asarray(problem.data.fit_mask, dtype=bool)
-    residual = np.asarray(candidate.log_residuals_decades, dtype=float)
+    residual = np.asarray(residuals, dtype=float)
     two_theta_value = getattr(problem.data, "two_theta_deg", None)
     two_theta = qz if two_theta_value is None else np.asarray(two_theta_value, dtype=float)
     if not (qz.shape == two_theta.shape == fit_mask.shape == residual.shape and qz.ndim == 1):
@@ -44,7 +46,7 @@ def ordered_fit_residuals(
     candidate: object,
 ) -> np.ndarray:
     """Return finite fitted residuals in stable increasing-q order."""
-    result = np.array(_ordered_data(problem, candidate).residual, copy=True)
+    result = np.array(_ordered_data(problem, candidate.residuals).residual, copy=True)
     result.setflags(write=False)
     return result
 
@@ -154,7 +156,7 @@ def _background(problem: object, data: _OrderedResiduals) -> PhysicsDiagnostic |
     )
 
 
-def _surface(data: _OrderedResiduals) -> PhysicsDiagnostic | None:
+def _surface_spectrum(data: _OrderedResiduals) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
     start = data.indices.size // 2
     indices = data.indices[start:]
     qz = data.qz[start:]
@@ -171,6 +173,14 @@ def _surface(data: _OrderedResiduals) -> PhysicsDiagnostic | None:
     thickness_a = 2.0 * np.pi * frequencies
     eligible = (thickness_a >= 2.0) & (thickness_a <= 50.0)
     eligible[0] = False
+    return indices, spectrum, eligible
+
+
+def _surface(data: _OrderedResiduals) -> PhysicsDiagnostic | None:
+    components = _surface_spectrum(data)
+    if components is None:
+        return None
+    indices, spectrum, eligible = components
     nonzero = spectrum[1:]
     median = float(np.median(nonzero))
     mad = float(np.median(np.abs(nonzero - median)))
@@ -188,7 +198,10 @@ def diagnose_residual_patterns(
     problem: FitEvaluationContext,
     candidate: object,
 ) -> tuple[PhysicsDiagnostic, ...]:
-    data = _ordered_data(problem, candidate)
+    return _pattern_diagnostics(problem, _ordered_data(problem, candidate.residuals))
+
+
+def _pattern_diagnostics(problem: object, data: _OrderedResiduals) -> tuple[PhysicsDiagnostic, ...]:
     if data.indices.size < 10:
         return ()
     unique: dict[tuple[str, tuple[int, ...]], PhysicsDiagnostic] = {}
@@ -196,3 +209,53 @@ def diagnose_residual_patterns(
         if diagnostic is not None:
             unique.setdefault((diagnostic.code, diagnostic.point_indices), diagnostic)
     return tuple(unique.values())
+
+
+def build_residual_evidence(
+    problem: FitEvaluationContext,
+    residuals: np.ndarray,
+    diagnostics: tuple[PhysicsDiagnostic, ...] = (),
+    *,
+    dataset_id: str | None = None,
+) -> ResidualEvidence:
+    physical = tuple(item for item in diagnostics if item.code not in RESIDUAL_ADVISORY_CODES)
+    data = _ordered_data(problem, residuals)
+    count = data.residual.size
+    if count < 10 or count != int(np.count_nonzero(problem.data.fit_mask)):
+        return ResidualEvidence(dataset_id, False, None, None, count, physical, "insufficient_finite_residuals")
+    derived = _pattern_diagnostics(problem, data)
+    autocorrelation = residual_autocorrelation_flag(data.residual)
+    systematic = bool(derived) or autocorrelation
+    if problem.config.noise_model == "poisson" and systematic:
+        return ResidualEvidence(
+            dataset_id,
+            False,
+            None,
+            None,
+            count,
+            physical,
+            "poisson_diagnostic_calibration_required",
+            systematic,
+            autocorrelation,
+            derived,
+        )
+    unique = {(item.code, item.point_indices): item for item in (*physical, *derived)}
+    return ResidualEvidence(
+        dataset_id,
+        True,
+        systematic,
+        autocorrelation,
+        count,
+        tuple(unique.values()),
+        raw_systematic=systematic,
+        raw_autocorrelation=autocorrelation,
+        advisories=derived,
+    )
+
+
+def aggregate_residual_flag(evidence: tuple[ResidualEvidence, ...], field: str) -> bool | None:
+    """Known failures survive aggregation even when another member was not tested."""
+    values = tuple(getattr(item, field) for item in evidence)
+    if any(value is True for value in values):
+        return True
+    return False if values and all(value is False for value in values) else None

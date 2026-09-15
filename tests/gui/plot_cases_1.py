@@ -5,6 +5,7 @@ from __future__ import annotations
 from tests.gui.plot_support import *  # noqa: F403
 
 from xrr_fitter.gui import theme
+from xrr_fitter.model.inference import CovarianceEvidence
 
 
 def test_plot_panel_has_all_diagnostic_tabs(qtbot) -> None:
@@ -262,7 +263,8 @@ def test_plot_panel_uses_independent_normalized_axis_for_heterogeneous_profiles(
         ),
     )
     data = prepared_data(size=4)
-    result = replace(_result(data), uncertainty=_uncertainty(profiles=profiles))
+    report = replace(_uncertainty(profiles=profiles), covariance_evidence=None, parameter_sigma=None)
+    result = replace(_result(data), uncertainty=report)
 
     panel = _panel(qtbot, data=data, result=result)
     profile_axes = panel.view("uncertainty").figure.axes[1]
@@ -613,8 +615,20 @@ def test_uncertainty_pane_stays_legible_at_the_height_the_tab_actually_gets(qtbo
     ``constrained_layout`` 会兜底——它管子图之间的间距，不管标题和刻度溢出。
     """
     data = prepared_data(size=4)
+    from tests.support.bootstrap_cases import bootstrap_evidence
+
     intervals = (("component.0.thickness_a", 35.0, 48.0), ("instrument.scale", 0.9, 1.1), ("roughness", 3.6, 4.9))
-    result = replace(_result(data), uncertainty=replace(_uncertainty(), bootstrap_intervals=intervals))
+    names = tuple(name for name, *_ in intervals)
+    report = replace(
+        _uncertainty(),
+        correlation_names=names,
+        correlation_matrix=np.eye(3),
+        covariance_evidence=CovarianceEvidence(names, np.eye(3), "gaussian_known_sigma", 3),
+        parameter_sigma=np.ones(3),
+        bootstrap_intervals=intervals,
+        bootstrap_evidence=bootstrap_evidence(intervals),
+    )
+    result = replace(_result(data), uncertainty=report)
     panel = _panel(qtbot, data=data, result=result)
     view = panel.view("uncertainty")
     view.figure.set_size_inches(6.62, 5.32)

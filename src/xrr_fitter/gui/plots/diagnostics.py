@@ -21,9 +21,10 @@ from matplotlib.figure import Figure
 from matplotlib.text import Text
 from matplotlib.ticker import AutoMinorLocator, FixedLocator, LogFormatter
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QFrame, QLabel, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QTabWidget, QVBoxLayout, QWidget
 
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.noise import residual_label
 from xrr_fitter.gui.plots.live import LiveReflectivityPlot
 
 # χ²ᵥ 只算一遍。残差卡的抬头和右栏判定卡的指标行读的是同一个数，两处各自实现会在某天
@@ -43,7 +44,7 @@ TAB_SPECS = (
     ("candidates", "候选解比较", "比较全部保留候选及其审计状态"),
     ("residual_map", "残差热图", "按候选逐行比较加权残差，定位共同失配的 q 区间"),
     ("parameter_map", "参数热图", "按候选逐行比较归一化参数值，查看结构解的分歧"),
-    ("uncertainty", "不确定度", "查看当前候选的参数相关矩阵与 Profile 似然区间"),
+    ("uncertainty", "不确定度", "查看当前候选的参数相关矩阵、参数剖面与区间证据"),
     ("trend", "批量趋势", "查看多个数据集的厚度和周期趋势"),
 )
 
@@ -319,7 +320,7 @@ def _axes(figure: Figure, key: str) -> object:
     """
     if key == "uncertainty":
         correlation, profile = figure.subplots(2, 1)
-        profile.set_title("参数剖面似然与区间")
+        profile.set_title("参数剖面与区间")
         return correlation
     return figure.subplots()
 
@@ -445,31 +446,28 @@ def plot_card_subtitle(key: str, dataset_id: str | None) -> str:
     return f"{dataset_id} · {note}"
 
 
+def _residual_metric_text(result: object, candidate: object) -> str:
+    if candidate.noise_model != "gaussian":
+        return f"J={candidate.objective:.4g} · {candidate.noise_model} · {residual_label(candidate)}"
+    chi_squared = reduced_chi_squared(candidate.weighted_residuals, free_parameter_count(result))
+    return RESIDUAL_CHI_UNAVAILABLE_TEXT if chi_squared is None else f"χ²ᵥ = {chi_squared:.3g}"
+
+
 def residual_card_subtitle(result: object | None, candidate: object | None) -> str:
-    """残差卡的判读：χ²ᵥ，以及这次拟合有没有留下系统性结构。
-
-    设计稿这张卡的第二句是 ``χ²ᵥ = 1.14 · 无系统性结构``。残差图形状好不好看是相对的——
-    纵轴随这一轮残差自动缩放，两张一模一样的图可能差十倍；χ²ᵥ 是那个绝对读数，所以它写在
-    图的抬头上而不是只躺在右栏的指标行里。
-
-    每一句都得有出处，凑不出来就少说一句：没有结果或没有候选解，整句退回「尚未拟合」；
-    χ²ᵥ 算不出来（残差全落在拟合窗口外，或 ν ≤ 0）只说「不可用」；不确定度报告缺席、
-    或者它算的是另一个候选解，就只写 χ²ᵥ 而不表态有无系统性结构——报告的归属规则与判定卡
-    一致（``results.panel._project_verdict``），一份对不上号的报告不能替屏幕上这个候选解
-    背书。
-    """
+    """Only Gaussian residuals support χ²ᵥ; an unavailable diagnostic is not negative."""
     if result is None or candidate is None:
         return RESIDUAL_UNFITTED_TEXT
-    chi_squared = reduced_chi_squared(candidate.weighted_residuals, free_parameter_count(result))
-    if chi_squared is None:
-        return RESIDUAL_CHI_UNAVAILABLE_TEXT
-    text = f"χ²ᵥ = {chi_squared:.3g}"
+    text = _residual_metric_text(result, candidate)
+    if text == RESIDUAL_CHI_UNAVAILABLE_TEXT:
+        return text
     report = result.uncertainty
     if report is None or report.candidate_id not in (None, candidate.candidate_id):
         return text
-    # 反面写成检出而不是把这句删掉：删掉等于让「无系统性结构」和「没做这项检查」看起来
-    # 一样。动词跟不确定度面板的「检出系统性残差」同源，名词用设计稿的「结构」。
-    clause = "检出系统性结构" if report.systematic_residual else "无系统性结构"
+    clause = {
+        None: "系统性残差：未执行/不可用",
+        False: "无系统性结构",
+        True: "检出系统性结构",
+    }[report.systematic_residual]
     return f"{text} · {clause}"
 
 
@@ -484,9 +482,40 @@ def _plot_card(canvas: QWidget, key: str) -> QFrame:
     """
     name = f"plotCard:{key}"
     card, body = theme.titled_card(None, name, PLOT_CARD_SPECS[key][0], plot_card_subtitle(key, None))
-    body.addWidget(theme.build_legend(card, f"{name}Legend", PLOT_CARD_LEGENDS[key]))
+    legend = (
+        _residual_legend(card)
+        if key == RESIDUAL_KEY
+        else theme.build_legend(card, f"{name}Legend", PLOT_CARD_LEGENDS[key])
+    )
+    body.addWidget(legend)
     body.addWidget(canvas, 1)
     return card
+
+
+def _residual_legend(card: QWidget) -> QWidget:
+    """Keep the Gaussian reference key independently hideable without rebuilding the pane."""
+    legend = QWidget(card)
+    legend.setObjectName("plotCard:residualLegend")
+    row = QHBoxLayout(legend)
+    row.setContentsMargins(0, 0, 0, 0)
+    observed, band = PLOT_CARD_LEGENDS[RESIDUAL_KEY]
+    observed_key = theme.build_legend(legend, "residualObservedLegend", (observed,))
+    label = next(label for label in observed_key.findChildren(QLabel) if label.text())
+    label.setObjectName("residualEvidenceLegendLabel")
+    row.addWidget(observed_key)
+    row.addWidget(theme.build_legend(legend, "residualSigmaLegend", (band,)))
+    return legend
+
+
+def _apply_residual_legend(root: QWidget, candidate: object | None) -> None:
+    label = root.findChild(QLabel, "residualEvidenceLegendLabel")
+    band = root.findChild(QWidget, "residualSigmaLegend")
+    if label is None or band is None:
+        return
+    gaussian = candidate is not None and candidate.noise_model == "gaussian"
+    text = "加权残差" if candidate is None else residual_label(candidate)
+    label.setText("(数据−模型)/σ" if gaussian else text)
+    band.setVisible(gaussian)
 
 
 def _residual_tab_host() -> QWidget:
@@ -540,6 +569,7 @@ def apply_plot_card_captions(
     pane whose interaction state (the fit-range item, the current zoom) would be
     discarded along with the widget.
     """
+    _apply_residual_legend(root, candidate)
     for key in PLOT_CARD_SPECS:
         caption = root.findChild(QLabel, f"plotCard:{key}Subtitle")
         if caption is None:

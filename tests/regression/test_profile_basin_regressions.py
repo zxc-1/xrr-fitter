@@ -7,7 +7,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from tests.support.model_cases import prepared_data, simple_structure
+from tests.support.synthetic_recovery_layer_cases import _oxide_cap_cases
+from tests.support.synthetic_recovery_runtime import _fit_config, _generate_case_intensity, _prepared_case_data
 
+from xrr_fitter.analysis.profiles import recover_profile_basin
 from xrr_fitter.evaluation import (
     EvaluationConstraintError,
     encode_physical_vector,
@@ -68,7 +71,7 @@ def _state(problem):
                 stop_reason="original stage E",
                 nfev=1,
             ),
-            objective=evaluation.objective + 0.10 + 0.01 * index,
+            objective=evaluation.objective + max(0.10, abs(evaluation.objective) * (0.10 + 0.01 * index)),
         )
         for index in range(4)
     )
@@ -156,16 +159,16 @@ def _assert_reconverged_stage_e(
 
 def test_fit_dataset_attempts_profile_basin_rescue_before_bootstrap(monkeypatch) -> None:
     pipeline = import_module("xrr_fitter.fit.pipeline")
-    stages = import_module("xrr_fitter.fit.stages")
+    profile_rescue = import_module("xrr_fitter.fit.profile_rescue")
     problem = _problem()
     search, decision, _evaluation = _state(problem)
     calls: list[str] = []
 
     def observed(*args, **kwargs):
         calls.append("reconverge")
-        return stages.reconverge_profile_basin(*args, **kwargs)
+        return profile_rescue.reconverge_profile_basin(*args, **kwargs)
 
-    monkeypatch.setattr(stages, "solve_local", _successful_local)
+    monkeypatch.setattr(profile_rescue, "solve_local", _successful_local)
     monkeypatch.setattr(pipeline, "reconverge_profile_basin", observed)
 
     continued = _continue_profile_basin(pipeline, problem, search, decision)
@@ -179,7 +182,7 @@ def test_fit_dataset_reconverges_profile_basin_across_four_stage_e_seeds(
     monkeypatch,
 ) -> None:
     pipeline = import_module("xrr_fitter.fit.pipeline")
-    stages = import_module("xrr_fitter.fit.stages")
+    profile_rescue = import_module("xrr_fitter.fit.profile_rescue")
     problem = _problem()
     search, decision, evaluation = _state(problem)
     starts: list[np.ndarray] = []
@@ -188,7 +191,7 @@ def test_fit_dataset_reconverges_profile_basin_across_four_stage_e_seeds(
         starts.append(np.asarray(start, dtype=float).copy())
         return _successful_local(problem_value, start, **kwargs)
 
-    monkeypatch.setattr(stages, "solve_local", observed)
+    monkeypatch.setattr(profile_rescue, "solve_local", observed)
     result = _continue_profile_basin(pipeline, problem, search, decision)
 
     _assert_reconverged_stage_e(result, search, starts, evaluation.objective)
@@ -276,11 +279,11 @@ def test_fit_dataset_cancels_profile_reconvergence_before_state_commit(
     monkeypatch,
 ) -> None:
     pipeline = import_module("xrr_fitter.fit.pipeline")
-    stages = import_module("xrr_fitter.fit.stages")
+    profile_rescue = import_module("xrr_fitter.fit.profile_rescue")
     problem = _problem()
     search, decision, _evaluation = _state(problem)
     checkpoints: list[FitCheckpoint] = []
-    monkeypatch.setattr(stages, "solve_local", _successful_local)
+    monkeypatch.setattr(profile_rescue, "solve_local", _successful_local)
 
     with pytest.raises(SearchCancelled, match="cancelled"):
         _continue_profile_basin(
@@ -298,14 +301,14 @@ def test_fit_dataset_cancels_profile_reconvergence_before_state_commit(
 
 def test_fit_dataset_maps_profile_cancellation_to_cancelled_result(monkeypatch) -> None:
     pipeline = import_module("xrr_fitter.fit.pipeline")
-    stages = import_module("xrr_fitter.fit.stages")
+    profile_rescue = import_module("xrr_fitter.fit.profile_rescue")
     problem = _problem()
     search, decision, _evaluation = _state(problem)
 
     def interrupted(*_args, **_kwargs):
         raise SearchCancelled("search cancelled")
 
-    monkeypatch.setattr(stages, "solve_local", interrupted)
+    monkeypatch.setattr(profile_rescue, "solve_local", interrupted)
 
     with pytest.raises(SearchCancelled, match="cancelled"):
         _continue_profile_basin(pipeline, problem, search, decision)
@@ -323,7 +326,7 @@ def test_profile_reconvergence_rejects_unpublishable_local_paths(
     outcome: str,
     monkeypatch,
 ) -> None:
-    stages = import_module("xrr_fitter.fit.stages")
+    profile_rescue = import_module("xrr_fitter.fit.profile_rescue")
     problem = _problem()
     search, decision, evaluation = _state(problem)
     calls = 0
@@ -346,9 +349,9 @@ def test_profile_reconvergence_rejects_unpublishable_local_paths(
             nfev=1,
         )
 
-    monkeypatch.setattr(stages, "solve_local", local)
+    monkeypatch.setattr(profile_rescue, "solve_local", local)
 
-    result = stages.reconverge_profile_basin(
+    result = profile_rescue.reconverge_profile_basin(
         problem,
         search.candidates,
         decision.unit_vector,
@@ -362,7 +365,7 @@ def test_profile_reconvergence_rejects_unpublishable_local_paths(
 def test_profile_reconvergence_rejects_four_valid_paths_without_material_gain(
     monkeypatch,
 ) -> None:
-    stages = import_module("xrr_fitter.fit.stages")
+    profile_rescue = import_module("xrr_fitter.fit.profile_rescue")
     problem = _problem()
     search, decision, _evaluation = _state(problem)
 
@@ -378,9 +381,9 @@ def test_profile_reconvergence_rejects_four_valid_paths_without_material_gain(
             nfev=1,
         )
 
-    monkeypatch.setattr(stages, "solve_local", stable_no_gain)
+    monkeypatch.setattr(profile_rescue, "solve_local", stable_no_gain)
 
-    rebuilt = stages.reconverge_profile_basin(
+    rebuilt = profile_rescue.reconverge_profile_basin(
         problem,
         search.candidates,
         decision.unit_vector,
@@ -389,3 +392,35 @@ def test_profile_reconvergence_rejects_four_valid_paths_without_material_gain(
     )
 
     assert rebuilt is None
+
+
+def test_oxide_cap_recovery_finds_the_basin_seen_by_reported_profiles() -> None:
+    case = next(case for case in _oxide_cap_cases() if case.case_id == "oxide-cap-14017")
+    data = _prepared_case_data(case, _generate_case_intensity(case))
+    problem = compile_fit_problem(data, case.fit_structure, case.fit_instrument, _fit_config(case))
+    # Frozen failed Stage-E center; exercise the real inference handoff without
+    # rerunning the global search or changing the corpus input, seed, or budget.
+    unit = np.asarray(
+        [
+            0.11687643352138376,
+            0.9573901326699007,
+            0.00082410047806986,
+            0.5450205227856092,
+            0.521080557016504,
+            0.8414340132570994,
+            0.019400872852358714,
+            0.32138728325358856,
+            0.49470604876855967,
+            3.4755484498953376e-05,
+            0.055184774877327786,
+        ]
+    )
+    observed = evaluate_model(problem, unit)
+    candidate = SimpleNamespace(valid=observed.valid, objective=observed.objective, unit_vector=unit)
+
+    decision = recover_profile_basin(problem, candidate)
+
+    assert decision is not None
+    assert decision.parameter_name == "component.0.thickness_a"
+    assert decision.objective < 0.5 * candidate.objective
+    assert evaluate_model(problem, decision.unit_vector).objective == pytest.approx(decision.objective)

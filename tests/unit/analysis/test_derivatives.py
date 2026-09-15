@@ -121,6 +121,14 @@ def test_problem_objective_information_uses_robust_weights_and_scale_prior() -> 
     assert np.allclose(regularized, regularized.T)
 
 
+def test_derivatives_reject_a_mismatched_residual_jacobian(monkeypatch: pytest.MonkeyPatch) -> None:
+    problem = _problem("instrument.scale")
+    unit = encode_physical_vector(problem, {})
+    monkeypatch.setattr(_api(), "evaluate_model_jacobian", lambda *_: np.ones((56, 2)))
+    with pytest.raises(ValueError, match="residual Jacobian.*shape"):
+        objective_gradient(problem, unit)
+
+
 def test_problem_objective_gradient_handles_log_bounds_whose_ratio_overflows() -> None:
     problem = _wide_log_scale_problem(scale_prior=True)
     unit = encode_physical_vector(problem, {"instrument.scale": 1.0})
@@ -145,9 +153,7 @@ def test_problem_objective_information_handles_log_bounds_whose_ratio_overflows(
     regularized = objective_information(with_prior, unit)
     definition = next(item for item in with_prior.parameter_definitions if item.name == "instrument.scale")
     decades_per_unit = np.log10(definition.upper) - np.log10(definition.lower)
-    expected_increment = (
-        2.0 * (decades_per_unit / with_prior.scale_prior_tau_decades) ** 2 / np.count_nonzero(with_prior.data.fit_mask)
-    )
+    expected_increment = (decades_per_unit / with_prior.scale_prior_tau_decades) ** 2
 
     assert np.all(np.isfinite(regularized))
     assert regularized[0, 0] - plain[0, 0] == pytest.approx(expected_increment)
@@ -181,7 +187,7 @@ def test_problem_objective_information_rejects_extreme_prior_tau_without_warning
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        with pytest.raises(FloatingPointError, match="scale prior derivative"):
+        with pytest.raises(FloatingPointError, match="scale prior Jacobian"):
             objective_information(problem, unit)
 
     assert not any(item.category is RuntimeWarning for item in caught)
@@ -197,7 +203,7 @@ def test_problem_objective_information_rejects_prior_curvature_overflow_without_
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        with pytest.raises(FloatingPointError, match="scale prior information"):
+        with pytest.raises(FloatingPointError, match="objective information"):
             objective_information(problem, unit)
 
     assert not any(item.category is RuntimeWarning for item in caught)
@@ -251,18 +257,20 @@ def test_objective_derivatives_reject_unrepresentable_matrix_products(
     problem = SimpleNamespace(
         variables=(SimpleNamespace(name="x", parameter_index=0),),
         weights=np.ones(1),
+        sampling_multipliers=np.ones(1),
+        objective_point_count=1,
         data=SimpleNamespace(fit_mask=np.array([True])),
-        config=SimpleNamespace(c_decades=1.0),
+        config=SimpleNamespace(c_decades=1.0, noise_model="robust_log"),
         scale_prior_center=None,
         parameter_definitions=(SimpleNamespace(),),
     )
     observed = SimpleNamespace(
         valid=True,
         objective=1.0,
-        fit_log_residuals_decades=np.ones(1),
+        fit_residuals=np.ones(1),
         parameters=(),
     )
-    monkeypatch.setattr(module, "evaluate_model", lambda *_args: observed)
+    monkeypatch.setattr(module, "evaluate_model", lambda *_args, **_kwargs: observed)
     monkeypatch.setattr(
         module,
         "evaluate_model_jacobian",

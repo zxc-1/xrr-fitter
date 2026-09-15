@@ -30,6 +30,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PySide6.QtWidgets import QTableWidget
+from tests.support.bootstrap_cases import bootstrap_evidence
 from tests.support.model_cases import (
     dataset_project,
     final_fit_result,
@@ -48,6 +49,8 @@ def _uncertainty(candidate_id: str = "candidate-a") -> api.UncertaintyReport:
         profiles=(),
         bootstrap_intervals=(("scale", 0.8, 1.2),),
         bootstrap_failure_rate=0.125,
+        bootstrap_performed=True,
+        bootstrap_evidence=bootstrap_evidence((("scale", 0.8, 1.2),), failure_rate=0.125),
         boundary_hits=("scale",),
         strong_correlations=(),
         systematic_residual=False,
@@ -365,6 +368,8 @@ def test_uncertainty_formats_length_intervals_and_residual_statuses(qtbot) -> No
     report = replace(
         _uncertainty(),
         bootstrap_intervals=(("component.0.thickness_a", 95.0, 108.0),),
+        correlation_names=("component.0.thickness_a",),
+        bootstrap_evidence=bootstrap_evidence((("component.0.thickness_a", 95.0, 108.0),), failure_rate=0.125),
         systematic_residual=False,
         residual_autocorrelation=False,
     )

@@ -7,7 +7,7 @@ from math import isfinite
 
 import numpy as np
 
-from xrr_fitter.evaluation import assign_fit_regions, region_weights
+from xrr_fitter.evaluation import assign_fit_regions, region_weights, validate_noise_data
 from xrr_fitter.fit.drift import DRIFT_DATASET, drift_constraint_rules, rebind_drift_rules
 from xrr_fitter.fit.gradient_bounds import validate_gradient_modes
 from xrr_fitter.fit.parameters import (
@@ -54,7 +54,7 @@ def _valid_scale_prior(config: FitConfig) -> bool:
 
 
 def _validate_config(config: FitConfig) -> None:
-    if (config.objective_name, config.objective_version) != ("robust_log_soft_l1", "1"):
+    if (config.objective_name, config.objective_version) != ("xrr_noise_model", "2"):
         raise ValueError("unsupported objective configuration")
     if config.final_seed_count != 4 or not isfinite(config.c_decades) or config.c_decades <= 0.0:
         raise ValueError("invalid standard fit configuration: c_decades")
@@ -300,6 +300,7 @@ def compile_fit_problem(
 ) -> FitEvaluationContext:
     _validate_config(config)
     _validate_data_mode(data, instrument)
+    validate_noise_data(data, config.noise_model)
     _require_explicit_expert_density(structure, tuple(parameter_settings))
     rules = _compiled_constraint_rules(structure, tuple(constraint_rules))
     namespace = _validate_local_constraints(rules)
@@ -314,6 +315,8 @@ def compile_fit_problem(
     validate_transition_modes(definitions, structure)
     validate_gradient_modes(definitions, structure)
     labels, weights = _region_layout(data)
+    if config.noise_model != "robust_log":
+        weights = _readonly(data.fit_mask.astype(float))
     center, reason = _scale_prior_state(data, instrument, config)
     problem = FitEvaluationContext(
         data=data,
@@ -333,19 +336,48 @@ def compile_fit_problem(
     return problem
 
 
+def recompile_resampled_problem(problem: FitEvaluationContext, data: PreparedData) -> FitEvaluationContext:
+    """Reestimate data-derived evidence without changing the declared parameter layout."""
+    if not np.array_equal(problem.data.fit_mask, data.fit_mask) or not np.array_equal(
+        problem.data.qz_a_inv, data.qz_a_inv, equal_nan=True
+    ):
+        raise ValueError("resampling must preserve the observation grid and mask")
+    validate_noise_data(data, problem.config.noise_model)
+    center, reason = _scale_prior_state(data, problem.instrument, problem.config)
+    warnings = tuple(value for value in problem.warnings if value != problem.scale_prior_reason)
+    return replace(
+        problem,
+        data=data,
+        scale_prior_center=center,
+        scale_prior_reason=reason,
+        warnings=warnings + (() if reason is None else (reason,)),
+    )
+
+
 def compile_stage_problem(
     problem: FitEvaluationContext,
     stage: str,
     current_values: dict[str, float],
 ) -> FitEvaluationContext:
     settings = stage_parameter_settings(problem.parameter_definitions, stage, current_values)
-    return compile_fit_problem(
+    compiled = compile_fit_problem(
         problem.data,
         problem.structure,
         problem.instrument,
         problem.config,
         settings,
         problem.constraint_rules,
+    )
+    return replace(
+        compiled,
+        region_labels=problem.region_labels,
+        weights=problem.weights,
+        scale_prior_center=problem.scale_prior_center,
+        scale_prior_tau_decades=problem.scale_prior_tau_decades,
+        scale_prior_reason=problem.scale_prior_reason,
+        warnings=problem.warnings,
+        objective_point_count=problem.objective_point_count,
+        sampling_multipliers=problem.sampling_multipliers,
     )
 
 
@@ -374,11 +406,22 @@ def compile_fixed_parameter_problem(
         )
         for definition in problem.parameter_definitions
     )
-    return compile_fit_problem(
+    compiled = compile_fit_problem(
         problem.data,
         problem.structure,
         problem.instrument,
         problem.config,
         settings,
         problem.constraint_rules,
+    )
+    return replace(
+        compiled,
+        region_labels=problem.region_labels,
+        weights=problem.weights,
+        scale_prior_center=problem.scale_prior_center,
+        scale_prior_tau_decades=problem.scale_prior_tau_decades,
+        scale_prior_reason=problem.scale_prior_reason,
+        warnings=problem.warnings,
+        objective_point_count=problem.objective_point_count,
+        sampling_multipliers=problem.sampling_multipliers,
     )

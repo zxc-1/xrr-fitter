@@ -43,6 +43,7 @@ def _numpy_scalar_fit_config() -> FitConfig:
         "local_min_nfev": np.int32(200),
         "local_nfev_per_parameter": np.int64(30),
         "bootstrap_samples": np.int32(8),
+        "diagnostic_samples": np.int64(999),
     }.items():
         object.__setattr__(budget, field, value)
     confidence = ConfidenceThresholds(
@@ -56,8 +57,8 @@ def _numpy_scalar_fit_config() -> FitConfig:
     )
     config = FitConfig(
         master_seed=1201,
-        objective_name="robust_log_soft_l1",
-        objective_version="1",
+        objective_name="xrr_noise_model",
+        objective_version="2",
         c_decades=np.float32(0.125),
         final_seed_count=4,
         budget=budget,
@@ -141,7 +142,7 @@ def test_project_bytes_normalize_numpy_scalars_in_fit_declarations() -> None:
     restored_confidence = restored.fit_config.confidence
 
     assert _field_types(restored.fit_config, ("master_seed", "final_seed_count", "local_workers")) == (int, int, int)
-    assert _dataclass_field_types(restored_budget) == (int, int, int, int, int)
+    assert _dataclass_field_types(restored_budget) == (int, int, int, int, int, int)
     assert _dataclass_field_types(restored_confidence) == (
         float,
         float,

@@ -33,7 +33,8 @@ import numpy as np
 from xrr_fitter.fit.global_search import bounded_index_product, geometry_variants
 from xrr_fitter.fit.initialization import estimate_initial_candidates
 from xrr_fitter.model.data import PreparedData
-from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext, ModelEvaluation
+from xrr_fitter.model.evaluation import ModelEvaluation
+from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.structure import (
     GradientLayerSpec,
@@ -414,6 +415,8 @@ def build_candidate_pool(
 
     Feature grids are combined only after each geometry family is bounded. The
     caller's RNG controls every stochastic choice without global state.
+    Inactive axes can collapse distinct draws to the same complete identity;
+    retain its first occurrence without resampling or merging feature families.
     """
     _validate_candidate_limit(limit)
     baseline = _declared_baseline_start(data, structure, instrument)
@@ -446,7 +449,7 @@ def build_candidate_pool(
         all_dimensions = (geometry, *dimensions)
         combinations = _selected_combinations(all_dimensions, rng, generated_limit)
         generated = tuple(_make_start(structure, combination[0], (), *combination[1:]) for combination in combinations)
-    return (*protected, *generated[:generated_limit])
+    return tuple(dict.fromkeys((*protected, *generated[:generated_limit])))
 
 
 def _start_distance(first: CandidateStart, second: CandidateStart) -> float:
@@ -501,6 +504,22 @@ def best_candidate_index(
     """Return the deterministic winner, or ``None`` for an empty scope."""
     ranked = rank_candidate_indices(candidates, eligible_ids=eligible_ids)
     return ranked[0] if ranked else None
+
+
+#
+# Materially improves
+#
+def materially_improves(
+    problem: FitEvaluationContext,
+    incumbent: FitCandidate,
+    candidate: FitCandidate | ModelEvaluation,
+) -> bool:
+    thresholds = problem.config.confidence
+    required = max(
+        thresholds.equivalent_cost_fraction * abs(incumbent.objective),
+        thresholds.equivalent_cost_floor,
+    )
+    return candidate.valid and candidate.objective + required < incumbent.objective
 
 
 def cluster_candidate_indices(
@@ -700,6 +719,21 @@ def select_full_search_candidates(
     return (baseline, *remaining[: limit - 1])
 
 
+def _published_residual_arrays(problem: FitEvaluationContext, evaluation: ModelEvaluation):
+    from xrr_fitter.evaluation import log_residuals
+
+    full_log, residuals, weighted = (np.full(problem.data.qz_a_inv.shape, np.nan, dtype=float) for _ in range(3))
+    mask = problem.data.fit_mask
+    residuals[mask] = evaluation.fit_residuals
+    weighted[mask] = evaluation.fit_weighted_residuals
+    positive = mask & (evaluation.model_normalized > 0.0) & (problem.data.intensity_normalized > 0.0)
+    if evaluation.valid and np.any(positive):
+        full_log[positive] = log_residuals(
+            evaluation.model_normalized[positive], problem.data.intensity_normalized[positive], problem.data.r_floor
+        )
+    return full_log, residuals, weighted
+
+
 def candidate_from_evaluation(
     problem: FitEvaluationContext,
     unit_vector: np.ndarray,
@@ -709,10 +743,7 @@ def candidate_from_evaluation(
     stop_reason: str,
     nfev: int,
 ) -> FitCandidate:
-    full_log = np.full(problem.data.qz_a_inv.shape, np.nan, dtype=float)
-    full_weighted = np.full(problem.data.qz_a_inv.shape, np.nan, dtype=float)
-    full_log[problem.data.fit_mask] = evaluation.fit_log_residuals_decades
-    full_weighted[problem.data.fit_mask] = evaluation.fit_weighted_residuals
+    full_log, full_residual, full_weighted = _published_residual_arrays(problem, evaluation)
     if evaluation.expanded_stack is None:
         depth = np.empty(0, dtype=float)
         profile = np.empty(0, dtype=np.complex128)
@@ -734,11 +765,13 @@ def candidate_from_evaluation(
         qz_a_inv=evaluation.qz_a_inv,
         model_normalized=evaluation.model_normalized,
         log_residuals_decades=_readonly(full_log, float),
+        residuals=_readonly(full_residual, float),
         weighted_residuals=_readonly(full_weighted, float),
         expanded_stack=evaluation.expanded_stack,
         sld_depth_a=_readonly(depth, float),
         sld_profile_a2=_readonly(profile, complex),
         diagnostics=evaluation.diagnostics,
+        noise_model=evaluation.noise_model,
     )
 
 

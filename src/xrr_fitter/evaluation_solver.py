@@ -74,11 +74,12 @@ from xrr_fitter.evaluation_geometry import (
 )
 from xrr_fitter.evaluation_instrument_jacobian import _model_residual_jacobian, evaluate_model_jacobian
 from xrr_fitter.evaluation_model import evaluate_model
-from xrr_fitter.evaluation_parameters import EvaluationConstraintError, _validated_unit
-from xrr_fitter.model.fitting import FitEvaluationContext, ModelEvaluation
+from xrr_fitter.evaluation_parameters import EvaluationConstraintError, _validated_unit, values_and_jacobians
+from xrr_fitter.evaluation_statistics import data_loss_rho
+from xrr_fitter.model.evaluation import ModelEvaluation
+from xrr_fitter.model.fitting import FitEvaluationContext
 from xrr_fitter.model.parameters import (
     _log10_ratio,
-    _log_interval_width,
 )
 
 
@@ -98,6 +99,8 @@ def _scale_prior_residual(problem: object, evaluation: ModelEvaluation) -> float
     invariants. This boundary therefore does not repair a missing scale value or
     reinterpret nonpositive metadata after optimization has begun.
     """
+    if problem.scale_prior_center is None:
+        return None
     scale = next(value.value for value in evaluation.parameters if value.name == "instrument.scale")
     return _scale_prior_residual_from_scale(problem, scale)
 
@@ -138,7 +141,7 @@ def _least_squares_residual_parts(
             None,
             False,
         )
-    residual = np.array(observed.fit_log_residuals_decades, dtype=float, copy=True)
+    residual = np.array(observed.fit_residuals, dtype=float, copy=True)
     return residual, _scale_prior_residual(problem, observed), True
 
 
@@ -177,83 +180,27 @@ def least_squares_residual(
     cannot be misclassified as merely unfavorable candidates.
     """
     unit = _validated_unit(problem, unit_vector)
-    evaluate = evaluate_model if evaluator is None else evaluator
+    evaluate = partial(evaluate_model, fit_only=True) if evaluator is None else evaluator
     residual, prior, valid = _least_squares_residual_parts(problem, unit, evaluate)
     if not valid:
         return np.full(_least_squares_row_count(problem), 1e6, dtype=float)
     return residual if prior is None else np.concatenate((residual, np.asarray([prior])))
 
 
-def _log_scale_prior_derivative(definition: object) -> float:
-    if definition.lower <= 0.0 or definition.upper <= 0.0:
-        raise ValueError("scale prior requires positive log bounds")
-    try:
-        log_span = _log_interval_width(definition.lower, definition.upper)
-    except (ValueError, OverflowError) as error:
-        raise FloatingPointError("scale prior log span is not representable") from error
-    return log_span / log(10.0)
-
-
-def _affine_scale_prior_derivative(definition: object) -> float:
-    span = definition.upper - definition.lower
-    if not isfinite(span):
-        raise FloatingPointError("scale prior affine parameter span is not representable")
-    scale = definition.lower + 0.5 * span
-    if not isfinite(scale) or scale <= 0.0:
-        raise FloatingPointError("scale prior affine midpoint is not positive and finite")
-    return span / (scale * log(10.0))
-
-
-def _scale_prior_derivative(definition: object) -> float:
-    derivative = (
-        _log_scale_prior_derivative(definition)
-        if definition.transform == "log"
-        else _affine_scale_prior_derivative(definition)
-    )
-    if not isfinite(derivative):
-        raise FloatingPointError("scale prior Jacobian is not finite")
-    return derivative
-
-
-def _scaled_prior_derivative(derivative: float, tau_decades: float) -> float:
+def _scale_prior_jacobian(problem: FitEvaluationContext, unit: np.ndarray) -> np.ndarray:
+    """Differentiate scale in the complete physical constraint graph at this point."""
+    if problem.scale_prior_center is None:
+        return np.zeros(len(problem.variables), dtype=float)
+    values, jacobians = values_and_jacobians(problem, unit)
     try:
         with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
-            scaled = np.divide(derivative, tau_decades)
+            row = (
+                jacobians["instrument.scale"] / values["instrument.scale"] / log(10.0) / problem.scale_prior_tau_decades
+            )
     except FloatingPointError as error:
         raise FloatingPointError("scale prior Jacobian is not finite") from error
-    if not isfinite(scaled):
+    if np.any(~np.isfinite(row)):
         raise FloatingPointError("scale prior Jacobian is not finite")
-    return float(scaled)
-
-
-def _scale_prior_jacobian(problem: object) -> np.ndarray:
-    """Differentiate the optional scale-prior row in unit coordinates.
-
-    Log transforms have a constant decades-per-unit derivative. The affine case
-    follows the persisted midpoint convention used by the frozen optimizer
-    contract. All non-scale coordinates remain exactly zero.
-
-    The row is allocated even when the prior is inactive so its coordinate axis
-    remains explicit and testable. Callers append it only for an active prior.
-    A compiled problem has at most one free scale coordinate; locked scale values
-    consequently leave the full derivative row at zero.
-
-    This derivative intentionally follows the frozen optimizer convention rather
-    than the current candidate scale for affine transforms. Changing that rule
-    would alter reference search trajectories and checkpoint replay.
-    """
-    row = np.zeros(len(problem.variables), dtype=float)
-    if problem.scale_prior_center is None:
-        return row
-    for index, coordinate in enumerate(problem.variables):
-        if coordinate.name != "instrument.scale":
-            continue
-        definition = problem.parameter_definitions[coordinate.parameter_index]
-        derivative = _scale_prior_derivative(definition)
-        row[index] = _scaled_prior_derivative(
-            derivative,
-            problem.scale_prior_tau_decades,
-        )
     return row
 
 
@@ -294,13 +241,14 @@ def _solver_data_system(
         residual, prior, valid = _least_squares_residual_parts(
             problem,
             unit,
-            evaluate_model,
+            partial(evaluate_model, fit_only=True),
         )
         return residual, _empty_residual_jacobian(problem), prior, None, valid
 
 
 def _append_scale_prior_row(
     problem: object,
+    unit: np.ndarray,
     residual: np.ndarray,
     jacobian: np.ndarray,
     prior: float | None,
@@ -312,10 +260,12 @@ def _append_scale_prior_row(
     if valid and scale is not None:
         prior = _scale_prior_residual_from_scale(problem, scale)
         assert prior is not None
-        prior_jacobian = _scale_prior_jacobian(problem)
+        prior_jacobian = _scale_prior_jacobian(problem, unit)
     else:
         prior = prior if valid else 1e6
-        prior_jacobian = _scale_prior_jacobian(problem) if valid else np.zeros(len(problem.variables), dtype=float)
+        prior_jacobian = (
+            _scale_prior_jacobian(problem, unit) if valid else np.zeros(len(problem.variables), dtype=float)
+        )
     assert prior is not None
     return (
         np.concatenate((residual, np.asarray([prior]))),
@@ -343,6 +293,7 @@ def least_squares_system(
     residual, jacobian, prior, scale, valid = _solver_data_system(problem, unit)
     residual, jacobian = _append_scale_prior_row(
         problem,
+        unit,
         residual,
         jacobian,
         prior,
@@ -428,78 +379,25 @@ def least_squares_residual_jacobian(
             _residual, _prior, valid = _least_squares_residual_parts(
                 problem,
                 unit,
-                evaluate_model,
+                partial(evaluate_model, fit_only=True),
             )
     if problem.scale_prior_center is not None:
-        prior_jacobian = _scale_prior_jacobian(problem) if valid else np.zeros(len(problem.variables), dtype=float)
+        prior_jacobian = (
+            _scale_prior_jacobian(problem, unit) if valid else np.zeros(len(problem.variables), dtype=float)
+        )
         jacobian = np.vstack((jacobian, prior_jacobian))
     return jacobian
 
 
-def least_squares_loss(
-    problem: FitEvaluationContext,
-) -> Callable[[np.ndarray], np.ndarray]:
-    """Build SciPy's three-row soft-L1 loss with external region weights.
-
-    SciPy supplies squared residuals and expects loss value plus first and second
-    derivatives with respect to those squared values. Data rows use the frozen
-    factor-two soft-L1 convention, with regional weights squared outside the
-    robust expression.
-
-    Rows after the fitted data count are independent quadratic priors. Their
-    derivative rows therefore stay constant and do not inherit regional weights
-    or the data robustness scale. The returned closure captures immutable
-    compiled weights and the configured decades scale.
-
-    SciPy passes squared residuals, so ``rho[1]`` and ``rho[2]`` differentiate
-    with respect to that squared coordinate rather than the signed residual.
-    Keeping all three rows together prevents the objective and analytic solver
-    derivatives from acquiring different factor-two conventions.
-
-    The closure accepts an arbitrary number of trailing prior rows even though
-    the current compiler emits at most one. Every trailing row uses the same
-    exact quadratic contract and remains independent of regional balancing.
-    """
-    weights = np.asarray(problem.weights[problem.data.fit_mask], dtype=float)
-    c_decades = problem.config.c_decades
-    data_count = weights.size
+def least_squares_loss(problem: FitEvaluationContext) -> Callable[[np.ndarray], np.ndarray]:
+    """Return rho with half-sum Q; prior mass is independent of data sampling."""
+    mask = problem.data.fit_mask
+    count = np.count_nonzero(mask)
 
     def loss(squared: np.ndarray) -> np.ndarray:
-        """Evaluate loss value and two derivatives without changing row axes.
-
-        The returned shape is always ``(3, squared.size)`` as required by SciPy's
-        callable-loss protocol. Empty data selections and prior-only vectors use
-        the same allocation path, avoiding special cases in optimizer dispatch.
-        """
         values = np.asarray(squared, dtype=float)
-        rho = np.empty((3, values.size), dtype=float)
-        data = values[:data_count]
-        with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-            scaled_data = data / c_decades**2
-            scaled = 1.0 + scaled_data
-            root = np.sqrt(scaled)
-            rho[0, :data_count] = 4.0 * weights**2 * c_decades**2 * (root - 1.0)
-            rho[1, :data_count] = 2.0 * weights**2 / root
-            rho[2, :data_count] = -(weights**2 / c_decades**2) * scaled ** (-1.5)
-        invalid_columns = np.any(~np.isfinite(rho[:, :data_count]), axis=0)
-        near_zero = (data > 0.0) & np.isfinite(scaled_data) & (scaled_data < 1e-8)
-        if np.any(invalid_columns | near_zero):
-            with np.errstate(over="ignore", invalid="ignore", divide="ignore", under="ignore"):
-                root_data = np.sqrt(data)
-                radius = np.hypot(c_decades, root_data)
-                stable = np.vstack(
-                    (
-                        4.0 * weights**2 * c_decades * root_data * (root_data / (radius + c_decades)),
-                        2.0 * weights**2 * c_decades / radius,
-                        -(weights**2) * (((c_decades / radius) / radius) / radius),
-                    )
-                )
-            rho[:3, :data_count] = np.where(invalid_columns[None, :], stable, rho[:3, :data_count])
-            rho[0, :data_count] = np.where(near_zero, stable[0], rho[0, :data_count])
-        if values.size > data_count:
-            rho[0, data_count:] = 2.0 * values[data_count:]
-            rho[1, data_count:] = 2.0
-            rho[2, data_count:] = 0.0
-        return rho
+        data = data_loss_rho(problem, values[:count])
+        prior = values[count:]
+        return np.hstack((data, np.vstack((2 * prior, np.full(prior.size, 2.0), np.zeros(prior.size)))))
 
     return loss

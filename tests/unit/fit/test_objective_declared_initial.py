@@ -56,7 +56,7 @@ def test_declared_initial_marks_known_physical_encoding_failures_invalid(
     assert result.valid is False
     assert result.reason == reason
     assert result.objective == float("inf")
-    assert result.fit_log_residuals_decades.shape == (np.count_nonzero(problem.data.fit_mask),)
+    assert result.fit_residuals.shape == (np.count_nonzero(problem.data.fit_mask),)
 
 
 def test_declared_initial_propagates_unexpected_encoding_errors(

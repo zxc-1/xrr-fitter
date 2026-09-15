@@ -238,7 +238,7 @@ def test_the_result_step_canvas_holds_only_reflectivity_and_residual(qtbot) -> N
 
     绘图栈的四段（反射率页 / 残差 / 分析页 / SLD 剖面）此前全都常驻，按 3:2:2:2 分同一
     个 ~800px 的画布，每段落到 180px 上下。180px 装不下一张带坐标轴和图例的图：帧⑤ 的
-    相关矩阵和 Profile 似然叠在一起连标签都读不出来，SLD 剖面干脆被挤到折叠线以下。设计
+    相关矩阵和 参数剖面叠在一起连标签都读不出来，SLD 剖面干脆被挤到折叠线以下。设计
     稿每一帧的画布都只有两张卡，所以这里也按步骤只留该露的那两段。
     """
     window = _window(qtbot, _fitted_project())
@@ -269,11 +269,11 @@ def test_the_structure_step_canvas_holds_the_sld_profile(qtbot) -> None:
 def test_selecting_an_analysis_view_gives_it_the_residual_s_place(qtbot) -> None:
     """帧⑤ 那一屏：选到分析页，残差让位——分析页是另一种看法，不是第三张图。
 
-    四段常驻时分析页只分到 ~180px，相关矩阵和 Profile 似然两张子图挤在一起，标签互相压
+    四段常驻时分析页只分到 ~180px，相关矩阵和 参数剖面两张子图挤在一起，标签互相压
     掉。让残差退场之后中栏整段都归它，读得出坐标轴——那一段真实像素归
     ``test_visual_contracts`` 里那条最小窗口的量法钉，这里只钉「哪几段该露」。
 
-    反射率也一并让位：设计稿帧⑤ 的 ``.canvas-top`` 只有四个标签（相关矩阵 / Profile 似然
+    反射率也一并让位：设计稿帧⑤ 的 ``.canvas-top`` 只有四个标签（相关矩阵 / 参数剖面
     / SLD 可信带 / MCMC 后验），尾部空着——模式条是帧① 才有的角落控件。收起标签页不会把
     人困住：回反射率那一组走菜单「视图」，它不经过标签页；滚轮缩放直接连在画布上。
     """

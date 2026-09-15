@@ -39,6 +39,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO, StringIO
+from itertools import chain
 from math import isfinite
 from pathlib import PurePosixPath
 from typing import Any
@@ -48,6 +49,14 @@ import pandas as pd
 
 from xrr_fitter.io.codec_declarations import _fit_config_to_dict
 from xrr_fitter.io.codec_results import fit_result_to_dict
+from xrr_fitter.io.export_evidence import (
+    PARAMETER_UNCERTAINTY_FIELDS,
+    RESIDUAL_METADATA_FIELDS,
+    inference_metadata,
+    parameter_uncertainty,
+    profile_metadata,
+    residual_metadata,
+)
 from xrr_fitter.io.project_codec import _dataset_to_dict
 from xrr_fitter.model.analysis import FitResult, UncertaintyReport
 from xrr_fitter.model.data import PreparedData
@@ -281,6 +290,8 @@ def _model_residuals_payload(context: DatasetExportData) -> dict[str, object]:
         "log_residuals_decades": _array_values(selected.log_residuals_decades),
         "weighted_residuals": _array_values(selected.weighted_residuals),
         "candidate_id": selected.candidate_id,
+        "residuals": _array_values(selected.residuals),
+        **residual_metadata(selected),
     }
 
 
@@ -325,6 +336,8 @@ def _run_info_payload(
         "jacobian_version": config.jacobian_version,
         "dataset_directory": dict(context.directory_mapping)[context.dataset.dataset_id],
         "dataset_directory_mapping": dict(context.directory_mapping),
+        **residual_metadata(context.selected),
+        "inference": inference_metadata(report, context.uncertainty_absent_reason),
     }
 
 
@@ -406,13 +419,28 @@ def dataset_json_bytes(context: DatasetExportData) -> bytes:
 
 
 def _parameter_frame(context: DatasetExportData) -> pd.DataFrame:
-    columns = ["parameter_name", "value", "lower", "upper"]
+    columns = [
+        "parameter_name",
+        "value",
+        "lower",
+        "upper",
+        *RESIDUAL_METADATA_FIELDS,
+        *PARAMETER_UNCERTAINTY_FIELDS,
+        "inference_json",
+    ]
+    report = context.selected_uncertainty
+    inference = json_text(inference_metadata(report, context.uncertainty_absent_reason))
     rows = [
         {
             "parameter_name": value.name,
             "value": value.value,
             "lower": value.lower,
             "upper": value.upper,
+            **residual_metadata(context.selected),
+            **parameter_uncertainty(
+                report, value.name, context.uncertainty_absent_reason, dataset_id=context.dataset.dataset_id
+            ),
+            "inference_json": inference,
         }
         for value in context.selected.parameters
     ]
@@ -434,6 +462,7 @@ def _dataset_parameter_frame(context: DatasetExportData) -> pd.DataFrame:
         "expert_only",
         "sharing_key",
         "selected_candidate_id",
+        *PARAMETER_UNCERTAINTY_FIELDS,
     ]
     values = {value.name: value for value in context.selected.parameters}
     rows = []
@@ -454,6 +483,12 @@ def _dataset_parameter_frame(context: DatasetExportData) -> pd.DataFrame:
                 "expert_only": definition.expert_only,
                 "sharing_key": definition.sharing_key,
                 "selected_candidate_id": context.selected.candidate_id,
+                **parameter_uncertainty(
+                    context.selected_uncertainty,
+                    definition.name,
+                    context.uncertainty_absent_reason,
+                    dataset_id=context.dataset.dataset_id,
+                ),
             }
         )
     return pd.DataFrame(rows, columns=columns)
@@ -549,6 +584,8 @@ def _model_frame(context: DatasetExportData) -> pd.DataFrame:
             "log_residuals_decades": selected.log_residuals_decades,
             "weighted_residuals": selected.weighted_residuals,
             "fit_included": context.dataset.fit_mask,
+            "residuals": selected.residuals,
+            **residual_metadata(selected),
         }
     )
 
@@ -574,17 +611,27 @@ def _correlation_frame(context: DatasetExportData) -> pd.DataFrame:
 
 
 def _profiles_frame(context: DatasetExportData) -> pd.DataFrame:
-    columns = ["name", "value", "objective", "lower_closed", "upper_closed"]
+    columns = [
+        "name",
+        "value",
+        "objective",
+        "lower_closed",
+        "upper_closed",
+        "interval_kind",
+        "confidence_level",
+        "method",
+        "unavailable_reason",
+        "delta_total",
+        "objective_point_count",
+    ]
     report = context.selected_uncertainty
     if report is None:
         return pd.DataFrame(columns=columns)
     rows = [
         {
-            "name": profile.name,
             "value": value,
             "objective": _finite_scalar(objective),
-            "lower_closed": profile.lower_closed,
-            "upper_closed": profile.upper_closed,
+            **profile_metadata(profile),
         }
         for profile in report.profiles
         for value, objective in zip(
@@ -627,8 +674,17 @@ def _run_info_frame(context: DatasetExportData) -> pd.DataFrame:
         "budget_reclaim_threshold_version": info["budget_reclaim_threshold_version"],
         "downsample_rule_version": info["downsample_rule_version"],
         "jacobian_version": info["jacobian_version"],
+        **residual_metadata(context.selected),
+        "inference": json_text(info["inference"]),
     }
     return pd.DataFrame([row])
+
+
+def _validate_workbook_strings(sheet_name: str, frame: pd.DataFrame) -> None:
+    values = chain(frame.columns, chain.from_iterable(frame.itertuples(index=False, name=None)))
+    for value in values:
+        if isinstance(value, str) and len(value) > 32767:
+            raise ValueError(f"Excel cell limit exceeded in {sheet_name}; text cannot be exported losslessly")
 
 
 def _workbook_bytes(frames: tuple[tuple[str, pd.DataFrame], ...]) -> bytes:
@@ -646,6 +702,7 @@ def _workbook_bytes(frames: tuple[tuple[str, pd.DataFrame], ...]) -> bytes:
             }
         )
         for sheet_name, frame in frames:
+            _validate_workbook_strings(sheet_name, frame)
             frame.to_excel(writer, sheet_name=sheet_name, index=False)
     return buffer.getvalue()
 
@@ -683,6 +740,8 @@ def _summary_frame(contexts: tuple[DatasetExportData, ...]) -> pd.DataFrame:
         "objective",
         "selected_candidate_id",
         "warnings",
+        *RESIDUAL_METADATA_FIELDS,
+        "inference",
     ]
     rows = [
         {
@@ -691,6 +750,8 @@ def _summary_frame(contexts: tuple[DatasetExportData, ...]) -> pd.DataFrame:
             "objective": context.selected.objective,
             "selected_candidate_id": context.selected.candidate_id,
             "warnings": json_text(context.result.warnings),
+            **residual_metadata(context.selected),
+            "inference": json_text(inference_metadata(context.selected_uncertainty, context.uncertainty_absent_reason)),
         }
         for context in contexts
     ]
@@ -782,6 +843,12 @@ def _batch_parameter_row(
         "lower": parameter.lower,
         "upper": parameter.upper,
         "unit": definition.unit,
+        **parameter_uncertainty(
+            context.selected_uncertainty,
+            parameter.name,
+            context.uncertainty_absent_reason,
+            dataset_id=context.dataset.dataset_id,
+        ),
     }
 
 
@@ -797,6 +864,7 @@ def batch_workbook_bytes(contexts: object) -> bytes:
         "lower",
         "upper",
         "unit",
+        *PARAMETER_UNCERTAINTY_FIELDS,
     ]
     rows = [_batch_parameter_row(context, parameter) for context in values for parameter in context.selected.parameters]
     parameters = pd.DataFrame(rows, columns=columns)

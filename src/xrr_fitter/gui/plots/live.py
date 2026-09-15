@@ -467,7 +467,9 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self._hide_placeholder()
         self.set_log_mode(False)
 
-    def show_residual(self, qz: object, weighted: object) -> None:
+    def show_residual(
+        self, qz: object, weighted: object, *, ylabel: str = "加权残差 (σ)", sigma_reference: bool = True
+    ) -> None:
         """Render the weighted residual as a marked line above a zero baseline."""
         self.apply_palette(theme.current_plot_palette())
         x = np.asarray(qz, dtype=float)
@@ -477,10 +479,10 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self.set_model(None, None)
         self.excluded_item.setData([], [])
         self.clipped_item.setData([], [])
-        self._apply_labels("散射矢量 qz (Å⁻¹)", "加权残差 (σ)")
+        self._apply_labels("散射矢量 qz (Å⁻¹)", ylabel)
         self._set_observed_style(diameter=RESIDUAL_MARKER_PX, connected=True)
         self._set_value_ticks(False)
-        self._set_sigma_reference(True)
+        self._set_sigma_reference(sigma_reference)
         self._hide_placeholder()
         self.set_log_mode(False)
 

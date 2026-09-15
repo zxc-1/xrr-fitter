@@ -1,4 +1,4 @@
-"""帧⑤ 那张 Profile 似然要能读出「哪个参数被约束住了」，而不只读出三条上扬的曲线。
+"""帧⑤ 那张 参数剖面要能读出「哪个参数被约束住了」，而不只读出三条上扬的曲线。
 
 设计稿的 Profile 卡：纵轴从 0 起算、写明「相对最优」，横轴以 σ 为单位、三条曲线共享同一个
 0 点，于是「对称 / 偏斜 / 平坦」一眼分得出；图例每项除短名外还写着中文量名与一句形状判读
@@ -328,7 +328,7 @@ def test_a_scan_that_never_reaches_the_threshold_still_shows_its_whole_curve(qtb
 
 
 def test_the_card_is_titled_the_way_the_design_names_it(qtbot) -> None:
-    """抬头写「Profile 似然」，且空态与有数据时是同一句。
+    """抬头写「参数剖面」，且空态与有数据时是同一句。
 
     抬头此前在实现里写了两遍（有数据一处、``_unavailable`` 一处），两处拼写分叉时读者会以为
     换了张图。这条断言把它锁在一个常量上。
@@ -337,5 +337,5 @@ def test_the_card_is_titled_the_way_the_design_names_it(qtbot) -> None:
 
     view = _pane(qtbot, _result())
 
-    assert PROFILE_TITLE == "Profile 似然 · 逐参数扫描"
+    assert PROFILE_TITLE == "参数剖面 · 逐参数扫描"
     assert _profile_axes(view).get_title() == PROFILE_TITLE

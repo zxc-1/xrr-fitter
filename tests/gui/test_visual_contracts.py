@@ -956,7 +956,9 @@ def _fit_pair(
     report_candidate_id: str | None = None,
 ):
     """一份拟合结果与它的候选解：Σr²=6，自由参数 0，所以 χ²ᵥ = 6/4 = 1.5。"""
-    candidate = replace(fit_candidate("candidate-0"), weighted_residuals=np.array(residuals, dtype=float))
+    candidate = replace(
+        fit_candidate("candidate-0"), weighted_residuals=np.array(residuals, dtype=float), noise_model="gaussian"
+    )
     result = final_fit_result(candidate)
     if report:
         result = replace(result, uncertainty=_uncertainty(systematic=systematic, candidate_id=report_candidate_id))

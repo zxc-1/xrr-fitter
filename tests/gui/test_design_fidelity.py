@@ -612,7 +612,7 @@ def test_the_inspector_warns_that_thickness_and_density_can_trade_off(qtbot, tmp
     薄层上厚度与密度换着走能给出几乎同样的曲线，所以一个收敛得很好的拟合仍可能
     两个值都不可信。这句话必须出现在编辑结构的地方——等到拟合完再说，人已经把那
     组数字记成结论了。措辞照设计稿留「可能」，并且指向不确定度页，因为这里只能提
-    示相关的可能性，真的相关要用相关矩阵和 Profile 似然去核。
+    示相关的可能性，真的相关要用相关矩阵和 参数剖面去核。
     """
     from xrr_fitter.gui.window_layout import INSPECTOR_SECTIONS
 
@@ -703,9 +703,15 @@ def test_the_selected_layer_header_writes_the_layer_name_with_one_separator(qtbo
 def _correlated_report(candidate_id: str, correlations) -> api.UncertaintyReport:
     import numpy as np
 
+    from xrr_fitter.model.inference import CovarianceEvidence
+
+    names = ("component.0.thickness_a", "component.0.density")
+    matrix = np.array([[1.0, -0.72], [-0.72, 1.0]])
     return api.UncertaintyReport(
-        correlation_names=("component.0.thickness_a", "component.0.density"),
-        correlation_matrix=np.array([[1.0, -0.72], [-0.72, 1.0]]),
+        correlation_names=names,
+        correlation_matrix=matrix,
+        covariance_evidence=CovarianceEvidence(names, matrix, "gaussian_known_sigma", 2),
+        parameter_sigma=np.ones(2),
         profiles=(),
         bootstrap_intervals=(),
         bootstrap_failure_rate=0.0,
@@ -740,7 +746,7 @@ def test_a_strong_correlation_is_read_out_not_just_listed_as_a_number(qtbot) -> 
 
     「强相关：d/ρ=-0.72」只是把数字搬到了屏幕上。看得懂这个数的人不需要它，看不懂
     的人也不会因此改变读数方式——而这里要改变的恰恰是读数方式：两个参数纠缠时 ±1σ
-    会低估真实不确定度，必须换用 Profile 似然判读。设计稿把这句判读放进提示框，就
+    会低估真实不确定度，必须换用 参数剖面判读。设计稿把这句判读放进提示框，就
     是要它在数字旁边被读到，而不是躺在证据清单的第四行里。
     """
     view = _uncertainty_view(qtbot, (("component.0.thickness_a", "component.0.density", -0.72),))
@@ -749,7 +755,7 @@ def test_a_strong_correlation_is_read_out_not_just_listed_as_a_number(qtbot) -> 
     assert callout is not None, "相关矩阵旁没有判读提示"
     assert callout.isVisibleTo(view)
     assert "低估" in callout.text()
-    assert "Profile 似然" in callout.text()
+    assert "参数剖面" in callout.text()
     assert callout.property("hintBox") is True, "判读提示没做成设计稿的提示框"
 
 
@@ -1087,6 +1093,7 @@ def _fitted_project(tmp_path: Path):
         qz_a_inv=np.linspace(0.01, 0.2, points),
         model_normalized=np.linspace(1.0, 0.1, points),
         log_residuals_decades=np.zeros(points),
+        residuals=np.zeros(points),
         weighted_residuals=np.zeros(points),
     )
     result = replace(final_fit_result(candidate), parameter_definitions=definitions)

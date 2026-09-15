@@ -11,7 +11,8 @@ from xrr_fitter.analysis import mcmc, profile_selection, profile_tasks
 from xrr_fitter.analysis.bootstrap_samples import TaskRunner
 from xrr_fitter.model.analysis import McmcConfig, UncertaintyReport
 from xrr_fitter.model.data import BeamSpec
-from xrr_fitter.model.fitting import FitCandidate, FitCheckpoint, FitEvaluationContext, ModelEvaluation
+from xrr_fitter.model.evaluation import ModelEvaluation
+from xrr_fitter.model.fitting import FitCandidate, FitCheckpoint, FitEvaluationContext
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import (
     ParameterCoordinate,

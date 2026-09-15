@@ -39,6 +39,7 @@ class FakeJob:
             qz_a_inv=np.linspace(0.01, 0.2, 32),
             model_normalized=np.linspace(1.0, 0.1, 32),
             log_residuals_decades=np.zeros(32),
+            residuals=np.zeros(32),
             weighted_residuals=np.zeros(32),
         )
         dataset = replace(

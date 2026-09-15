@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 import numpy as np
+from matplotlib import rcParams
 from matplotlib.colors import to_rgba
 from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import MaxNLocator, NullLocator
@@ -744,7 +745,7 @@ def _definitions(result: object | None) -> tuple[object, ...]:
 # 前半段并进抬头，后半段不采用——本项目的目标函数是 ``robust_log_cost``，它不是 χ²，所以
 # 「Δ=1 对应 ±1σ」这个推论在这里不成立（见 ``_draw_profiles``）。写成常量是因为空态那一支
 # 也要写同一句：两处拼写分叉时读者会以为换了张图。
-PROFILE_TITLE = "Profile 似然 · 逐参数扫描"
+PROFILE_TITLE = "参数剖面 · 逐参数扫描"
 
 # 两侧半宽比过了这个数才叫「对称」。0.75 即「窄的一侧不短于宽的一侧的四分之三」——再接近一些
 # 的差别在半栏高的图上本来就看不出来，而低于它时曲线的歪已经肉眼可辨，此时逐参数的 ±1σ
@@ -964,17 +965,17 @@ def _legend_columns(axes: object, entry_count: int) -> int:
     矩阵（矩阵从 379.9 缩到 211.8px），读数栏挂在矩阵坐标上跟着从 235.5 矮到 131.3px，四段
     读数 175.0px 装不下，末段被栏底裁掉。
 
-    按可用高度算列数：每列最多 n 项，n 行高 ≤ 绘图区高 × 0.9（留 10% 呼吸），行高按
-    ``FONT_PT_SM`` 与 matplotlib 默认行距 1.2 推（不等 draw 量实高，构图时拿不到）。
-    18 项 / 2 列 = 9 行，9 × 13.1 = 118.1px < 211.8 × 0.9 = 190.6px，收进去了。
+    按可用高度算列数时须把每行的 ``labelspacing`` 和图例内外边距一起扣掉。只算字高会把
+    8 项误判为单列可容纳，实际图例高 159px；它随后又把 constrained_layout 的绘图区压到
+    99px。构图时尚未排版，预留这份真实排版开销，避免图例反过来撑坏整个上下布局。
     """
     box = axes.get_position()
     height_inches = box.height * float(axes.figure.get_figheight())
     height_pixels = height_inches * float(axes.figure.dpi)
-    # 一行图例的高：字号 + 默认行距 1.2 倍（matplotlib Legend 的 labelspacing 默认 0.5，
-    # 但那是**段间**额外间距，基础行高仍按 1.2 算）。
-    line_height = theme.FONT_PT_SM * 1.2 * float(axes.figure.dpi) / 72.0
-    usable = height_pixels * 0.9
+    font_pixels = theme.FONT_PT_SM * float(axes.figure.dpi) / 72.0
+    line_height = font_pixels * (1.2 + float(rcParams["legend.labelspacing"]))
+    padding = 2.0 * font_pixels * (float(rcParams["legend.borderpad"]) + float(rcParams["legend.borderaxespad"]))
+    usable = height_pixels * 0.9 - padding
     max_rows = max(int(usable / line_height), 1)
     return max((entry_count + max_rows - 1) // max_rows, 1)
 
@@ -1009,7 +1010,7 @@ def _draw_profile_thresholds(axes: object, levels: dict[str, float], palette: th
 
 
 def _draw_profiles(axes: object, report: object, definitions: Iterable[object] = ()) -> None:
-    """The profile-likelihood curves and the threshold that closes their intervals.
+    """Parameter profiles and the published threshold that closes their intervals.
 
     刻度和图例写的是短名（``d·ox``）。这张图在帧⑤ 与相关矩阵上下叠，读者拿图例里的曲线去
     矩阵上找那一格；一边写 ``d·ox``、另一边写 ``component.0.thickness_a``，两张互证的图之间
@@ -1063,7 +1064,7 @@ def _draw_profiles(axes: object, report: object, definitions: Iterable[object] =
         # 按可用高度自适应列数：每列最多 n 项，n 行高 ≤ 绘图区高 × 0.9（留 10% 呼吸）。
         axes.legend(fontsize=theme.FONT_PT_SM, ncols=_legend_columns(axes, len(profiles) + len(levels)))
     else:
-        axes.text(0.5, 0.5, "剖面似然与区间证据不可用", ha="center", va="center", transform=axes.transAxes)
+        axes.text(0.5, 0.5, "剖面与区间证据未执行/不可用", ha="center", va="center", transform=axes.transAxes)
     # 取景按阈值而不是按曲线远端，见 ``PROFILE_HEADROOM``。裁的是视野不是数据：远端那些点仍留在
     # 线上（悬停读得到、导出用得着），只是不出现在这一屏里。阈值是上限而非固定值——三条都抬不到
     # 阈值时（全是弱约束）按曲线收回来，否则那一屏会变成三条压在底部的平线加一大片空白；但阈值线

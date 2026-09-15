@@ -133,8 +133,11 @@ def _analyze_joint_searches(
     *,
     joint_candidate_vectors: Callable,
     analyze_joint_ensemble: Callable,
+    joint_point_evidence: Callable,
     with_parameter_priors: Callable,
     prior_conflicts: Callable,
+    bootstrap: Callable | None = None,
+    bootstrap_owner: Callable | None = None,
 ) -> tuple[FitResult, ...]:
     incomplete = _incomplete_joint_results(searches)
     if incomplete is not None:
@@ -156,9 +159,13 @@ def _analyze_joint_searches(
         valid=_joint_validity(aligned),
         diagnostics=_joint_diagnostics(aligned),
         thresholds=problem.problems[0].config.confidence,
+        point_evidence=lambda vector: joint_point_evidence(problem, vector),
+        bootstrap=bootstrap,
+        bootstrap_owner=bootstrap_owner,
     )
     report = replace(
         report,
+        parameter_members=tuple(variable.members for variable in problem.global_variables),
         prior_conflicts=_joint_prior_conflicts(
             problem,
             candidate_maps,

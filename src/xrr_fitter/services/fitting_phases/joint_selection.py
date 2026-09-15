@@ -9,6 +9,7 @@ from statistics import median
 
 from xrr_fitter.model.analysis import FitResult
 from xrr_fitter.model.automation import AutomaticRole, AutomaticStatus
+from xrr_fitter.model.diagnostic_calibration import RESIDUAL_ADVISORY_CODES
 from xrr_fitter.model.fitting import FitCheckpoint
 from xrr_fitter.model.parameters import ParameterFreedom, ParameterSetting, SharingRule
 from xrr_fitter.model.progress import search_terminated_early
@@ -23,6 +24,16 @@ from .common import (
 from .sharing import _automatic_material_occurrences
 
 
+def _prefit_report_reason(report) -> str | None:
+    if _residual_report_unavailable(report):
+        return "prefit residual diagnostics unavailable"
+    if report.diagnostics:
+        return f"prefit effective diagnostic: {report.diagnostics[0].code}"
+    if report.systematic_residual or report.residual_autocorrelation:
+        return "prefit systematic residual"
+    return None
+
+
 def _prefit_isolation_reason(
     prefit: AutomaticPreparedResult,
 ) -> str | None:
@@ -31,8 +42,12 @@ def _prefit_isolation_reason(
         return "prefit has no valid candidate"
     if not best.valid or not isfinite(best.objective):
         return "prefit candidate is invalid"
-    if best.diagnostics:
-        return f"prefit physical diagnostic: {best.diagnostics[0].code}"
+    physical = tuple(item for item in best.diagnostics if item.code not in RESIDUAL_ADVISORY_CODES)
+    if physical:
+        return f"prefit physical diagnostic: {physical[0].code}"
+    reason = _prefit_report_reason(prefit.fit_result.uncertainty)
+    if reason is not None:
+        return reason
     if not prefit.passed:
         return f"prefit quality failed: {prefit.reason}"
     return None
@@ -158,6 +173,71 @@ def _unlocked_joint_prepared(
     return tuple(values)
 
 
+def _residual_report_unavailable(report) -> bool:
+    return report is None or report.systematic_residual is None or report.residual_autocorrelation is None
+
+
+def _member_parameter_names(report, dataset_id):
+    return {
+        name
+        for name, references in zip(report.correlation_names, report.parameter_members, strict=True)
+        if any(reference.dataset_id == dataset_id for reference in references)
+    }
+
+
+def _member_quality_report(report, member, names):
+    return replace(
+        report,
+        member_residuals=(member,),
+        systematic_residual=member.systematic,
+        residual_autocorrelation=member.autocorrelation,
+        diagnostics=member.diagnostics,
+        boundary_hits=tuple(name for name in report.boundary_hits if name in names),
+        strong_correlations=tuple(row for row in report.strong_correlations if row[0] in names or row[1] in names),
+        prior_conflicts=tuple(name for name in report.prior_conflicts if name in names),
+    )
+
+
+def _joint_member_quality_result(result: FitResult, dataset_id: str) -> FitResult:
+    """Project only the member's quality flags; preserve the joint evidence owner.
+
+    This operation-local view is not an independent-fit analysis request. Its
+    covariance and numerical axes remain joint, without pretending to estimate
+    a new local optimum or running a different null family.
+    """
+    report = result.uncertainty
+    if report is None:
+        return result
+    members = tuple(member for member in report.member_residuals if member.dataset_id == dataset_id)
+    if len(members) != 1 or report.parameter_members is None:
+        raise ValueError("joint quality projection requires one owned member and a parameter-member axis")
+    names = _member_parameter_names(report, dataset_id)
+    return replace(result, uncertainty=_member_quality_report(report, members[0], names))
+
+
+def _local_quality_results(prepared, searches, joint_results, analysis_request, run_analysis, cancelled, progress):
+    results = []
+    for item, search, joint_result in zip(prepared, searches, joint_results, strict=True):
+        if item.problem.config.noise_model == "poisson":
+            results.append(_joint_member_quality_result(joint_result, item.dataset_id))
+        else:
+            results.append(
+                run_analysis(
+                    analysis_request(
+                        item.dataset_id,
+                        item.problem,
+                        search,
+                        profile_names=(),
+                        bootstrap_enabled=False,
+                        parameter_priors=item.updated_dataset.parameter_priors,
+                    ),
+                    cancelled=cancelled,
+                    progress=progress,
+                )
+            )
+    return tuple(results)
+
+
 def _run_automatic_joint_refinement(
     prepared: tuple[PreparedDatasetFit, ...],
     rules: tuple[SharingRule, ...],
@@ -192,34 +272,26 @@ def _run_automatic_joint_refinement(
         progress=progress,
         checkpoint=checkpoint,
     )
-    local_results = tuple(
-        run_analysis(
-            analysis_request(
-                item.dataset_id,
-                item.problem,
-                search,
-                profile_names=(),
-                bootstrap_enabled=False,
-                parameter_priors=item.updated_dataset.parameter_priors,
-            ),
-            cancelled=cancelled,
-            progress=progress,
-        )
-        for item, search in zip(prepared, searches, strict=True)
+    joint_results = analyze_joint_searches(
+        problem,
+        searches,
+        tuple(item.updated_dataset.parameter_priors for item in prepared),
+        cancelled=cancelled,
+        progress=progress,
+    )
+    local_results = _local_quality_results(
+        prepared,
+        searches,
+        joint_results,
+        analysis_request,
+        run_analysis,
+        cancelled,
+        progress,
     )
     decisions = tuple(
         assess_automatic_quality(item.problem, result) for item, result in zip(prepared, local_results, strict=True)
     )
-    return (
-        problem,
-        analyze_joint_searches(
-            problem,
-            searches,
-            tuple(item.updated_dataset.parameter_priors for item in prepared),
-        ),
-        local_results,
-        decisions,
-    )
+    return problem, joint_results, local_results, decisions
 
 
 def _joint_result_conflicts(
@@ -245,8 +317,10 @@ def _joint_result_conflicts(
             thresholds.equivalent_cost_floor,
         )
         report = local_result.uncertainty
-        systematic = report is not None and report.systematic_residual
-        if joint_best.objective > prefit_best.objective + allowed or systematic:
+        residual_failed = (
+            _residual_report_unavailable(report) or report.systematic_residual or report.residual_autocorrelation
+        )
+        if joint_best.objective > prefit_best.objective + allowed or residual_failed:
             return True
     return False
 

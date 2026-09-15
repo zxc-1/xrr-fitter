@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from math import isclose, isfinite
+from math import isfinite
 
 from xrr_fitter.model.analysis import FitResult, StructureEvidence
 from xrr_fitter.model.automation import DatasetAutomation, MeasurementPreset
@@ -50,6 +50,10 @@ from xrr_fitter.model.data import (
 )
 from xrr_fitter.model.fitting import FitCheckpoint, FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
+from xrr_fitter.model.joint_bootstrap_provenance import (
+    validate_joint_bootstrap_report,
+    validate_joint_bootstrap_reports,
+)
 from xrr_fitter.model.parameters import (
     RESERVED_DATASET_ID,
     ConstraintRule,
@@ -57,11 +61,12 @@ from xrr_fitter.model.parameters import (
     ParameterSetting,
     SharingRule,
 )
+from xrr_fitter.model.project_joint_ranking import validate_joint_rank
 from xrr_fitter.model.project_parameter_graph import validate_project_parameter_graph
 from xrr_fitter.model.structure import StructureSpec
 
-SCHEMA_VERSION = 2
-ALGORITHM_VERSION = "xrr-fit-v1"
+SCHEMA_VERSION = 5
+ALGORITHM_VERSION = "xrr-fit-v2-poisson-5"
 
 
 def _sha256(value: str, field_name: str) -> None:
@@ -527,6 +532,8 @@ def _validate_project_header(project: XrrProject) -> None:
         raise ValueError("unsupported batch_mode")
     if not isinstance(project.fit_config, FitConfig):
         raise TypeError("fit_config must be FitConfig")
+    if (project.fit_config.objective_name, project.fit_config.objective_version) != ("xrr_noise_model", "2"):
+        raise ValueError("unsupported objective configuration")
     if not isinstance(project.ui_state, ProjectUiState):
         raise TypeError("ui_state must be ProjectUiState")
     _optional_attachment(
@@ -567,6 +574,9 @@ def _validate_result_evidence(result: FitResult) -> None:
     report = result.uncertainty
     if report is None:
         return
+    sampling = report.bootstrap_evidence
+    if sampling is not None and (report.parameter_members is not None or sampling.joint_owner_sha256 is not None):
+        validate_joint_bootstrap_report(report)
     candidate_ids = {candidate.candidate_id for candidate in result.candidates}
     owners = ((report.candidate_id, "uncertainty"),)
     if report.mcmc is not None:
@@ -600,39 +610,11 @@ def _result_identity(result: FitResult) -> tuple[object, ...]:
     )
 
 
-def _validate_invalid_joint_rank(candidates: tuple[object, ...]) -> bool:
-    if candidates[0].valid:
-        return False
-    if any(candidate.ranking_objective is not None for candidate in candidates):
-        raise ValueError("joint candidates have inconsistent invalid ranking")
-    return True
-
-
-def _joint_objectives(candidates: tuple[object, ...]) -> tuple[float, ...]:
-    objectives = tuple(candidate.objective for candidate in candidates)
-    if any(not isfinite(value) for value in objectives):
-        raise ValueError("joint candidates have nonfinite objective")
-    return objectives
-
-
-def _stable_objective_mean(objectives: tuple[float, ...]) -> float:
-    expected = sum(objectives) / len(objectives)
-    if not isfinite(expected):
-        return sum(value / len(objectives) for value in objectives)
-    return expected
-
-
-def _validate_joint_rank(candidates: tuple[object, ...]) -> None:
-    # Invalid global candidates cannot claim a finite rank in any projection.
-    if _validate_invalid_joint_rank(candidates):
-        return
-    # A valid joint rank is the mean of aligned finite local objectives, never
-    # a copied objective from whichever dataset happened to finish first.
-    objectives = _joint_objectives(candidates)
-    ranking = candidates[0].ranking_objective
-    expected = _stable_objective_mean(objectives)
-    if ranking is None or not isclose(ranking, expected, rel_tol=1e-12, abs_tol=1e-15):
-        raise ValueError("joint candidate global ranking does not match local mean")
+def _joint_result_rows(datasets):
+    results = tuple(dataset.last_valid_result for dataset in datasets if dataset.last_valid_result is not None)
+    if results and len(results) != len(datasets):
+        raise ValueError("joint results must exist for every dataset")
+    return results
 
 
 def _validate_joint_results(datasets: tuple[DatasetProject, ...]) -> None:
@@ -645,17 +627,16 @@ def _validate_joint_results(datasets: tuple[DatasetProject, ...]) -> None:
     """
     # Joint publication is atomic: either every dataset has a projection or none
     # does. Partial results would make best_index and UI selection ambiguous.
-    results = tuple(dataset.last_valid_result for dataset in datasets if dataset.last_valid_result is not None)
-    if results and len(results) != len(datasets):
-        raise ValueError("joint results must exist for every dataset")
+    results = _joint_result_rows(datasets)
     if not results:
         return
-    # Establish alignment before indexing candidates for mean-rank validation.
+    # Establish alignment before indexing candidates for global-rank validation.
     identity = _result_identity(results[0])
     if any(_result_identity(result) != identity for result in results[1:]):
         raise ValueError("joint result candidates are not coherent across datasets")
     for index in range(len(results[0].candidates)):
-        _validate_joint_rank(tuple(result.candidates[index] for result in results))
+        validate_joint_rank(tuple(result.candidates[index] for result in results), datasets)
+    validate_joint_bootstrap_reports(tuple(result.uncertainty for result in results))
 
 
 def _validate_ui(project: XrrProject, dataset_ids: set[str]) -> None:

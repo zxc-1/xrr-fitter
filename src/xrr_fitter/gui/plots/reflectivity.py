@@ -10,6 +10,7 @@ from matplotlib.ticker import LogFormatter
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.noise import residual_label
 from xrr_fitter.gui.plots.diagnostics import (
     DiagnosticView,
     current_plot_palette,
@@ -54,6 +55,8 @@ class ReflectivityPaneArrays:
     raw_model: np.ndarray | None
     qz4: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None
     residual: tuple[np.ndarray, np.ndarray] | None
+    residual_ylabel: str | None
+    residual_sigma_reference: bool
     qz4_ylabel: str | None
 
 
@@ -106,6 +109,8 @@ def _prepared_dataset(
             dataset.beam,
             dataset.import_angle_offset_deg,
             dataset.column_mapping,
+            angle_convention=dataset.angle_convention,
+            noise_model=project.fit_config.noise_model,
         )
     except (OSError, ValueError):
         return None
@@ -169,29 +174,14 @@ def prepare_project_plots(project: api.XrrProject) -> PreparedProjectPlots:
 
 
 def _quality_caption_text(candidate: object | None) -> str | None:
-    """Compose the ``J=… · 平均残差 …`` note both backends annotate with.
-
-    这行注解只留给 matplotlib 那条导出路径：导出的图是逐位比对的交付物，注解跟着走。
-    屏幕上的互动面板不再画它——设计稿把拟合质量归到状态栏和左栏管线里去了。
-    """
+    """Caption the saved objective/mode/units on static exports, not live panes."""
     if candidate is None:
         return None
-    residuals = np.asarray(candidate.log_residuals_decades, dtype=float)
-    finite = residuals[np.isfinite(residuals)]
-    parts = [f"J={candidate.objective:.4g}"]
-    if finite.size:
-        parts.append(f"平均残差 {np.mean(np.abs(finite)):.3g} decade")
-    return " · ".join(parts)
+    return f"J={candidate.objective:.4g} · {candidate.noise_model} · 残差单位 {candidate.residual_unit}"
 
 
 def _quality_caption(axes: object, candidate: object | None) -> None:
-    """Annotate how well the drawn candidate agrees with the data.
-
-    Two overlaid curves on a log axis look close whatever their disagreement, so
-    the axes state the objective the search minimised together with the mean
-    absolute log-decade miss, which reads as "off by this many decades on
-    average" and is the same quantity the exported residual plot labels.
-    """
+    """State the saved objective together with its actual noise declaration."""
     caption = _quality_caption_text(candidate)
     if caption is None:
         return
@@ -384,6 +374,8 @@ def reflectivity_pane_arrays(
             raw_model=None,
             qz4=None,
             residual=None,
+            residual_ylabel=None,
+            residual_sigma_reference=False,
             qz4_ylabel=None,
         )
     model_normalized = np.asarray(candidate.model_normalized, dtype=float)
@@ -401,6 +393,8 @@ def reflectivity_pane_arrays(
         raw_model=model_normalized * data.normalization,
         qz4=(data_qz, data_values, model_qz, model_values),
         residual=(qz, np.asarray(candidate.weighted_residuals, dtype=float)),
+        residual_ylabel=residual_label(candidate),
+        residual_sigma_reference=candidate.noise_model == "gaussian",
         qz4_ylabel=_qz4_axis_label(data_label, model_label),
     )
 
@@ -441,6 +435,6 @@ def draw_residual(view: DiagnosticView, candidate: object | None) -> None:
     axes.clear()
     axes.plot(qz, candidate.weighted_residuals, "-o", label="加权残差")
     axes.plot(qz, np.zeros_like(qz), ":", label="零参考线")
-    axes.set(title="加权残差", xlabel="qz (Å⁻¹)", ylabel="加权残差")
+    axes.set(title="加权残差", xlabel="qz (Å⁻¹)", ylabel=residual_label(candidate))
     axes.legend()
     finish_view(view)

@@ -1,4 +1,4 @@
-"""The single R22-compatible JSON codec for immutable R23 projects."""
+"""The versioned JSON codec for immutable V2 fitting projects."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import errno
 import json
 import os
 import tempfile
-from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -70,6 +69,7 @@ from xrr_fitter.model.project import (
     ProjectUiState,
     ScalePriorState,
     XrrProject,
+    validate_project,
 )
 
 
@@ -140,11 +140,7 @@ def _oxide_from_dict(value: object) -> OxideDecision:
 
 
 SETTING_REQUIRED_FIELDS = frozenset({"name", "initial", "lower", "upper"})
-# 旧文件里第三态还不存在，自由度是一个 ``locked: bool``。两个键都收下，写出时只写 ``freedom``——
-# 版本号不动，因为这是一次「放宽」而不是「换形状」：v2 里必填的 ``locked`` 变成可选，旧 build
-# 写的文件依旧读得进来，而 FREE 这个默认值不落盘，既有项目照原样重写仍然逐位不变（与
-# ``angle_convention`` 的处理同一个理由）。
-SETTING_LEGACY_FIELDS = frozenset({"locked", "freedom"})
+SETTING_OPTIONAL_FIELDS = frozenset({"freedom"})
 
 
 def _setting_to_dict(value: ParameterSetting) -> dict[str, object]:
@@ -160,20 +156,13 @@ def _setting_to_dict(value: ParameterSetting) -> dict[str, object]:
 
 
 def _setting_freedom(payload: dict[str, object]) -> ParameterFreedom:
-    if "freedom" in payload:
-        if "locked" in payload:
-            raise ProjectSchemaError("parameter setting must not carry both freedom and locked")
-        raw = payload["freedom"]
-        if not isinstance(raw, str):
-            raise ProjectSchemaError("parameter setting freedom must be a string")
-        try:
-            return ParameterFreedom(raw)
-        except ValueError as error:
-            raise ProjectSchemaError(f"unsupported parameter setting freedom: {raw!r}") from error
-    legacy = payload.get("locked", False)
-    if not isinstance(legacy, bool):
-        raise ProjectSchemaError("parameter setting locked must be a boolean")
-    return ParameterFreedom.from_locked(legacy)
+    raw = payload.get("freedom", ParameterFreedom.FREE.value)
+    if not isinstance(raw, str):
+        raise ProjectSchemaError("parameter setting freedom must be a string")
+    try:
+        return ParameterFreedom(raw)
+    except ValueError as error:
+        raise ProjectSchemaError(f"unsupported parameter setting freedom: {raw!r}") from error
 
 
 def _setting_from_dict(value: object) -> ParameterSetting:
@@ -181,7 +170,7 @@ def _setting_from_dict(value: object) -> ParameterSetting:
         value,
         set(SETTING_REQUIRED_FIELDS),
         "parameter setting",
-        optional=set(SETTING_LEGACY_FIELDS),
+        optional=set(SETTING_OPTIONAL_FIELDS),
     )
     return ParameterSetting(
         name=payload["name"],
@@ -518,6 +507,7 @@ def project_to_dict(project: XrrProject) -> dict[str, object]:
     """Encode a project without its runtime-only base directory."""
     if not isinstance(project, XrrProject):
         raise TypeError("project must be an XrrProject")
+    validate_project(project)
     document: dict[str, object] = {
         "schema_version": project.schema_version,
         "algorithm_version": project.algorithm_version,
@@ -590,6 +580,8 @@ def _validate_result_identity(value: object) -> None:
 
 
 def _validated_document(value: object) -> dict[str, Any]:
+    if isinstance(value, dict) and "schema_version" in value:
+        _validate_version(value["schema_version"])
     # constraint_rules rides an optional channel: the curated _project_fields()
     # set stays unchanged (修正 5) and the key is accepted only as an extra so a
     # document that never carried it still passes the exact field-set check.
@@ -603,36 +595,10 @@ def _validated_document(value: object) -> dict[str, Any]:
     return payload
 
 
-def _migrate_v1_document(value: object) -> object:
-    if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value.get("schema_version") != 1:
-        return value
-    payload = deepcopy(value)
-    payload["schema_version"] = 2
-    payload["measurement_preset"] = None
-    for dataset in payload.get("datasets", ()):
-        if not isinstance(dataset, dict):
-            continue
-        dataset["automation"] = {
-            "import_batch_id": None,
-            "fit_group_id": None,
-            "role": "manual",
-            "status": "not_run",
-            "statistics_member": False,
-            "reason": None,
-        }
-        result = dataset.get("last_valid_result")
-        if not isinstance(result, dict):
-            continue
-        uncertainty = result.get("uncertainty")
-        if isinstance(uncertainty, dict):
-            uncertainty["bootstrap_performed"] = True
-    return payload
-
-
 def project_from_dict(value: object) -> XrrProject:
-    """Decode a complete R22-compatible document with exact field sets."""
+    """Decode a V2 document with exact field sets and no legacy conversion."""
     try:
-        payload = _validated_document(_migrate_v1_document(value))
+        payload = _validated_document(value)
         return XrrProject(
             schema_version=payload["schema_version"],
             algorithm_version=payload["algorithm_version"],

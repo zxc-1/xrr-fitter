@@ -120,9 +120,13 @@ def import_data(
     import_angle_offset_deg: float = 0.0,
     column_mapping: DataColumnMapping | None = None,
     angle_convention: AngleConvention = "two_theta",
+    *,
+    noise_model: str = "robust_log",
 ) -> PreparedData:
     """Import one source through the authoritative XY reader."""
-    return read_xy(path, beam, import_angle_offset_deg, column_mapping, angle_convention)
+    return read_xy(
+        path, beam, import_angle_offset_deg, column_mapping, angle_convention=angle_convention, noise_model=noise_model
+    )
 
 
 def detect_angle_convention(path: str | Path) -> AngleConventionEvidence:
@@ -302,7 +306,8 @@ def _automatic_dataset(
         preview.preset.beam,
         preview.preset.import_angle_offset_deg,
         column_mapping,
-        preview.preset.angle_convention,
+        noise_model=project.fit_config.noise_model,
+        angle_convention=preview.preset.angle_convention,
     )
     return _from_prepared(
         _dataset_id(project, row.dataset_id_stem),
@@ -350,7 +355,8 @@ def _import_preview_row(
             preview.preset.beam,
             preview.preset.import_angle_offset_deg,
             mappings.get(row.source_path),
-            preview.preset.angle_convention,
+            noise_model=project.fit_config.noise_model,
+            angle_convention=preview.preset.angle_convention,
         )
         return _from_prepared(
             _dataset_id(project, row.dataset_id_stem),
@@ -473,7 +479,8 @@ def add_dataset(
         beam_value,
         import_angle_offset_deg,
         column_mapping,
-        angle_convention,
+        noise_model=project.fit_config.noise_model,
+        angle_convention=angle_convention,
     )
     dataset = _from_prepared(
         _dataset_id(project, identifier_stem),
@@ -598,7 +605,8 @@ def _read_current(project: XrrProject, dataset: DatasetProject) -> PreparedData:
         dataset.beam,
         dataset.import_angle_offset_deg,
         dataset.column_mapping,
-        dataset.angle_convention,
+        noise_model=project.fit_config.noise_model,
+        angle_convention=dataset.angle_convention,
     )
     if data.source_sha256 != dataset.source_sha256:
         raise ValueError(f"source changed for dataset {dataset.dataset_id}")
@@ -710,6 +718,7 @@ def _accepted_source_dataset(
         beam=dataset.beam,
         import_angle_offset_deg=dataset.import_angle_offset_deg,
         column_mapping=dataset.column_mapping,
+        noise_model=project.fit_config.noise_model,
         angle_convention=dataset.angle_convention,
     )
     return index, replace(

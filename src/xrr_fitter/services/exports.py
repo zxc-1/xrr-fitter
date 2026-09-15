@@ -34,6 +34,7 @@ from xrr_fitter.io.export_tables import (
 from xrr_fitter.io.orso import orso_bytes
 from xrr_fitter.io.project_codec import project_to_bytes
 from xrr_fitter.io.source import resolve_source_path
+from xrr_fitter.io.source import validate_sources as inspect_sources
 from xrr_fitter.model.analysis import ConfidenceClass, FitResult
 from xrr_fitter.model.export import (
     DEFAULT_FORMATS,
@@ -47,7 +48,6 @@ from xrr_fitter.model.fitting import FitCandidate
 from xrr_fitter.model.operations import ProjectFitResult
 from xrr_fitter.model.project import DatasetProject, XrrProject
 from xrr_fitter.services.datasets import _prepared_current, service_seed_branches
-from xrr_fitter.services.projects import inspect_sources
 from xrr_fitter.services.structures import suggest_oxide_layers
 
 
@@ -188,15 +188,7 @@ def _dataset_artifacts(
     if ExportFormat.SVG in formats:
         files.append(ArtifactProducer("sld_profile.svg", lambda: sld_profile_svg(context)))
     if ExportFormat.ORT in formats:
-        # 架构门禁禁止 ``services.exports`` 依赖 ``analysis`` 或 numpy，协方差矩阵改由
-        # model 层 ``UncertaintyReport.covariance`` 派生（修正 9 的合规落点），服务层仅读取
-        # 并透传，缺逐参数 sigma 时为 ``None``，导出即记录缺席原因。
-        def render_orso() -> bytes:
-            report = context.selected_uncertainty
-            covariance = None if report is None else report.covariance
-            return orso_bytes(context, covariance=covariance)
-
-        files.append(ArtifactProducer("fit_result.ort", render_orso))
+        files.append(ArtifactProducer("fit_result.ort", lambda: orso_bytes(context)))
     return DatasetArtifacts(context.dataset.dataset_id, tuple(files))
 
 

@@ -18,6 +18,7 @@ from matplotlib.transforms import Bbox, offset_copy
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.plots.diagnostics import diverging_colormap
 from xrr_fitter.gui.plots.parameter_labels import short_labels
+from xrr_fitter.gui.results.inference_text import correlation_unavailable_reason
 
 # 抬头点明是谁之间的相关。同屏还有残差自相关、SLD 可信带这些同样带「相关」字样的证据，
 # 光写「相关矩阵」读者得先猜是哪一种。
@@ -231,7 +232,12 @@ def _ranked_pairs(matrix: np.ndarray) -> tuple[tuple[int, int, float], ...]:
     之后想确认的第二格。
     """
     size = int(matrix.shape[0])
-    pairs = [(row, column, float(matrix[row, column])) for row in range(size) for column in range(row + 1, size)]
+    pairs = [
+        (row, column, float(matrix[row, column]))
+        for row in range(size)
+        for column in range(row + 1, size)
+        if math.isfinite(float(matrix[row, column]))
+    ]
     pairs.sort(key=lambda item: -abs(item[2]))
     return tuple(pairs)
 
@@ -255,7 +261,7 @@ def _correlation_hint(first: str, second: str, labels: tuple[str, str], value: f
     parts = [f"{labels[0]} 与 {labels[1]} 强{'负' if value < 0.0 else '正'}相关。"]
     if _is_thickness_density_pair(first, second):
         parts.append("薄层的电子密度与厚度难以同时唯一确定；")
-    parts.append("单看 ±1σ 会低估真实不确定度，需结合 Profile 似然判读。")
+    parts.append("单看 ±1σ 会低估真实不确定度，需结合参数剖面判读。")
     return "⚠ " + "".join(parts)
 
 
@@ -545,8 +551,23 @@ def _draw_correlation(
     空白则整块让给读数栏。``wide_layout=False`` 的扁框里这个前提不成立，见
     ``draw_correlation_page``。
     """
-    matrix = np.asarray(report.correlation_matrix, dtype=float)
     palette = theme.current_plot_palette()
+    reason = correlation_unavailable_reason(report)
+    if reason is not None:
+        axes.set_xticks(())
+        axes.set_yticks(())
+        axes.set_title(CORRELATION_TITLE)
+        axes.text(
+            0.5,
+            0.5,
+            f"参数相关矩阵不可用\n{reason}",
+            ha="center",
+            va="center",
+            transform=axes.transAxes,
+            color=palette.muted,
+        )
+        return
+    matrix = np.asarray(report.correlation_matrix, dtype=float)
     image = axes.imshow(matrix, vmin=-1.0, vmax=1.0, cmap=diverging_colormap())
     image.set_clim(-1.0, 1.0)
     if wide_layout:

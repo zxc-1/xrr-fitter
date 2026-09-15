@@ -35,6 +35,7 @@ from xrr_fitter.gui.plots.posterior import (
     PosteriorQuantilePlot,
 )
 from xrr_fitter.gui.plots.sld import _owned_report
+from xrr_fitter.gui.results.inference_text import correlation_unavailable_reason
 from xrr_fitter.gui.results.uncertainty import (
     EFFECTIVE_SAMPLE_FLOOR,
     SPLIT_RHAT_LIMIT,
@@ -73,10 +74,8 @@ QUANTILE_CAPTIONS = ("P16", "P50（中位）", "P84")
 
 BOOTSTRAP_CAPTIONS = ("重采样次数", "失败率", "边界命中")
 
-# 没跑过自助抽样与跑过但没记下次数是两回事：前者的下一步是去跑，后者的下一步是去看这份
-# 工程文件是哪个版本存的（``bootstrap_sample_count`` 是后加的字段）。
+# 未运行没有采样记录；已运行的次数与失败数直接来自当前 sampling evidence。
 BOOTSTRAP_NOT_RUN_TEXT = "未运行"
-BOOTSTRAP_COUNT_UNRECORDED_TEXT = "未记录"
 
 
 def mcmc_evidence(result: object | None, candidate_id: str | None) -> object | None:
@@ -299,6 +298,9 @@ def correlation_note(report: object) -> tuple[str, str]:
     相关时，这句话才对读者有意义。一律写「已计入相关」的话，一份没有强相关的报告也在声称重
     采样替他处理了一件根本不存在的事。两句都是陈述而非判定，所以都用 info。
     """
+    reason = correlation_unavailable_reason(report)
+    if reason is not None:
+        return (f"相关不可用：{reason}", "")
     return ("ℹ 已计入相关", "info") if report.strong_correlations else ("ℹ 无强相关", "info")
 
 
@@ -317,16 +319,14 @@ def bootstrap_readings(report: object) -> tuple[tuple[str, str], ...]:
 
     失败率补上基数：单给比例读不出量级——「丢了 2%」在 200 次和在 20 次上是两件事。
     """
-    if not report.bootstrap_performed:
+    evidence = report.bootstrap_evidence
+    if evidence is None:
         return ((BOOTSTRAP_NOT_RUN_TEXT, ""), (UNAVAILABLE_TEXT, ""), _boundary_reading(report))
-    count = int(report.bootstrap_sample_count)
-    rate = float(report.bootstrap_failure_rate)
+    count = evidence.attempted_count
+    rate = float(evidence.failure_rate)
     kind = "ok" if rate <= FAILURE_RATE_WARN else "warn"
-    # 次数为 0 说明这份工程文件存在 ``bootstrap_sample_count`` 之前——比例还在，基数没有，
-    # 那就只念比例，不去拿 0 当基数算出一个「0/0」。
-    share = f"{rate:.0%}" if count <= 0 else f"{rate:.0%}（{round(rate * count)}/{count:,}）"
-    counted = BOOTSTRAP_COUNT_UNRECORDED_TEXT if count <= 0 else f"{count:,}"
-    return ((counted, ""), (share, kind), _boundary_reading(report))
+    share = f"{rate:.0%}（{len(evidence.failure_reasons)}/{count:,}）"
+    return ((f"{count:,}", ""), (share, kind), _boundary_reading(report))
 
 
 class _ReadingPanel(QWidget):

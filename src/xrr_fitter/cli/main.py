@@ -51,6 +51,11 @@ def build_parser() -> argparse.ArgumentParser:
     fit = subparsers.add_parser("fit", help="运行拟合流水线")
     fit.add_argument("project")
     fit.add_argument("--auto", action="store_true", help="走自动批次拟合路径")
+    fit.add_argument(
+        "--noise-model",
+        choices=("robust_log", "gaussian", "poisson"),
+        help="覆盖工程噪声模式；Gaussian 需要已知标准差，Poisson 声明输入为原始非负整数计数",
+    )
     fit.add_argument("--output", help="把更新后的工程写到该路径")
     _add_progress_flag(fit)
 

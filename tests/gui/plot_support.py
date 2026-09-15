@@ -25,6 +25,7 @@ from matplotlib.backend_bases import MouseButton, MouseEvent
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtWidgets import QApplication, QLineEdit, QToolButton, QTreeWidget, QVBoxLayout, QWidget
 from shiboken6 import isValid
+from tests.support.bootstrap_cases import bootstrap_evidence
 from tests.support.model_cases import (
     final_fit_result,
     fit_candidate,
@@ -38,6 +39,7 @@ from xrr_fitter.gui.plots.sld import (
     NOMINAL_OVERLAY_LABEL,
     SLD_DISPLAY_SCALE,
 )
+from xrr_fitter.model.inference import CovarianceEvidence
 
 # The SLD profile left the tab bar for a permanent companion pane, so these are
 # the switchable diagnostic tabs only, with the log view leading.  The weighted
@@ -63,6 +65,7 @@ def _candidate(data, candidate_id="candidate-a", *, objective=0.2, **changes):
         "qz_a_inv": np.linspace(0.015, 0.25, size),
         "model_normalized": np.geomspace(0.9, 2e-5, size),
         "log_residuals_decades": np.linspace(-0.2, 0.2, size),
+        "residuals": np.linspace(-0.2, 0.2, size),
         "weighted_residuals": np.linspace(-1.0, 1.0, size),
         "sld_depth_a": np.array([0.0, 20.0, 50.0]),
         "sld_profile_a2": np.array([0.0 + 0.0j, 2e-5 + 1e-7j, 4e-6 + 0.0j]),
@@ -73,12 +76,20 @@ def _candidate(data, candidate_id="candidate-a", *, objective=0.2, **changes):
 
 
 def _uncertainty(candidate_id="candidate-a", *, profiles=()):
+    names = ("component.0.thickness_a", "instrument.scale")
+    matrix = np.array([[1.0, -0.65], [-0.65, 1.0]])
     return api.UncertaintyReport(
-        correlation_names=("component.0.thickness_a", "instrument.scale"),
-        correlation_matrix=np.array([[1.0, -0.65], [-0.65, 1.0]]),
+        correlation_names=names,
+        correlation_matrix=matrix,
+        covariance_evidence=CovarianceEvidence(names, matrix, "gaussian_known_sigma", 2),
+        parameter_sigma=np.ones(2),
         profiles=profiles,
-        bootstrap_intervals=(("component.0.thickness_a", 35.0, 48.0),),
+        bootstrap_intervals=(("component.0.thickness_a", 35.0, 48.0), ("instrument.scale", 0.8, 1.2)),
         bootstrap_failure_rate=0.0,
+        bootstrap_performed=True,
+        bootstrap_evidence=bootstrap_evidence(
+            (("component.0.thickness_a", 35.0, 48.0), ("instrument.scale", 0.8, 1.2))
+        ),
         boundary_hits=(),
         strong_correlations=(),
         systematic_residual=False,

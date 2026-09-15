@@ -21,10 +21,12 @@ from dataclasses import replace
 
 import numpy as np
 from PySide6.QtWidgets import QLabel
+from tests.support.bootstrap_cases import bootstrap_evidence
 
 import xrr_fitter.api as api
+from xrr_fitter.model.inference import CovarianceEvidence
 
-METHOD_NAMES = ("相关矩阵", "自助抽样", "Profile 似然", "MCMC 后验")
+METHOD_NAMES = ("相关矩阵", "自助抽样", "参数剖面", "MCMC 后验")
 SAMPLING_ROW = len(METHOD_NAMES) - 1
 
 # 候选解的自由参数个数。报告里那条链只有 2 个参数名（见 ``_mcmc``）：页脚读错了出处就是「2→16」。
@@ -72,6 +74,8 @@ def _report(**changes) -> api.UncertaintyReport:
     values = {
         "correlation_names": ("scale", "thickness"),
         "correlation_matrix": np.eye(2),
+        "covariance_evidence": CovarianceEvidence(("scale", "thickness"), np.eye(2), "gaussian_known_sigma", 2),
+        "parameter_sigma": np.ones(2),
         "profiles": (),
         "bootstrap_intervals": (),
         "bootstrap_failure_rate": 0.0,
@@ -88,7 +92,14 @@ def _report(**changes) -> api.UncertaintyReport:
 
 def _full_report() -> api.UncertaintyReport:
     """四样证据都齐的报告——``walked`` 到顶，第四行本来会被读成 ``done``。"""
-    return _report(bootstrap_performed=True, profiles=(_profile("scale"),), mcmc=_mcmc())
+    evidence = bootstrap_evidence((("scale", 0.9, 1.1), ("thickness", 39.0, 41.0)))
+    return _report(
+        bootstrap_performed=True,
+        bootstrap_intervals=evidence.intervals,
+        bootstrap_evidence=evidence,
+        profiles=(_profile("scale"),),
+        mcmc=_mcmc(),
+    )
 
 
 def _rows(report, **changes):
@@ -124,6 +135,7 @@ def _project(tmp_path, *, uncertainty=None):
         qz_a_inv=np.linspace(0.015, 0.25, size),
         model_normalized=np.geomspace(0.9, 2e-5, size),
         log_residuals_decades=np.full(size, 0.1),
+        residuals=np.full(size, 0.1),
         weighted_residuals=np.zeros(size),
     )
     result = api.FitResult.from_search(

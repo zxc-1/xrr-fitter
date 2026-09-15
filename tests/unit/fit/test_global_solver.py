@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from tests.support.model_cases import prepared_data, simple_structure
 
+from xrr_fitter.fit.feature_grid import feature_grid_indices
 from xrr_fitter.fit.problem import compile_fit_problem
 from xrr_fitter.model.fitting import FitConfig, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
@@ -296,7 +297,6 @@ def test_stage_e_population_contains_centers_perturbations_and_lhs() -> None:
 
 
 def test_feature_grid_preserves_a_narrow_reflectivity_peak() -> None:
-    api = _api()
     data = prepared_data(size=512)
     intensity = np.geomspace(1.0, 1e-8, data.qz_a_inv.size)
     peak_index = 137
@@ -310,8 +310,8 @@ def test_feature_grid_preserves_a_narrow_reflectivity_peak() -> None:
         intensity_normalized=intensity,
     )
 
-    first = api.feature_grid_indices(peaked, max_points=32)
-    second = api.feature_grid_indices(peaked, max_points=32)
+    first = feature_grid_indices(peaked, max_points=32)
+    second = feature_grid_indices(peaked, max_points=32)
 
     np.testing.assert_array_equal(first, second)
     assert first.size <= 32
@@ -331,7 +331,7 @@ def test_downsampled_search_data_keeps_every_row_field_aligned() -> None:
         intensity_sigma_normalized=row_values + 3.0,
         sigma_q_a_inv=row_values + 4.0,
     )
-    selected = api.feature_grid_indices(enriched, max_points=32)
+    selected = feature_grid_indices(enriched, max_points=32)
 
     coarse = api.downsample_prepared_data(enriched, selected)
 

@@ -76,6 +76,7 @@ def test_plot_panel_rejects_misaligned_candidate_diagnostics_without_redraw(
         qz_a_inv=np.array([0.1, 0.2, 0.3]),
         model_normalized=np.array([0.8, 0.4, 0.2]),
         log_residuals_decades=np.zeros(3),
+        residuals=np.zeros(3),
         weighted_residuals=np.zeros(3),
     )
 
@@ -423,6 +424,8 @@ def _plot_texts(view):
 def test_interactive_views_leave_the_fit_quality_to_the_status_bar(qtbot) -> None:
     """设计稿把 J 放在状态栏和左栏管线上，图里不再有那行 ``J=… · 平均残差 …``。
 
+    The saved objective must name its noise model and residual units. The GUI
+    does not invent another fit statistic by averaging a display array.
     互动面板上有十字光标读数、拟合窗口说明、±1σ 说明三处文字，右下角再压一行拟合
     质量，读者要同时盯四处；而 J 是整份结果的属性，不是某一张图的，重复在四张图上
     只会让「哪张图的 J」变成一个不该存在的问题。matplotlib 的导出图仍旧带这行字，
@@ -437,3 +440,10 @@ def test_interactive_views_leave_the_fit_quality_to_the_status_bar(qtbot) -> Non
         if not _is_live(view):
             continue
         assert not [text for text in _plot_texts(view) if "J=" in text], f"{key} view still captions J"
+
+
+def test_quality_caption_stays_off_the_views_until_a_candidate_exists(qtbot) -> None:
+    """Prepared data with no fit has no quality to report, so nothing is claimed."""
+    panel = _panel(qtbot, data=prepared_data(size=4))
+    for key in ("log", "raw"):
+        assert not [text for text in _plot_texts(panel.view(key)) if "J=" in text]

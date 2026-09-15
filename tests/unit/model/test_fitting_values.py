@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from tests.support.model_cases import fit_candidate, fit_result
 
+from xrr_fitter.model.evaluation import ModelEvaluation
 from xrr_fitter.model.fitting import (
     ConfidenceThresholds,
     FitCheckpoint,
@@ -15,7 +16,6 @@ from xrr_fitter.model.fitting import (
     FitProgress,
     FitSearchResult,
     FitStageSummary,
-    ModelEvaluation,
     SearchBudget,
 )
 from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
@@ -24,13 +24,18 @@ from xrr_fitter.model.slab_stack import PeriodicSpan, SlabStack
 def test_fit_config_standard_is_versioned_finite_and_immutable() -> None:
     config = FitConfig.standard(1201)
 
-    assert config.objective_name == "robust_log_soft_l1"
+    assert config.objective_name == "xrr_noise_model"
     assert config.jacobian_version == "analytic-v1"
-    assert config.budget == SearchBudget(60, 200, 2000, 300, 100)
+    assert config.budget == SearchBudget(60, 200, 2000, 300, 200)
     with pytest.raises(FrozenInstanceError):
         config.master_seed = 3
     with pytest.raises(ValueError, match="master_seed"):
         FitConfig.standard(True)
+
+
+def test_default_cost_tolerance_uses_dimensionless_v2_units() -> None:
+    for config in (FitConfig.fast(1201), FitConfig.standard(1201)):
+        assert config.confidence.equivalent_cost_floor == pytest.approx(0.004)
 
 
 def test_fit_candidate_copies_and_freezes_every_array() -> None:
@@ -69,7 +74,7 @@ def test_model_evaluation_copies_reporting_arrays() -> None:
         parameters=fit_candidate().parameters,
         qz_a_inv=source,
         model_normalized=np.ones(4),
-        fit_log_residuals_decades=np.zeros(3),
+        fit_residuals=np.zeros(3),
         fit_weighted_residuals=np.zeros(3),
         objective=1.0,
         expanded_stack=None,
@@ -90,7 +95,7 @@ def test_published_fitting_arrays_remain_read_only_after_pickle() -> None:
         parameters=candidate.parameters,
         qz_a_inv=candidate.qz_a_inv,
         model_normalized=candidate.model_normalized,
-        fit_log_residuals_decades=candidate.log_residuals_decades,
+        fit_residuals=candidate.log_residuals_decades,
         fit_weighted_residuals=candidate.weighted_residuals,
         objective=candidate.objective,
         expanded_stack=None,
@@ -114,7 +119,7 @@ def test_published_fitting_arrays_remain_read_only_after_pickle() -> None:
     evaluation_fields = (
         "qz_a_inv",
         "model_normalized",
-        "fit_log_residuals_decades",
+        "fit_residuals",
         "fit_weighted_residuals",
     )
     assert all(not getattr(restored_candidate, field).flags.writeable for field in candidate_fields)
@@ -138,7 +143,7 @@ def test_nested_expanded_stack_remains_read_only_after_pickle() -> None:
         parameters=candidate.parameters,
         qz_a_inv=candidate.qz_a_inv,
         model_normalized=candidate.model_normalized,
-        fit_log_residuals_decades=candidate.log_residuals_decades,
+        fit_residuals=candidate.log_residuals_decades,
         fit_weighted_residuals=candidate.weighted_residuals,
         objective=candidate.objective,
         expanded_stack=stack,

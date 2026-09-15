@@ -12,7 +12,8 @@ from tests.support.model_cases import prepared_data, simple_structure
 from xrr_fitter.evaluation import encode_physical_vector
 from xrr_fitter.fit.objective import evaluate_vector
 from xrr_fitter.fit.problem import compile_fit_problem
-from xrr_fitter.model.fitting import FitConfig, ModelEvaluation, SearchBudget
+from xrr_fitter.model.evaluation import ModelEvaluation
+from xrr_fitter.model.fitting import FitConfig, SearchBudget
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.parameters import ParameterFreedom, ParameterReference, ParameterSetting, SharingRule
 from xrr_fitter.model.structure import LayerSpec
@@ -212,7 +213,7 @@ def _evaluation(problem, *, objective: float, residual: float, valid: bool = Tru
         parameters=(),
         qz_a_inv=qz,
         model_normalized=np.ones_like(qz),
-        fit_log_residuals_decades=np.full(fit_count, residual),
+        fit_residuals=np.full(fit_count, residual),
         fit_weighted_residuals=np.full(fit_count, residual),
         objective=objective,
         expanded_stack=None,

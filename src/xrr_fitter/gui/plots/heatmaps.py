@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from xrr_fitter.gui.noise import residual_label
 from xrr_fitter.gui.plots.diagnostics import (
     DiagnosticView,
     candidate_is_inspection_only,
@@ -115,7 +116,7 @@ def draw_residual_heatmap(
     limit = _symmetric_limit(matrix)
     axes = reset_single_axes(view)
     image = axes.imshow(matrix, aspect="auto", cmap=diverging_colormap(), vmin=-limit, vmax=limit)
-    view.figure.colorbar(image, ax=axes)
+    view.figure.colorbar(image, ax=axes, label=residual_label(candidates[0]))
     _label_rows(axes, _row_labels(candidates, candidate_id))
     xlabel = _label_columns_with_qz(axes, candidates[0], matrix.shape[1])
     axes.set(title=RESIDUAL_TITLE, xlabel=xlabel, ylabel="候选")

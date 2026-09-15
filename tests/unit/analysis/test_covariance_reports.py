@@ -93,14 +93,15 @@ def test_joint_singleton_does_not_claim_zero_parameter_uncertainty() -> None:
     report = _joint_report()
 
     assert report.parameter_sigma is None
-    np.testing.assert_array_equal(report.correlation_matrix, np.eye(1))
+    assert np.all(np.isnan(report.correlation_matrix))
 
 
-def test_joint_ensemble_populates_parameter_sigma_from_physical_spread() -> None:
+def test_joint_ensemble_keeps_physical_spread_separate_from_statistical_sigma() -> None:
     report = _joint_report(fixed=True)
 
-    np.testing.assert_allclose(report.parameter_sigma, (1.0, 0.0))
-    np.testing.assert_array_equal(np.diag(report.correlation_matrix), (1.0, 1.0))
+    assert report.parameter_sigma is None
+    np.testing.assert_allclose(report.search_parameter_spread, (1.0, 0.0))
+    assert np.all(np.isnan(report.correlation_matrix))
 
 
 def test_joint_ensemble_handles_repeated_finite_extreme_physical_values() -> None:
@@ -120,17 +121,15 @@ def test_joint_ensemble_handles_repeated_finite_extreme_physical_values() -> Non
             thresholds=FitConfig.fast(1701).confidence,
         )
 
-    np.testing.assert_array_equal(report.parameter_sigma, (0.0,))
-    np.testing.assert_array_equal(report.correlation_matrix, np.eye(1))
+    assert report.parameter_sigma is None
+    np.testing.assert_array_equal(report.search_parameter_spread, (0.0,))
+    assert np.all(np.isnan(report.correlation_matrix))
     assert not any(item.category is RuntimeWarning for item in caught)
 
 
-def test_local_report_parameter_sigma_matches_correlation_diagonal() -> None:
+def test_local_mismatched_curve_withholds_iid_covariance() -> None:
     report = _local_report()
-    sigma = report.parameter_sigma
-    diagonal = np.diag(report.correlation_matrix)
-
-    assert sigma is not None
-    assert sigma.shape == (len(report.correlation_names),)
-    assert np.all(sigma[diagonal == 1.0] > 0.0)
-    assert np.all(sigma[diagonal == 0.0] == 0.0)
+    assert report.residual_autocorrelation
+    assert report.parameter_sigma is None
+    assert report.covariance_evidence.unavailable_reason == "residual_autocorrelation_requires_block_bootstrap"
+    assert np.all(np.isnan(report.correlation_matrix))

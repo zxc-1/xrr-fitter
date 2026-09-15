@@ -106,7 +106,9 @@ def test_qt_advisory_guard_rejects_build_inputs_changed_after_binding(load_tool_
 
 
 @pytest.mark.parametrize("mutation", ["hash", "missing-build", "missing-wheels", "target"])
-def test_qt_advisory_receipt_rejects_wrong_installed_input_or_incomplete_arguments(load_tool_module, tmp_path, mutation):
+def test_qt_advisory_receipt_rejects_wrong_installed_input_or_incomplete_arguments(
+    load_tool_module, tmp_path, mutation
+):
     module, args, documents, bound, receipt = _qt_bound_case(load_tool_module, tmp_path)
     if mutation == "hash":
         rows = documents["installed.cdx.json"]["metadata"]["properties"]

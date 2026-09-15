@@ -20,7 +20,7 @@ from xrr_fitter.services.fitting_phases.sharing import automatic_sharing_rules
 
 
 def _skipped_result(result, stage="E"):
-    return replace(result, confidence=ConfidenceClass.UNTRUSTED, skipped_stages=(stage,))
+    return replace(result, confidence=ConfidenceClass.UNTRUSTED, uncertainty=None, skipped_stages=(stage,))
 
 
 @pytest.mark.parametrize("stage", ["B", "E"])

@@ -359,6 +359,9 @@ def fit_joint_datasets(
         problem,
         searches,
         tuple(item.updated_dataset.parameter_priors for item in values),
+        bootstrap_enabled=True,
+        cancelled=cancelled,
+        progress=progress,
     )
     if progress is not None:
         progress(FitProgress(None, "finalizing", 1, 1, objective, "completed"))

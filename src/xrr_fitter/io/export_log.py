@@ -6,6 +6,7 @@ import json
 
 import numpy as np
 
+from xrr_fitter.io.export_evidence import inference_metadata, residual_metadata
 from xrr_fitter.io.export_tables import DatasetExportData
 from xrr_fitter.model.instrument import PhysicsDiagnostic
 
@@ -74,6 +75,8 @@ def run_log_bytes(context: DatasetExportData) -> bytes:
         f"optimizer_child_seeds: {_compact_json(result.child_seeds)}",
         f"mcmc_child_seed: {None if mcmc is None else mcmc.child_seed}",
     ]
+    lines.extend(f"{key}: {value}" for key, value in residual_metadata(context.selected).items())
+    lines.append(f"inference: {_compact_json(inference_metadata(report, context.uncertainty_absent_reason))}")
     if context.uncertainty_absent_reason is not None:
         lines.append(f"uncertainty_absent_reason: {context.uncertainty_absent_reason}")
     lines.extend(f"warning: {value}" for value in result.warnings)

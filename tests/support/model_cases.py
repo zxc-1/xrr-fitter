@@ -96,6 +96,7 @@ def fit_candidate(candidate_id: str = "candidate-0", objective: float = 1.0) -> 
         qz_a_inv=qz,
         model_normalized=np.linspace(1.0, 0.1, 4),
         log_residuals_decades=np.zeros(4),
+        residuals=np.zeros(4),
         weighted_residuals=np.zeros(4),
         expanded_stack=None,
         sld_depth_a=np.array([0.0, 20.0]),

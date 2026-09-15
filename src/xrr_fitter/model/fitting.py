@@ -56,7 +56,7 @@ from math import isfinite
 
 import numpy as np
 
-from xrr_fitter.model.data import PreparedData
+from xrr_fitter.model.data import PreparedData, ResidualMetadata, validate_noise_model
 from xrr_fitter.model.instrument import InstrumentSpec, PhysicsDiagnostic
 from xrr_fitter.model.parameters import (
     ConstraintRule,
@@ -69,6 +69,9 @@ from xrr_fitter.model.progress import (
     normalize_skipped_stages,
     search_terminated_early,
 )
+from xrr_fitter.model.search import GridReview as GridReview
+from xrr_fitter.model.search import SearchAllocation as SearchAllocation
+from xrr_fitter.model.search import SearchEvidence, search_evidence_tuple
 from xrr_fitter.model.slab_stack import SlabStack
 from xrr_fitter.model.structure import StructureSpec
 
@@ -152,18 +155,22 @@ def _candidate_members(
 
 @dataclass(frozen=True, slots=True)
 class SearchBudget:
-    """Versioned work limits for global, local, and bootstrap stages."""
+    """Separate versioned work limits for search, bootstrap, and diagnostics."""
 
     short_de_maxiter: int
     full_de_maxiter: int
     local_min_nfev: int
     local_nfev_per_parameter: int
     bootstrap_samples: int
+    diagnostic_samples: int = 999
 
     def __post_init__(self) -> None:
         for field in self.__dataclass_fields__:
             allow_zero = field in {"short_de_maxiter", "full_de_maxiter"}
             _positive_integer(getattr(self, field), field, allow_zero=allow_zero)
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), _pickle_values(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,7 +180,8 @@ class ConfidenceThresholds:
     cluster_join_distance: float = 0.05
     distinct_cluster_distance: float = 0.10
     equivalent_cost_fraction: float = 0.02
-    equivalent_cost_floor: float = 1e-5
+    # V2 dimensionless units, calibrated at the default robust scale of 0.05.
+    equivalent_cost_floor: float = 0.004
     boundary_fraction: float = 0.005
     strong_correlation: float = 0.95
     prior_conflict_sigmas: float = 3.0
@@ -189,6 +197,11 @@ class ConfidenceThresholds:
         # nonnegative fractions above where zero is a meaningful setting.
         if self.prior_conflict_sigmas <= 0.0:
             raise ValueError("prior_conflict_sigmas must be positive")
+
+
+def _diagnostic_version(value: str) -> None:
+    if value != "poisson-refit-null-v4":
+        raise ValueError("diagnostic_version must be poisson-refit-null-v4")
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,11 +222,19 @@ class FitConfig:
     budget_reclaim_threshold_version: str = "stage-b-reclaim-v1"
     downsample_rule_version: str = "feature-grid-v1"
     jacobian_version: str = "analytic-v1"
+    noise_model: str = "robust_log"
+    profile_steps: int = 41
+    diagnostic_version: str = "poisson-refit-null-v4"
 
     def __post_init__(self) -> None:
+        validate_noise_model(self.noise_model)
         _positive_integer(self.master_seed, "master_seed", allow_zero=True)
         _positive_integer(self.final_seed_count, "final_seed_count")
         _positive_integer(self.local_workers, "local_workers")
+        _positive_integer(self.profile_steps, "profile_steps")
+        if self.profile_steps < 5:
+            raise ValueError("profile_steps must be at least five")
+        _diagnostic_version(self.diagnostic_version)
         for field in (
             "objective_name",
             "objective_version",
@@ -234,26 +255,30 @@ class FitConfig:
         if not isinstance(self.confidence, ConfidenceThresholds):
             raise TypeError("confidence must be ConfidenceThresholds")
 
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return type(self), _pickle_values(self)
+
     @classmethod
     def standard(cls, master_seed: int) -> FitConfig:
         return cls(
             master_seed=master_seed,
-            objective_name="robust_log_soft_l1",
-            objective_version="1",
+            objective_name="xrr_noise_model",
+            objective_version="2",
             c_decades=0.05,
             final_seed_count=4,
-            budget=SearchBudget(60, 200, 2000, 300, 100),
+            budget=SearchBudget(60, 200, 2000, 300, 200),
         )
 
     @classmethod
     def fast(cls, master_seed: int) -> FitConfig:
         return cls(
             master_seed=master_seed,
-            objective_name="robust_log_soft_l1",
-            objective_version="1",
+            objective_name="xrr_noise_model",
+            objective_version="2",
             c_decades=0.05,
             final_seed_count=4,
             budget=SearchBudget(4, 8, 200, 30, 8),
+            profile_steps=11,
         )
 
 
@@ -337,6 +362,24 @@ def _validate_context_prior(context: FitEvaluationContext) -> None:
         raise ValueError("scale_prior_reason must be nonempty or None")
 
 
+def _context_sampling(context: FitEvaluationContext) -> tuple[int, np.ndarray]:
+    """Freeze the full-data denominator and the grid's positive integration mass."""
+    count = context.objective_point_count
+    fitted = int(np.count_nonzero(context.data.fit_mask))
+    count = fitted if count is None else count
+    _positive_integer(count, "objective_point_count")
+    if count < fitted:
+        raise ValueError("objective_point_count cannot be smaller than the fitted grid")
+    values = context.sampling_multipliers
+    if values is None:
+        values = np.ones(context.data.fit_mask.shape, dtype=float)
+    sampling = _readonly(values, float, "sampling_multipliers")
+    valid = sampling.shape == context.data.fit_mask.shape and np.all(np.isfinite(sampling) & (sampling > 0))
+    if not valid:
+        raise ValueError("sampling_multipliers must be positive finite and match prepared data")
+    return count, sampling
+
+
 def _context_warnings(values: object) -> tuple[str, ...]:
     """Normalize warning evidence without accepting empty placeholders."""
     warnings = tuple(values)
@@ -372,6 +415,22 @@ class FitEvaluationContext:
     is also reconstructed because NumPy write flags are not preserved by an
     ordinary pickle round trip. Re-running this constructor during unpickling
     restores the read-only contract at the process boundary.
+
+    ``objective_point_count`` is the fitted count on the complete observation
+    grid, not necessarily the number of rows in ``data``. Coarse and fixed-
+    parameter compilations retain this denominator so J=Q/N and the scale prior
+    keep their meaning throughout search and analysis.
+
+    ``sampling_multipliers`` describes how much full-grid data each retained
+    row represents. It is separate from empirical region weights and never
+    rescales prior rows. A complete grid starts with unit mass; downsampling
+    owns the selection and mass redistribution, not this value constructor.
+    Both defaults are resolved during construction, so numerical consumers
+    always observe a concrete integer and an owned read-only array.
+
+    Resampled observations are a new statistical problem rather than a coarse
+    view of the old observations. Their compiler must recompute data-derived
+    prior evidence instead of copying the original sample's plateau estimate.
     """
 
     data: PreparedData
@@ -387,6 +446,8 @@ class FitEvaluationContext:
     scale_prior_reason: str | None = None
     warnings: tuple[str, ...] = ()
     constraint_rules: tuple[ConstraintRule, ...] = ()
+    objective_point_count: int | None = None
+    sampling_multipliers: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         _validate_context_components(self)
@@ -396,6 +457,9 @@ class FitEvaluationContext:
         )
         labels, weights = _context_arrays(self)
         _validate_context_prior(self)
+        point_count, sampling = _context_sampling(self)
+        object.__setattr__(self, "objective_point_count", point_count)
+        object.__setattr__(self, "sampling_multipliers", sampling)
         warnings = _context_warnings(self.warnings)
         constraint_rules = _context_constraint_rules(self.constraint_rules)
         # Reconstruct nested prepared data so a pickle round-trip cannot expose
@@ -414,7 +478,7 @@ class FitEvaluationContext:
 
 
 @dataclass(frozen=True, slots=True)
-class FitCandidate:
+class FitCandidate(ResidualMetadata):
     """Published candidate with physical values and owned reporting arrays."""
 
     candidate_id: str
@@ -428,14 +492,18 @@ class FitCandidate:
     qz_a_inv: np.ndarray
     model_normalized: np.ndarray
     log_residuals_decades: np.ndarray
+    residuals: np.ndarray
     weighted_residuals: np.ndarray
     expanded_stack: SlabStack | None
     sld_depth_a: np.ndarray
     sld_profile_a2: np.ndarray
     diagnostics: tuple[PhysicsDiagnostic, ...]
     ranking_objective: float | None = None
+    noise_model: str = "robust_log"
+    search_evidence: tuple[SearchEvidence, ...] = ()
 
     def __post_init__(self) -> None:
+        validate_noise_model(self.noise_model)
         _nonempty(self.candidate_id, "candidate_id")
         _archived_seed(self.seed_index)
         _positive_integer(self.nfev, "nfev", allow_zero=True)
@@ -446,6 +514,7 @@ class FitCandidate:
         parameters, diagnostics = _candidate_members(self.parameters, self.diagnostics)
         object.__setattr__(self, "parameters", parameters)
         object.__setattr__(self, "diagnostics", diagnostics)
+        object.__setattr__(self, "search_evidence", search_evidence_tuple(self.search_evidence))
         self._freeze_arrays()
 
     def _freeze_arrays(self) -> None:
@@ -459,66 +528,18 @@ class FitCandidate:
                 "log_residuals_decades",
             ),
             "weighted_residuals": _readonly(self.weighted_residuals, float, "weighted_residuals"),
+            "residuals": _readonly(self.residuals, float, "residuals"),
             "sld_depth_a": _readonly(self.sld_depth_a, float, "sld_depth_a"),
             "sld_profile_a2": _readonly(self.sld_profile_a2, complex, "sld_profile_a2"),
         }
         q_size = arrays["qz_a_inv"].size
-        q_fields = ("model_normalized", "log_residuals_decades", "weighted_residuals")
+        q_fields = ("model_normalized", "log_residuals_decades", "residuals", "weighted_residuals")
         if any(arrays[field].size != q_size for field in q_fields):
             raise ValueError("candidate q-grid arrays must have equal length")
         if arrays["sld_depth_a"].shape != arrays["sld_profile_a2"].shape:
             raise ValueError("candidate SLD arrays must have equal length")
         for field, value in arrays.items():
             object.__setattr__(self, field, value)
-
-    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
-        return type(self), _pickle_values(self)
-
-
-@dataclass(frozen=True, slots=True)
-class ModelEvaluation:
-    """Internal model evaluation before candidate identity is assigned."""
-
-    valid: bool
-    reason: str
-    parameters: tuple[ParameterValue, ...]
-    qz_a_inv: np.ndarray
-    model_normalized: np.ndarray
-    fit_log_residuals_decades: np.ndarray
-    fit_weighted_residuals: np.ndarray
-    objective: float
-    expanded_stack: SlabStack | None
-    diagnostics: tuple[PhysicsDiagnostic, ...]
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.valid, bool):
-            raise TypeError("valid must be bool")
-        _nonempty(self.reason, "reason")
-        if self.valid and not isfinite(self.objective):
-            raise ValueError("valid evaluation objective must be finite")
-        parameters = tuple(self.parameters)
-        diagnostics = tuple(self.diagnostics)
-        if any(not isinstance(value, ParameterValue) for value in parameters):
-            raise TypeError("evaluation parameters must be ParameterValue values")
-        if any(not isinstance(value, PhysicsDiagnostic) for value in diagnostics):
-            raise TypeError("evaluation diagnostics must be PhysicsDiagnostic values")
-        arrays = self._freeze_arrays()
-        if arrays[0].shape != arrays[1].shape or arrays[2].shape != arrays[3].shape:
-            raise ValueError("evaluation array axes are inconsistent")
-        object.__setattr__(self, "parameters", parameters)
-        object.__setattr__(self, "diagnostics", diagnostics)
-
-    def _freeze_arrays(self) -> tuple[np.ndarray, ...]:
-        fields = (
-            ("qz_a_inv", self.qz_a_inv),
-            ("model_normalized", self.model_normalized),
-            ("fit_log_residuals_decades", self.fit_log_residuals_decades),
-            ("fit_weighted_residuals", self.fit_weighted_residuals),
-        )
-        arrays = tuple(_readonly(value, float, name) for name, value in fields)
-        for (name, _value), array in zip(fields, arrays, strict=True):
-            object.__setattr__(self, name, array)
-        return arrays
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         return type(self), _pickle_values(self)
@@ -533,6 +554,7 @@ class FitStageSummary:
     best_objective: float
     total_nfev: int
     stop_reasons: tuple[str, ...]
+    search_evidence: tuple[SearchEvidence, ...] = ()
 
     def __post_init__(self) -> None:
         _nonempty(self.stage, "stage")
@@ -550,6 +572,7 @@ class FitStageSummary:
         _positive_integer(self.total_nfev, "total_nfev", allow_zero=True)
         object.__setattr__(self, "candidate_ids", candidates)
         object.__setattr__(self, "stop_reasons", reasons)
+        object.__setattr__(self, "search_evidence", search_evidence_tuple(self.search_evidence))
 
 
 @dataclass(frozen=True, slots=True)
