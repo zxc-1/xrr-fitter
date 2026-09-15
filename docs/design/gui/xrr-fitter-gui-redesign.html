@@ -1,0 +1,1162 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XRR Fitter · GUI 全新设计预览</title>
+<style>
+/* ============================================================
+   设计令牌 — 取自项目 src/xrr_fitter/gui/theme.py（明色主题）
+   仅数据色系为固定 Okabe-Ito（跨明暗不变，保护"蓝色=我的数据"这类已习得语义）
+   ============================================================ */
+:root{
+  /* 品牌/强调 */
+  --accent:#2F6BD8; --accent-hover:#255CC0; --accent-text:#FFFFFF;
+  /* 语义状态（图标+文字，永不单靠颜色） */
+  --ok:#2E7D32; --info:#1565C0; --warn:#9A6700; --error:#B3261E;
+  /* 表面与文字 */
+  --app-bg:#EDEFF3; --panel:#FFFFFF; --panel-2:#F7F8FA;
+  --border:#D9DCE3; --border-strong:#C2C7D2;
+  --ink:#1B1F27; --ink-muted:#5B6270; --ink-faint:#8A909C;
+  --selection:rgba(47,107,216,.14);
+  /* 数据色（固定 Okabe-Ito） */
+  --d-observed:#0072B2; --d-candidate:#D55E00; --d-preview:#009E73;
+  --d-range:#E69F00; --d-c5:#CC79A7; --d-c6:#56B4E9; --d-neutral:#9AA0A6;
+  /* 4px 间距栅格 */
+  --xs:4px; --sm:8px; --md:12px; --lg:16px; --xl:24px; --xxl:32px;
+  --r-sm:6px; --r-md:8px; --r-lg:12px;
+  --shadow:0 1px 2px rgba(16,20,30,.06), 0 6px 24px rgba(16,20,30,.08);
+  --shadow-sm:0 1px 2px rgba(16,20,30,.08);
+  --mono:"SF Mono",ui-monospace,"Cascadia Code","Consolas",monospace;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--app-bg); color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+}
+.tnum{font-variant-numeric:tabular-nums}
+a{color:var(--accent);text-decoration:none}
+h1,h2,h3,h4{margin:0;font-weight:700;letter-spacing:.2px}
+
+/* ---------- 页头 ---------- */
+.pagehead{max-width:1320px;margin:0 auto;padding:var(--xxl) var(--xl) var(--lg)}
+.pagehead .eyebrow{color:var(--accent);font-weight:700;font-size:12px;letter-spacing:1.2px;text-transform:uppercase}
+.pagehead h1{font-size:30px;margin:var(--sm) 0}
+.pagehead p{color:var(--ink-muted);max-width:78ch;margin:var(--xs) 0}
+.pagehead .meta{display:flex;flex-wrap:wrap;gap:var(--sm);margin-top:var(--md)}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--border);
+  border-radius:999px;padding:5px 12px;font-size:12px;color:var(--ink-muted)}
+.chip b{color:var(--ink)}
+
+/* ---------- 目录导航 ---------- */
+.toc{position:sticky;top:0;z-index:50;background:rgba(237,239,243,.86);backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--border);margin-top:var(--lg)}
+.toc-inner{max-width:1320px;margin:0 auto;padding:10px var(--xl);display:flex;flex-wrap:wrap;gap:var(--xs);align-items:center}
+.toc a{font-size:12.5px;color:var(--ink-muted);padding:5px 10px;border-radius:var(--r-sm);white-space:nowrap}
+.toc a:hover{background:var(--selection);color:var(--accent)}
+.toc .sep{flex:1}
+
+/* ---------- 版块 ---------- */
+.section{max-width:1320px;margin:0 auto;padding:var(--xxl) var(--xl)}
+.section > .lead{margin-bottom:var(--lg)}
+.section .knum{color:var(--accent);font-weight:700;font-size:13px;letter-spacing:1px}
+.section h2{font-size:22px;margin:6px 0 var(--sm)}
+.section .lead p{color:var(--ink-muted);max-width:82ch}
+.annot{display:flex;gap:var(--sm);flex-wrap:wrap;margin:var(--md) 0 0}
+.annot .note{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--accent);
+  border-radius:var(--r-sm);padding:8px 12px;font-size:12.5px;color:var(--ink-muted);max-width:40ch}
+.annot .note b{color:var(--ink)}
+
+/* ============================================================
+   应用窗口外框（所有帧共用）
+   ============================================================ */
+.appwin{background:var(--panel);border:1px solid var(--border-strong);border-radius:var(--r-lg);
+  overflow:hidden;box-shadow:var(--shadow)}
+.titlebar{height:38px;display:flex;align-items:center;gap:var(--sm);padding:0 var(--md);
+  background:linear-gradient(180deg,#FBFCFD,#F1F3F7);border-bottom:1px solid var(--border)}
+.tl-dots{display:flex;gap:7px}
+.tl-dots i{width:11px;height:11px;border-radius:50%;display:block}
+.tl-dots .r{background:#ED6A5E}.tl-dots .y{background:#F4BF4F}.tl-dots .g{background:#61C554}
+.tl-title{flex:1;text-align:center;font-size:12.5px;color:var(--ink-muted);font-weight:600}
+.tl-title .dirty{color:var(--warn)}
+
+/* 命令栏 */
+.cmdbar{display:flex;align-items:center;gap:var(--xs);padding:var(--sm) var(--md);
+  border-bottom:1px solid var(--border);background:var(--panel-2);flex-wrap:wrap}
+.cmdbar .grp{display:flex;align-items:center;gap:var(--xs)}
+.cmdbar .vsep{width:1px;height:22px;background:var(--border);margin:0 var(--xs)}
+.cmdbar .spring{flex:1}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:var(--r-sm);
+  border:1px solid var(--border-strong);background:var(--panel);color:var(--ink);font-size:12.5px;
+  font-weight:600;cursor:default;white-space:nowrap}
+.btn svg{width:15px;height:15px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--accent);font-weight:600}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.icon{width:30px;padding:0;justify-content:center}
+.seg{display:inline-flex;border:1px solid var(--border-strong);border-radius:var(--r-sm);overflow:hidden}
+.seg span{padding:0 12px;height:28px;display:inline-flex;align-items:center;font-size:12.5px;font-weight:600;color:var(--ink-muted)}
+.seg span.on{background:var(--accent);color:#fff}
+
+/* 应用主体三栏 */
+.appbody{display:grid;grid-template-columns:264px 1fr 340px;min-height:560px}
+.appbody.two{grid-template-columns:264px 1fr}
+.nav{border-right:1px solid var(--border);background:var(--panel-2);display:flex;flex-direction:column}
+.canvas{background:var(--panel);display:flex;flex-direction:column;min-width:0}
+.inspector{border-left:1px solid var(--border);background:var(--panel-2);display:flex;flex-direction:column;min-width:0}
+
+/* 导航：分区标题 */
+.nav-sec{padding:var(--md) var(--md) var(--sm);font-size:11px;font-weight:700;letter-spacing:.8px;
+  color:var(--ink-faint);text-transform:uppercase;display:flex;align-items:center;justify-content:space-between}
+.nav-sec .add{color:var(--accent);font-size:16px;line-height:1;cursor:default}
+
+/* 数据集列表 */
+.ds{padding:8px var(--md);display:flex;align-items:center;gap:var(--sm);border-left:3px solid transparent;cursor:default}
+.ds:hover{background:var(--selection)}
+.ds.on{background:#fff;border-left-color:var(--accent)}
+.ds .nm{flex:1;min-width:0}
+.ds .nm .t{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ds .nm .s{font-size:11.5px;color:var(--ink-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ds .cf{font-size:15px;line-height:1}
+
+/* 置信度字形（形状+颜色双编码） */
+.cf-trusted{color:var(--ok)} .cf-correlated{color:var(--info)}
+.cf-multiple{color:var(--warn)} .cf-untrusted{color:var(--error)}
+
+/* 数据集摘要行 */
+.ds-summary{margin-top:auto;padding:var(--md);border-top:1px solid var(--border);font-size:11.5px;color:var(--ink-muted)}
+
+/* 管线 stepper */
+.pipe{padding:var(--sm) 0}
+.pstep{display:flex;gap:var(--sm);padding:7px var(--md);align-items:flex-start;position:relative;cursor:default}
+.pstep:hover{background:var(--selection)}
+.pstep .rail{display:flex;flex-direction:column;align-items:center;flex:0 0 auto}
+.pstep .dot{width:20px;height:20px;border-radius:50%;border:2px solid var(--border-strong);background:#fff;
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--ink-faint);z-index:1}
+.pstep .line{width:2px;flex:1;background:var(--border);margin:2px 0;min-height:10px}
+.pstep:last-child .line{display:none}
+.pstep.done .dot{background:var(--ok);border-color:var(--ok);color:#fff}
+.pstep.current .dot{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 0 0 4px var(--selection)}
+.pstep .body{padding-top:1px}
+.pstep .body .t{font-size:13px;font-weight:600}
+.pstep.current .body .t{color:var(--accent)}
+.pstep .body .d{font-size:11.5px;color:var(--ink-faint)}
+
+/* 画布工具条 + tabs */
+.canvas-top{display:flex;align-items:center;gap:var(--xs);padding:var(--sm) var(--md);border-bottom:1px solid var(--border);flex-wrap:wrap}
+.tabs{display:flex;gap:2px}
+.tab{padding:6px 12px;font-size:12.5px;font-weight:600;color:var(--ink-muted);border-radius:var(--r-sm) var(--r-sm) 0 0;cursor:default;border:1px solid transparent;border-bottom:none}
+.tab.on{color:var(--accent);background:var(--panel);border-color:var(--border);position:relative}
+.tab.on:after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--accent)}
+.canvas-body{padding:var(--md);flex:1;display:flex;flex-direction:column;gap:var(--md);min-height:0}
+
+/* 迷你工具（图上浮动模式条） */
+.modebar{display:inline-flex;border:1px solid var(--border);border-radius:7px;background:var(--panel);overflow:hidden}
+.modebar b{width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--ink-muted);cursor:default}
+.modebar b.on{background:var(--selection);color:var(--accent)}
+
+/* 图卡片 */
+.plotcard{border:1px solid var(--border);border-radius:var(--r-md);background:var(--panel);overflow:hidden}
+.plotcard .ph{display:flex;align-items:center;justify-content:space-between;padding:8px var(--md);border-bottom:1px solid var(--border)}
+.plotcard .ph .t{font-size:12.5px;font-weight:700}
+.plotcard .ph .sub{font-size:11px;color:var(--ink-faint)}
+.legend{display:flex;gap:var(--md);flex-wrap:wrap;font-size:11.5px;color:var(--ink-muted)}
+.legend i{display:inline-flex;align-items:center;gap:5px}
+.legend i::before{content:"";width:14px;height:0;border-top:3px solid var(--c,currentColor);display:inline-block}
+.legend i.dot::before{border:none;width:9px;height:9px;border-radius:50%;background:var(--c,currentColor)}
+.legend i.dash::before{border-top-style:dashed}
+.legend i.box::before{border:none;width:14px;height:10px;border-radius:2px;background:var(--c,currentColor);opacity:.55}
+.legend i.plain::before{display:none}
+
+/* 检视器块 */
+.insp-sec{padding:var(--md);border-bottom:1px solid var(--border)}
+.insp-sec .h{font-size:11px;font-weight:700;letter-spacing:.6px;color:var(--ink-faint);margin-bottom:var(--sm);display:flex;align-items:center;justify-content:space-between}
+.kv{display:flex;justify-content:space-between;gap:var(--sm);padding:3px 0;font-size:12.5px}
+.kv .k{color:var(--ink-muted)}
+.kv .v{font-weight:600;font-variant-numeric:tabular-nums}
+
+/* 置信度大徽标 */
+.confbadge{display:flex;align-items:center;gap:var(--sm);padding:10px var(--md);border-radius:var(--r-md);border:1px solid var(--border)}
+.confbadge .glyph{font-size:22px;line-height:1}
+.confbadge .txt .l{font-weight:700;font-size:15px}
+.confbadge .txt .r{font-size:11.5px;color:var(--ink-muted)}
+.confbadge.trusted{background:rgba(46,125,50,.08);border-color:rgba(46,125,50,.35)}
+.confbadge.correlated{background:rgba(21,101,192,.08);border-color:rgba(21,101,192,.35)}
+.confbadge.multiple{background:rgba(154,103,0,.09);border-color:rgba(154,103,0,.35)}
+.confbadge.untrusted{background:rgba(179,38,30,.08);border-color:rgba(179,38,30,.35)}
+
+/* 表格 */
+table.grid{width:100%;border-collapse:collapse;font-size:12px}
+table.grid th{text-align:left;font-weight:700;color:var(--ink-muted);padding:6px 8px;border-bottom:1px solid var(--border-strong);white-space:nowrap;font-size:11px}
+table.grid td{padding:5px 8px;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums;white-space:nowrap}
+table.grid tr:hover td{background:var(--panel-2)}
+table.grid td.num{text-align:right}
+table.grid .grouprow td{background:var(--panel-2);font-weight:700;color:var(--ink);font-size:11px;letter-spacing:.4px}
+.railbar{position:relative;background:var(--panel-2);border-radius:3px;height:16px;min-width:70px;border:1px solid var(--border)}
+.railbar i{position:absolute;top:0;bottom:0;left:0;background:var(--selection);border-right:2px solid var(--accent);border-radius:3px 0 0 3px}
+.railbar span{position:relative;z-index:1;font-size:11px;padding:0 5px;line-height:16px;display:block;font-variant-numeric:tabular-nums}
+.lock{width:14px;height:14px;border:1.5px solid var(--ink-muted);border-radius:3px;display:inline-block;vertical-align:-2px}
+.lock.on{background:var(--accent);border-color:var(--accent);position:relative}
+.lock.on:after{content:"✓";color:#fff;font-size:10px;position:absolute;left:1px;top:-3px}
+
+/* 状态徽章（图标+文字） */
+.badge{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid}
+.badge.ok{color:var(--ok);border-color:rgba(46,125,50,.4);background:rgba(46,125,50,.08)}
+.badge.info{color:var(--info);border-color:rgba(21,101,192,.4);background:rgba(21,101,192,.08)}
+.badge.warn{color:var(--warn);border-color:rgba(154,103,0,.4);background:rgba(154,103,0,.09)}
+.badge.error{color:var(--error);border-color:rgba(179,38,30,.4);background:rgba(179,38,30,.08)}
+.badge.mut{color:var(--ink-muted);border-color:var(--border-strong);background:var(--panel-2)}
+
+/* 状态栏 */
+.statusbar{height:30px;display:flex;align-items:center;gap:var(--md);padding:0 var(--md);
+  border-top:1px solid var(--border);background:var(--panel-2);font-size:11.5px;color:var(--ink-muted)}
+.statusbar .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px}
+.statusbar .spring{flex:1}
+.statusbar b{color:var(--ink);font-weight:600}
+
+/* 说明脚注 */
+.frame-cap{font-size:12px;color:var(--ink-faint);margin:var(--sm) 2px 0;display:flex;gap:6px;align-items:baseline}
+.frame-cap b{color:var(--ink-muted)}
+
+/* 通用工具 */
+.muted{color:var(--ink-muted)} .faint{color:var(--ink-faint)}
+.mono{font-family:var(--mono)}
+.row{display:flex;gap:var(--md)} .col{display:flex;flex-direction:column;gap:var(--md)}
+.wrap2{display:grid;grid-template-columns:1fr 1fr;gap:var(--md)}
+.field{display:flex;flex-direction:column;gap:3px}
+.field label{font-size:11.5px;font-weight:600;color:var(--ink-muted)}
+.field .inp{height:30px;border:1px solid var(--border-strong);border-radius:var(--r-sm);background:#fff;
+  display:flex;align-items:center;padding:0 10px;font-size:12.5px;font-variant-numeric:tabular-nums}
+.field .inp.sel::after{content:"▾";margin-left:auto;color:var(--ink-faint)}
+.reqd::after{content:" *";color:var(--error)}
+.help{font-size:11px;color:var(--ink-faint)}
+.radio{display:inline-flex;align-items:center;gap:6px;font-size:12.5px}
+.radio i{width:14px;height:14px;border-radius:50%;border:2px solid var(--border-strong);display:inline-block}
+.radio.on i{border-color:var(--accent)}
+.radio.on i{box-shadow:inset 0 0 0 3px var(--accent)}
+.check{display:inline-flex;align-items:center;gap:6px;font-size:12.5px}
+.check i{width:14px;height:14px;border-radius:3px;border:2px solid var(--border-strong);display:inline-block;position:relative}
+.check.on i{background:var(--accent);border-color:var(--accent)}
+.check.on i:after{content:"✓";color:#fff;font-size:10px;position:absolute;left:1px;top:-3px}
+
+/* 对话框 */
+.dialog{background:var(--panel);border:1px solid var(--border-strong);border-radius:var(--r-lg);box-shadow:var(--shadow);overflow:hidden}
+.dialog .dh{padding:var(--md) var(--lg);border-bottom:1px solid var(--border);font-weight:700;font-size:14px;display:flex;align-items:center;gap:var(--sm)}
+.dialog .db{padding:var(--lg);display:flex;flex-direction:column;gap:var(--md)}
+.dialog .df{padding:var(--md) var(--lg);border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:var(--sm);background:var(--panel-2)}
+.groupbox{border:1px solid var(--border);border-radius:var(--r-md);padding:var(--md);position:relative;margin-top:8px}
+.groupbox > .gt{position:absolute;top:-9px;left:12px;background:var(--panel);padding:0 6px;font-size:11.5px;font-weight:700;color:var(--ink-muted)}
+
+/* 图例卡片（设计系统） */
+.swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:var(--sm)}
+.sw{border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;background:var(--panel)}
+.sw .cap{height:52px} .sw .lb{padding:7px 10px;font-size:11.5px} .sw .lb .n{font-weight:700}
+.sw .lb .h{font-family:var(--mono);color:var(--ink-faint);font-size:11px}
+.cardgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:var(--md)}
+.card{border:1px solid var(--border);border-radius:var(--r-md);padding:var(--md);background:var(--panel)}
+.card h4{font-size:13px;margin-bottom:6px}
+.card p{font-size:12px;color:var(--ink-muted);margin:0}
+
+/* 覆盖对照表 */
+table.cover{width:100%;border-collapse:collapse;font-size:12.5px;background:var(--panel);border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden}
+table.cover th{background:var(--panel-2);text-align:left;padding:9px 12px;font-size:12px;border-bottom:1px solid var(--border-strong)}
+table.cover td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+table.cover td:first-child{font-weight:700;white-space:nowrap;color:var(--ink)}
+table.cover .loc{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+
+footer{max-width:1320px;margin:0 auto;padding:var(--xl);color:var(--ink-faint);font-size:12px;border-top:1px solid var(--border);margin-top:var(--xxl)}
+
+@media (max-width:1100px){
+  .appbody{grid-template-columns:1fr}
+  .nav,.inspector{border:none;border-top:1px solid var(--border)}
+  .wrap2{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<!-- ================= 页头 ================= -->
+<div class="pagehead">
+  <div class="eyebrow">XRR FITTER · 图形界面全新设计</div>
+  <h1>反射率拟合工作台 — 重新设计预览</h1>
+  <p>基于对项目实际能力的审计（<b>xrr_fitter.api</b> 公共接口、用户指南、以及全部 GUI 面板控件清单），
+  抛开现有"中央图 + 自由停靠面板"的布局，围绕 <b>科学工作流本身</b> 重新组织界面。
+  这是一份静态高保真预览：所有图表为内联 SVG，所有字段名、单位、状态与置信度标签均与代码库一致。</p>
+  <div class="meta">
+    <span class="chip">信息架构：<b>管线导航 + 自适应画布 + 上下文检视器</b></span>
+    <span class="chip">配色：<b>Okabe-Ito 色觉友好</b>（已过校验脚本）</span>
+    <span class="chip">显示单位：<b>nm / g·cm⁻³ / Å⁻²</b>（内部持久化 Å）</span>
+    <span class="chip">主题：<b>明色为主</b>，随系统明暗自适应</span>
+  </div>
+</div>
+
+<!-- ================= 目录 ================= -->
+<nav class="toc"><div class="toc-inner">
+  <a href="#ia">设计理念</a>
+  <a href="#f1">① 主工作台·结果态</a>
+  <a href="#f2">② 引导四步</a>
+  <a href="#f3">③ 结构编辑</a>
+  <a href="#f4">④ 拟合进行</a>
+  <a href="#f5">⑤ 不确定度</a>
+  <a href="#f6">⑥ 导入 / 导出</a>
+  <a href="#f7">设计系统</a>
+  <span class="sep"></span>
+  <a href="#cover">能力覆盖对照</a>
+</div></nav>
+
+<!-- ================= 设计理念 / 信息架构 ================= -->
+<section class="section" id="ia">
+  <div class="lead">
+    <span class="knum">设计理念</span>
+    <h2>为什么是"管线导航 + 自适应画布 + 检视器"</h2>
+    <p>现有界面把每类信息都做成可自由拖动的停靠面板，灵活但缺少方向感——新手容易迷路，专家也要反复找面板。
+    XRR 分析本质是一条<b>有向管线</b>：导入 → 结构 → 参数 → 拟合 → 结果 → 导出。新设计把这条管线变成界面的主骨架，
+    让"我在哪一步、下一步能不能走"始终可见，同时保留专家所需的全部深度。</p>
+  </div>
+  <div class="cardgrid">
+    <div class="card"><h4>① 左栏 · 项目与管线</h4><p>上半是数据集列表（带状态与置信度字形、可拟合计数），
+      下半是竖向管线 stepper。两套模式（引导 / 专家）共享同一条管线，只是展开深度不同——它们是同一文档的两个投影，功能等价。</p></div>
+    <div class="card"><h4>② 中央 · 自适应画布</h4><p>随当前阶段切换主内容：结果态以对数反射率图 + 残差为主；
+      结构态显示可点击剖面 + SLD 深度剖面；拟合态显示九阶段进度与实时曲线。画布顶部一排 tab 承载同一阶段的多个视图。</p></div>
+    <div class="card"><h4>③ 右栏 · 上下文检视器</h4><p>永远回答"选中项的细节是什么"：结果态显示置信度报告 + 参数表 + 候选解；
+      结构态显示选中层编辑器。可折叠，让画布在需要时独占宽度。</p></div>
+    <div class="card"><h4>④ 顶栏 · 命令 &amp; 模式</h4><p>项目命令（新建/打开/保存）、引导↔专家分段切换、主操作"一键拟合"、导出、明暗切换。
+      主操作在标准模式收敛为单按钮流；专家模式解锁独立/联合批量选择与手动拟合。</p></div>
+    <div class="card"><h4>⑤ 底栏 · 状态</h4><p>就绪态圆点 + 原因、拟合质量（置信度 · 目标值 J）、活动数据集、数据源校验状态；
+      拟合时叠加进度条。所有阻塞原因在此单行呈现，不打断主视图。</p></div>
+    <div class="card"><h4>⑥ 无障碍与数据可视化</h4><p>置信度/状态一律"形状/图标 + 文字"双编码，绝不单靠颜色；数值列用等宽数字（tabular figures）；
+      ≥2 条序列必有图例并尽量直接标注；对比度达 4.5:1；焦点可见、可键盘导航。</p></div>
+  </div>
+  <div class="annot">
+    <div class="note"><b>取材真实：</b>下列每一帧的控件、字段、单位与文案，均来自代码库审计，可与 <span class="mono">gui/</span> 各面板逐一对应。</div>
+    <div class="note"><b>非照搬：</b>布局骨架（管线主导航、检视器、自适应画布）是全新的，未沿用现有 dock 布局。</div>
+  </div>
+</section>
+
+<!-- ================= 帧 ① 主工作台 · 结果态 ================= -->
+<section class="section" id="f1">
+  <div class="lead">
+    <span class="knum">帧 ①</span>
+    <h2>主工作台 · 结果态（专家模式）</h2>
+    <p>一次全自动拟合收敛后的默认视图。左栏管线走到「结果」，中央叠放对数反射率与加权残差，
+    右栏检视器直接回答三个问题：<b>结果可不可信、每个参数是多少、还有没有其它解</b>。</p>
+  </div>
+  <div class="appwin">
+    <div class="titlebar">
+      <div class="tl-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="tl-title">aSi_multilayer_2024-03&nbsp;<span class="dirty">●</span>&nbsp;— XRR Fitter</div>
+      <div style="width:54px"></div>
+    </div>
+    <!-- 命令栏 -->
+    <div class="cmdbar">
+      <div class="grp"><span class="btn sm">新建</span><span class="btn sm">打开</span><span class="btn sm">保存</span></div>
+      <div class="vsep"></div>
+      <div class="seg" title="两种模式是同一文档的两个投影，功能等价"><span>引导</span><span class="on">专家</span></div>
+      <div class="vsep"></div>
+      <div class="grp"><span class="faint" style="font-size:12px">批量</span><div class="seg"><span class="on">独立</span><span>联合</span></div></div>
+      <div class="spring"></div>
+      <span class="btn primary">⚡ 一键拟合</span>
+      <span class="btn">导出…</span>
+      <span class="btn icon" title="随系统明暗">☾</span>
+    </div>
+    <!-- 三栏主体 -->
+    <div class="appbody">
+      <!-- 左：项目与管线 -->
+      <div class="nav">
+        <div class="nav-sec">数据集 <span class="add">＋</span></div>
+        <div class="ds on"><span class="cf cf-trusted">●</span><div class="nm"><div class="t">aSi_ML_25C.xrdml</div><div class="s">θ/2θ · 512 点 · 已拟合</div></div></div>
+        <div class="ds"><span class="cf cf-correlated">◆</span><div class="nm"><div class="t">aSi_ML_200C.xrdml</div><div class="s">θ/2θ · 512 点 · 已拟合</div></div></div>
+        <div class="ds"><span class="cf cf-multiple">▲</span><div class="nm"><div class="t">aSi_ML_400C.xrdml</div><div class="s">θ/2θ · 480 点 · 需复核</div></div></div>
+        <div class="ds"><span class="cf" style="color:var(--d-neutral)">○</span><div class="nm"><div class="t">Si_substrate_ref.xrdml</div><div class="s">参考 · 未纳入拟合</div></div></div>
+        <div class="nav-sec" style="margin-top:6px">分析管线</div>
+        <div class="pipe">
+          <div class="pstep done"><div class="rail"><div class="dot">✓</div><div class="line"></div></div><div class="body"><div class="t">数据</div><div class="d">4 导入 · 3 可拟合</div></div></div>
+          <div class="pstep done"><div class="rail"><div class="dot">✓</div><div class="line"></div></div><div class="body"><div class="t">结构</div><div class="d">5 层 · 含表面氧化</div></div></div>
+          <div class="pstep done"><div class="rail"><div class="dot">✓</div><div class="line"></div></div><div class="body"><div class="t">参数</div><div class="d">12 个自由参数</div></div></div>
+          <div class="pstep done"><div class="rail"><div class="dot">✓</div><div class="line"></div></div><div class="body"><div class="t">拟合</div><div class="d">全自动 · 已收敛</div></div></div>
+          <div class="pstep current"><div class="rail"><div class="dot">5</div><div class="line"></div></div><div class="body"><div class="t">结果</div><div class="d">可信 · J=1.83</div></div></div>
+          <div class="pstep"><div class="rail"><div class="dot">6</div></div><div class="body"><div class="t">导出</div><div class="d">ORSO / Excel / 图</div></div></div>
+        </div>
+        <div class="ds-summary">共 <b>4</b> 个数据集 · 可拟合 <b>3</b> · 需注意 <b>1</b></div>
+      </div>
+      <!-- 中：自适应画布 -->
+      <div class="canvas">
+        <div class="canvas-top">
+          <div class="tabs">
+            <span class="tab on">对数反射率</span><span class="tab">原始数据与模型</span><span class="tab">qz⁴·R</span><span class="tab">加权残差</span>
+          </div>
+          <div class="spring"></div>
+          <div class="modebar" title="平移 / 缩放 / 复位 / 选择拟合范围"><b class="on">✥</b><b>⤢</b><b>⌂</b><b>▭</b></div>
+        </div>
+        <div class="canvas-body">
+          <div class="plotcard">
+            <div class="ph"><div class="t">反射率 R vs 入射角 2θ</div><div class="sub">aSi_ML_25C · 归一化</div></div>
+            <div style="padding:10px 12px 6px">
+              <div class="legend" style="margin-bottom:6px">
+                <i class="dot" style="--c:var(--d-observed)">观测数据</i>
+                <i class="dash" style="--c:var(--d-candidate)">当前拟合模型</i>
+                <i class="box" style="--c:var(--d-range)">拟合窗口</i>
+                <i class="plain" style="color:var(--ink-faint)">▽ 截断点（低于本底）</i>
+              </div>
+              <svg viewBox="0 0 662 288" style="width:100%;height:auto;display:block" role="img" aria-label="对数反射率曲线：观测蓝点与橙色虚线模型叠合，Kiessig 条纹吻合"><rect x="91.9" y="18" width="474.0" height="232" fill="var(--d-range)" opacity="0.10"/><line x1="58" x2="624" y1="29.4" y2="29.4" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" x2="624" y1="61.8" y2="61.8" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" x2="624" y1="94.3" y2="94.3" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" x2="624" y1="126.7" y2="126.7" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" x2="624" y1="159.1" y2="159.1" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" x2="624" y1="191.6" y2="191.6" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" x2="624" y1="224.0" y2="224.0" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="43.5" x2="43.5" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="140.2" x2="140.2" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="237.0" x2="237.0" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="333.7" x2="333.7" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="430.5" x2="430.5" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="527.2" x2="527.2" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="624.0" x2="624.0" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" y1="18" x2="58" y2="250" stroke="rgba(27,31,39,.45)" stroke-width="1.2"/><line x1="58" y1="250" x2="624" y2="250" stroke="rgba(27,31,39,.45)" stroke-width="1.2"/><path d="M58.0,28.9 L60.0,29.0 L62.0,29.0 L64.1,29.0 L66.1,29.1 L68.1,29.1 L70.1,29.1 L72.2,29.2 L74.2,29.2 L76.2,29.2 L78.2,29.3 L80.2,29.3 L82.3,29.3 L84.3,4.1 L86.3,4.9 L88.3,6.7 L90.3,9.4 L92.4,12.7 L94.4,16.6 L96.4,21.0 L98.4,25.6 L100.4,30.3 L102.5,34.9 L104.5,39.2 L106.5,43.1 L108.5,46.4 L110.6,49.1 L112.6,51.0 L114.6,52.1 L116.6,52.5 L118.6,52.0 L120.7,50.9 L122.7,49.1 L124.7,46.9 L126.7,44.3 L128.8,41.4 L130.8,38.5 L132.8,35.8 L134.8,33.3 L136.8,31.3 L138.9,29.7 L140.9,28.9 L142.9,28.7 L144.9,29.4 L146.9,30.8 L149.0,32.9 L151.0,35.8 L153.0,39.2 L155.0,43.2 L157.1,47.5 L159.1,52.1 L161.1,56.7 L163.1,61.2 L165.1,65.5 L167.2,69.4 L169.2,72.8 L171.2,75.6 L173.2,77.8 L175.2,79.2 L177.3,79.9 L179.3,79.9 L181.3,79.3 L183.3,78.1 L185.4,76.4 L187.4,74.3 L189.4,72.1 L191.4,69.7 L193.4,67.4 L195.5,65.4 L197.5,63.6 L199.5,62.3 L201.5,61.6 L203.5,61.5 L205.6,62.0 L207.6,63.3 L209.6,65.1 L211.6,67.6 L213.7,70.6 L215.7,74.1 L217.7,77.9 L219.7,81.9 L221.7,86.0 L223.8,90.0 L225.8,93.9 L227.8,97.4 L229.8,100.4 L231.8,103.0 L233.9,105.0 L235.9,106.3 L237.9,107.0 L239.9,107.1 L242.0,106.6 L244.0,105.6 L246.0,104.2 L248.0,102.4 L250.0,100.4 L252.1,98.3 L254.1,96.3 L256.1,94.4 L258.1,92.8 L260.1,91.6 L262.2,90.9 L264.2,90.7 L266.2,91.2 L268.2,92.2 L270.3,93.8 L272.3,95.9 L274.3,98.6 L276.3,101.6 L278.3,105.0 L280.4,108.6 L282.4,112.3 L284.4,115.9 L286.4,119.4 L288.4,122.7 L290.5,125.6 L292.5,128.1 L294.5,130.0 L296.5,131.5 L298.6,132.3 L300.6,132.7 L302.6,132.5 L304.6,131.9 L306.6,130.8 L308.7,129.5 L310.7,128.0 L312.7,126.4 L314.7,124.9 L316.7,123.4 L318.8,122.3 L320.8,121.4 L322.8,121.0 L324.8,121.1 L326.9,121.7 L328.9,122.8 L330.9,124.5 L332.9,126.6 L334.9,129.2 L337.0,132.2 L339.0,135.5 L341.0,139.0 L343.0,142.6 L345.0,146.2 L347.1,149.7 L349.1,153.0 L351.1,156.0 L353.1,158.7 L355.1,160.9 L357.2,162.6 L359.2,163.8 L361.2,164.6 L363.2,164.9 L365.3,164.8 L367.3,164.4 L369.3,163.7 L371.3,162.8 L373.3,161.8 L375.4,160.8 L377.4,159.9 L379.4,159.3 L381.4,158.9 L383.4,158.8 L385.5,159.2 L387.5,160.1 L389.5,161.4 L391.5,163.1 L393.6,165.4 L395.6,168.0 L397.6,170.9 L399.6,174.2 L401.6,177.6 L403.7,181.1 L405.7,184.6 L407.7,188.1 L409.7,191.3 L411.8,194.4 L413.8,197.0 L415.8,199.3 L417.8,201.2 L419.8,202.7 L421.9,203.7 L423.9,204.3 L425.9,204.6 L427.9,204.5 L429.9,204.1 L432.0,203.6 L434.0,202.9 L436.0,202.3 L438.0,201.7 L440.1,201.3 L442.1,201.1 L444.1,201.2 L446.1,201.7 L448.1,202.5 L450.2,203.8 L452.2,205.5 L454.2,207.5 L456.2,209.9 L458.2,212.6 L460.3,215.5 L462.3,218.6 L464.3,221.9 L466.3,225.1 L468.4,228.2 L470.4,231.2 L472.4,234.0 L474.4,236.5 L476.4,238.7 L478.5,240.5 L480.5,241.9 L482.5,242.9 L484.5,243.6 L486.5,243.9 L488.6,243.9 L490.6,243.7 L492.6,243.3 L494.6,242.8 L496.6,242.3 L498.7,241.8 L500.7,241.5 L502.7,241.4 L504.7,241.5 L506.8,241.9 L508.8,242.6 L510.8,243.7 L512.8,245.1 L514.8,245.1 L516.9,245.1 L518.9,245.1 L520.9,245.1 L522.9,245.1 L525.0,245.1 L527.0,245.1 L529.0,245.1 L531.0,245.1 L533.0,245.1 L535.1,245.1 L537.1,245.1 L539.1,245.1 L541.1,245.1 L543.1,245.1 L545.2,245.1 L547.2,245.1 L549.2,245.1 L551.2,245.1 L553.3,245.1 L555.3,245.1 L557.3,245.1 L559.3,245.1 L561.3,245.1 L563.4,245.1 L565.4,245.1 L567.4,245.1 L569.4,245.1 L571.4,245.1 L573.5,245.1 L575.5,245.1 L577.5,245.1 L579.5,245.1 L581.6,245.1 L583.6,245.1 L585.6,245.1 L587.6,245.1 L589.6,245.1 L591.7,245.1 L593.7,245.1 L595.7,245.1 L597.7,245.1 L599.7,245.1 L601.8,245.1 L603.8,245.1 L605.8,245.1 L607.8,245.1 L609.9,245.1 L611.9,245.1 L613.9,245.1 L615.9,245.1 L617.9,245.1 L620.0,245.1 L622.0,245.1 L624.0,245.1" fill="none" stroke="var(--d-candidate)" stroke-width="2" stroke-dasharray="6 4" stroke-linejoin="round"/><circle cx="60.9" cy="28.5" r="2.6" fill="var(--d-observed)"/><circle cx="71.8" cy="29.7" r="2.6" fill="var(--d-observed)"/><circle cx="82.7" cy="29.1" r="2.6" fill="var(--d-observed)"/><circle cx="93.6" cy="18.0" r="2.6" fill="var(--d-observed)"/><circle cx="104.4" cy="39.9" r="2.6" fill="var(--d-observed)"/><circle cx="115.3" cy="52.1" r="2.6" fill="var(--d-observed)"/><circle cx="126.2" cy="44.1" r="2.6" fill="var(--d-observed)"/><circle cx="137.1" cy="31.7" r="2.6" fill="var(--d-observed)"/><circle cx="148.0" cy="31.9" r="2.6" fill="var(--d-observed)"/><circle cx="158.9" cy="52.6" r="2.6" fill="var(--d-observed)"/><circle cx="169.7" cy="74.1" r="2.6" fill="var(--d-observed)"/><circle cx="180.6" cy="79.8" r="2.6" fill="var(--d-observed)"/><circle cx="191.5" cy="70.9" r="2.6" fill="var(--d-observed)"/><circle cx="202.4" cy="61.6" r="2.6" fill="var(--d-observed)"/><circle cx="213.3" cy="70.2" r="2.6" fill="var(--d-observed)"/><circle cx="224.2" cy="91.5" r="2.6" fill="var(--d-observed)"/><circle cx="235.1" cy="104.3" r="2.6" fill="var(--d-observed)"/><circle cx="245.9" cy="103.7" r="2.6" fill="var(--d-observed)"/><circle cx="256.8" cy="93.4" r="2.6" fill="var(--d-observed)"/><circle cx="267.7" cy="92.6" r="2.6" fill="var(--d-observed)"/><circle cx="278.6" cy="104.0" r="2.6" fill="var(--d-observed)"/><circle cx="289.5" cy="123.9" r="2.6" fill="var(--d-observed)"/><circle cx="300.4" cy="130.8" r="2.6" fill="var(--d-observed)"/><circle cx="311.2" cy="129.7" r="2.6" fill="var(--d-observed)"/><circle cx="322.1" cy="122.8" r="2.6" fill="var(--d-observed)"/><circle cx="333.0" cy="125.4" r="2.6" fill="var(--d-observed)"/><circle cx="343.9" cy="145.7" r="2.6" fill="var(--d-observed)"/><circle cx="354.8" cy="158.4" r="2.6" fill="var(--d-observed)"/><circle cx="365.7" cy="163.8" r="2.6" fill="var(--d-observed)"/><circle cx="376.6" cy="158.4" r="2.6" fill="var(--d-observed)"/><circle cx="387.4" cy="161.4" r="2.6" fill="var(--d-observed)"/><circle cx="398.3" cy="170.8" r="2.6" fill="var(--d-observed)"/><circle cx="409.2" cy="189.0" r="2.6" fill="var(--d-observed)"/><circle cx="420.1" cy="203.1" r="2.6" fill="var(--d-observed)"/><circle cx="431.0" cy="206.5" r="2.6" fill="var(--d-observed)"/><circle cx="441.9" cy="202.0" r="2.6" fill="var(--d-observed)"/><circle cx="452.7" cy="208.1" r="2.6" fill="var(--d-observed)"/><circle cx="463.6" cy="217.6" r="2.6" fill="var(--d-observed)"/><path d="M 474.5 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 485.4 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 496.3 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 507.2 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 518.1 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 528.9 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 539.8 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 550.7 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 561.6 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 572.5 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 583.4 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 594.2 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 605.1 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 616.0 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 626.9 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><text x="52" y="33.4" text-anchor="end" font-size="10.5" fill="#5B6270">10⁰</text><text x="52" y="98.3" text-anchor="end" font-size="10.5" fill="#5B6270">10⁻²</text><text x="52" y="163.1" text-anchor="end" font-size="10.5" fill="#5B6270">10⁻⁴</text><text x="52" y="228.0" text-anchor="end" font-size="10.5" fill="#5B6270">10⁻⁶</text><text x="43.5" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">0</text><text x="140.2" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">1</text><text x="237.0" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">2</text><text x="333.7" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">3</text><text x="430.5" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">4</text><text x="527.2" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">5</text><text x="624.0" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">6</text><text x="341" y="282" text-anchor="middle" font-size="11" fill="#5B6270">入射角 2θ (°)</text><text transform="translate(15,134) rotate(-90)" text-anchor="middle" font-size="11" fill="#5B6270">反射率 R（归一化 · 对数）</text><text x="328.9" y="31" text-anchor="middle" font-size="10.5" fill="#8A6D00">拟合窗口 0.5–5.4°</text></svg>
+            </div>
+          </div>
+          <div class="plotcard">
+            <div class="ph"><div class="t">加权残差 vs 散射矢量 qz</div><div class="sub">χ²ᵥ = 1.14 · 无系统性结构</div></div>
+            <div style="padding:10px 12px 6px">
+              <div class="legend" style="margin-bottom:6px">
+                <i class="dot" style="--c:var(--d-observed)">(数据−模型)/σ</i>
+                <i class="box" style="--c:var(--d-observed)">±1σ 区间</i>
+              </div>
+              <svg viewBox="0 0 662 132" style="width:100%;height:auto;display:block" role="img" aria-label="加权残差散点，围绕零线随机分布，落在正负一西格玛带内"><rect x="58" y="38.3" width="566" height="27.5" fill="var(--d-observed)" opacity="0.08"/><line x1="58" x2="624" y1="24.5" y2="24.5" stroke="rgba(27,31,39,.10)" stroke-width="1" stroke-dasharray="3 3"/><line x1="58" x2="624" y1="79.5" y2="79.5" stroke="rgba(27,31,39,.10)" stroke-width="1" stroke-dasharray="3 3"/><line x1="58" x2="624" y1="52.0" y2="52.0" stroke="rgba(27,31,39,.45)" stroke-width="1"/><line x1="182.2" x2="182.2" y1="8" y2="96" stroke="rgba(27,31,39,.10)" stroke-width="1"/><text x="182.2" y="110" text-anchor="middle" font-size="10.5" fill="#5B6270">0.1</text><line x1="320.3" x2="320.3" y1="8" y2="96" stroke="rgba(27,31,39,.10)" stroke-width="1"/><text x="320.3" y="110" text-anchor="middle" font-size="10.5" fill="#5B6270">0.2</text><line x1="458.3" x2="458.3" y1="8" y2="96" stroke="rgba(27,31,39,.10)" stroke-width="1"/><text x="458.3" y="110" text-anchor="middle" font-size="10.5" fill="#5B6270">0.3</text><line x1="596.4" x2="596.4" y1="8" y2="96" stroke="rgba(27,31,39,.10)" stroke-width="1"/><text x="596.4" y="110" text-anchor="middle" font-size="10.5" fill="#5B6270">0.4</text><path d="M58.0,30.5 L68.9,23.2 L79.8,25.9 L90.7,35.7 L101.5,35.8 L112.4,41.2 L123.3,63.6 L134.2,61.3 L145.1,60.8 L156.0,84.4 L166.8,81.9 L177.7,61.8 L188.6,66.1 L199.5,64.2 L210.4,56.5 L221.3,33.1 L232.2,39.7 L243.0,22.2 L253.9,43.2 L264.8,43.6 L275.7,51.1 L286.6,64.8 L297.5,45.5 L308.3,51.6 L319.2,58.2 L330.1,68.9 L341.0,70.5 L351.9,62.4 L362.8,62.9 L373.7,57.0 L384.5,42.2 L395.4,47.6 L406.3,26.8 L417.2,44.1 L428.1,41.3 L439.0,57.0 L449.8,63.0 L460.7,66.8 L471.6,66.0 L482.5,56.8 L493.4,73.7 L504.3,74.2 L515.2,62.1 L526.0,47.3 L536.9,52.5 L547.8,49.6 L558.7,32.1 L569.6,36.1 L580.5,50.5 L591.3,38.0 L602.2,46.0 L613.1,44.3 L624.0,57.6" fill="none" stroke="var(--d-observed)" stroke-width="1.3" opacity="0.55"/><circle cx="58.0" cy="30.5" r="2.2" fill="var(--d-observed)"/><circle cx="68.9" cy="23.2" r="2.2" fill="var(--d-observed)"/><circle cx="79.8" cy="25.9" r="2.2" fill="var(--d-observed)"/><circle cx="90.7" cy="35.7" r="2.2" fill="var(--d-observed)"/><circle cx="101.5" cy="35.8" r="2.2" fill="var(--d-observed)"/><circle cx="112.4" cy="41.2" r="2.2" fill="var(--d-observed)"/><circle cx="123.3" cy="63.6" r="2.2" fill="var(--d-observed)"/><circle cx="134.2" cy="61.3" r="2.2" fill="var(--d-observed)"/><circle cx="145.1" cy="60.8" r="2.2" fill="var(--d-observed)"/><circle cx="156.0" cy="84.4" r="2.2" fill="var(--d-observed)"/><circle cx="166.8" cy="81.9" r="2.2" fill="var(--d-observed)"/><circle cx="177.7" cy="61.8" r="2.2" fill="var(--d-observed)"/><circle cx="188.6" cy="66.1" r="2.2" fill="var(--d-observed)"/><circle cx="199.5" cy="64.2" r="2.2" fill="var(--d-observed)"/><circle cx="210.4" cy="56.5" r="2.2" fill="var(--d-observed)"/><circle cx="221.3" cy="33.1" r="2.2" fill="var(--d-observed)"/><circle cx="232.2" cy="39.7" r="2.2" fill="var(--d-observed)"/><circle cx="243.0" cy="22.2" r="2.2" fill="var(--d-observed)"/><circle cx="253.9" cy="43.2" r="2.2" fill="var(--d-observed)"/><circle cx="264.8" cy="43.6" r="2.2" fill="var(--d-observed)"/><circle cx="275.7" cy="51.1" r="2.2" fill="var(--d-observed)"/><circle cx="286.6" cy="64.8" r="2.2" fill="var(--d-observed)"/><circle cx="297.5" cy="45.5" r="2.2" fill="var(--d-observed)"/><circle cx="308.3" cy="51.6" r="2.2" fill="var(--d-observed)"/><circle cx="319.2" cy="58.2" r="2.2" fill="var(--d-observed)"/><circle cx="330.1" cy="68.9" r="2.2" fill="var(--d-observed)"/><circle cx="341.0" cy="70.5" r="2.2" fill="var(--d-observed)"/><circle cx="351.9" cy="62.4" r="2.2" fill="var(--d-observed)"/><circle cx="362.8" cy="62.9" r="2.2" fill="var(--d-observed)"/><circle cx="373.7" cy="57.0" r="2.2" fill="var(--d-observed)"/><circle cx="384.5" cy="42.2" r="2.2" fill="var(--d-observed)"/><circle cx="395.4" cy="47.6" r="2.2" fill="var(--d-observed)"/><circle cx="406.3" cy="26.8" r="2.2" fill="var(--d-observed)"/><circle cx="417.2" cy="44.1" r="2.2" fill="var(--d-observed)"/><circle cx="428.1" cy="41.3" r="2.2" fill="var(--d-observed)"/><circle cx="439.0" cy="57.0" r="2.2" fill="var(--d-observed)"/><circle cx="449.8" cy="63.0" r="2.2" fill="var(--d-observed)"/><circle cx="460.7" cy="66.8" r="2.2" fill="var(--d-observed)"/><circle cx="471.6" cy="66.0" r="2.2" fill="var(--d-observed)"/><circle cx="482.5" cy="56.8" r="2.2" fill="var(--d-observed)"/><circle cx="493.4" cy="73.7" r="2.2" fill="var(--d-observed)"/><circle cx="504.3" cy="74.2" r="2.2" fill="var(--d-observed)"/><circle cx="515.2" cy="62.1" r="2.2" fill="var(--d-observed)"/><circle cx="526.0" cy="47.3" r="2.2" fill="var(--d-observed)"/><circle cx="536.9" cy="52.5" r="2.2" fill="var(--d-observed)"/><circle cx="547.8" cy="49.6" r="2.2" fill="var(--d-observed)"/><circle cx="558.7" cy="32.1" r="2.2" fill="var(--d-observed)"/><circle cx="569.6" cy="36.1" r="2.2" fill="var(--d-observed)"/><circle cx="580.5" cy="50.5" r="2.2" fill="var(--d-observed)"/><circle cx="591.3" cy="38.0" r="2.2" fill="var(--d-observed)"/><circle cx="602.2" cy="46.0" r="2.2" fill="var(--d-observed)"/><circle cx="613.1" cy="44.3" r="2.2" fill="var(--d-observed)"/><circle cx="624.0" cy="57.6" r="2.2" fill="var(--d-observed)"/><text x="62" y="35.3" font-size="9.5" fill="#8A909C">±1σ</text><text x="341" y="126" text-anchor="middle" font-size="11" fill="#5B6270">散射矢量 qz (Å⁻¹)</text><text transform="translate(14,52) rotate(-90)" text-anchor="middle" font-size="10.5" fill="#5B6270">加权残差 (σ)</text></svg>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- 右：上下文检视器 -->
+      <div class="inspector">
+        <div class="insp-sec">
+          <div class="h">拟合判定 <span class="faint">aSi_ML_25C</span></div>
+          <div class="confbadge trusted"><span class="glyph cf-trusted">●</span><div class="txt"><div class="l">可信</div><div class="r">参数唯一，置信区间收敛</div></div></div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+            <span class="badge ok">✓ 自助收敛 98%</span><span class="badge ok">✓ 无边界命中</span><span class="badge info">ℹ 1 处相关 ρ=0.71</span>
+          </div>
+          <div style="margin-top:8px">
+            <div class="kv"><span class="k">目标值 J</span><span class="v">1.83</span></div>
+            <div class="kv"><span class="k">约化 χ²ᵥ</span><span class="v">1.14</span></div>
+            <div class="kv"><span class="k">自助失败率</span><span class="v">2%</span></div>
+          </div>
+        </div>
+        <div class="insp-sec">
+          <div class="h">参数 · 结果值 <span class="faint">12 自由</span></div>
+          <table class="grid">
+            <thead><tr><th>参数</th><th class="num">结果值</th><th class="num">±1σ</th><th>单位</th></tr></thead>
+            <tbody>
+              <tr class="grouprow"><td colspan="4">表面氧化层 · SiO₂</td></tr>
+              <tr><td>厚度 d</td><td class="num">3.420</td><td class="num">0.080</td><td>nm</td></tr>
+              <tr><td>粗糙度 σ</td><td class="num">0.510</td><td class="num">0.060</td><td>nm</td></tr>
+              <tr><td>密度 ρ</td><td class="num">2.190</td><td class="num">0.050</td><td>g·cm⁻³</td></tr>
+              <tr class="grouprow"><td colspan="4">非晶硅层 · a-Si</td></tr>
+              <tr><td>厚度 d</td><td class="num">48.700</td><td class="num">0.200</td><td>nm</td></tr>
+              <tr><td>粗糙度 σ</td><td class="num">0.440</td><td class="num">0.050</td><td>nm</td></tr>
+              <tr><td>密度 ρ</td><td class="num">2.280</td><td class="num">0.030</td><td>g·cm⁻³</td></tr>
+              <tr class="grouprow"><td colspan="4">晶硅基底 · c-Si</td></tr>
+              <tr><td>粗糙度 σ</td><td class="num">0.300</td><td class="num">0.040</td><td>nm</td></tr>
+              <tr><td>密度 ρ <span class="lock on" title="已锁定"></span></td><td class="num">2.330</td><td class="num faint">锁定</td><td>g·cm⁻³</td></tr>
+              <tr class="grouprow"><td colspan="4">仪器</td></tr>
+              <tr><td>强度标度 scale</td><td class="num">0.982</td><td class="num">0.004</td><td>—</td></tr>
+              <tr><td>本底 background</td><td class="num">3.1e-7</td><td class="num">0.4e-7</td><td>—</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="insp-sec" style="border-bottom:none">
+          <div class="h">候选解 <span class="faint">3 个</span></div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div class="row" style="align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--accent);border-radius:6px;background:var(--selection)">
+              <span class="cf-trusted" style="font-size:14px">●</span><b style="flex:1;font-size:12.5px">候选 A</b>
+              <span class="tnum faint" style="font-size:12px">J=1.83</span><span class="badge ok">当前</span>
+            </div>
+            <div class="row" style="align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:6px">
+              <span class="cf-multiple" style="font-size:14px">▲</span><b style="flex:1;font-size:12.5px;font-weight:600">候选 B</b>
+              <span class="tnum faint" style="font-size:12px">J=1.97</span><span class="btn ghost sm">切换</span>
+            </div>
+            <div class="row" style="align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:6px">
+              <span class="cf-untrusted" style="font-size:14px">■</span><b style="flex:1;font-size:12.5px;font-weight:600">候选 C</b>
+              <span class="tnum faint" style="font-size:12px">J=2.41</span><span class="btn ghost sm">切换</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- 状态栏 -->
+    <div class="statusbar">
+      <span><span class="dot" style="background:var(--ok)"></span>就绪</span>
+      <span>拟合结果：<b class="cf-trusted">● 可信</b></span>
+      <span class="tnum">J = 1.83 · χ²ᵥ = 1.14</span>
+      <span class="spring"></span>
+      <span>活动数据集：<b>aSi_ML_25C</b></span>
+      <span>源校验：<b style="color:var(--ok)">通过 ✓</b></span>
+    </div>
+  </div>
+  <div class="frame-cap"><b>对应能力：</b><span>fit_automatically / summarize_automatic_results / select_candidate · ConfidenceClass · 反射率与残差面板 · 参数不确定度</span></div>
+</section>
+
+<!-- ===== 追加组件样式（帧 ②–④ 专用） ===== -->
+<style>
+.wizhead{display:flex;border-bottom:1px solid var(--border);background:var(--panel-2)}
+.wizhead .wh{flex:1;display:flex;align-items:center;gap:10px;padding:13px 16px;border-right:1px solid var(--border)}
+.wizhead .wh:last-child{border-right:none}
+.wizhead .wh .n{width:30px;height:30px;border-radius:50%;border:2px solid var(--border-strong);display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--ink-faint);background:#fff;flex:0 0 auto}
+.wizhead .wh .tt{font-size:13.5px;font-weight:700;line-height:1.15}
+.wizhead .wh .dd{font-size:11px;color:var(--ink-faint)}
+.wizhead .wh.done .n{background:var(--ok);border-color:var(--ok);color:#fff}
+.wizhead .wh.current{background:#fff}
+.wizhead .wh.current .n{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 0 0 4px var(--selection)}
+.wizhead .wh.current .tt{color:var(--accent)}
+.wizbody{padding:24px;max-width:720px;margin:0 auto;width:100%}
+.wizbody .eyebrow2{font-size:12px;font-weight:700;letter-spacing:.6px;color:var(--accent)}
+.wizbody h3{font-size:21px;margin:6px 0 8px}
+.wizbody .sub{color:var(--ink-muted);font-size:13.5px;margin-bottom:16px;max-width:60ch}
+.hint{display:flex;gap:10px;align-items:flex-start;background:rgba(21,101,192,.06);border:1px solid rgba(21,101,192,.28);border-left:3px solid var(--info);border-radius:8px;padding:10px 12px;font-size:12.5px;color:var(--ink-muted);margin-bottom:14px}
+.hint b{color:var(--ink)}
+.ctarow{display:flex;align-items:center;gap:12px;margin-top:20px;flex-wrap:wrap}
+.btn.lg{height:44px;padding:0 22px;font-size:14px;border-radius:8px}
+/* 层堆叠 */
+.stack{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--panel)}
+.stack .lyr{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--border);cursor:default}
+.stack .lyr:last-child{border-bottom:none}
+.stack .lyr:hover{background:var(--panel-2)}
+.stack .lyr .sw{width:14px;height:14px;border-radius:3px;flex:0 0 auto}
+.stack .lyr .nm{font-weight:600;font-size:13px;flex:1;min-width:0}
+.stack .lyr .nm small{display:block;font-weight:400;color:var(--ink-faint);font-size:11px}
+.stack .lyr .mv{font-size:12px;color:var(--ink-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.stack .lyr.semi{background:var(--panel-2)}
+.stack .lyr.sel{background:var(--selection);box-shadow:inset 3px 0 0 var(--accent)}
+.stack .lyr .drag{color:var(--ink-faint);cursor:grab;font-size:14px}
+/* 进度条 + 九阶段 */
+.pbar{height:10px;border-radius:6px;background:var(--panel-2);border:1px solid var(--border);overflow:hidden}
+.pbar i{display:block;height:100%;background:var(--accent);border-radius:6px}
+.stages{display:flex;flex-direction:column;gap:2px}
+.stg{display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:6px;font-size:12.5px}
+.stg .ic{width:18px;height:18px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;border:2px solid var(--border-strong);color:var(--ink-faint);background:#fff}
+.stg.done .ic{background:var(--ok);border-color:var(--ok);color:#fff}
+.stg.current{background:var(--selection)}
+.stg.current .ic{background:var(--accent);border-color:var(--accent);color:#fff}
+.stg .nm{flex:1}
+.stg.current .nm{font-weight:700;color:var(--accent)}
+.stg .mt{font-size:11px;color:var(--ink-faint);font-variant-numeric:tabular-nums}
+.stg.pending{opacity:.5}
+.jbanner{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:8px;background:rgba(154,103,0,.08);border:1px solid rgba(154,103,0,.3);font-size:12.5px;color:var(--ink-muted)}
+.heatwrap{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+</style>
+
+<!-- ================= 帧 ② 引导模式 · 四步 ================= -->
+<section class="section" id="f2">
+  <div class="lead">
+    <span class="knum">帧 ②</span>
+    <h2>引导模式 · 四步流程（同一文档的简化投影）</h2>
+    <p>面向偶尔使用或初次上手的用户。把专家模式的六段管线收敛为四个大步骤
+    <b>导入数据 → 确认样品结构 → 开始拟合 → 查看结果</b>，用平实语言解释每一步在做什么，
+    隐藏停靠面板与高级批量选项。它与专家模式是<b>同一份项目文档</b>，随时可切换、结果一致。</p>
+  </div>
+  <div class="appwin">
+    <div class="titlebar">
+      <div class="tl-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="tl-title">aSi_multilayer_2024-03&nbsp;<span class="dirty">●</span>&nbsp;— XRR Fitter</div>
+      <div style="width:54px"></div>
+    </div>
+    <div class="cmdbar">
+      <div class="grp"><span class="btn sm">新建</span><span class="btn sm">打开</span><span class="btn sm">保存</span></div>
+      <div class="vsep"></div>
+      <div class="seg" title="切到专家模式解锁停靠面板与批量控制"><span class="on">引导</span><span>专家</span></div>
+      <div class="spring"></div>
+      <span class="btn icon" title="随系统明暗">☾</span>
+    </div>
+    <!-- 四步横向进度 -->
+    <div class="wizhead">
+      <div class="wh done"><div class="n">✓</div><div><div class="tt">导入数据</div><div class="dd">4 个文件 · 已就绪</div></div></div>
+      <div class="wh current"><div class="n">2</div><div><div class="tt">确认样品结构</div><div class="dd">检查自动建议</div></div></div>
+      <div class="wh"><div class="n">3</div><div><div class="tt">开始拟合</div><div class="dd">全自动</div></div></div>
+      <div class="wh"><div class="n">4</div><div><div class="tt">查看结果</div><div class="dd">置信度与参数</div></div></div>
+    </div>
+    <!-- 当前步骤内容 -->
+    <div style="background:var(--panel)">
+      <div class="wizbody">
+        <div class="eyebrow2">第 2 步 · 共 4 步</div>
+        <h3>确认样品结构</h3>
+        <div class="sub">我们根据你的数据和常见薄膜体系，自动搭好了一个初始结构。看一眼是否合理——
+        不确定也没关系，拟合会在允许范围内自动修正每一层。</div>
+        <div class="hint"><span>💡</span><div><b>已自动加入表面氧化层。</b>金属与半导体表面在空气中通常生成几纳米氧化层。
+          若你的样品在惰性气氛中制备并即时测量，可以移除它。</div></div>
+        <div class="stack">
+          <div class="lyr semi"><span class="sw" style="background:var(--d-neutral)"></span>
+            <div class="nm">空气<small>入射介质 · 半无限，无需参数</small></div><div class="mv">—</div></div>
+          <div class="lyr"><span class="sw" style="background:var(--d-observed)"></span>
+            <div class="nm">SiO₂ 表面氧化层<small>自动建议 · 可移除</small></div><div class="mv">≈ 3.4 nm</div></div>
+          <div class="lyr"><span class="sw" style="background:var(--d-candidate)"></span>
+            <div class="nm">a-Si 非晶硅薄膜<small>主体层 · 你要测量的对象</small></div><div class="mv">≈ 48.7 nm</div></div>
+          <div class="lyr semi"><span class="sw" style="background:var(--d-neutral)"></span>
+            <div class="nm">c-Si 晶体硅基底<small>衬底 · 半无限</small></div><div class="mv">—</div></div>
+        </div>
+        <div class="ctarow">
+          <span class="btn primary lg">看起来没问题，开始拟合 →</span>
+          <span class="btn lg">＋ 我要手动加/删层</span>
+        </div>
+        <div class="help" style="margin-top:12px">需要精细控制每个参数的边界、先验或跨数据集共享？切换到<b>专家模式</b>即可。</div>
+      </div>
+    </div>
+    <div class="statusbar">
+      <span><span class="dot" style="background:var(--info)"></span>引导模式</span>
+      <span>第 <b>2</b> 步 / 共 4 步</span>
+      <span class="spring"></span>
+      <span>活动数据集：<b>aSi_ML_25C</b></span>
+      <span>源校验：<b style="color:var(--ok)">通过 ✓</b></span>
+    </div>
+  </div>
+  <div class="frame-cap"><b>对应能力：</b><span>import_data / suggest_oxide_layers / set_structure · fit_automatically（一键流）· expert_mode 投影切换</span></div>
+</section>
+
+<!-- ================= 帧 ③ 结构编辑 · SLD 剖面 ================= -->
+<section class="section" id="f3">
+  <div class="lead">
+    <span class="knum">帧 ③</span>
+    <h2>结构编辑 · 层堆叠与 SLD 深度剖面（专家模式）</h2>
+    <p>管线走到「结构」。中央上半是层堆叠（可增删、拖动排序、建议氧化层、定义周期结构），
+    下半是与之实时联动的 <b>SLD 深度剖面</b>——空气与基底是半无限介质，取中性色，只有真正的层才着色。
+    右栏是选中层的参数编辑器：每个物理量都能设定<b>边界、初值、固定/自由，或跨数据集共享</b>。</p>
+  </div>
+  <div class="appwin">
+    <div class="titlebar">
+      <div class="tl-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="tl-title">aSi_multilayer_2024-03&nbsp;<span class="dirty">●</span>&nbsp;— XRR Fitter</div>
+      <div style="width:54px"></div>
+    </div>
+    <div class="cmdbar">
+      <div class="grp"><span class="btn sm">新建</span><span class="btn sm">打开</span><span class="btn sm">保存</span></div>
+      <div class="vsep"></div>
+      <div class="seg"><span>引导</span><span class="on">专家</span></div>
+      <div class="spring"></div>
+      <span class="btn primary">⚡ 一键拟合</span>
+      <span class="btn">导出…</span>
+      <span class="btn icon">☾</span>
+    </div>
+    <div class="appbody">
+      <!-- 左：管线（结构 current） -->
+      <div class="nav">
+        <div class="nav-sec">数据集 <span class="add">＋</span></div>
+        <div class="ds on"><span class="cf cf-trusted">●</span><div class="nm"><div class="t">aSi_ML_25C.xrdml</div><div class="s">θ/2θ · 512 点</div></div></div>
+        <div class="ds"><span class="cf cf-correlated">◆</span><div class="nm"><div class="t">aSi_ML_200C.xrdml</div><div class="s">θ/2θ · 512 点</div></div></div>
+        <div class="ds"><span class="cf cf-multiple">▲</span><div class="nm"><div class="t">aSi_ML_400C.xrdml</div><div class="s">θ/2θ · 480 点</div></div></div>
+        <div class="nav-sec" style="margin-top:6px">分析管线</div>
+        <div class="pipe">
+          <div class="pstep done"><div class="rail"><div class="dot">✓</div><div class="line"></div></div><div class="body"><div class="t">数据</div><div class="d">3 可拟合</div></div></div>
+          <div class="pstep current"><div class="rail"><div class="dot">2</div><div class="line"></div></div><div class="body"><div class="t">结构</div><div class="d">4 层 · 编辑中</div></div></div>
+          <div class="pstep"><div class="rail"><div class="dot">3</div><div class="line"></div></div><div class="body"><div class="t">参数</div><div class="d">待复核</div></div></div>
+          <div class="pstep"><div class="rail"><div class="dot">4</div><div class="line"></div></div><div class="body"><div class="t">拟合</div><div class="d">未开始</div></div></div>
+          <div class="pstep"><div class="rail"><div class="dot">5</div><div class="line"></div></div><div class="body"><div class="t">结果</div><div class="d">—</div></div></div>
+          <div class="pstep"><div class="rail"><div class="dot">6</div></div><div class="body"><div class="t">导出</div><div class="d">—</div></div></div>
+        </div>
+        <div class="ds-summary">结构对全部可拟合数据集共享 · 每集独立仪器/标度</div>
+      </div>
+      <!-- 中：结构 + SLD -->
+      <div class="canvas">
+        <div class="canvas-top">
+          <div class="tabs"><span class="tab on">样品结构</span><span class="tab">SLD 深度剖面</span><span class="tab">参数总览</span></div>
+          <div class="spring"></div>
+          <div class="grp" style="display:flex;gap:4px">
+            <span class="btn sm">＋ 添加层</span><span class="btn sm">建议氧化层</span><span class="btn sm">周期结构…</span>
+          </div>
+        </div>
+        <div class="canvas-body">
+          <div class="plotcard">
+            <div class="ph"><div class="t">层堆叠</div><div class="sub">从空气到基底 · 点击选中 · 拖动排序</div></div>
+            <div style="padding:10px 12px">
+              <div class="stack">
+                <div class="lyr semi"><span class="drag">⋮⋮</span><span class="sw" style="background:var(--d-neutral)"></span>
+                  <div class="nm">空气<small>入射介质 · 半无限</small></div><div class="mv">SLD 0 · 半无限</div></div>
+                <div class="lyr"><span class="drag">⋮⋮</span><span class="sw" style="background:var(--d-observed)"></span>
+                  <div class="nm">SiO₂ · 表面氧化层<small>厚度 3.42 · 粗糙 0.51 · 密度 2.19</small></div><div class="mv">3 参数</div></div>
+                <div class="lyr sel"><span class="drag">⋮⋮</span><span class="sw" style="background:var(--d-candidate)"></span>
+                  <div class="nm">a-Si · 非晶硅薄膜<small>厚度 48.70 · 粗糙 0.44 · 密度 2.28</small></div><div class="mv">3 参数</div></div>
+                <div class="lyr semi"><span class="drag">⋮⋮</span><span class="sw" style="background:var(--d-neutral)"></span>
+                  <div class="nm">c-Si · 晶体硅基底<small>粗糙 0.30 · 密度 2.33（锁定）</small></div><div class="mv">半无限</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="plotcard">
+            <div class="ph"><div class="t">SLD 深度剖面</div><div class="sub">实时预览 · 界面手柄可拖拽</div></div>
+            <div style="padding:10px 12px 4px">
+              <div class="legend" style="margin-bottom:6px">
+                <i style="--c:var(--d-candidate)">当前 SLD 剖面</i>
+                <i class="box" style="--c:var(--d-candidate)">16–84% 不确定带</i>
+                <i class="dot" style="--c:var(--accent)">可拖拽界面</i>
+              </div>
+              <svg viewBox="0 0 470 236" style="width:100%;height:auto;display:block" role="img" aria-label="SLD 深度剖面：随深度阶梯上升，界面处按粗糙度平滑，橙色阴影为不确定带"><rect x="58.0" y="16" width="33.0" height="180" fill="var(--d-neutral)" opacity="0.05"/><text x="74.5" y="29" text-anchor="middle" font-size="10.5" font-weight="600" fill="#8A909C">空气</text><rect x="91.0" y="16" width="18.7" height="180" fill="var(--d-observed)" opacity="0.1"/><text x="100.3" y="29" text-anchor="middle" font-size="10.5" font-weight="600" fill="var(--ink-muted)">SiO₂ 3.4nm</text><rect x="109.7" y="16" width="267.9" height="180" fill="var(--d-candidate)" opacity="0.1"/><text x="243.6" y="29" text-anchor="middle" font-size="10.5" font-weight="600" fill="var(--ink-muted)">a-Si 48.7nm</text><rect x="377.6" y="16" width="54.4" height="180" fill="var(--d-neutral)" opacity="0.05"/><text x="404.8" y="29" text-anchor="middle" font-size="10.5" font-weight="600" fill="#8A909C">c-Si 基底</text><line x1="58" x2="432" y1="196" y2="196" stroke="rgba(27,31,39,.10)"/><text x="52" y="200.0" text-anchor="end" font-size="10" fill="#5B6270">0</text><line x1="58" x2="432" y1="155.0909090909091" y2="155.0909090909091" stroke="rgba(27,31,39,.10)"/><text x="52" y="159.1" text-anchor="end" font-size="10" fill="#5B6270">5</text><line x1="58" x2="432" y1="114.18181818181819" y2="114.18181818181819" stroke="rgba(27,31,39,.10)"/><text x="52" y="118.2" text-anchor="end" font-size="10" fill="#5B6270">10</text><line x1="58" x2="432" y1="73.27272727272728" y2="73.27272727272728" stroke="rgba(27,31,39,.10)"/><text x="52" y="77.3" text-anchor="end" font-size="10" fill="#5B6270">15</text><line x1="58" x2="432" y1="32.363636363636374" y2="32.363636363636374" stroke="rgba(27,31,39,.10)"/><text x="52" y="36.4" text-anchor="end" font-size="10" fill="#5B6270">20</text><text x="91.0" y="211" text-anchor="middle" font-size="10" fill="#5B6270">0</text><text x="146.0" y="211" text-anchor="middle" font-size="10" fill="#5B6270">10</text><text x="201.0" y="211" text-anchor="middle" font-size="10" fill="#5B6270">20</text><text x="256.0" y="211" text-anchor="middle" font-size="10" fill="#5B6270">30</text><text x="311.0" y="211" text-anchor="middle" font-size="10" fill="#5B6270">40</text><text x="366.0" y="211" text-anchor="middle" font-size="10" fill="#5B6270">50</text><text x="421.0" y="211" text-anchor="middle" font-size="10" fill="#5B6270">60</text><path d="M58.0,193.1 L60.1,193.1 L62.2,193.1 L64.2,193.1 L66.3,193.1 L68.4,193.1 L70.5,193.1 L72.5,193.1 L74.6,193.1 L76.7,193.1 L78.8,193.1 L80.9,193.1 L82.9,192.9 L85.0,191.1 L87.1,183.0 L89.2,161.3 L91.2,126.9 L93.3,94.5 L95.4,76.4 L97.5,70.5 L99.6,69.3 L101.6,69.2 L103.7,69.0 L105.8,67.7 L107.9,62.9 L109.9,54.2 L112.0,46.1 L114.1,42.3 L116.2,41.5 L118.3,41.4 L120.3,41.4 L122.4,41.4 L124.5,41.4 L126.6,41.4 L128.6,41.4 L130.7,41.4 L132.8,41.4 L134.9,41.4 L137.0,41.4 L139.0,41.4 L141.1,41.4 L143.2,41.4 L145.3,41.4 L147.3,41.4 L149.4,41.4 L151.5,41.4 L153.6,41.4 L155.7,41.4 L157.7,41.4 L159.8,41.4 L161.9,41.4 L164.0,41.4 L166.0,41.4 L168.1,41.4 L170.2,41.4 L172.3,41.4 L174.4,41.4 L176.4,41.4 L178.5,41.4 L180.6,41.4 L182.7,41.4 L184.7,41.4 L186.8,41.4 L188.9,41.4 L191.0,41.4 L193.1,41.4 L195.1,41.4 L197.2,41.4 L199.3,41.4 L201.4,41.4 L203.4,41.4 L205.5,41.4 L207.6,41.4 L209.7,41.4 L211.8,41.4 L213.8,41.4 L215.9,41.4 L218.0,41.4 L220.1,41.4 L222.1,41.4 L224.2,41.4 L226.3,41.4 L228.4,41.4 L230.5,41.4 L232.5,41.4 L234.6,41.4 L236.7,41.4 L238.8,41.4 L240.8,41.4 L242.9,41.4 L245.0,41.4 L247.1,41.4 L249.2,41.4 L251.2,41.4 L253.3,41.4 L255.4,41.4 L257.5,41.4 L259.5,41.4 L261.6,41.4 L263.7,41.4 L265.8,41.4 L267.9,41.4 L269.9,41.4 L272.0,41.4 L274.1,41.4 L276.2,41.4 L278.2,41.4 L280.3,41.4 L282.4,41.4 L284.5,41.4 L286.6,41.4 L288.6,41.4 L290.7,41.4 L292.8,41.4 L294.9,41.4 L296.9,41.4 L299.0,41.4 L301.1,41.4 L303.2,41.4 L305.3,41.4 L307.3,41.4 L309.4,41.4 L311.5,41.4 L313.6,41.4 L315.6,41.4 L317.7,41.4 L319.8,41.4 L321.9,41.4 L324.0,41.4 L326.0,41.4 L328.1,41.4 L330.2,41.4 L332.3,41.4 L334.3,41.4 L336.4,41.4 L338.5,41.4 L340.6,41.4 L342.7,41.4 L344.7,41.4 L346.8,41.4 L348.9,41.4 L351.0,41.4 L353.0,41.4 L355.1,41.4 L357.2,41.4 L359.3,41.4 L361.4,41.4 L363.4,41.4 L365.5,41.4 L367.6,41.4 L369.7,41.4 L371.7,41.4 L373.8,41.2 L375.9,39.6 L378.0,34.7 L380.1,31.0 L382.1,30.3 L384.2,30.3 L386.3,30.3 L388.4,30.3 L390.4,30.3 L392.5,30.3 L394.6,30.3 L396.7,30.3 L398.8,30.3 L400.8,30.3 L402.9,30.3 L405.0,30.3 L407.1,30.3 L409.1,30.3 L411.2,30.3 L413.3,30.3 L415.4,30.3 L417.5,30.3 L419.5,30.3 L421.6,30.3 L423.7,30.3 L425.8,30.3 L427.8,30.3 L429.9,30.3 L432.0,30.3 L432.0,34.4 L429.9,34.4 L427.8,34.4 L425.8,34.4 L423.7,34.4 L421.6,34.4 L419.5,34.4 L417.5,34.4 L415.4,34.4 L413.3,34.4 L411.2,34.4 L409.1,34.4 L407.1,34.4 L405.0,34.4 L402.9,34.4 L400.8,34.4 L398.8,34.4 L396.7,34.4 L394.6,34.4 L392.5,34.4 L390.4,34.4 L388.4,34.4 L386.3,34.4 L384.2,34.4 L382.1,34.4 L380.1,35.3 L378.0,39.8 L375.9,45.8 L373.8,47.7 L371.7,47.9 L369.7,47.9 L367.6,47.9 L365.5,47.9 L363.4,47.9 L361.4,47.9 L359.3,47.9 L357.2,47.9 L355.1,47.9 L353.0,47.9 L351.0,47.9 L348.9,47.9 L346.8,47.9 L344.7,47.9 L342.7,47.9 L340.6,47.9 L338.5,47.9 L336.4,47.9 L334.3,47.9 L332.3,47.9 L330.2,47.9 L328.1,47.9 L326.0,47.9 L324.0,47.9 L321.9,47.9 L319.8,47.9 L317.7,47.9 L315.6,47.9 L313.6,47.9 L311.5,47.9 L309.4,47.9 L307.3,47.9 L305.3,47.9 L303.2,47.9 L301.1,47.9 L299.0,47.9 L296.9,47.9 L294.9,47.9 L292.8,47.9 L290.7,47.9 L288.6,47.9 L286.6,47.9 L284.5,47.9 L282.4,47.9 L280.3,47.9 L278.2,47.9 L276.2,47.9 L274.1,47.9 L272.0,47.9 L269.9,47.9 L267.9,47.9 L265.8,47.9 L263.7,47.9 L261.6,47.9 L259.5,47.9 L257.5,47.9 L255.4,47.9 L253.3,47.9 L251.2,47.9 L249.2,47.9 L247.1,47.9 L245.0,47.9 L242.9,47.9 L240.8,47.9 L238.8,47.9 L236.7,47.9 L234.6,47.9 L232.5,47.9 L230.5,47.9 L228.4,47.9 L226.3,47.9 L224.2,47.9 L222.1,47.9 L220.1,47.9 L218.0,47.9 L215.9,47.9 L213.8,47.9 L211.8,47.9 L209.7,47.9 L207.6,47.9 L205.5,47.9 L203.4,47.9 L201.4,47.9 L199.3,47.9 L197.2,47.9 L195.1,47.9 L193.1,47.9 L191.0,47.9 L188.9,47.9 L186.8,47.9 L184.7,47.9 L182.7,47.9 L180.6,47.9 L178.5,47.9 L176.4,47.9 L174.4,47.9 L172.3,47.9 L170.2,47.9 L168.1,47.9 L166.0,47.9 L164.0,47.9 L161.9,47.9 L159.8,47.9 L157.7,47.9 L155.7,47.9 L153.6,47.9 L151.5,47.9 L149.4,47.9 L147.3,47.9 L145.3,47.9 L143.2,47.9 L141.1,47.9 L139.0,47.9 L137.0,47.9 L134.9,47.9 L132.8,47.9 L130.7,47.9 L128.6,47.9 L126.6,47.9 L124.5,47.9 L122.4,47.9 L120.3,47.9 L118.3,47.9 L116.2,48.0 L114.1,48.9 L112.0,52.9 L109.9,61.5 L107.9,70.8 L105.8,75.8 L103.7,77.2 L101.6,77.4 L99.6,77.5 L97.5,78.6 L95.4,84.2 L93.3,101.1 L91.2,131.6 L89.2,164.0 L87.1,184.4 L85.0,192.0 L82.9,193.7 L80.9,193.9 L78.8,194.0 L76.7,194.0 L74.6,194.0 L72.5,194.0 L70.5,194.0 L68.4,194.0 L66.3,194.0 L64.2,194.0 L62.2,194.0 L60.1,194.0 L58.0,194.0 Z" fill="var(--d-candidate)" opacity="0.16"/><path d="M58.0,193.5 L60.1,193.5 L62.2,193.5 L64.2,193.5 L66.3,193.5 L68.4,193.5 L70.5,193.5 L72.5,193.5 L74.6,193.5 L76.7,193.5 L78.8,193.5 L80.9,193.5 L82.9,193.3 L85.0,191.6 L87.1,183.7 L89.2,162.7 L91.2,129.2 L93.3,97.8 L95.4,80.3 L97.5,74.5 L99.6,73.4 L101.6,73.3 L103.7,73.1 L105.8,71.8 L107.9,66.8 L109.9,57.8 L112.0,49.5 L114.1,45.6 L116.2,44.7 L118.3,44.6 L120.3,44.6 L122.4,44.6 L124.5,44.6 L126.6,44.6 L128.6,44.6 L130.7,44.6 L132.8,44.6 L134.9,44.6 L137.0,44.6 L139.0,44.6 L141.1,44.6 L143.2,44.6 L145.3,44.6 L147.3,44.6 L149.4,44.6 L151.5,44.6 L153.6,44.6 L155.7,44.6 L157.7,44.6 L159.8,44.6 L161.9,44.6 L164.0,44.6 L166.0,44.6 L168.1,44.6 L170.2,44.6 L172.3,44.6 L174.4,44.6 L176.4,44.6 L178.5,44.6 L180.6,44.6 L182.7,44.6 L184.7,44.6 L186.8,44.6 L188.9,44.6 L191.0,44.6 L193.1,44.6 L195.1,44.6 L197.2,44.6 L199.3,44.6 L201.4,44.6 L203.4,44.6 L205.5,44.6 L207.6,44.6 L209.7,44.6 L211.8,44.6 L213.8,44.6 L215.9,44.6 L218.0,44.6 L220.1,44.6 L222.1,44.6 L224.2,44.6 L226.3,44.6 L228.4,44.6 L230.5,44.6 L232.5,44.6 L234.6,44.6 L236.7,44.6 L238.8,44.6 L240.8,44.6 L242.9,44.6 L245.0,44.6 L247.1,44.6 L249.2,44.6 L251.2,44.6 L253.3,44.6 L255.4,44.6 L257.5,44.6 L259.5,44.6 L261.6,44.6 L263.7,44.6 L265.8,44.6 L267.9,44.6 L269.9,44.6 L272.0,44.6 L274.1,44.6 L276.2,44.6 L278.2,44.6 L280.3,44.6 L282.4,44.6 L284.5,44.6 L286.6,44.6 L288.6,44.6 L290.7,44.6 L292.8,44.6 L294.9,44.6 L296.9,44.6 L299.0,44.6 L301.1,44.6 L303.2,44.6 L305.3,44.6 L307.3,44.6 L309.4,44.6 L311.5,44.6 L313.6,44.6 L315.6,44.6 L317.7,44.6 L319.8,44.6 L321.9,44.6 L324.0,44.6 L326.0,44.6 L328.1,44.6 L330.2,44.6 L332.3,44.6 L334.3,44.6 L336.4,44.6 L338.5,44.6 L340.6,44.6 L342.7,44.6 L344.7,44.6 L346.8,44.6 L348.9,44.6 L351.0,44.6 L353.0,44.6 L355.1,44.6 L357.2,44.6 L359.3,44.6 L361.4,44.6 L363.4,44.6 L365.5,44.6 L367.6,44.6 L369.7,44.6 L371.7,44.6 L373.8,44.5 L375.9,42.7 L378.0,37.2 L380.1,33.2 L382.1,32.4 L384.2,32.4 L386.3,32.4 L388.4,32.4 L390.4,32.4 L392.5,32.4 L394.6,32.4 L396.7,32.4 L398.8,32.4 L400.8,32.4 L402.9,32.4 L405.0,32.4 L407.1,32.4 L409.1,32.4 L411.2,32.4 L413.3,32.4 L415.4,32.4 L417.5,32.4 L419.5,32.4 L421.6,32.4 L423.7,32.4 L425.8,32.4 L427.8,32.4 L429.9,32.4 L432.0,32.4 " fill="none" stroke="var(--d-candidate)" stroke-width="2.2" stroke-linejoin="round"/><line x1="91.0" x2="91.0" y1="126.40909084895438" y2="196" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/><circle cx="91.0" cy="133.4" r="3.6" fill="#fff" stroke="var(--accent)" stroke-width="2"/><line x1="109.7" x2="109.7" y1="51.95454544180947" y2="196" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/><circle cx="109.7" cy="59.0" r="3.6" fill="#fff" stroke="var(--accent)" stroke-width="2"/><line x1="377.6" x2="377.6" y1="31.49999999386364" y2="196" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/><circle cx="377.6" cy="38.5" r="3.6" fill="#fff" stroke="var(--accent)" stroke-width="2"/><line x1="58" y1="16" x2="58" y2="196" stroke="rgba(27,31,39,.45)"/><line x1="58" y1="196" x2="432" y2="196" stroke="rgba(27,31,39,.45)"/><text x="245.0" y="226" text-anchor="middle" font-size="10.5" fill="#5B6270">深度 z（nm，从表面向基底）</text><text transform="translate(15,106.0) rotate(-90)" text-anchor="middle" font-size="10.5" fill="#5B6270">散射长度密度 SLD（10⁻⁶ Å⁻²）</text></svg>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- 右：选中层编辑器 -->
+      <div class="inspector">
+        <div class="insp-sec">
+          <div class="h">选中层 · a-Si 非晶硅</div>
+          <div class="field" style="margin-bottom:10px">
+            <label>材料 / 化学式</label>
+            <div class="inp sel">a-Si（自定义密度）</div>
+            <div class="help">输入化学式（如 SiO2、Al2O3）由 periodictable 自动计算 SLD；也可直接给定密度。</div>
+          </div>
+          <div class="field" style="margin-bottom:10px">
+            <label>厚度 d（nm）</label>
+            <div class="row" style="gap:8px;align-items:center">
+              <div class="inp" style="width:96px">48.70000000</div>
+              <div class="railbar" style="flex:1"><i style="width:58%"></i><span class="faint">40 ≤ <b style="color:var(--ink)">48.7</b> ≤ 60</span></div>
+            </div>
+          </div>
+          <div class="field" style="margin-bottom:10px">
+            <label>粗糙度 σ（nm）</label>
+            <div class="row" style="gap:8px;align-items:center">
+              <div class="inp" style="width:96px">0.44000000</div>
+              <div class="railbar" style="flex:1"><i style="width:44%"></i><span class="faint">0 ≤ <b style="color:var(--ink)">0.44</b> ≤ 1.0</span></div>
+            </div>
+          </div>
+          <div class="field">
+            <label>密度 ρ（g·cm⁻³） <span class="lock" title="未锁定"></span></label>
+            <div class="row" style="gap:8px;align-items:center">
+              <div class="inp" style="width:96px">2.28000000</div>
+              <div class="railbar" style="flex:1"><i style="width:56%"></i><span class="faint">2.0 ≤ <b style="color:var(--ink)">2.28</b> ≤ 2.5</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="insp-sec">
+          <div class="h">参数化 · 厚度 d</div>
+          <div class="row" style="gap:14px;margin-bottom:8px">
+            <span class="radio on"><i></i>自由</span><span class="radio"><i></i>固定</span><span class="radio"><i></i>仅范围</span>
+          </div>
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            <span class="badge mut">先验：无（均匀）</span>
+            <span class="badge info">共享：跨 3 集共享厚度</span>
+          </div>
+        </div>
+        <div class="insp-sec" style="border-bottom:none">
+          <div class="h">结构诊断</div>
+          <div class="hint" style="margin-bottom:0"><span>🔎</span><div><b>厚度 d 与密度 ρ 可能相关。</b>
+            这类相关在薄层上常见；拟合后请到<b>不确定度</b>页用相关矩阵与 Profile 似然核查。</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="statusbar">
+      <span><span class="dot" style="background:var(--warn)"></span>结构已修改（未保存）</span>
+      <span>4 层 · 9 个自由参数</span>
+      <span class="spring"></span>
+      <span>选中：<b>a-Si</b></span>
+      <span>下一步：<b style="color:var(--accent)">开始拟合</b></span>
+    </div>
+  </div>
+  <div class="frame-cap"><b>对应能力：</b><span>set_structure / add_layer / suggest_oxide_layers · describe_parameters / set_parameter / set_prior / set_constraint / set_sharing · sld_nominal_profile / sld_uncertainty_bands</span></div>
+</section>
+
+<!-- ================= 帧 ④ 拟合进行中 · 联合批量 ================= -->
+<section class="section" id="f4">
+  <div class="lead">
+    <span class="knum">帧 ④</span>
+    <h2>拟合进行中 · 九阶段进度与联合批量</h2>
+    <p>一键拟合把「初筛 → 全局搜索 → 密度精修 → 粗糙度/仪器精修 → 终种子搜索 → 基态复核 → 自助抽样 → 置信区间 → 汇总」
+    九个阶段串成一条 0–1000 单调递增的进度。此处演示<b>联合批量</b>：三个数据集共享同一套层结构，各自保留独立标度与本底，
+    一次拟合同时收敛。右栏是实时指标，可随时暂停或停止。</p>
+  </div>
+  <div class="appwin">
+    <div class="titlebar">
+      <div class="tl-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="tl-title">aSi_multilayer_2024-03&nbsp;<span class="dirty">●</span>&nbsp;— XRR Fitter</div>
+      <div style="width:54px"></div>
+    </div>
+    <div class="cmdbar">
+      <div class="grp"><span class="btn sm">新建</span><span class="btn sm">打开</span><span class="btn sm">保存</span></div>
+      <div class="vsep"></div>
+      <div class="seg"><span>引导</span><span class="on">专家</span></div>
+      <div class="vsep"></div>
+      <div class="grp"><span class="faint" style="font-size:12px">批量</span><div class="seg"><span>独立</span><span class="on">联合</span></div></div>
+      <div class="spring"></div>
+      <span class="btn">⏸ 暂停</span>
+      <span class="btn" style="color:var(--error);border-color:rgba(179,38,30,.4)">⏹ 停止</span>
+      <span class="btn icon">☾</span>
+    </div>
+    <div class="appbody">
+      <!-- 左：管线（拟合 current） -->
+      <div class="nav">
+        <div class="nav-sec">联合拟合 · 数据集</div>
+        <div class="ds on"><span class="cf" style="color:var(--accent)">◐</span><div class="nm"><div class="t">aSi_ML_25C.xrdml</div><div class="s">拟合中 · J=2.14↓</div></div></div>
+        <div class="ds"><span class="cf" style="color:var(--accent)">◐</span><div class="nm"><div class="t">aSi_ML_200C.xrdml</div><div class="s">拟合中 · J=2.63↓</div></div></div>
+        <div class="ds"><span class="cf" style="color:var(--accent)">◐</span><div class="nm"><div class="t">aSi_ML_400C.xrdml</div><div class="s">拟合中 · J=3.05↓</div></div></div>
+        <div class="nav-sec" style="margin-top:6px">分析管线</div>
+        <div class="pipe">
+          <div class="pstep done"><div class="rail"><div class="dot">✓</div><div class="line"></div></div><div class="body"><div class="t">数据</div><div class="d">3 联合</div></div></div>
+          <div class="pstep done"><div class="rail"><div class="dot">✓</div><div class="line"></div></div><div class="body"><div class="t">结构</div><div class="d">4 层共享</div></div></div>
+          <div class="pstep done"><div class="rail"><div class="dot">✓</div><div class="line"></div></div><div class="body"><div class="t">参数</div><div class="d">9 共享 + 6 独立</div></div></div>
+          <div class="pstep current"><div class="rail"><div class="dot">4</div><div class="line"></div></div><div class="body"><div class="t">拟合</div><div class="d">进行中 62%</div></div></div>
+          <div class="pstep"><div class="rail"><div class="dot">5</div><div class="line"></div></div><div class="body"><div class="t">结果</div><div class="d">—</div></div></div>
+          <div class="pstep"><div class="rail"><div class="dot">6</div></div><div class="body"><div class="t">导出</div><div class="d">—</div></div></div>
+        </div>
+      </div>
+      <!-- 中：进度 + 阶段 + 实时曲线 -->
+      <div class="canvas">
+        <div class="canvas-top">
+          <div class="tabs"><span class="tab on">进度</span><span class="tab">实时反射率</span><span class="tab">目标值轨迹</span></div>
+          <div class="spring"></div>
+          <span class="badge info">实时刷新 · 每 250 ms</span>
+        </div>
+        <div class="canvas-body">
+          <div class="plotcard">
+            <div class="ph"><div class="t">总进度</div><div class="sub">阶段 4 / 9 · 单调递增 0–1000</div></div>
+            <div style="padding:14px 14px 6px">
+              <div class="jbanner" style="margin-bottom:12px"><span>🔗</span><div><b>联合拟合。</b>3 个数据集共享层结构（厚度/粗糙度/密度），
+                各自独立标度与本底；共 <b>620 / 1000</b>。</div></div>
+              <div class="pbar" style="margin-bottom:6px"><i style="width:62%"></i></div>
+              <div class="row" style="justify-content:space-between"><span class="faint" style="font-size:11.5px">已用 00:47</span>
+                <span class="faint" style="font-size:11.5px">进度 620 / 1000</span>
+                <span class="faint" style="font-size:11.5px">预计剩余 ≈ 00:29</span></div>
+              <div class="stages" style="margin-top:14px">
+                <div class="stg done"><div class="ic">✓</div><div class="nm">初筛候选 A</div><div class="mt">128 组 · 0.8s</div></div>
+                <div class="stg done"><div class="ic">✓</div><div class="nm">全局搜索 B（差分进化）</div><div class="mt">收敛 · 21s</div></div>
+                <div class="stg done"><div class="ic">✓</div><div class="nm">密度精修 C</div><div class="mt">6 参数 · 9s</div></div>
+                <div class="stg current"><div class="ic">4</div><div class="nm">粗糙度与仪器精修 D</div><div class="mt">迭代 342 · J=2.14</div></div>
+                <div class="stg pending"><div class="ic">5</div><div class="nm">最终种子搜索 E</div><div class="mt">待运行</div></div>
+                <div class="stg pending"><div class="ic">6</div><div class="nm">基态复核</div><div class="mt">待运行</div></div>
+                <div class="stg pending"><div class="ic">7</div><div class="nm">自助抽样（Bootstrap）</div><div class="mt">200 次</div></div>
+                <div class="stg pending"><div class="ic">8</div><div class="nm">置信区间</div><div class="mt">16–84%</div></div>
+                <div class="stg pending"><div class="ic">9</div><div class="nm">汇总与判定</div><div class="mt">ConfidenceClass</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="plotcard">
+            <div class="ph"><div class="t">实时反射率 · aSi_ML_25C</div><div class="sub">当前模型随迭代逼近观测</div></div>
+            <div style="padding:10px 12px 6px">
+              <div class="legend" style="margin-bottom:6px">
+                <i class="dot" style="--c:var(--d-observed)">观测数据</i>
+                <i class="dash" style="--c:var(--d-candidate)">当前迭代模型</i>
+                <i class="box" style="--c:var(--d-range)">拟合窗口</i>
+              </div>
+              <svg viewBox="0 0 662 288" style="width:100%;height:auto;display:block" role="img" aria-label="实时反射率：模型虚线正逐步贴合观测蓝点"><rect x="91.9" y="18" width="474.0" height="232" fill="var(--d-range)" opacity="0.10"/><line x1="58" x2="624" y1="29.4" y2="29.4" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" x2="624" y1="61.8" y2="61.8" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" x2="624" y1="94.3" y2="94.3" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" x2="624" y1="126.7" y2="126.7" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" x2="624" y1="159.1" y2="159.1" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" x2="624" y1="191.6" y2="191.6" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" x2="624" y1="224.0" y2="224.0" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="43.5" x2="43.5" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="140.2" x2="140.2" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="237.0" x2="237.0" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="333.7" x2="333.7" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="430.5" x2="430.5" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="527.2" x2="527.2" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line y1="18" y2="250" x1="624.0" x2="624.0" stroke="rgba(27,31,39,.10)" stroke-width="1"/><line x1="58" y1="18" x2="58" y2="250" stroke="rgba(27,31,39,.45)" stroke-width="1.2"/><line x1="58" y1="250" x2="624" y2="250" stroke="rgba(27,31,39,.45)" stroke-width="1.2"/><path d="M58.0,28.9 L60.0,29.0 L62.0,29.0 L64.1,29.0 L66.1,29.1 L68.1,29.1 L70.1,29.1 L72.2,29.2 L74.2,29.2 L76.2,29.2 L78.2,29.3 L80.2,29.3 L82.3,29.3 L84.3,4.1 L86.3,4.9 L88.3,6.7 L90.3,9.4 L92.4,12.7 L94.4,16.6 L96.4,21.0 L98.4,25.6 L100.4,30.3 L102.5,34.9 L104.5,39.2 L106.5,43.1 L108.5,46.4 L110.6,49.1 L112.6,51.0 L114.6,52.1 L116.6,52.5 L118.6,52.0 L120.7,50.9 L122.7,49.1 L124.7,46.9 L126.7,44.3 L128.8,41.4 L130.8,38.5 L132.8,35.8 L134.8,33.3 L136.8,31.3 L138.9,29.7 L140.9,28.9 L142.9,28.7 L144.9,29.4 L146.9,30.8 L149.0,32.9 L151.0,35.8 L153.0,39.2 L155.0,43.2 L157.1,47.5 L159.1,52.1 L161.1,56.7 L163.1,61.2 L165.1,65.5 L167.2,69.4 L169.2,72.8 L171.2,75.6 L173.2,77.8 L175.2,79.2 L177.3,79.9 L179.3,79.9 L181.3,79.3 L183.3,78.1 L185.4,76.4 L187.4,74.3 L189.4,72.1 L191.4,69.7 L193.4,67.4 L195.5,65.4 L197.5,63.6 L199.5,62.3 L201.5,61.6 L203.5,61.5 L205.6,62.0 L207.6,63.3 L209.6,65.1 L211.6,67.6 L213.7,70.6 L215.7,74.1 L217.7,77.9 L219.7,81.9 L221.7,86.0 L223.8,90.0 L225.8,93.9 L227.8,97.4 L229.8,100.4 L231.8,103.0 L233.9,105.0 L235.9,106.3 L237.9,107.0 L239.9,107.1 L242.0,106.6 L244.0,105.6 L246.0,104.2 L248.0,102.4 L250.0,100.4 L252.1,98.3 L254.1,96.3 L256.1,94.4 L258.1,92.8 L260.1,91.6 L262.2,90.9 L264.2,90.7 L266.2,91.2 L268.2,92.2 L270.3,93.8 L272.3,95.9 L274.3,98.6 L276.3,101.6 L278.3,105.0 L280.4,108.6 L282.4,112.3 L284.4,115.9 L286.4,119.4 L288.4,122.7 L290.5,125.6 L292.5,128.1 L294.5,130.0 L296.5,131.5 L298.6,132.3 L300.6,132.7 L302.6,132.5 L304.6,131.9 L306.6,130.8 L308.7,129.5 L310.7,128.0 L312.7,126.4 L314.7,124.9 L316.7,123.4 L318.8,122.3 L320.8,121.4 L322.8,121.0 L324.8,121.1 L326.9,121.7 L328.9,122.8 L330.9,124.5 L332.9,126.6 L334.9,129.2 L337.0,132.2 L339.0,135.5 L341.0,139.0 L343.0,142.6 L345.0,146.2 L347.1,149.7 L349.1,153.0 L351.1,156.0 L353.1,158.7 L355.1,160.9 L357.2,162.6 L359.2,163.8 L361.2,164.6 L363.2,164.9 L365.3,164.8 L367.3,164.4 L369.3,163.7 L371.3,162.8 L373.3,161.8 L375.4,160.8 L377.4,159.9 L379.4,159.3 L381.4,158.9 L383.4,158.8 L385.5,159.2 L387.5,160.1 L389.5,161.4 L391.5,163.1 L393.6,165.4 L395.6,168.0 L397.6,170.9 L399.6,174.2 L401.6,177.6 L403.7,181.1 L405.7,184.6 L407.7,188.1 L409.7,191.3 L411.8,194.4 L413.8,197.0 L415.8,199.3 L417.8,201.2 L419.8,202.7 L421.9,203.7 L423.9,204.3 L425.9,204.6 L427.9,204.5 L429.9,204.1 L432.0,203.6 L434.0,202.9 L436.0,202.3 L438.0,201.7 L440.1,201.3 L442.1,201.1 L444.1,201.2 L446.1,201.7 L448.1,202.5 L450.2,203.8 L452.2,205.5 L454.2,207.5 L456.2,209.9 L458.2,212.6 L460.3,215.5 L462.3,218.6 L464.3,221.9 L466.3,225.1 L468.4,228.2 L470.4,231.2 L472.4,234.0 L474.4,236.5 L476.4,238.7 L478.5,240.5 L480.5,241.9 L482.5,242.9 L484.5,243.6 L486.5,243.9 L488.6,243.9 L490.6,243.7 L492.6,243.3 L494.6,242.8 L496.6,242.3 L498.7,241.8 L500.7,241.5 L502.7,241.4 L504.7,241.5 L506.8,241.9 L508.8,242.6 L510.8,243.7 L512.8,245.1 L514.8,245.1 L516.9,245.1 L518.9,245.1 L520.9,245.1 L522.9,245.1 L525.0,245.1 L527.0,245.1 L529.0,245.1 L531.0,245.1 L533.0,245.1 L535.1,245.1 L537.1,245.1 L539.1,245.1 L541.1,245.1 L543.1,245.1 L545.2,245.1 L547.2,245.1 L549.2,245.1 L551.2,245.1 L553.3,245.1 L555.3,245.1 L557.3,245.1 L559.3,245.1 L561.3,245.1 L563.4,245.1 L565.4,245.1 L567.4,245.1 L569.4,245.1 L571.4,245.1 L573.5,245.1 L575.5,245.1 L577.5,245.1 L579.5,245.1 L581.6,245.1 L583.6,245.1 L585.6,245.1 L587.6,245.1 L589.6,245.1 L591.7,245.1 L593.7,245.1 L595.7,245.1 L597.7,245.1 L599.7,245.1 L601.8,245.1 L603.8,245.1 L605.8,245.1 L607.8,245.1 L609.9,245.1 L611.9,245.1 L613.9,245.1 L615.9,245.1 L617.9,245.1 L620.0,245.1 L622.0,245.1 L624.0,245.1" fill="none" stroke="var(--d-candidate)" stroke-width="2" stroke-dasharray="6 4" stroke-linejoin="round"/><circle cx="60.9" cy="28.5" r="2.6" fill="var(--d-observed)"/><circle cx="71.8" cy="29.7" r="2.6" fill="var(--d-observed)"/><circle cx="82.7" cy="29.1" r="2.6" fill="var(--d-observed)"/><circle cx="93.6" cy="18.0" r="2.6" fill="var(--d-observed)"/><circle cx="104.4" cy="39.9" r="2.6" fill="var(--d-observed)"/><circle cx="115.3" cy="52.1" r="2.6" fill="var(--d-observed)"/><circle cx="126.2" cy="44.1" r="2.6" fill="var(--d-observed)"/><circle cx="137.1" cy="31.7" r="2.6" fill="var(--d-observed)"/><circle cx="148.0" cy="31.9" r="2.6" fill="var(--d-observed)"/><circle cx="158.9" cy="52.6" r="2.6" fill="var(--d-observed)"/><circle cx="169.7" cy="74.1" r="2.6" fill="var(--d-observed)"/><circle cx="180.6" cy="79.8" r="2.6" fill="var(--d-observed)"/><circle cx="191.5" cy="70.9" r="2.6" fill="var(--d-observed)"/><circle cx="202.4" cy="61.6" r="2.6" fill="var(--d-observed)"/><circle cx="213.3" cy="70.2" r="2.6" fill="var(--d-observed)"/><circle cx="224.2" cy="91.5" r="2.6" fill="var(--d-observed)"/><circle cx="235.1" cy="104.3" r="2.6" fill="var(--d-observed)"/><circle cx="245.9" cy="103.7" r="2.6" fill="var(--d-observed)"/><circle cx="256.8" cy="93.4" r="2.6" fill="var(--d-observed)"/><circle cx="267.7" cy="92.6" r="2.6" fill="var(--d-observed)"/><circle cx="278.6" cy="104.0" r="2.6" fill="var(--d-observed)"/><circle cx="289.5" cy="123.9" r="2.6" fill="var(--d-observed)"/><circle cx="300.4" cy="130.8" r="2.6" fill="var(--d-observed)"/><circle cx="311.2" cy="129.7" r="2.6" fill="var(--d-observed)"/><circle cx="322.1" cy="122.8" r="2.6" fill="var(--d-observed)"/><circle cx="333.0" cy="125.4" r="2.6" fill="var(--d-observed)"/><circle cx="343.9" cy="145.7" r="2.6" fill="var(--d-observed)"/><circle cx="354.8" cy="158.4" r="2.6" fill="var(--d-observed)"/><circle cx="365.7" cy="163.8" r="2.6" fill="var(--d-observed)"/><circle cx="376.6" cy="158.4" r="2.6" fill="var(--d-observed)"/><circle cx="387.4" cy="161.4" r="2.6" fill="var(--d-observed)"/><circle cx="398.3" cy="170.8" r="2.6" fill="var(--d-observed)"/><circle cx="409.2" cy="189.0" r="2.6" fill="var(--d-observed)"/><circle cx="420.1" cy="203.1" r="2.6" fill="var(--d-observed)"/><circle cx="431.0" cy="206.5" r="2.6" fill="var(--d-observed)"/><circle cx="441.9" cy="202.0" r="2.6" fill="var(--d-observed)"/><circle cx="452.7" cy="208.1" r="2.6" fill="var(--d-observed)"/><circle cx="463.6" cy="217.6" r="2.6" fill="var(--d-observed)"/><path d="M 474.5 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 485.4 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 496.3 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 507.2 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 518.1 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 528.9 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 539.8 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 550.7 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 561.6 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 572.5 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 583.4 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 594.2 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 605.1 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 616.0 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><path d="M 626.9 230.8 l 3 5 l -6 0 z" fill="none" stroke="var(--d-neutral)" stroke-width="1.3"/><text x="52" y="33.4" text-anchor="end" font-size="10.5" fill="#5B6270">10⁰</text><text x="52" y="98.3" text-anchor="end" font-size="10.5" fill="#5B6270">10⁻²</text><text x="52" y="163.1" text-anchor="end" font-size="10.5" fill="#5B6270">10⁻⁴</text><text x="52" y="228.0" text-anchor="end" font-size="10.5" fill="#5B6270">10⁻⁶</text><text x="43.5" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">0</text><text x="140.2" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">1</text><text x="237.0" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">2</text><text x="333.7" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">3</text><text x="430.5" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">4</text><text x="527.2" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">5</text><text x="624.0" y="266" text-anchor="middle" font-size="10.5" fill="#5B6270">6</text><text x="341" y="282" text-anchor="middle" font-size="11" fill="#5B6270">入射角 2θ (°)</text><text transform="translate(15,134) rotate(-90)" text-anchor="middle" font-size="11" fill="#5B6270">反射率 R（归一化 · 对数）</text><text x="328.9" y="31" text-anchor="middle" font-size="10.5" fill="#8A6D00">拟合窗口 0.5–5.4°</text></svg>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- 右：实时指标 -->
+      <div class="inspector">
+        <div class="insp-sec">
+          <div class="h">实时指标 <span class="faint">联合</span></div>
+          <div class="kv"><span class="k">当前阶段</span><span class="v">D · 粗糙度/仪器精修</span></div>
+          <div class="kv"><span class="k">全局目标 J</span><span class="v">2.61 ↓</span></div>
+          <div class="kv"><span class="k">迭代次数</span><span class="v">342</span></div>
+          <div class="kv"><span class="k">函数评估</span><span class="v">18,204</span></div>
+          <div class="kv"><span class="k">接受率</span><span class="v">0.34</span></div>
+          <div class="kv"><span class="k">步长 · 自适应</span><span class="v">收缩中</span></div>
+        </div>
+        <div class="insp-sec">
+          <div class="h">各数据集目标值</div>
+          <table class="grid">
+            <thead><tr><th>数据集</th><th class="num">J</th><th>趋势</th></tr></thead>
+            <tbody>
+              <tr><td>25 °C</td><td class="num">2.14</td><td style="color:var(--ok)">↓ 下降</td></tr>
+              <tr><td>200 °C</td><td class="num">2.63</td><td style="color:var(--ok)">↓ 下降</td></tr>
+              <tr><td>400 °C</td><td class="num">3.05</td><td style="color:var(--warn)">≈ 平台</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="insp-sec" style="border-bottom:none">
+          <div class="h">控制</div>
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            <span class="btn">⏸ 暂停</span><span class="btn">⏭ 跳过本阶段</span>
+            <span class="btn" style="color:var(--error);border-color:rgba(179,38,30,.4)">⏹ 停止并保留最优</span>
+          </div>
+          <div class="help" style="margin-top:8px">停止后保留当前最优候选，可直接进入结果复核，不丢弃已完成阶段。</div>
+        </div>
+      </div>
+    </div>
+    <div class="statusbar">
+      <span><span class="dot" style="background:var(--accent)"></span>拟合进行中</span>
+      <span>阶段 <b>4 / 9</b></span>
+      <span class="tnum">进度 620 / 1000</span>
+      <span class="spring"></span>
+      <span>模式：<b>联合批量</b></span>
+      <span>预计剩余 <b>00:29</b></span>
+    </div>
+  </div>
+  <div class="frame-cap"><b>对应能力：</b><span>fit_automatically / fit_batch（joint｜independent）· FitStage×9 · progress 0–1000 · pause / stop / skip_stage · per-dataset objective</span></div>
+</section>
+
+<!-- ================= 帧 ⑤ 不确定度 · 四种诊断 ================= -->
+<section class="section" id="f5">
+  <div class="lead">
+    <span class="knum">帧 ⑤</span>
+    <h2>不确定度 · 相关矩阵 / Profile 似然 / 可信带 / MCMC</h2>
+    <p>「结果可不可信」在这里被拆成可核查的证据：<b>参数相关矩阵</b>看谁和谁纠缠、
+    <b>Profile 似然</b>看每个参数的真实置信区间是否对称、<b>SLD 可信带</b>把不确定度映回深度剖面、
+    <b>MCMC 后验</b>给出 split-R̂ / ESS 收敛诊断与 P16/P50/P84 分位。发散配色（蓝↔灰↔橙）对色觉障碍安全。</p>
+  </div>
+  <div class="appwin">
+    <div class="titlebar">
+      <div class="tl-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="tl-title">aSi_multilayer_2024-03&nbsp;— XRR Fitter</div>
+      <div style="width:54px"></div>
+    </div>
+    <div class="cmdbar">
+      <div class="grp"><span class="btn sm">新建</span><span class="btn sm">打开</span><span class="btn sm">保存</span></div>
+      <div class="vsep"></div>
+      <div class="seg"><span>引导</span><span class="on">专家</span></div>
+      <div class="spring"></div>
+      <span class="btn">▶ 运行 MCMC</span>
+      <span class="btn">导出…</span>
+      <span class="btn icon">☾</span>
+    </div>
+    <div class="appbody">
+      <!-- 左：管线（结果 current） + 方法 -->
+      <div class="nav">
+        <div class="nav-sec">数据集</div>
+        <div class="ds on"><span class="cf cf-trusted">●</span><div class="nm"><div class="t">aSi_ML_25C.xrdml</div><div class="s">已拟合 · 可信</div></div></div>
+        <div class="ds"><span class="cf cf-correlated">◆</span><div class="nm"><div class="t">aSi_ML_200C.xrdml</div><div class="s">已拟合 · 可用</div></div></div>
+        <div class="nav-sec" style="margin-top:6px">不确定度方法</div>
+        <div class="pipe">
+          <div class="pstep done"><div class="rail"><div class="dot">✓</div><div class="line"></div></div><div class="body"><div class="t">相关矩阵</div><div class="d">Hessian 派生</div></div></div>
+          <div class="pstep done"><div class="rail"><div class="dot">✓</div><div class="line"></div></div><div class="body"><div class="t">自助抽样</div><div class="d">200 次 · 失败 2%</div></div></div>
+          <div class="pstep done"><div class="rail"><div class="dot">✓</div><div class="line"></div></div><div class="body"><div class="t">Profile 似然</div><div class="d">6 参数</div></div></div>
+          <div class="pstep current"><div class="rail"><div class="dot">◐</div></div><div class="body"><div class="t">MCMC 后验</div><div class="d">32 walkers · 采样中</div></div></div>
+        </div>
+        <div class="ds-summary">walkers ≥ 2·n_free + 2 · 已满足（9→32）</div>
+      </div>
+      <!-- 中：诊断图 -->
+      <div class="canvas">
+        <div class="canvas-top">
+          <div class="tabs"><span class="tab on">相关矩阵</span><span class="tab">Profile 似然</span><span class="tab">SLD 可信带</span><span class="tab">MCMC 后验</span></div>
+        </div>
+        <div class="canvas-body">
+          <div class="plotcard">
+            <div class="ph"><div class="t">参数相关矩阵</div><div class="sub">Pearson ρ · |ρ|＞0.6 视为强相关</div></div>
+            <div style="padding:12px 14px 6px">
+              <div class="heatwrap">
+                <svg viewBox="0 0 360 390" style="width:360px;max-width:100%;height:auto;display:block" role="img" aria-label="6×6 相关矩阵热图，d·aSi 与 ρ·aSi 呈强负相关 −0.72"><text x="93" y="50" text-anchor="middle" font-size="10.5" fill="#5B6270" transform="rotate(-32 93 50)">d·ox</text><text x="139" y="50" text-anchor="middle" font-size="10.5" fill="#5B6270" transform="rotate(-32 139 50)">ρ·ox</text><text x="185" y="50" text-anchor="middle" font-size="10.5" fill="#5B6270" transform="rotate(-32 185 50)">d·aSi</text><text x="231" y="50" text-anchor="middle" font-size="10.5" fill="#5B6270" transform="rotate(-32 231 50)">ρ·aSi</text><text x="277" y="50" text-anchor="middle" font-size="10.5" fill="#5B6270" transform="rotate(-32 277 50)">σ·aSi</text><text x="323" y="50" text-anchor="middle" font-size="10.5" fill="#5B6270" transform="rotate(-32 323 50)">scale</text><text x="62" y="85" text-anchor="end" font-size="10.5" fill="#5B6270">d·ox</text><rect x="71" y="59" width="44" height="44" rx="3" fill="rgb(213,94,0)" stroke="rgba(27,31,39,.08)"/><text x="93" y="85" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff" style="font-variant-numeric:tabular-nums">1</text><rect x="117" y="59" width="44" height="44" rx="3" fill="rgb(228,163,113)" stroke="rgba(27,31,39,.08)"/><text x="139" y="85" text-anchor="middle" font-size="10.5" font-weight="400" fill="#fff" style="font-variant-numeric:tabular-nums">+0.55</text><rect x="163" y="59" width="44" height="44" rx="3" fill="rgb(244,233,225)" stroke="rgba(27,31,39,.08)"/><text x="185" y="85" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.10</text><rect x="209" y="59" width="44" height="44" rx="3" fill="rgb(227,237,244)" stroke="rgba(27,31,39,.08)"/><text x="231" y="85" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">-0.08</text><rect x="255" y="59" width="44" height="44" rx="3" fill="rgb(245,240,238)" stroke="rgba(27,31,39,.08)"/><text x="277" y="85" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.05</text><rect x="301" y="59" width="44" height="44" rx="3" fill="rgb(246,243,243)" stroke="rgba(27,31,39,.08)"/><text x="323" y="85" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.03</text><text x="62" y="131" text-anchor="end" font-size="10.5" fill="#5B6270">ρ·ox</text><rect x="71" y="105" width="44" height="44" rx="3" fill="rgb(228,163,113)" stroke="rgba(27,31,39,.08)"/><text x="93" y="131" text-anchor="middle" font-size="10.5" font-weight="400" fill="#fff" style="font-variant-numeric:tabular-nums">+0.55</text><rect x="117" y="105" width="44" height="44" rx="3" fill="rgb(213,94,0)" stroke="rgba(27,31,39,.08)"/><text x="139" y="131" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff" style="font-variant-numeric:tabular-nums">1</text><rect x="163" y="105" width="44" height="44" rx="3" fill="rgb(232,240,246)" stroke="rgba(27,31,39,.08)"/><text x="185" y="131" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">-0.06</text><rect x="209" y="105" width="44" height="44" rx="3" fill="rgb(217,232,241)" stroke="rgba(27,31,39,.08)"/><text x="231" y="131" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">-0.12</text><rect x="255" y="105" width="44" height="44" rx="3" fill="rgb(244,234,228)" stroke="rgba(27,31,39,.08)"/><text x="277" y="131" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.09</text><rect x="301" y="105" width="44" height="44" rx="3" fill="rgb(246,242,240)" stroke="rgba(27,31,39,.08)"/><text x="323" y="131" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.04</text><text x="62" y="177" text-anchor="end" font-size="10.5" fill="#5B6270">d·aSi</text><rect x="71" y="151" width="44" height="44" rx="3" fill="rgb(244,233,225)" stroke="rgba(27,31,39,.08)"/><text x="93" y="177" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.10</text><rect x="117" y="151" width="44" height="44" rx="3" fill="rgb(232,240,246)" stroke="rgba(27,31,39,.08)"/><text x="139" y="177" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">-0.06</text><rect x="163" y="151" width="44" height="44" rx="3" fill="rgb(213,94,0)" stroke="rgba(27,31,39,.08)"/><text x="185" y="177" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff" style="font-variant-numeric:tabular-nums">1</text><rect x="209" y="151" width="44" height="44" rx="3" fill="rgb(69,152,198)" stroke="rgba(27,31,39,.08)"/><text x="231" y="177" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff" style="font-variant-numeric:tabular-nums">-0.72</text><rect x="255" y="151" width="44" height="44" rx="3" fill="rgb(241,220,205)" stroke="rgba(27,31,39,.08)"/><text x="277" y="177" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.18</text><rect x="301" y="151" width="44" height="44" rx="3" fill="rgb(198,221,236)" stroke="rgba(27,31,39,.08)"/><text x="323" y="177" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">-0.20</text><text x="62" y="223" text-anchor="end" font-size="10.5" fill="#5B6270">ρ·aSi</text><rect x="71" y="197" width="44" height="44" rx="3" fill="rgb(227,237,244)" stroke="rgba(27,31,39,.08)"/><text x="93" y="223" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">-0.08</text><rect x="117" y="197" width="44" height="44" rx="3" fill="rgb(217,232,241)" stroke="rgba(27,31,39,.08)"/><text x="139" y="223" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">-0.12</text><rect x="163" y="197" width="44" height="44" rx="3" fill="rgb(69,152,198)" stroke="rgba(27,31,39,.08)"/><text x="185" y="223" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff" style="font-variant-numeric:tabular-nums">-0.72</text><rect x="209" y="197" width="44" height="44" rx="3" fill="rgb(213,94,0)" stroke="rgba(27,31,39,.08)"/><text x="231" y="223" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff" style="font-variant-numeric:tabular-nums">1</text><rect x="255" y="197" width="44" height="44" rx="3" fill="rgb(210,228,239)" stroke="rgba(27,31,39,.08)"/><text x="277" y="223" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">-0.15</text><rect x="301" y="197" width="44" height="44" rx="3" fill="rgb(236,200,173)" stroke="rgba(27,31,39,.08)"/><text x="323" y="223" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.31</text><text x="62" y="269" text-anchor="end" font-size="10.5" fill="#5B6270">σ·aSi</text><rect x="71" y="243" width="44" height="44" rx="3" fill="rgb(245,240,238)" stroke="rgba(27,31,39,.08)"/><text x="93" y="269" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.05</text><rect x="117" y="243" width="44" height="44" rx="3" fill="rgb(244,234,228)" stroke="rgba(27,31,39,.08)"/><text x="139" y="269" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.09</text><rect x="163" y="243" width="44" height="44" rx="3" fill="rgb(241,220,205)" stroke="rgba(27,31,39,.08)"/><text x="185" y="269" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.18</text><rect x="209" y="243" width="44" height="44" rx="3" fill="rgb(210,228,239)" stroke="rgba(27,31,39,.08)"/><text x="231" y="269" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">-0.15</text><rect x="255" y="243" width="44" height="44" rx="3" fill="rgb(213,94,0)" stroke="rgba(27,31,39,.08)"/><text x="277" y="269" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff" style="font-variant-numeric:tabular-nums">1</text><rect x="301" y="243" width="44" height="44" rx="3" fill="rgb(222,235,243)" stroke="rgba(27,31,39,.08)"/><text x="323" y="269" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">-0.10</text><text x="62" y="315" text-anchor="end" font-size="10.5" fill="#5B6270">scale</text><rect x="71" y="289" width="44" height="44" rx="3" fill="rgb(246,243,243)" stroke="rgba(27,31,39,.08)"/><text x="93" y="315" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.03</text><rect x="117" y="289" width="44" height="44" rx="3" fill="rgb(246,242,240)" stroke="rgba(27,31,39,.08)"/><text x="139" y="315" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.04</text><rect x="163" y="289" width="44" height="44" rx="3" fill="rgb(198,221,236)" stroke="rgba(27,31,39,.08)"/><text x="185" y="315" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">-0.20</text><rect x="209" y="289" width="44" height="44" rx="3" fill="rgb(236,200,173)" stroke="rgba(27,31,39,.08)"/><text x="231" y="315" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">+0.31</text><rect x="255" y="289" width="44" height="44" rx="3" fill="rgb(222,235,243)" stroke="rgba(27,31,39,.08)"/><text x="277" y="315" text-anchor="middle" font-size="10.5" font-weight="400" fill="#1B1F27" style="font-variant-numeric:tabular-nums">-0.10</text><rect x="301" y="289" width="44" height="44" rx="3" fill="rgb(213,94,0)" stroke="rgba(27,31,39,.08)"/><text x="323" y="315" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff" style="font-variant-numeric:tabular-nums">1</text><rect x="70.0" y="356" width="7.3" height="10" fill="rgb(0,114,178)"/><rect x="76.7" y="356" width="7.3" height="10" fill="rgb(12,121,182)"/><rect x="83.5" y="356" width="7.3" height="10" fill="rgb(25,127,185)"/><rect x="90.2" y="356" width="7.3" height="10" fill="rgb(37,134,189)"/><rect x="96.9" y="356" width="7.3" height="10" fill="rgb(49,141,192)"/><rect x="103.7" y="356" width="7.3" height="10" fill="rgb(62,148,196)"/><rect x="110.4" y="356" width="7.3" height="10" fill="rgb(74,154,200)"/><rect x="117.1" y="356" width="7.3" height="10" fill="rgb(86,161,203)"/><rect x="123.9" y="356" width="7.3" height="10" fill="rgb(99,168,207)"/><rect x="130.6" y="356" width="7.3" height="10" fill="rgb(111,174,210)"/><rect x="137.3" y="356" width="7.3" height="10" fill="rgb(124,181,214)"/><rect x="144.0" y="356" width="7.3" height="10" fill="rgb(136,188,218)"/><rect x="150.8" y="356" width="7.3" height="10" fill="rgb(148,194,221)"/><rect x="157.5" y="356" width="7.3" height="10" fill="rgb(161,201,225)"/><rect x="164.2" y="356" width="7.3" height="10" fill="rgb(173,208,228)"/><rect x="171.0" y="356" width="7.3" height="10" fill="rgb(185,215,232)"/><rect x="177.7" y="356" width="7.3" height="10" fill="rgb(198,221,236)"/><rect x="184.4" y="356" width="7.3" height="10" fill="rgb(210,228,239)"/><rect x="191.2" y="356" width="7.3" height="10" fill="rgb(222,235,243)"/><rect x="197.9" y="356" width="7.3" height="10" fill="rgb(235,241,246)"/><rect x="204.6" y="356" width="7.3" height="10" fill="rgb(247,248,250)"/><rect x="211.4" y="356" width="7.3" height="10" fill="rgb(245,240,238)"/><rect x="218.1" y="356" width="7.3" height="10" fill="rgb(244,233,225)"/><rect x="224.8" y="356" width="7.3" height="10" fill="rgb(242,225,213)"/><rect x="231.6" y="356" width="7.3" height="10" fill="rgb(240,217,200)"/><rect x="238.3" y="356" width="7.3" height="10" fill="rgb(239,210,188)"/><rect x="245.0" y="356" width="7.3" height="10" fill="rgb(237,202,175)"/><rect x="251.8" y="356" width="7.3" height="10" fill="rgb(235,194,162)"/><rect x="258.5" y="356" width="7.3" height="10" fill="rgb(233,186,150)"/><rect x="265.2" y="356" width="7.3" height="10" fill="rgb(232,179,138)"/><rect x="272.0" y="356" width="7.3" height="10" fill="rgb(230,171,125)"/><rect x="278.7" y="356" width="7.3" height="10" fill="rgb(228,163,113)"/><rect x="285.4" y="356" width="7.3" height="10" fill="rgb(227,156,100)"/><rect x="292.1" y="356" width="7.3" height="10" fill="rgb(225,148,88)"/><rect x="298.9" y="356" width="7.3" height="10" fill="rgb(223,140,75)"/><rect x="305.6" y="356" width="7.3" height="10" fill="rgb(222,133,63)"/><rect x="312.3" y="356" width="7.3" height="10" fill="rgb(220,125,50)"/><rect x="319.1" y="356" width="7.3" height="10" fill="rgb(218,117,37)"/><rect x="325.8" y="356" width="7.3" height="10" fill="rgb(216,109,25)"/><rect x="332.5" y="356" width="7.3" height="10" fill="rgb(215,102,13)"/><rect x="339.3" y="356" width="7.3" height="10" fill="rgb(213,94,0)"/><text x="70" y="380" font-size="10" fill="#5B6270">−1</text><text x="208" y="380" text-anchor="middle" font-size="10" fill="#5B6270">0</text><text x="346" y="380" text-anchor="end" font-size="10" fill="#5B6270">+1</text><text x="208" y="352" text-anchor="middle" font-size="10" fill="#8A909C">Pearson 相关系数 ρ</text></svg>
+                <div style="flex:1;min-width:180px">
+                  <div class="kv"><span class="k">最强相关</span><span class="v">d·aSi ↔ ρ·aSi</span></div>
+                  <div class="kv"><span class="k">系数 ρ</span><span class="v" style="color:var(--d-observed)">−0.72</span></div>
+                  <div class="kv"><span class="k">次强</span><span class="v">d·ox ↔ ρ·ox +0.55</span></div>
+                  <div class="hint" style="margin-top:10px;margin-bottom:0"><span>⚠</span><div><b>厚度—密度强负相关。</b>
+                    薄层的电子密度与厚度难以同时唯一确定；单看 ±1σ 会低估真实不确定度，需结合 Profile 似然判读。</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="plotcard">
+            <div class="ph"><div class="t">Profile 似然</div><div class="sub">逐参数扫描 · Δχ²=1 对应 ±1σ</div></div>
+            <div style="padding:10px 14px 6px">
+              <div class="legend" style="margin-bottom:6px">
+                <i style="--c:var(--d-observed)">厚度 d·aSi（对称）</i>
+                <i style="--c:var(--d-candidate)">密度 ρ·aSi（偏斜）</i>
+                <i style="--c:var(--d-preview)">粗糙度 σ·aSi（平坦→弱约束）</i>
+              </div>
+              <svg viewBox="0 0 490 240" style="width:100%;height:auto;display:block" role="img" aria-label="三条 Profile 似然抛物线，密度曲线偏斜、粗糙度曲线平坦表示约束弱"><line x1="56" x2="470" y1="200" y2="200" stroke="rgba(27,31,39,.10)"/><text x="50" y="204" text-anchor="end" font-size="10" fill="#5B6270">0</text><line x1="56" x2="470" y1="153.5" y2="153.5" stroke="rgba(27,31,39,.10)"/><text x="50" y="157.5" text-anchor="end" font-size="10" fill="#5B6270">1</text><line x1="56" x2="470" y1="107" y2="107" stroke="rgba(27,31,39,.10)"/><text x="50" y="111" text-anchor="end" font-size="10" fill="#5B6270">2</text><line x1="56" x2="470" y1="60.5" y2="60.5" stroke="rgba(27,31,39,.10)"/><text x="50" y="64.5" text-anchor="end" font-size="10" fill="#5B6270">3</text><line x1="56" x2="470" y1="14" y2="14" stroke="rgba(27,31,39,.10)"/><text x="50" y="18" text-anchor="end" font-size="10" fill="#5B6270">4</text><line x1="56" x2="56" y1="14" y2="200" stroke="rgba(27,31,39,.10)"/><text x="56" y="215" text-anchor="middle" font-size="10" fill="#5B6270">-3σ</text><line x1="125" x2="125" y1="14" y2="200" stroke="rgba(27,31,39,.10)"/><text x="125" y="215" text-anchor="middle" font-size="10" fill="#5B6270">-2σ</text><line x1="194" x2="194" y1="14" y2="200" stroke="rgba(27,31,39,.10)"/><text x="194" y="215" text-anchor="middle" font-size="10" fill="#5B6270">-1σ</text><line x1="263" x2="263" y1="14" y2="200" stroke="rgba(27,31,39,.10)"/><text x="263" y="215" text-anchor="middle" font-size="10" fill="#5B6270">0</text><line x1="332" x2="332" y1="14" y2="200" stroke="rgba(27,31,39,.10)"/><text x="332" y="215" text-anchor="middle" font-size="10" fill="#5B6270">+1σ</text><line x1="401" x2="401" y1="14" y2="200" stroke="rgba(27,31,39,.10)"/><text x="401" y="215" text-anchor="middle" font-size="10" fill="#5B6270">+2σ</text><line x1="470" x2="470" y1="14" y2="200" stroke="rgba(27,31,39,.10)"/><text x="470" y="215" text-anchor="middle" font-size="10" fill="#5B6270">+3σ</text><line x1="56" x2="470" y1="153.5" y2="153.5" stroke="var(--warn)" stroke-width="1.3" stroke-dasharray="5 4"/><text x="466" y="148.5" text-anchor="end" font-size="10" fill="var(--warn)">Δχ²=1 → ±1σ</text><path d="M56.0,18.4 L59.4,23.1 L62.9,27.9 L66.3,32.6 L69.8,37.3 L73.3,41.9 L76.7,46.6 L80.2,51.2 L83.6,55.8 L87.1,60.3 L90.5,64.9 L93.9,69.3 L97.4,73.8 L100.8,78.2 L104.3,82.6 L107.8,86.9 L111.2,91.2 L114.7,95.4 L118.1,99.6 L121.6,103.7 L125.0,107.7 L128.4,111.8 L131.9,115.7 L135.3,119.6 L138.8,123.4 L142.3,127.2 L145.7,130.8 L149.2,134.5 L152.6,138.0 L156.1,141.5 L159.5,144.9 L163.0,148.2 L166.4,151.4 L169.8,154.6 L173.3,157.6 L176.8,160.6 L180.2,163.5 L183.7,166.3 L187.1,169.0 L190.6,171.6 L194.0,174.1 L197.4,176.5 L200.9,178.7 L204.3,180.9 L207.8,183.0 L211.3,185.0 L214.7,186.9 L218.2,188.6 L221.6,190.2 L225.1,191.8 L228.5,193.2 L231.9,194.4 L235.4,195.6 L238.8,196.6 L242.3,197.5 L245.8,198.2 L249.2,198.9 L252.7,199.4 L256.1,199.7 L259.6,199.9 L263.0,200.0 L266.4,199.9 L269.9,199.7 L273.4,199.3 L276.8,198.8 L280.3,198.2 L283.7,197.3 L287.1,196.3 L290.6,195.2 L294.1,193.9 L297.5,192.4 L301.0,190.8 L304.4,189.0 L307.8,187.0 L311.3,184.9 L314.8,182.6 L318.2,180.1 L321.7,177.4 L325.1,174.5 L328.6,171.5 L332.0,168.3 L335.4,164.9 L338.9,161.3 L342.4,157.5 L345.8,153.5 L349.3,149.3 L352.7,144.9 L356.1,140.4 L359.6,135.6 L363.1,130.6 L366.5,125.4 L369.9,120.0 L373.4,114.4 L376.9,108.6 L380.3,102.5 L383.8,96.3 L387.2,89.8 L390.6,83.1 L394.1,76.1 L397.6,69.0 L401.0,61.6 L404.4,54.0 L407.9,46.2 L411.4,38.1 L414.8,29.8 L418.3,21.2 L421.7,14.0 L425.1,14.0 L428.6,14.0 L432.1,14.0 L435.5,14.0 L438.9,14.0 L442.4,14.0 L445.9,14.0 L449.3,14.0 L452.8,14.0 L456.2,14.0 L459.6,14.0 L463.1,14.0 L466.6,14.0 L470.0,14.0 " fill="none" stroke="var(--d-observed)" stroke-width="2" stroke-linejoin="round"/><path d="M56.0,14.0 L59.4,14.0 L62.9,14.0 L66.3,14.0 L69.8,14.0 L73.3,14.0 L76.7,14.0 L80.2,14.0 L83.6,14.0 L87.1,14.0 L90.5,14.0 L93.9,14.0 L97.4,14.0 L100.8,14.0 L104.3,14.0 L107.8,14.0 L111.2,14.0 L114.7,14.0 L118.1,14.0 L121.6,14.0 L125.0,14.0 L128.4,14.0 L131.9,14.0 L135.3,14.0 L138.8,17.8 L142.3,28.1 L145.7,38.1 L149.2,47.7 L152.6,56.9 L156.1,65.8 L159.5,74.4 L163.0,82.7 L166.4,90.6 L169.8,98.2 L173.3,105.5 L176.8,112.5 L180.2,119.2 L183.7,125.6 L187.1,131.6 L190.6,137.4 L194.0,142.9 L197.4,148.1 L200.9,153.1 L204.3,157.7 L207.8,162.1 L211.3,166.3 L214.7,170.1 L218.2,173.7 L221.6,177.1 L225.1,180.2 L228.5,183.0 L231.9,185.6 L235.4,188.0 L238.8,190.2 L242.3,192.1 L245.8,193.8 L249.2,195.3 L252.7,196.6 L256.1,197.6 L259.6,198.5 L263.0,199.2 L266.4,199.6 L269.9,199.9 L273.4,200.0 L276.8,199.9 L280.3,199.6 L283.7,199.2 L287.1,198.6 L290.6,197.8 L294.1,196.9 L297.5,195.8 L301.0,194.6 L304.4,193.2 L307.8,191.7 L311.3,190.0 L314.8,188.2 L318.2,186.3 L321.7,184.3 L325.1,182.1 L328.6,179.8 L332.0,177.4 L335.4,174.9 L338.9,172.3 L342.4,169.6 L345.8,166.9 L349.3,164.0 L352.7,161.0 L356.1,158.0 L359.6,154.9 L363.1,151.7 L366.5,148.5 L369.9,145.2 L373.4,141.8 L376.9,138.4 L380.3,134.9 L383.8,131.4 L387.2,127.9 L390.6,124.3 L394.1,120.7 L397.6,117.1 L401.0,113.4 L404.4,109.8 L407.9,106.1 L411.4,102.4 L414.8,98.7 L418.3,95.0 L421.7,91.3 L425.1,87.7 L428.6,84.0 L432.1,80.4 L435.5,76.7 L438.9,73.2 L442.4,69.6 L445.9,66.1 L449.3,62.6 L452.8,59.2 L456.2,55.8 L459.6,52.5 L463.1,49.2 L466.6,46.0 L470.0,42.9 " fill="none" stroke="var(--d-candidate)" stroke-width="2" stroke-linejoin="round"/><path d="M56.0,55.7 L59.4,60.1 L62.9,64.5 L66.3,68.8 L69.8,73.1 L73.3,77.3 L76.7,81.5 L80.2,85.6 L83.6,89.6 L87.1,93.6 L90.5,97.6 L93.9,101.4 L97.4,105.2 L100.8,109.0 L104.3,112.7 L107.8,116.3 L111.2,119.9 L114.7,123.4 L118.1,126.8 L121.6,130.2 L125.0,133.5 L128.4,136.8 L131.9,139.9 L135.3,143.0 L138.8,146.1 L142.3,149.0 L145.7,151.9 L149.2,154.7 L152.6,157.4 L156.1,160.1 L159.5,162.7 L163.0,165.2 L166.4,167.6 L169.8,170.0 L173.3,172.2 L176.8,174.4 L180.2,176.5 L183.7,178.5 L187.1,180.5 L190.6,182.3 L194.0,184.1 L197.4,185.7 L200.9,187.3 L204.3,188.8 L207.8,190.2 L211.3,191.6 L214.7,192.8 L218.2,193.9 L221.6,195.0 L225.1,195.9 L228.5,196.8 L231.9,197.5 L235.4,198.2 L238.8,198.7 L242.3,199.2 L245.8,199.5 L249.2,199.8 L252.7,199.9 L256.1,200.0 L259.6,199.9 L263.0,199.8 L266.4,199.5 L269.9,199.2 L273.4,198.7 L276.8,198.1 L280.3,197.4 L283.7,196.6 L287.1,195.7 L290.6,194.6 L294.1,193.5 L297.5,192.2 L301.0,190.9 L304.4,189.4 L307.8,187.8 L311.3,186.0 L314.8,184.2 L318.2,182.2 L321.7,180.2 L325.1,177.9 L328.6,175.6 L332.0,173.2 L335.4,170.6 L338.9,167.9 L342.4,165.0 L345.8,162.1 L349.3,159.0 L352.7,155.8 L356.1,152.4 L359.6,149.0 L363.1,145.4 L366.5,141.6 L369.9,137.7 L373.4,133.7 L376.9,129.6 L380.3,125.3 L383.8,120.9 L387.2,116.3 L390.6,111.6 L394.1,106.8 L397.6,101.8 L401.0,96.6 L404.4,91.4 L407.9,86.0 L411.4,80.4 L414.8,74.7 L418.3,68.8 L421.7,62.8 L425.1,56.7 L428.6,50.4 L432.1,43.9 L435.5,37.3 L438.9,30.6 L442.4,23.7 L445.9,16.6 L449.3,14.0 L452.8,14.0 L456.2,14.0 L459.6,14.0 L463.1,14.0 L466.6,14.0 L470.0,14.0 " fill="none" stroke="var(--d-preview)" stroke-width="2" stroke-linejoin="round"/><line x1="56" y1="14" x2="56" y2="200" stroke="rgba(27,31,39,.45)"/><line x1="56" y1="200" x2="470" y2="200" stroke="rgba(27,31,39,.45)"/><text transform="translate(15,107) rotate(-90)" text-anchor="middle" font-size="10.5" fill="#5B6270">Δχ²（相对最优）</text><text x="263" y="230" text-anchor="middle" font-size="10.5" fill="#5B6270">参数偏移（以 σ 为单位）</text></svg>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- 右：MCMC 诊断 + Bootstrap -->
+      <div class="inspector">
+        <div class="insp-sec">
+          <div class="h">MCMC 收敛诊断</div>
+          <div class="kv"><span class="k">walkers</span><span class="v">32（≥ 2·9+2）</span></div>
+          <div class="kv"><span class="k">步数 / 链</span><span class="v">8,000</span></div>
+          <div class="kv"><span class="k">接受率</span><span class="v">0.31 ✓</span></div>
+          <div class="kv"><span class="k">split-R̂ (max)</span><span class="v" style="color:var(--ok)">1.008 ✓</span></div>
+          <div class="kv"><span class="k">ESS (min)</span><span class="v">1,240 ✓</span></div>
+          <div class="kv"><span class="k">燃烧期 burn-in</span><span class="v">前 25%</span></div>
+        </div>
+        <div class="insp-sec">
+          <div class="h">后验分位 · d·aSi</div>
+          <div style="padding:2px 0 8px">
+            <svg viewBox="0 0 260 100" style="width:100%;height:auto;display:block" role="img" aria-label="d·aSi 后验直方图，标出 P16 / P50 / P84 分位线"><rect x="8.8" y="91.4" width="7.8" height="0.6" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="18.2" y="90.8" width="7.8" height="1.2" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="27.6" y="89.6" width="7.8" height="2.4" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="37.0" y="87.6" width="7.8" height="4.4" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="46.3" y="84.3" width="7.8" height="7.7" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="55.7" y="79.4" width="7.8" height="12.6" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="65.1" y="72.4" width="7.8" height="19.6" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="74.5" y="63.3" width="7.8" height="28.7" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="83.9" y="52.4" width="7.8" height="39.6" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="93.3" y="40.6" width="7.8" height="51.4" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="102.6" y="28.9" width="7.8" height="63.1" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="112.0" y="19.0" width="7.8" height="73.0" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="121.4" y="12.3" width="7.8" height="79.7" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="130.8" y="10.0" width="7.8" height="82.0" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="140.2" y="12.4" width="7.8" height="79.6" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="149.6" y="19.1" width="7.8" height="72.9" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="159.0" y="29.0" width="7.8" height="63.0" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="168.3" y="40.7" width="7.8" height="51.3" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="177.7" y="52.5" width="7.8" height="39.5" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="187.1" y="63.4" width="7.8" height="28.6" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="196.5" y="72.4" width="7.8" height="19.6" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="205.9" y="79.3" width="7.8" height="12.7" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="215.3" y="84.3" width="7.8" height="7.7" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="224.6" y="87.6" width="7.8" height="4.4" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="234.0" y="89.6" width="7.8" height="2.4" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><rect x="243.4" y="90.8" width="7.8" height="1.2" rx="1.5" fill="var(--d-observed)" opacity="0.55"/><line x1="81.2" x2="81.2" y1="6" y2="92" stroke="var(--ink-muted)" stroke-width="1.3" stroke-dasharray="3 3"/><text x="81.2" y="15" text-anchor="middle" font-size="8.5" fill="var(--ink-muted)">P16</text><line x1="130.0" x2="130.0" y1="6" y2="92" stroke="var(--accent)" stroke-width="1.3" stroke-dasharray="0"/><text x="130.0" y="15" text-anchor="middle" font-size="8.5" fill="var(--accent)">P50</text><line x1="178.8" x2="178.8" y1="6" y2="92" stroke="var(--ink-muted)" stroke-width="1.3" stroke-dasharray="3 3"/><text x="178.8" y="15" text-anchor="middle" font-size="8.5" fill="var(--ink-muted)">P84</text><line x1="8" x2="252" y1="92" y2="92" stroke="rgba(27,31,39,.45)"/></svg>
+          </div>
+          <table class="grid">
+            <tbody>
+              <tr><td>P16</td><td class="num">48.52</td><td>nm</td></tr>
+              <tr><td>P50（中位）</td><td class="num">48.70</td><td>nm</td></tr>
+              <tr><td>P84</td><td class="num">48.89</td><td>nm</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="insp-sec" style="border-bottom:none">
+          <div class="h">自助抽样（Bootstrap）</div>
+          <div class="kv"><span class="k">重采样次数</span><span class="v">200</span></div>
+          <div class="kv"><span class="k">失败率</span><span class="v" style="color:var(--ok)">2%（4/200）</span></div>
+          <div class="kv"><span class="k">边界命中</span><span class="v" style="color:var(--ok)">0</span></div>
+          <div class="row" style="margin-top:8px"><span class="badge ok">✓ 与 Profile 一致</span><span class="badge info">ℹ 已计入相关</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="statusbar">
+      <span><span class="dot" style="background:var(--ok)"></span>MCMC 采样中</span>
+      <span>split-R̂ <b style="color:var(--ok)">1.008</b> · ESS <b>1,240</b></span>
+      <span class="spring"></span>
+      <span>判定：<b class="cf-correlated">◆ 可用但相关</b></span>
+    </div>
+  </div>
+  <div class="frame-cap"><b>对应能力：</b><span>correlation_matrix · profile_likelihood · sld_uncertainty_bands · run_mcmc（split-Rhat / ESS / P16-P50-P84）· bootstrap（failure_rate / boundary_hits）</span></div>
+</section>
+
+<!-- ================= 帧 ⑥ 导入 / 导出 ================= -->
+<section class="section" id="f6">
+  <div class="lead">
+    <span class="knum">帧 ⑥</span>
+    <h2>导入与导出 · 批量预览与可复现产物</h2>
+    <p>两个关键对话框。<b>导入</b>自动识别列映射与 θ/2θ 角度约定，逐文件预览行数与校验状态，坏文件不静默吞掉而是显式标红并可跳过。
+    <b>导出</b>以 ORSO <code>.ort</code> 为规范交换格式，附 Excel、图件与拟合清单；清单记录 <code>master_seed</code> 与各阶段配置，
+    保证在相同种子下逐位可复现。</p>
+  </div>
+  <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;background:repeating-linear-gradient(45deg,var(--app-bg),var(--app-bg) 10px,#e6e9ef 10px,#e6e9ef 20px);padding:22px;border-radius:var(--r-lg);border:1px solid var(--border)">
+    <!-- 导入对话框 -->
+    <div class="dialog" style="flex:1;min-width:420px;max-width:560px">
+      <div class="dh">📥 导入数据 · 批量预览</div>
+      <div class="db">
+        <div class="help">已自动检测分隔符、列映射与角度约定；可逐文件覆盖。无有效数据列的文件将被跳过，不影响其余导入。</div>
+        <table class="grid">
+          <thead><tr><th>文件</th><th>角度</th><th>列映射</th><th class="num">行数</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr><td>aSi_ML_25C.xrdml</td><td>2θ</td><td>1 → 2</td><td class="num">512</td><td><span class="badge ok">✓ 就绪</span></td></tr>
+            <tr><td>aSi_ML_200C.xrdml</td><td>2θ</td><td>1 → 2</td><td class="num">512</td><td><span class="badge ok">✓ 就绪</span></td></tr>
+            <tr><td>aSi_ML_400C.xrdml</td><td>2θ</td><td>1 → 2</td><td class="num">480</td><td><span class="badge ok">✓ 就绪</span></td></tr>
+            <tr><td>Si_substrate_ref.xrdml</td><td>θ</td><td>1 → 2</td><td class="num">640</td><td><span class="badge info">ℹ 参考</span></td></tr>
+            <tr><td>blank_run.dat</td><td>—</td><td>—</td><td class="num">0</td><td><span class="badge error">✕ 无数据列</span></td></tr>
+          </tbody>
+        </table>
+        <div class="wrap2">
+          <div class="field">
+            <label>角度约定（全局默认）</label>
+            <div class="row" style="gap:14px;margin-top:2px"><span class="radio on"><i></i>2θ（衍射角）</span><span class="radio"><i></i>θ（掠射角）</span></div>
+          </div>
+          <div class="field"><label>列分隔符</label><div class="inp sel">自动检测（空白/逗号）</div></div>
+        </div>
+        <div class="groupbox">
+          <div class="gt">高级</div>
+          <div class="wrap2">
+            <div class="field"><label>跳过表头行</label><div class="inp">自动</div></div>
+            <div class="field"><label>强度列取对数</label><div class="row" style="margin-top:2px"><span class="check"><i></i>是（若为线性计数）</span></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="df"><span class="btn">取消</span><span class="btn primary">导入 4 个（跳过 1 个失败）</span></div>
+    </div>
+    <!-- 导出对话框 -->
+    <div class="dialog" style="flex:1;min-width:380px;max-width:520px">
+      <div class="dh">📤 导出结果</div>
+      <div class="db">
+        <div class="groupbox">
+          <div class="gt">数据格式</div>
+          <div class="col" style="gap:8px">
+            <span class="check on"><i></i>ORSO <code>.ort</code> — 规范反射率交换格式（推荐）</span>
+            <span class="check on"><i></i>Excel <code>.xlsx</code> — 参数表 + 不确定度 + 数据</span>
+            <span class="check"><i></i>CSV — 逐数据集纯文本</span>
+          </div>
+        </div>
+        <div class="groupbox">
+          <div class="gt">图件</div>
+          <div class="col" style="gap:8px">
+            <span class="check on"><i></i>反射率图 <code>PNG</code>（300 dpi）</span>
+            <span class="check on"><i></i>SLD 深度剖面 <code>SVG</code>（矢量）</span>
+            <span class="check"><i></i>加权残差图 <code>PNG</code></span>
+          </div>
+        </div>
+        <div class="groupbox">
+          <div class="gt">随附内容</div>
+          <div class="col" style="gap:8px">
+            <span class="check on"><i></i>参数表与 16–84% 置信区间</span>
+            <span class="check on"><i></i>相关矩阵与收敛诊断</span>
+            <span class="check on"><i></i>拟合清单 manifest（含 master_seed）</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>清单预览 · run_manifest.json</label>
+          <div class="mono" style="background:var(--panel-2);border:1px solid var(--border);border-radius:var(--r-sm);padding:10px;font-size:11px;color:var(--ink-muted);line-height:1.6;white-space:pre-wrap">{
+  "app": "xrr-fitter",
+  "master_seed": 20240822,
+  "datasets": 3,  "mode": "joint",
+  "stages": ["A","B","C","D","E","baseline","bootstrap","ci","summary"],
+  "confidence": "correlated",
+  "include_ort": true,
+  "reproducible": "逐位一致（固定种子 + 同源）"
+}</div>
+        </div>
+      </div>
+      <div class="df"><span class="btn">取消</span><span class="btn primary">导出到文件夹…</span></div>
+    </div>
+  </div>
+  <div class="frame-cap"><b>对应能力：</b><span>import_data / detect_angle_convention / validate_source · export（ORSO .ort / xlsx / png / svg）· run_manifest · master_seed 可复现</span></div>
+</section>
+
+<!-- ================= 设计系统 ================= -->
+<section class="section" id="f7">
+  <div class="lead">
+    <span class="knum">设计系统</span>
+    <h2>令牌 · 配色 · 置信度语言</h2>
+    <p>全部取自代码库审计：语义色令牌、固定的数据色相（跨明暗不变，"蓝=我的观测数据"永不改色）、
+    以及双重编码（颜色 + 形状字形）的置信度体系。状态与置信度<b>从不靠颜色单独表意</b>，始终附图标与文字。</p>
+  </div>
+
+  <h3 style="font-size:14px;margin:0 0 8px">语义色 · 界面与状态</h3>
+  <div class="swatches" style="margin-bottom:20px">
+    <div class="sw"><div class="cap" style="background:#2F6BD8"></div><div class="lb"><div class="n" style="">品牌强调 accent</div><div class="h">#2F6BD8</div><div class="faint" style="font-size:10.5px;margin-top:2px">主操作 / 选中 / 拟合模型</div></div></div>
+    <div class="sw"><div class="cap" style="background:#2E7D32"></div><div class="lb"><div class="n" style="">成功 ok</div><div class="h">#2E7D32</div><div class="faint" style="font-size:10.5px;margin-top:2px">收敛 / 可信 / 通过</div></div></div>
+    <div class="sw"><div class="cap" style="background:#1565C0"></div><div class="lb"><div class="n" style="">信息 info</div><div class="h">#1565C0</div><div class="faint" style="font-size:10.5px;margin-top:2px">提示 / 相关性说明</div></div></div>
+    <div class="sw"><div class="cap" style="background:#9A6700"></div><div class="lb"><div class="n" style="">警告 warn</div><div class="h">#9A6700</div><div class="faint" style="font-size:10.5px;margin-top:2px">需复核 / 平台期</div></div></div>
+    <div class="sw"><div class="cap" style="background:#B3261E"></div><div class="lb"><div class="n" style="">错误 error</div><div class="h">#B3261E</div><div class="faint" style="font-size:10.5px;margin-top:2px">失败 / 停止 / 无效</div></div></div>
+    <div class="sw"><div class="cap" style="background:#EDEFF3"></div><div class="lb"><div class="n" style="color:#1B1F27">应用底 app-bg</div><div class="h">#EDEFF3</div><div class="faint" style="font-size:10.5px;margin-top:2px">窗口背景</div></div></div>
+  </div>
+
+  <h3 style="font-size:14px;margin:0 0 8px">数据色相 · Okabe-Ito（色觉障碍安全 · 跨明暗固定）</h3>
+  <div class="swatches" style="margin-bottom:8px">
+    <div class="sw"><div class="cap" style="background:#0072B2"></div><div class="lb"><div class="n" style="">观测数据 observed</div><div class="h">#0072B2</div><div class="faint" style="font-size:10.5px;margin-top:2px">实测反射率点</div></div></div>
+    <div class="sw"><div class="cap" style="background:#D55E00"></div><div class="lb"><div class="n" style="">候选 / 模型 candidate</div><div class="h">#D55E00</div><div class="faint" style="font-size:10.5px;margin-top:2px">当前拟合曲线 / 主体层</div></div></div>
+    <div class="sw"><div class="cap" style="background:#009E73"></div><div class="lb"><div class="n" style="">预览 preview</div><div class="h">#009E73</div><div class="faint" style="font-size:10.5px;margin-top:2px">假设修改的预览叠加</div></div></div>
+    <div class="sw"><div class="cap" style="background:#E69F00"></div><div class="lb"><div class="n" style="">范围 range</div><div class="h">#E69F00</div><div class="faint" style="font-size:10.5px;margin-top:2px">拟合窗口 / 区间高亮</div></div></div>
+    <div class="sw"><div class="cap" style="background:#CC79A7"></div><div class="lb"><div class="n" style="">序列 5</div><div class="h">#CC79A7</div><div class="faint" style="font-size:10.5px;margin-top:2px">附加层</div></div></div>
+    <div class="sw"><div class="cap" style="background:#56B4E9"></div><div class="lb"><div class="n" style="">序列 6</div><div class="h">#56B4E9</div><div class="faint" style="font-size:10.5px;margin-top:2px">附加层</div></div></div>
+    <div class="sw"><div class="cap" style="background:#9AA0A6"></div><div class="lb"><div class="n" style="">中性 neutral</div><div class="h">#9AA0A6</div><div class="faint" style="font-size:10.5px;margin-top:2px">半无限介质：空气 / 基底</div></div></div>
+  </div>
+  <div class="help" style="margin-bottom:24px">规则：空气与基底是半无限介质，一律取中性灰，不占用序列色相；只有真正的层才依次着色。发散型图（相关矩阵）用蓝↔灰↔橙双极 + 中性灰中点。</div>
+
+  <div class="cardgrid" style="margin-bottom:24px">
+    <div class="card"><h4>字号阶梯</h4>
+      <div style="line-height:1.9"><span style="font-size:24px;font-weight:700">24 / 标题</span><br><span style="font-size:18px;font-weight:600">18 / 小标题</span><br><span style="font-size:15px">15 / 强调</span><br><span style="font-size:13px">13 / 正文</span><br><span style="font-size:11px;color:var(--ink-faint)">11 / 脚注</span><br><span class="mono" style="font-size:12px">12 / 等宽数值 0123456789</span></div>
+    </div>
+    <div class="card"><h4>间距标度（4pt 基）</h4>
+      <div class="col" style="gap:6px;margin-top:4px">
+        <div class="row" style="align-items:center;gap:8px"><span style="width:4px;height:14px;background:var(--accent)"></span><span class="faint" style="font-size:11px">xs · 4px</span></div>
+        <div class="row" style="align-items:center;gap:8px"><span style="width:8px;height:14px;background:var(--accent)"></span><span class="faint" style="font-size:11px">sm · 8px</span></div>
+        <div class="row" style="align-items:center;gap:8px"><span style="width:12px;height:14px;background:var(--accent)"></span><span class="faint" style="font-size:11px">md · 12px</span></div>
+        <div class="row" style="align-items:center;gap:8px"><span style="width:16px;height:14px;background:var(--accent)"></span><span class="faint" style="font-size:11px">lg · 16px</span></div>
+        <div class="row" style="align-items:center;gap:8px"><span style="width:24px;height:14px;background:var(--accent)"></span><span class="faint" style="font-size:11px">xl · 24px</span></div>
+      </div>
+    </div>
+    <div class="card"><h4>状态徽章</h4>
+      <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:4px">
+        <span class="badge ok">✓ 通过</span><span class="badge info">ℹ 提示</span><span class="badge warn">⚠ 复核</span><span class="badge error">✕ 失败</span><span class="badge mut">· 中性</span>
+      </div>
+      <p style="margin-top:8px">图标 + 文字，绝不靠颜色单独表意。</p>
+    </div>
+  </div>
+
+  <h3 style="font-size:14px;margin:0 0 8px">置信度体系 · 颜色 + 形状双重编码</h3>
+  <div class="cardgrid">
+    <div class="card" style="border-color:rgba(46,125,50,.35);background:rgba(46,125,50,.06)"><h4><span class="cf-trusted" style="font-size:16px">●</span> 可信 TRUSTED</h4><p>参数唯一、置信区间收敛、无边界命中。可直接采信。</p></div>
+    <div class="card" style="border-color:rgba(21,101,192,.35);background:rgba(21,101,192,.06)"><h4><span class="cf-correlated" style="font-size:16px">◆</span> 可用但相关 CORRELATED</h4><p>解可用，但存在强参数相关；需结合 Profile 似然判读区间。</p></div>
+    <div class="card" style="border-color:rgba(154,103,0,.35);background:rgba(154,103,0,.07)"><h4><span class="cf-multiple" style="font-size:16px">▲</span> 多解 MULTIPLE</h4><p>存在多个目标值相近的候选，需人工在候选间裁决。</p></div>
+    <div class="card" style="border-color:rgba(179,38,30,.35);background:rgba(179,38,30,.06)"><h4><span class="cf-untrusted" style="font-size:16px">■</span> 不可信 UNTRUSTED</h4><p>未收敛、命中边界或残差含系统性结构。不应采信。</p></div>
+    <div class="card"><h4><span style="font-size:16px;color:var(--d-neutral)">○</span> 不可用 N/A</h4><p>未纳入拟合或数据不足，无判定（回退态）。</p></div>
+  </div>
+  <div class="frame-cap"><b>对应能力：</b><span>theme 令牌 · ConfidenceClass（TRUSTED/CORRELATED/MULTIPLE/UNTRUSTED + 回退）· 数据色相固定策略 · 双重编码可及性</span></div>
+</section>
+
+<!-- ================= 能力覆盖对照表 ================= -->
+<section class="section" id="cover">
+  <div class="lead">
+    <span class="knum">覆盖对照</span>
+    <h2>能力 → 界面 → API 一一对照</h2>
+    <p>逐条核对：软件的每一项真实能力都在新界面中有落点，并标注其公共 API 符号（<code>xrr_fitter.api</code>，唯一受支持面）。
+    此表既是设计自查，也是实现时的接线清单。</p>
+  </div>
+  <table class="cover">
+    <thead><tr><th style="width:30%">能力</th><th style="width:14%">见于</th><th>公共 API 符号（xrr_fitter.api）</th></tr></thead>
+    <tbody><tr><td>导入与源校验</td><td>帧 ②⑥</td><td class="loc">import_data · validate_source · detect_angle_convention</td></tr><tr><td>样品结构编辑</td><td>帧 ②③</td><td class="loc">set_structure · add_layer · suggest_oxide_layers</td></tr><tr><td>参数化（固定/自由/范围/先验/共享）</td><td>帧 ③</td><td class="loc">describe_parameters · set_parameter · set_prior · set_constraint · set_sharing</td></tr><tr><td>一键自动拟合</td><td>帧 ①④</td><td class="loc">fit_automatically</td></tr><tr><td>批量拟合（独立 / 联合）</td><td>帧 ④</td><td class="loc">fit_batch(mode=independent｜joint)</td></tr><tr><td>九阶段进度（0–1000）</td><td>帧 ④</td><td class="loc">FitStage×9 · progress</td></tr><tr><td>候选解与切换</td><td>帧 ①</td><td class="loc">summarize_automatic_results · select_candidate</td></tr><tr><td>置信度判定</td><td>帧 ①⑤</td><td class="loc">ConfidenceClass</td></tr><tr><td>反射率 / 残差 / qz⁴ 面板</td><td>帧 ①④</td><td class="loc">reflectivity · residual · qz4 views</td></tr><tr><td>SLD 深度剖面与可信带</td><td>帧 ③⑤</td><td class="loc">sld_nominal_profile · sld_uncertainty_bands</td></tr><tr><td>参数相关矩阵</td><td>帧 ⑤</td><td class="loc">correlation_matrix</td></tr><tr><td>Profile 似然</td><td>帧 ⑤</td><td class="loc">profile_likelihood</td></tr><tr><td>自助抽样（Bootstrap）</td><td>帧 ④⑤</td><td class="loc">bootstrap(failure_rate · boundary_hits)</td></tr><tr><td>MCMC 后验</td><td>帧 ⑤</td><td class="loc">run_mcmc(split-Rhat · ESS · P16/P50/P84)</td></tr><tr><td>导出 ORSO / Excel / 图 / 清单</td><td>帧 ⑥</td><td class="loc">export(.ort · .xlsx · png/svg) · run_manifest · master_seed</td></tr><tr><td>引导 ↔ 专家 双模式投影</td><td>帧 ①②③</td><td class="loc">guided_mode · expert_mode（同一文档）</td></tr></tbody>
+  </table>
+  <div class="frame-cap"><b>说明：</b><span>方法名为审计所见的公共 API 语义分组；界面元素均映射到真实能力，无虚构功能。</span></div>
+</section>
+
+<footer>
+  <div style="max-width:1320px">
+    <b style="color:var(--ink-muted)">XRR Fitter · GUI 全新设计预览</b>　—　静态高保真原型。
+    所有图表为确定性内联 SVG（固定几何，非真实拟合输出）；字段名、单位、状态与置信度标签均取自代码库审计。
+    <div style="margin-top:8px">布局骨架为全新设计（管线导航 · 自适应画布 · 上下文检视器 三区），未沿用现有停靠式界面。
+    恪守：数据色相跨明暗固定 · 半无限介质取中性色 · 状态/置信度颜色+图标+文字三重编码 · 发散配色对色觉障碍安全。</div>
+    <div style="margin-top:8px" class="faint">单位约定：厚度/粗糙度 nm · 密度 g·cm⁻³ · SLD 10⁻⁶ Å⁻² · qz Å⁻¹ · 输入角 2θ deg。</div>
+  </div>
+</footer>
+</body>
+</html>
