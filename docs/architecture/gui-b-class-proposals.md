@@ -100,7 +100,7 @@
 ## B1 可停靠面板布局
 
 > **状态：已落地后回退。** 曾以五个 dock + 绘图作中央控件实现；现按
-> `deliverables/xrr-fitter-gui-redesign.html` 的 `grid-template-columns:264px 1fr
+> `docs/design/gui/xrr-fitter-gui-redesign.html` 的 `grid-template-columns:264px 1fr
 > 340px` 改回固定三栏——一个 `QSplitter` 作中央控件，三列为 `navigationColumn` /
 > `canvasColumn` / `inspectorColumn`，无标题栏、不可浮动、不可折叠。下文保留原提案
 > 作为记录，其"设计方案"一节描述的是已被替换的形态。
