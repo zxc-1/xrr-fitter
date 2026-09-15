@@ -124,6 +124,18 @@ class ObjectiveTracePlot(pg.PlotWidget):
         self._y.clear()
         self.trace_item.setData([], [])
 
+    def _apply_theme_palette(self) -> None:
+        """Refresh the progress chart's structural colours after a theme switch."""
+        palette = theme.current_plot_palette()
+        self.setBackground(QColor.fromRgbF(*palette.background))
+        foreground = QColor.fromRgbF(*palette.foreground)
+        muted = QColor.fromRgbF(*palette.muted)
+        for side in ("left", "bottom"):
+            axis = self.plotItem.getAxis(side)
+            axis.setTextPen(foreground)
+            axis.setPen(muted)
+        self.showGrid(x=True, y=True, alpha=palette.grid[3])
+
 
 class LiveReflectivityPlot(pg.PlotWidget):
     """One reflectivity pane with an owned preview curve and native gestures.
@@ -147,6 +159,8 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self.plot_item.setAxisItems({"left": DecadeAxis(orientation="left")})
         self._released = False
         self._masking = False
+        self._range_mouse_enabled: tuple[bool, bool] | None = None
+        self._range_accepted_mouse_buttons: Qt.MouseButton | None = None
         self.preview_item: pg.PlotDataItem | None = None
         self.range_item: pg.LinearRegionItem | None = None
         self._overlay_items: list[pg.PlotDataItem] = []
@@ -771,12 +785,39 @@ class LiveReflectivityPlot(pg.PlotWidget):
                 brush.setAlpha(50)
                 region = pg.LinearRegionItem(brush=pg.mkBrush(brush), pen=pg.mkPen(theme.DATA_RANGE))
                 region.sigRegionChangeFinished.connect(self._emit_range)
+                # The region handles must own the drag gesture.  Save the current
+                # ViewBox state so leaving range mode restores the user's pan/zoom
+                # configuration exactly, including one-axis-disabled views.
+                mouse_enabled = self.plot_item.vb.state["mouseEnabled"]
+                self._range_mouse_enabled = (bool(mouse_enabled[0]), bool(mouse_enabled[1]))
+                vb = self.plot_item.vb
+                self._range_accepted_mouse_buttons = vb.acceptedMouseButtons()
+                vb.setMouseEnabled(False, False)
+                # ViewBox accepts the press at the scene level even when both
+                # axes are disabled, so its mouseDragEvent can still swallow a
+                # range-handle drag.  Remove that competing target for the
+                # duration of range mode and restore the exact button set later.
+                vb.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                region.setZValue(10)
                 self.addItem(region)
                 self.range_item = region
             return
         if self.range_item is not None:
             self.removeItem(self.range_item)
             self.range_item = None
+        mouse_enabled = self._range_mouse_enabled
+        self._range_mouse_enabled = None
+        if mouse_enabled is not None:
+            self.plot_item.vb.setMouseEnabled(*mouse_enabled)
+        accepted_mouse_buttons = self._range_accepted_mouse_buttons
+        self._range_accepted_mouse_buttons = None
+        if accepted_mouse_buttons is not None:
+            self.plot_item.vb.setAcceptedMouseButtons(accepted_mouse_buttons)
+
+    def _apply_theme_palette(self) -> None:
+        """Refresh an existing pyqtgraph pane after the application appearance flips."""
+        if not self._released:
+            self.apply_palette(theme.current_plot_palette())
 
     def enable_masking(self, enabled: bool) -> None:
         self._masking = bool(enabled)

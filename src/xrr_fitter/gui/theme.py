@@ -1328,11 +1328,26 @@ def set_dark_appearance(application: QApplication, dark: bool) -> str:
     return apply_theme(application)
 
 
+def _refresh_plot_palettes(application: QApplication) -> None:
+    """Repaint plot widgets that were created before an appearance switch.
+
+    Qt's stylesheet reaches ordinary widgets, but Matplotlib and pyqtgraph own
+    their canvases and structural colours themselves.  Plot widgets register a
+    small private hook instead of making this module import the plotting modules
+    (which would create a theme/plot import cycle).
+    """
+    for widget in application.allWidgets():
+        refresh = getattr(widget, "_apply_theme_palette", None)
+        if callable(refresh):
+            refresh()
+
+
 def apply_theme(application: QApplication) -> str:
     """Install the palette-matched stylesheet and return the applied sheet."""
     sheet = build_stylesheet(application.palette())
     if application.styleSheet() != sheet:
         application.setStyleSheet(sheet)
+    _refresh_plot_palettes(application)
     return sheet
 
 
