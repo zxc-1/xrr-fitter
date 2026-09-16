@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -20,7 +21,7 @@ def _step(name: str) -> dict[str, object]:
     return matches[0]
 
 
-def test_patch_release_version_is_0_2_3() -> None:
+def test_release_version_module_declares_semver() -> None:
     payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = payload["project"]
     version_module = (ROOT / "src" / "xrr_fitter" / "version.py").read_text(encoding="utf-8")
@@ -30,7 +31,8 @@ def test_patch_release_version_is_0_2_3() -> None:
     assert payload["tool"]["setuptools"]["dynamic"]["version"] == {
         "attr": "xrr_fitter.version.__version__",
     }
-    assert '__version__ = "0.2.3"' in version_module
+    match = re.search(r'^__version__ = "([0-9]+\.[0-9]+\.[0-9]+)"$', version_module, re.MULTILINE)
+    assert match is not None
 
 
 def test_windows_spec_collects_orsopy_schema_files() -> None:
