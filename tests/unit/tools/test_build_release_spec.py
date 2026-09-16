@@ -301,7 +301,7 @@ def test_dynamic_version_project_can_build_release_fixture(load_tool_module) -> 
 
     fixture = module._fixture_toml(payload)
 
-    assert 'version = "0.2.3"' in fixture
+    assert f"version = {json.dumps(payload['project']['version'])}" in fixture
 
 
 def test_pyproject_rejects_static_and_dynamic_version_sources(
