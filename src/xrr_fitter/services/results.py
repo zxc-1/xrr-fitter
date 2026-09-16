@@ -130,12 +130,11 @@ def _layer_result(
 
 def _dataset_summary(dataset: DatasetProject) -> AutomaticDatasetSummary:
     structure = dataset.structure
-    if structure is None:
-        raise ValueError(f"automatic result requires a structure: {dataset.dataset_id}")
     # Per-layer rows assume the flat filename-derived layers the automatic route
-    # builds. Anything else still deserves a status row: this runs on every
-    # results refresh, so raising here would tear down the panel from a Qt slot.
-    flat = all(isinstance(component, LayerSpec) for component in structure.components)
+    # builds. Anything else, including a newly imported dataset awaiting structure
+    # initialization, still deserves a status row: this runs on every results
+    # refresh, so raising here would tear down the panel from a Qt slot.
+    flat = structure is not None and all(isinstance(component, LayerSpec) for component in structure.components)
     parameters = _parameter_map(dataset)
     layers = (
         ()

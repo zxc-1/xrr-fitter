@@ -12,8 +12,10 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QImage, QPainter
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
 
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.plots.live import LiveReflectivityPlot
@@ -127,6 +129,50 @@ def test_range_selection_emits_sorted_bounds(qtbot) -> None:
     assert low < high
     assert np.isclose(low, 0.08)
     assert np.isclose(high, 0.22)
+
+
+def test_range_drag_claims_the_viewbox_and_restores_navigation(qtbot) -> None:
+    """Dragging a range handle must not translate the plot underneath it."""
+    plot = LiveReflectivityPlot()
+    qtbot.addWidget(plot)
+    plot.resize(800, 400)
+    plot.show()
+    qtbot.wait(1)
+    plot.plot_item.vb.setRange(xRange=(0.0, 1.0), yRange=(0.0, 1.0), padding=0)
+    plot.set_navigation_mode("pan")
+    before = plot.plot_item.vb.viewRange()
+    original_mouse_buttons = plot.plot_item.vb.acceptedMouseButtons()
+
+    plot.enable_range_selection(True)
+    region = plot.range_item
+    assert region is not None
+    region.setRegion((0.2, 0.4))
+    assert plot.plot_item.vb.state["mouseEnabled"] == [False, False]
+    assert plot.plot_item.vb.acceptedMouseButtons() == Qt.MouseButton.NoButton
+
+    received = _collect(plot.fit_range_selected)
+    view = plot.scene().views()[0]
+
+    def viewport_position(x: float) -> object:
+        scene = plot.plot_item.vb.mapViewToScene(QPointF(x, 0.5))
+        return view.mapFromScene(scene)
+
+    start = viewport_position(0.2)
+    finish = viewport_position(0.3)
+    QTest.mousePress(view.viewport(), Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(view.viewport(), finish, delay=20)
+    QTest.mouseRelease(view.viewport(), Qt.MouseButton.LeftButton, pos=finish)
+    qtbot.wait(1)
+
+    low, high = sorted(region.getRegion())
+    assert np.isclose(low, 0.3, atol=0.02)
+    assert np.isclose(high, 0.4, atol=0.02)
+    assert plot.plot_item.vb.viewRange() == before
+    assert received and np.isclose(received[-1][0], low) and np.isclose(received[-1][1], high)
+
+    plot.enable_range_selection(False)
+    assert plot.plot_item.vb.state["mouseEnabled"] == [True, True]
+    assert plot.plot_item.vb.acceptedMouseButtons() == original_mouse_buttons
 
 
 def test_range_item_is_hidden_until_selection_is_enabled(qtbot) -> None:
@@ -663,18 +709,31 @@ def test_clearing_the_fit_range_takes_its_caption_with_it(qtbot) -> None:
 
 def test_fit_range_caption_reads_against_the_canvas_it_is_drawn_on(qtbot) -> None:
     """标签压在半透明带子上，实际底色是画布，颜色得由画布决定。"""
-    plot = LiveReflectivityPlot()
-    qtbot.addWidget(plot)
-    plot.apply_palette(theme.LIGHT_PLOT_PALETTE)
-    plot.show_log_reflectivity(np.array([0.5, 3.0, 5.4]), np.array([1.0, 0.1, 0.01]), None, r_floor=1e-6)
-    plot.show_fit_range(0.5, 5.4)
-    light = _range_label(plot).color.name().upper()
+    application = QApplication.instance()
+    assert application is not None
+    previous_palette = application.palette()
+    try:
+        # show_log_reflectivity re-resolves the application palette, so make the
+        # first half independent of the desktop appearance running the test.
+        application.setPalette(theme.light_palette())
+        plot = LiveReflectivityPlot()
+        qtbot.addWidget(plot)
+        plot.show_log_reflectivity(
+            np.array([0.5, 3.0, 5.4]),
+            np.array([1.0, 0.1, 0.01]),
+            None,
+            r_floor=1e-6,
+        )
+        plot.show_fit_range(0.5, 5.4)
+        light = _range_label(plot).color.name().upper()
 
-    plot.apply_palette(theme.DARK_PLOT_PALETTE)
-    dark = _range_label(plot).color.name().upper()
+        plot.apply_palette(theme.DARK_PLOT_PALETTE)
+        dark = _range_label(plot).color.name().upper()
 
-    assert light == theme.RANGE_LABEL_ON_LIGHT.upper()
-    assert dark == theme.RANGE_LABEL_ON_DARK.upper()
+        assert light == theme.RANGE_LABEL_ON_LIGHT.upper()
+        assert dark == theme.RANGE_LABEL_ON_DARK.upper()
+    finally:
+        application.setPalette(previous_palette)
 
 
 def test_residual_pane_names_its_sigma_band_in_the_plot(qtbot) -> None:

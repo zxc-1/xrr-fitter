@@ -188,6 +188,13 @@ class DiagnosticCanvas(FigureCanvasQTAgg):
         self._draw_timer.stop()
         self._draw_pending = False
 
+    def _apply_theme_palette(self) -> None:
+        """Refresh an existing figure after the application appearance flips."""
+        if self._released or self.figure is None:
+            return
+        apply_figure_font(self.figure)
+        self.draw_idle()
+
     def release(self) -> None:
         self.cancel_pending_draw()
         self._released = True

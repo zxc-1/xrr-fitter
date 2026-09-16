@@ -15,6 +15,19 @@ from PySide6.QtWidgets import QApplication
 from xrr_fitter.gui import theme
 
 
+def _assert_views_use_plot_palette(views: object, palette: theme.PlotPalette) -> None:
+    import numpy as np
+
+    from xrr_fitter.gui.plots.live import LiveReflectivityPlot
+
+    for view in views.values():
+        if isinstance(view, LiveReflectivityPlot):
+            assert np.allclose(view.background_color(), palette.background, atol=1e-6)
+        else:
+            assert view.figure.get_facecolor() == palette.background
+            assert view.axes.get_facecolor() == palette.background
+
+
 def _relative_luminance(value: tuple[float, ...]) -> float:
     """WCAG relative luminance for an RGB(A) tuple of 0..1 channels."""
     channels = []
@@ -78,6 +91,38 @@ def test_diagnostic_views_paint_the_resolved_background(qtbot) -> None:
         else:
             assert view.figure.get_facecolor() == expected
             assert view.axes.get_facecolor() == expected
+
+
+def test_existing_diagnostic_views_follow_an_appearance_round_trip(qtbot) -> None:
+    """A live theme switch repaints views that were built before the switch."""
+    from xrr_fitter.gui import theme
+    from xrr_fitter.gui.plots.diagnostics import build_tabs
+
+    ref_tabs, analysis_tabs, views = build_tabs()
+    qtbot.addWidget(ref_tabs)
+    qtbot.addWidget(analysis_tabs)
+    application = QApplication.instance()
+    assert application is not None
+
+    previous_palette = application.palette()
+    previous_stylesheet = application.styleSheet()
+    previous_light_palette = theme.LIGHT_PALETTE
+    try:
+        # Make this test independent of the palette left by another GUI test.
+        theme.LIGHT_PALETTE = None
+        application.setPalette(theme.light_palette())
+        theme.apply_theme(application)
+
+        theme.set_dark_appearance(application, True)
+        _assert_views_use_plot_palette(views, theme.DARK_PLOT_PALETTE)
+
+        theme.set_dark_appearance(application, False)
+        _assert_views_use_plot_palette(views, theme.LIGHT_PLOT_PALETTE)
+        assert ref_tabs is not None and analysis_tabs is not None
+    finally:
+        theme.LIGHT_PALETTE = previous_light_palette
+        application.setPalette(previous_palette)
+        application.setStyleSheet(previous_stylesheet)
 
 
 def test_palette_survives_a_real_draw_that_clears_the_axes(qtbot, monkeypatch) -> None:
