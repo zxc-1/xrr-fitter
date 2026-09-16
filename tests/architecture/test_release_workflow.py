@@ -41,6 +41,7 @@ def test_candidate_readiness_validates_the_version_tag() -> None:
     job = _payload()["jobs"]["candidate-readiness"]
     validation = next(step for step in job["steps"] if step.get("name") == "Validate release version tag")
     assert validation["if"] == "startsWith(github.ref, 'refs/tags/')"
+    assert validation["env"] == {"PYTHONDONTWRITEBYTECODE": "1"}
     assert "tools/release_version.py" in validation["run"]
     assert '"$GITHUB_REF_NAME"' in validation["run"]
 

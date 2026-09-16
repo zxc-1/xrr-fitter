@@ -256,6 +256,8 @@ jobs:
           fetch-depth: 0
       - name: Validate release version tag
         if: startsWith(github.ref, 'refs/tags/')
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         shell: bash
         run: |
           set -euo pipefail

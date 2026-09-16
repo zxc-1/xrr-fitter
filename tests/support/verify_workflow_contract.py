@@ -151,6 +151,7 @@ def _readiness_job() -> dict[str, object]:
             {
                 "name": "Validate release version tag",
                 "if": "startsWith(github.ref, 'refs/tags/')",
+                "env": {"PYTHONDONTWRITEBYTECODE": "1"},
                 "shell": "bash",
                 "run": "\n".join(
                     (
