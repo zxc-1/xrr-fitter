@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
@@ -36,6 +37,7 @@ from xrr_fitter.gui import theme
 from xrr_fitter.gui.data.dataset_card import DATASET_CARD_ROLE, DatasetCardDelegate, dataset_card
 from xrr_fitter.gui.data.import_dialog import ImportDialog
 from xrr_fitter.gui.data.mask_editor import MaskEditor
+from xrr_fitter.gui.data.sources import folder_data_paths
 from xrr_fitter.gui.data.substrate_dialog import SubstrateDialog
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.fitting.metrics import UNKNOWN
@@ -44,7 +46,6 @@ from xrr_fitter.gui.navigation.panel import STRUCTURE_STEP_INDEX
 from xrr_fitter.gui.sizing import ContentSizedTree
 
 DATA_FILTER = "XRR 数据 (*.xy *.dat *.txt);;所有文件 (*)"
-SUPPORTED_SUFFIXES = {".xy", ".dat", ".txt"}
 # 七列仍是模型的形状——详情标签和各列 tooltip 都从这里取值，所以列没有删。显示则
 # 收成一列自绘卡片（见 dataset_card）：设计稿的 ``.ds`` 没有表头也没有第二列。
 # 这里此前还有 ``COMPACT_COLUMNS = (0, 4, 6)`` 和 ``DETAIL_COLUMNS = (1, 2, 3, 5)``
@@ -173,6 +174,16 @@ class DataPanel(QWidget):
         self.import_files_button.clicked.connect(self._import_files)
         self.import_folder_button.clicked.connect(self._import_folder)
         self.change_preset_button.clicked.connect(self._change_measurement_preset)
+        self.import_folder_quick_button = QToolButton()
+        self.import_folder_quick_button.setObjectName("importFolderQuickButton")
+        self.import_folder_quick_button.setAccessibleName("导入文件夹")
+        self.import_folder_quick_button.setToolTip("从文件夹批量导入 XRR 数据")
+        self.import_folder_quick_button.setAutoRaise(True)
+        self.import_folder_quick_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.import_folder_quick_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        self.import_folder_quick_button.setIconSize(QSize(16, 16))
+        self.import_folder_quick_button.setFixedSize(QSize(24, 24))
+        self.import_folder_quick_button.clicked.connect(self._import_folder)
         self.import_files_shortcut = self._shortcut("importFilesShortcut", "Ctrl+I")
         self.import_folder_shortcut = self._shortcut(
             "importFolderShortcut",
@@ -191,6 +202,7 @@ class DataPanel(QWidget):
         top.setContentsMargins(theme.SPACE_MD, theme.SPACE_MD, theme.SPACE_MD, theme.SPACE_SM)
         top.addWidget(heading)
         top.addStretch(1)
+        top.addWidget(self.import_folder_quick_button)
         top.addWidget(self.dataset_add_button)
         self.summary_label = QLabel()
         self.summary_label.setObjectName("datasetSummary")
@@ -320,13 +332,7 @@ class DataPanel(QWidget):
         import_angle_offset_deg: float = 0.0,
     ) -> None:
         root = Path(folder)
-        entries = root.rglob("*") if recursive else root.glob("*")
-        paths = tuple(
-            sorted(
-                (path for path in entries if path.is_file() and path.suffix.casefold() in SUPPORTED_SUFFIXES),
-                key=lambda path: path.relative_to(root).as_posix().casefold(),
-            )
-        )
+        paths = folder_data_paths(root, recursive)
         self.add_paths(
             paths,
             beam=beam,
@@ -785,34 +791,32 @@ class DataPanel(QWidget):
 
     def _confirm_import(self, paths: tuple[Path, ...], *, folder: bool) -> None:
         try:
-            preset = self.document.project.measurement_preset
+            preset = None if self._force_preset_dialog else self.document.project.measurement_preset
             mapping = None
-            recursive = False
-            if preset is None or self._force_preset_dialog:
+            sources = paths
+            if folder or preset is None:
                 dialog = ImportDialog(
-                    paths, folder_mode=folder, noise_model=self.document.project.fit_config.noise_model, parent=self
+                    paths,
+                    folder_mode=folder,
+                    preset=preset,
+                    noise_model=self.document.project.fit_config.noise_model,
+                    parent=self,
                 )
                 if dialog.exec() != QDialog.DialogCode.Accepted:
                     return
-                instrument = dialog.instrument_spec()
-                preset = api.MeasurementPreset(
-                    instrument.instrument_id or "default-measurement",
-                    dialog.beam_spec(),
-                    instrument,
-                    angle_convention=dialog.angle_convention(),
-                )
+                if preset is None:
+                    instrument = dialog.instrument_spec()
+                    preset = api.MeasurementPreset(
+                        instrument.instrument_id or "default-measurement",
+                        dialog.beam_spec(),
+                        instrument,
+                        angle_convention=dialog.angle_convention(),
+                    )
                 mapping = dialog.column_mapping()
-                recursive = dialog.recursive_folder_import()
-            sources = self._folder_paths(paths[0], recursive) if folder else paths
+                sources = dialog.source_paths()
             self.import_paths(sources, preset=preset, column_mapping=mapping)
         except (InterruptedError, OSError, ValueError, TypeError) as error:
             QMessageBox.critical(self, "导入数据失败", f"{type(error).__name__}: {error}")
 
     def _folder_paths(self, folder: Path, recursive: bool) -> tuple[Path, ...]:
-        entries = folder.rglob("*") if recursive else folder.glob("*")
-        return tuple(
-            sorted(
-                (path for path in entries if path.is_file() and path.suffix.casefold() in SUPPORTED_SUFFIXES),
-                key=lambda path: path.relative_to(folder).as_posix().casefold(),
-            )
-        )
+        return folder_data_paths(folder, recursive)

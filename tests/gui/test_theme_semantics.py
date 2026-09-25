@@ -253,6 +253,36 @@ def test_an_advisory_line_paints_a_callout_box_not_just_coloured_text(qtbot, kin
     assert bar.alpha() > fill.alpha(), "竖条没有比底色更实"
 
 
+def test_a_suggested_button_wears_a_tinted_ground_not_the_primary_fill(qtbot) -> None:
+    """建议动作按钮：低饱和 accent 底 + 左侧实心强调竖条，不是通栏那块饱和 accent。
+
+    「初始化结构」此前是 ``primary`` 实心按钮——整块底染成 accent、铺满画布顶端，像一条
+    标题栏，抢走了「整屏只推荐一个下一步」里那枚实心的名额。降级成建议动作后，底色压到几个
+    百分点的 accent，左缘留一条取满 accent 的竖条指着它。底色是渲染出来的，所以这里量像素
+    而不是读 stylesheet 文本：中心底得比饱和 accent 淡，左缘那条得是满 accent。
+    """
+    from PySide6.QtWidgets import QPushButton
+
+    button = QPushButton("初始化结构")
+    qtbot.addWidget(button)
+    theme.mark_suggested(button)
+    palette = QPalette(button.palette())
+    # 照 ``_hint_probe``：贴 stylesheet 前把调色板钉住，量到的每个像素都出自这一份。
+    button.setPalette(palette)
+    button.setStyleSheet(theme.build_stylesheet(palette))
+    button.resize(240, 40)
+    button.show()
+    qtbot.waitExposed(button)
+
+    image = button.grab().toImage()
+    bar = QColor.fromRgba(image.pixel(1, image.height() // 2))
+    fill = QColor.fromRgba(image.pixel(image.width() // 2, image.height() - 4))
+    accent = QColor(theme.palette_tokens(palette).accent)
+
+    assert fill.rgb() != accent.rgb(), "建议按钮仍铺着饱和 accent，没有降下来"
+    assert bar.rgb() == accent.rgb(), "建议按钮左缘没有取满 accent 的强调竖条"
+
+
 def test_a_plain_status_label_stays_unboxed(qtbot) -> None:
     """The box has to come from the hint property, not from every status label.
 
@@ -489,19 +519,57 @@ def test_both_side_rails_are_washed_a_step_off_the_canvas() -> None:
 
 
 def test_the_rail_wash_falls_back_to_the_window_when_alternatebase_is_flat() -> None:
-    """深色调色板把 AlternateBase 设成和 Base 同色，那时机架色得另找一处。
+    """调色板把 AlternateBase 写成与 Base 同色时，机架色得另找一处。
 
-    ``dark_palette`` 的 Base 与 AlternateBase 都是 ``#14181D``；照搬 AlternateBase 会让
-    三栏在深色外观下重新变成一整块平底色，正是上面两条测试要挡的那件事。
+    平台默认的深色板常把这两个角色写成同一个值；照搬 AlternateBase 会让三栏变成一整块平
+    底色，正是上面两条测试要挡的那件事。这里喂一份合成的扁平调色板，而不是 ``dark_palette()``
+    ——本仓库的深色外观自己带了第三层洗色（见下一条），拿它当扁平样本的话，这条回退路径就
+    根本没被走到，测试会在不再成立的前提上继续绿着。
     """
-    palette = theme.dark_palette()
-    assert palette.color(QPalette.ColorRole.AlternateBase) == palette.color(QPalette.ColorRole.Base)
-    sheet = theme.build_stylesheet(palette)
+    flat = "#14181d"
+    window = "#1b1f24"
+    sheet = theme.build_stylesheet(_shell_palette(window, flat, flat))
 
-    window = palette.color(QPalette.ColorRole.Window).name()
     assert f"background: {window}" in _column_rule(sheet, "navigationColumn").lower()
     assert f"background: {window}" in _column_rule(sheet, "inspectorColumn").lower()
     assert window not in _column_rule(sheet, "canvasColumn").lower()
+
+
+def test_the_dark_appearance_carries_three_distinct_washes_too() -> None:
+    """深色的窗口、机架、画布必须是三个各不相同的值，和亮色一样。
+
+    深色此前把 ``AlternateBase`` 写成与 ``Base`` 同色，``shell_washes`` 于是回退到窗口色当机
+    架——机架、窗口壳与状态栏共用一个值，深色下也就没有「机架」这一层；而剩下那唯一一道
+    分界（``#1B1F24`` 对 ``#14181D``）对比只有 1.08，两栏几乎是贴着的。
+    """
+    palette = theme.dark_palette()
+    roles = (
+        QPalette.ColorRole.Window,
+        QPalette.ColorRole.Base,
+        QPalette.ColorRole.AlternateBase,
+    )
+    washes = [palette.color(role).name().lower() for role in roles]
+
+    assert len(set(washes)) == 3, washes
+
+    canvas_wash, rail_wash = theme.shell_washes(palette)
+    assert canvas_wash == palette.color(QPalette.ColorRole.Base).name()
+    assert rail_wash == palette.color(QPalette.ColorRole.AlternateBase).name()
+
+
+def test_the_dark_rails_sit_above_both_the_canvas_and_the_window() -> None:
+    """深色下机架是三层里最亮的一层：画布最深，窗口壳居中，机架浮在最上面。
+
+    这是深色外观通行的那套明暗语序（编辑器最深、侧栏亮一档、活动栏再亮一档），也是「内容
+    往里凹、机架往外浮」在没有投影可用时唯一还剩的表达手段——Qt 的 QSS 没有 ``box-shadow``。
+    方向必须钉住：把机架调得比画布更深，读起来就是画布浮在机架上，主次正好反了。
+    """
+    palette = theme.dark_palette()
+    canvas = palette.color(QPalette.ColorRole.Base)
+    window = palette.color(QPalette.ColorRole.Window)
+    rail = palette.color(QPalette.ColorRole.AlternateBase)
+
+    assert canvas.lightness() < window.lightness() < rail.lightness()
 
 
 def _column_wash(qtbot, name: str, palette: QPalette) -> QColor:

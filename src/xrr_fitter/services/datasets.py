@@ -20,6 +20,7 @@ same derived-state contract rather than maintaining parallel cleanup rules.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -155,38 +156,63 @@ def _dataset_id(project: XrrProject, stem: str) -> str:
 
 
 def _strict_filename_materials(stem: str) -> tuple[str, tuple[str, ...]]:
-    parts = stem.rsplit(maxsplit=1)
+    normalized = re.sub(r"\s*\+\s*", "+", stem.strip())
+    parts = normalized.rsplit(maxsplit=1)
     if len(parts) != 2:
         raise ValueError("filename must end with a space-separated material stack")
     sample_id, material_segment = parts
-    tokens = tuple(value.strip() for value in material_segment.split("+"))
-    if not sample_id.strip() or not tokens or any(not value for value in tokens):
-        raise ValueError("filename material stack contains an empty token")
+    tokens = tuple(material_segment.split("+"))
+    material_pattern = r"(?:[ac]-)?(?:[A-Z][a-z]?[0-9]*(?:\.[0-9]+)?)+"
+    if any(not re.fullmatch(material_pattern, token) for token in tokens):
+        raise ValueError("filename must declare material tokens, not scan identifiers")
+    if any(re.fullmatch(r"W[0-9]+", token) for token in tokens):
+        raise ValueError("wafer point identifiers do not declare a material stack")
     return sample_id, tokens
 
 
-def _strict_source_materials(path: Path) -> tuple[str, tuple[str, ...]]:
-    """Prefer a matching parent stack while preserving the wafer-point ID.
+def _strict_stack_only_materials(name: str) -> tuple[str, ...]:
+    normalized = re.sub(r"\s*\+\s*", "+", name.strip())
+    if "+" not in normalized:
+        raise ValueError("stack-only folder must declare a material stack with '+' separators")
+    _sample_id, tokens = _strict_filename_materials(f"_ {normalized}")
+    return tokens
 
-    Only ``W<digits>_exported`` loses the transport suffix. Other stems retain
-    the strict filename parser so malformed or unrelated names still fail.
-    """
+
+def _folder_materials(name: str) -> tuple[str | None, tuple[str, ...]]:
     try:
-        folder_sample_id, folder_tokens = _strict_filename_materials(path.parent.name)
+        sample_id, tokens = _strict_filename_materials(name)
+    except ValueError:
+        return None, _strict_stack_only_materials(name)
+    return sample_id, tokens
+
+
+def _exported_point_stem(stem: str) -> str:
+    if re.fullmatch(r"W[0-9]+_exported", stem):
+        return stem.removesuffix("_exported")
+    return stem
+
+
+def _folder_dataset_id_stem(path: Path, folder_sample_id: str | None) -> str:
+    if folder_sample_id is None:
+        return _exported_point_stem(path.stem)
+    point_stem = path.stem.removeprefix(f"{folder_sample_id} ")
+    point_stem = _exported_point_stem(point_stem)
+    return f"{folder_sample_id} {point_stem}"
+
+
+def _strict_source_materials(path: Path) -> tuple[str, tuple[str, ...]]:
+    """Use an explicit file stack first, otherwise inherit the nearest folder declaration."""
+    try:
+        return _strict_filename_materials(path.stem)
     except ValueError:
         pass
-    else:
-        if path.stem.startswith(f"{folder_sample_id} "):
-            point_stem = path.stem[len(folder_sample_id) + 1 :]
-            exported_suffix = "_exported"
-            if (
-                point_stem.startswith("W")
-                and point_stem.endswith(exported_suffix)
-                and point_stem[1 : -len(exported_suffix)].isdigit()
-            ):
-                point_stem = point_stem[: -len(exported_suffix)]
-            return f"{folder_sample_id} {point_stem}", folder_tokens
-    return _strict_filename_materials(path.stem)
+    for folder in path.parents:
+        try:
+            folder_sample_id, folder_tokens = _folder_materials(folder.name)
+        except ValueError:
+            continue
+        return _folder_dataset_id_stem(path, folder_sample_id), folder_tokens
+    raise ValueError("source path does not declare a material stack")
 
 
 def _substrate_group_id(tokens: tuple[str, ...]) -> str:

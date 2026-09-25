@@ -65,92 +65,90 @@ def _inputs(
 
 
 def _all_kz(stack: SlabStack, inputs: _Inputs) -> ComplexTangent:
-    # The discrete root sign is inherited from the primal branch; its tangent
-    # is flipped only after differentiating the analytic square root.
+    # Keep the query axis contiguous: resolution quadrature evaluates thousands
+    # of q values per layer, while the number of parameters stays small.
     qz = inputs.qz.ravel()
-    q_tangent = inputs.qz_jacobian.reshape(qz.size, inputs.parameter_count)
-    # Pin real radicands before applying the same decaying-root branch as the primal.
+    q_tangent = inputs.qz_jacobian.reshape(qz.size, inputs.parameter_count).T
     relative = (stack.sld_a2 - stack.sld_a2[0]).copy()
     relative.imag[relative.imag == 0.0] = BRANCH_EPSILON_A2
     relative_tangent = inputs.sld_jacobian - inputs.sld_jacobian[0]
-    radicand = (qz[:, None] / 2.0) ** 2 - 4.0 * np.pi * relative
-    radicand_tangent = (qz[:, None, None] / 2.0) * q_tangent[:, None, :] - 4.0 * np.pi * relative_tangent[None, :, :]
+    radicand = (qz[None, :] / 2.0) ** 2 - 4.0 * np.pi * relative[:, None]
+    radicand_tangent = (qz[None, None, :] / 2.0) * q_tangent[None, :, :] - 4.0 * np.pi * relative_tangent[:, :, None]
     raw = np.sqrt(radicand.astype(np.complex128))
     if np.any(raw == 0.0):
         raise FloatingPointError("zero layer wavevector in Parratt Jacobian")
-    # Differentiate the complex square root before applying its discrete sign choice.
-    tangent = radicand_tangent / (2.0 * raw[:, :, None])
+    tangent = radicand_tangent / (2.0 * raw[:, None, :])
     flip = (raw.imag > 0.0) | ((raw.imag == 0.0) & (raw.real < 0.0))
     kz = raw.copy()
     kz[flip] *= -1.0
-    tangent[flip] *= -1.0
+    np.multiply(tangent, -1.0, out=tangent, where=flip[:, None, :])
     return kz, tangent
 
 
 def _all_interfaces(stack: SlabStack, inputs: _Inputs, kz: np.ndarray, kz_tangent: np.ndarray) -> ComplexTangent:
-    # Fresnel, roughness, and exponential terms are differentiated together so
-    # no interface parameter is evaluated through a second primal traversal.
-    upper, lower = kz[:, :-1], kz[:, 1:]
-    upper_tangent, lower_tangent = kz_tangent[:, :-1], kz_tangent[:, 1:]
+    upper, lower = kz[:-1], kz[1:]
+    upper_tangent, lower_tangent = kz_tangent[:-1], kz_tangent[1:]
     denominator = upper + lower
     if np.any(denominator == 0.0):
         raise FloatingPointError("zero Fresnel denominator")
     numerator = upper - lower
     bare = numerator / denominator
-    # The bare-interface tangent is the exact quotient rule for each parameter.
-    bare_tangent = (
-        (upper_tangent - lower_tangent) * denominator[:, :, None]
-        - numerator[:, :, None] * (upper_tangent + lower_tangent)
-    ) / denominator[:, :, None] ** 2
     sigma = stack.roughness_a
     sigma_tangent = inputs.roughness_jacobian
-    # Nevot-Croce roughness contributes through both wavevectors and sigma.
-    exponent = -2.0 * upper * lower * sigma[None, :] ** 2
-    exponent_tangent = -2.0 * (
-        (upper_tangent * lower[:, :, None] + upper[:, :, None] * lower_tangent) * sigma[None, :, None] ** 2
-        + upper[:, :, None] * lower[:, :, None] * 2.0 * sigma[None, :, None] * sigma_tangent[None, :, :]
-    )
+    exponent = -2.0 * upper * lower * sigma[:, None] ** 2
     factor = np.exp(exponent)
     reflection = bare * factor
-    factor_tangent = factor[:, :, None] * exponent_tangent
-    tangent = bare_tangent * factor[:, :, None] + bare[:, :, None] * factor_tangent
+    # Differentiate once per interface/query before broadcasting parameters.
+    # Expanding the quotient and product rules on the full tangent tensor
+    # needlessly repeats complex divisions and creates many large temporaries.
+    quotient = 2.0 * factor / denominator**2
+    damping = -2.0 * sigma[:, None] ** 2 * reflection
+    upper_partial = lower * (quotient + damping)
+    lower_partial = upper * (damping - quotient)
+    sigma_partial = -4.0 * upper * lower * sigma[:, None] * reflection
+    tangent = (
+        upper_partial[:, None, :] * upper_tangent
+        + lower_partial[:, None, :] * lower_tangent
+        + sigma_partial[:, None, :] * sigma_tangent[:, :, None]
+    )
     return reflection, tangent
 
 
 def _standard_jacobian(stack: SlabStack, inputs: _Inputs) -> tuple[np.ndarray, np.ndarray]:
-    # Keep the backward Parratt recurrence identical to the primal amplitude
-    # path, carrying one quotient-rule tangent alongside each amplitude.
     kz, kz_tangent = _all_kz(stack, inputs)
     reflection, reflection_tangent = _all_interfaces(stack, inputs, kz, kz_tangent)
-    amplitude = reflection[:, -1]
-    amplitude_tangent = reflection_tangent[:, -1]
-    # Preserve the primal backward recurrence and propagate its quotient tangent.
-    for interface in range(reflection.shape[1] - 2, -1, -1):
+    amplitude = reflection[-1]
+    amplitude_tangent = reflection_tangent[-1]
+    # Preserve the primal arithmetic and backward recurrence; transpose only at
+    # the public boundary where callers expect a trailing parameter axis.
+    for interface in range(reflection.shape[0] - 2, -1, -1):
         lower = interface + 1
         thickness = stack.thickness_a[lower]
-        exponent = -2j * kz[:, lower] * thickness
+        exponent = -2j * kz[lower] * thickness
         exponent_tangent = -2j * (
-            kz_tangent[:, lower] * thickness + kz[:, lower, None] * inputs.thickness_jacobian[lower]
+            kz_tangent[lower] * thickness + kz[lower, None, :] * inputs.thickness_jacobian[lower, :, None]
         )
         phase = np.exp(exponent)
-        phase_tangent = phase[:, None] * exponent_tangent
+        phase_tangent = phase[None, :] * exponent_tangent
         propagated = amplitude * phase
-        propagated_tangent = amplitude_tangent * phase[:, None] + amplitude[:, None] * phase_tangent
-        numerator = reflection[:, interface] + propagated
-        numerator_tangent = reflection_tangent[:, interface] + propagated_tangent
-        denominator = 1.0 + reflection[:, interface] * propagated
+        propagated_tangent = amplitude_tangent * phase[None, :] + amplitude[None, :] * phase_tangent
+        numerator = reflection[interface] + propagated
+        numerator_tangent = reflection_tangent[interface] + propagated_tangent
+        denominator = 1.0 + reflection[interface] * propagated
         if np.any(denominator == 0.0):
             raise FloatingPointError("zero Parratt denominator")
         denominator_tangent = (
-            reflection_tangent[:, interface] * propagated[:, None] + reflection[:, interface, None] * propagated_tangent
+            reflection_tangent[interface] * propagated[None, :] + reflection[interface, None, :] * propagated_tangent
         )
         amplitude = numerator / denominator
+        # Keep reflection and propagation coupled: an individual interface may
+        # overflow when squared even though this quotient and its tangent are finite.
         amplitude_tangent = (
-            numerator_tangent * denominator[:, None] - numerator[:, None] * denominator_tangent
-        ) / denominator[:, None] ** 2
+            numerator_tangent * denominator[None, :] - numerator[None, :] * denominator_tangent
+        ) / denominator[None, :] ** 2
     intensity = np.abs(amplitude) ** 2
-    jacobian = 2.0 * np.real(np.conjugate(amplitude)[:, None] * amplitude_tangent)
-    return intensity.reshape(inputs.qz.shape), jacobian.reshape(inputs.qz.shape + (inputs.parameter_count,))
+    jacobian = 2.0 * np.real(np.conjugate(amplitude)[None, :] * amplitude_tangent)
+    return intensity.reshape(inputs.qz.shape), jacobian.T.reshape(inputs.qz.shape + (inputs.parameter_count,))
 
 
 def _normalize(matrix: np.ndarray, tangent: np.ndarray) -> ComplexTangent:
@@ -469,19 +467,18 @@ def parratt_reflectivity_jacobian(
         # This prevents overflow warnings from escaping during a failed fit
         # candidate and makes derivative failure match the primal contract.
         with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
-            if not stack.periodic_spans:
-                values, jacobian = _standard_jacobian(stack, inputs)
+            # Background, scale and footprint parameters do not enter the optical
+            # recurrence. Prune their zero tangents for ordinary stacks as well.
+            active = _active_parameter_mask(inputs)
+            if np.all(active):
+                values, jacobian = _jacobian_for_inputs(stack, inputs)
             else:
-                active = _active_parameter_mask(inputs)
-                if np.all(active):
-                    values, jacobian = _jacobian_for_inputs(stack, inputs)
-                else:
-                    values, reduced = _jacobian_for_inputs(
-                        stack,
-                        _selected_parameter_inputs(inputs, active),
-                    )
-                    jacobian = np.zeros(values.shape + (inputs.parameter_count,), dtype=float)
-                    jacobian[..., active] = reduced
+                values, reduced = _jacobian_for_inputs(
+                    stack,
+                    _selected_parameter_inputs(inputs, active),
+                )
+                jacobian = np.zeros(values.shape + (inputs.parameter_count,), dtype=float)
+                jacobian[..., active] = reduced
     except FloatingPointError as error:
         if str(error).startswith(("zero ", "invalid periodic Parratt transform")):
             raise

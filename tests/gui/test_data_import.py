@@ -15,6 +15,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
+    QToolButton,
     QTreeWidget,
 )
 from tests.gui.data_import_support import _instrument, _panel, _saved_preset, _write_curve
@@ -312,6 +313,29 @@ def test_data_panel_folder_import_filters_and_sorts_deterministically(
     )
 
     assert panel.dataset_ids == ("A", "b", "C", "d", "zeta")
+
+
+def test_home_folder_button_runs_the_batch_import_path(qtbot, tmp_path, monkeypatch) -> None:
+    """The visible homepage folder action must import the chosen directory."""
+    from dataclasses import replace
+
+    from xrr_fitter.gui.data.import_dialog import ImportDialog
+    from xrr_fitter.gui.document import ProjectDocument
+
+    folder = tmp_path / "homepage-folder"
+    _write_curve(folder / "first.xy")
+    _write_curve(folder / "second.dat")
+    project = replace(api.new_project(), measurement_preset=_saved_preset())
+    panel = _panel(qtbot, ProjectDocument(project))
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *_args, **_kwargs: str(folder))
+
+    monkeypatch.setattr(ImportDialog, "exec", lambda _dialog: QDialog.DialogCode.Accepted)
+    quick_button = panel.findChild(QToolButton, "importFolderQuickButton")
+    assert quick_button is not None
+    quick_button.click()
+
+    assert panel.dataset_ids == ("first", "second")
+    assert panel.batch_preview_table.rowCount() == 2
 
 
 def test_data_panel_shows_source_beam_and_instrument_summaries(qtbot, tmp_path) -> None:
@@ -687,3 +711,53 @@ def test_the_batch_preview_says_so_when_a_filename_declares_no_stack(qtbot, tmp_
 
     assert result.imported_dataset_ids == ("unnamed",)
     assert panel.batch_preview_table.item(0, 2).text() == BATCH_PREVIEW_NO_STACK
+
+
+@pytest.mark.parametrize("saved", (False, True))
+def test_home_folder_import_previews_real_files_before_commit(qtbot, tmp_path, monkeypatch, saved) -> None:
+    from dataclasses import replace
+
+    from PySide6.QtWidgets import QPushButton
+
+    from xrr_fitter.gui.data.import_dialog import PREVIEW_READY, ImportDialog
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.gui.main_window import MainWindow
+
+    folder = tmp_path / "batch"
+    _write_curve(folder / "P1 Zr.xy")
+    _write_curve(folder / "nested" / "P2 Zr.xy")
+    preset = replace(_saved_preset(), angle_convention="theta", import_angle_offset_deg=0.01)
+    value = replace(api.new_project(), measurement_preset=preset if saved else None)
+    window = MainWindow(ProjectDocument(value))
+    qtbot.addWidget(window)
+    window.show()
+    button = window.findChild(QPushButton, "emptyStateImportFolderButton")
+    assert button is not None and button.isVisibleTo(window)
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *_a, **_kw: str(folder))
+    observed = []
+
+    def accept(dialog):
+        observed.append(dialog)
+        assert window.document.project.datasets == ()
+        assert dialog.preview_table.item(0, 0).text() == "P1 Zr.xy"
+        assert dialog.preview_table.item(0, 4).text() == PREVIEW_READY
+        if not saved:
+            dialog.select_beam_kind("monochromatic")
+        else:
+            assert dialog.beam_spec() == preset.beam
+            assert dialog.instrument_spec() == preset.instrument
+            assert dialog.angle_convention() == preset.angle_convention
+        dialog.recursive_check.setChecked(True)
+        assert dialog.import_button().isEnabled()
+        assert dialog.preview_table.rowCount() == 2
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(ImportDialog, "exec", accept)
+    button.click()
+
+    assert len(observed) == 1
+    assert window.data_panel.dataset_ids == ("P2", "P1")
+    if saved:
+        assert window.document.project.measurement_preset == preset
+        assert all(item.import_angle_offset_deg == 0.01 for item in window.document.project.datasets)
+    window.document._set_dirty(False)

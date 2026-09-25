@@ -121,26 +121,76 @@ def test_each_step_stays_within_the_control_budget(qtbot, tmp_path) -> None:
         assert len(visible) <= 10, f"{name} shows {len(visible)} controls"
 
 
-def test_a_step_is_blocked_until_its_precondition_holds(qtbot) -> None:
-    """An empty project cannot advance past import."""
+def test_all_onboarding_topics_are_available_without_data(qtbot) -> None:
     window = _window(qtbot)
-
-    assert window.guidance.step_is_available("importStep") is True
-    assert window.guidance.step_is_available("structureStep") is False
-    assert window.guidance.step_is_available("fitStep") is False
+    assert all(window.guidance.step_is_available(name) for name in STEP_NAMES)
 
 
-def test_importing_data_unblocks_the_structure_step(qtbot, tmp_path) -> None:
+def test_importing_data_does_not_gate_onboarding(qtbot, tmp_path) -> None:
     window = _window(qtbot, _project(tmp_path))
-
-    assert window.guidance.step_is_available("structureStep") is True
-    assert window.guidance.step_is_available("fitStep") is False
+    assert all(window.guidance.step_is_available(name) for name in STEP_NAMES)
 
 
 def test_defining_a_structure_unblocks_the_fit_step(qtbot, tmp_path) -> None:
     window = _window(qtbot, _project(tmp_path, structured=True))
 
     assert window.guidance.step_is_available("fitStep") is True
+
+
+def test_completed_fit_does_not_change_the_onboarding_topic(qtbot, tmp_path) -> None:
+    from dataclasses import replace
+
+    from tests.support.model_cases import final_fit_result
+
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.gui.guidance.panel import GuidancePanel
+
+    project = _project(tmp_path, structured=True)
+    document = ProjectDocument(project)
+    panel = GuidancePanel(document)
+    qtbot.addWidget(panel)
+    panel.show_step("fitStep")
+    fitted = replace(project, datasets=(replace(project.datasets[0], last_valid_result=final_fit_result()),))
+
+    document.replace_project(fitted)
+
+    assert panel.current_step() == "fitStep"
+
+
+def test_result_action_is_enabled_for_a_project_without_active_selection(qtbot, tmp_path) -> None:
+    """Guidance should use the first dataset when a loaded project has no selection."""
+    from dataclasses import replace
+
+    from tests.support.model_cases import dataset_project, final_fit_result, project
+
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.gui.guidance.panel import GuidancePanel
+
+    value = replace(project(dataset_project(result=final_fit_result())), base_directory=str(tmp_path))
+    document = ProjectDocument(value)
+    panel = GuidancePanel(document)
+    qtbot.addWidget(panel)
+    panel.show_step("resultStep")
+
+    action = panel.findChild(QPushButton, "resultStepAction")
+
+    assert action is not None
+    assert action.isEnabled()
+
+
+def test_finishing_onboarding_returns_to_home_without_a_fit(qtbot) -> None:
+    window = _window(qtbot)
+    window.set_guidance_visible(True)
+    window.guidance.show_step("resultStep")
+    action = window.guidance.findChild(QPushButton, "resultStepAction")
+    assert action is not None and action.isEnabled()
+    assert action.text() == "完成引导，进入主页"
+
+    action.click()
+
+    assert not window.guidance_is_visible()
+    assert window.inspector_column.isVisibleTo(window)
+    assert window.central_stack.currentWidget() is window.plot_panel
 
 
 def test_switching_to_expert_reveals_the_inspector_column(qtbot, tmp_path) -> None:
@@ -187,10 +237,10 @@ def test_the_guided_header_labels_all_four_steps(qtbot) -> None:
     window = _window(qtbot)
 
     assert window.guidance.step_header_titles() == (
-        "导入数据",
-        "确认样品结构",
-        "开始拟合",
-        "查看结果",
+        "了解数据导入",
+        "了解样品结构",
+        "了解拟合流程",
+        "进入主页",
     )
 
 
@@ -216,7 +266,7 @@ def test_the_guided_header_draws_one_cell_per_declared_step(qtbot, monkeypatch) 
         ),
     )
     monkeypatch.setattr(guidance_panel, "STEP_SPECS", extended)
-    panel = guidance_panel.GuidancePanel(ProjectDocument(), {})
+    panel = guidance_panel.GuidancePanel(ProjectDocument())
     qtbot.addWidget(panel)
 
     assert len(panel.step_header_titles()) == len(extended)
@@ -393,7 +443,7 @@ def test_the_guided_actions_sit_in_one_row_at_the_bodys_left_edge(qtbot, tmp_pat
     action = panel.findChild(QPushButton, "structureStepAction")
     manual = panel.findChild(QPushButton, "structureStepManual")
 
-    assert action.text() == "看起来没问题，开始拟合 →"
+    assert action.text() == "下一步 →"
     assert action.mapTo(card, QPoint(0, 0)).x() == body.mapTo(card, QPoint(0, 0)).x()
     assert manual.mapTo(card, QPoint(0, 0)).x() > action.mapTo(card, QPoint(0, 0)).x()
     assert action.mapTo(card, QPoint(0, 0)).y() == manual.mapTo(card, QPoint(0, 0)).y()
@@ -402,9 +452,11 @@ def test_the_guided_actions_sit_in_one_row_at_the_bodys_left_edge(qtbot, tmp_pat
         assert panel.findChild(QPushButton, f"{name}Back") is None, name
     # Step 2's primary *is* the advance, and step 4's is the exit, so neither
     # carries a second forward button beside it.
-    assert panel.findChild(QPushButton, "structureStepNext") is None
-    assert panel.findChild(QPushButton, "resultStepNext") is None
-    assert panel.findChild(QPushButton, "importStepNext") is not None
+    next_buttons = [
+        panel.findChild(QPushButton, f"{name}Next") for name in ("structureStep", "resultStep", "importStep")
+    ]
+    assert next_buttons == [None, None, None]
+    assert panel.findChild(QPushButton, "importStepSkip") is not None
 
 
 def test_the_step_header_is_how_a_guided_user_goes_back(qtbot, tmp_path) -> None:
@@ -425,8 +477,8 @@ def test_the_step_header_is_how_a_guided_user_goes_back(qtbot, tmp_path) -> None
 
     panel.findChild(QAbstractButton, "guidanceStep_resultStepCell").click()
 
-    assert panel.step_is_available("resultStep") is False
-    assert panel.current_step() == "importStep"
+    assert panel.step_is_available("resultStep") is True
+    assert panel.current_step() == "resultStep"
 
 
 def test_the_header_cells_get_the_width_their_titles_need(qtbot) -> None:
@@ -563,6 +615,70 @@ def test_the_header_is_a_band_above_the_page_not_half_the_panel(qtbot) -> None:
     assert cells[1].height() == header.height(), (cells[1].height(), header.height())
 
 
+def test_the_guided_card_ends_where_its_content_ends(qtbot) -> None:
+    """``.wizbody`` 是块流：卡片贴着自己最后一块收边，余量归它下面的页面。
+
+    ``_build_page`` 末尾那个 ``addStretch(1)`` 把整屏余量吸进了卡片内部——量下来卡片 629px 高
+    而内容止于 y=175，底下 454px 是一个空 spacer，占卡片 72%。空项目里更明显：氧化提示与层
+    列表都不可见，一屏就剩三行字顶在最上面。
+
+    这与抬头带那条（``test_the_header_is_a_band_above_the_page_not_half_the_panel``）是同一
+    处置：能长的部件得贴住 ``sizeHint`` 收边，多余高度交给容器，而不是自己养一块空白。
+
+    卡片不许设最小高，也不许把 ``BODY_MAX_WIDTH`` 换成固定宽：两者都会抬
+    ``QStackedWidget.minimumSizeHint``（它取各页的最大值），连带把专家模式画布列的地板顶高。
+    所以断言只钉「卡片不比自己的内容高」，不钉任何绝对尺寸。
+    """
+    from xrr_fitter.gui import theme
+    from xrr_fitter.gui.guidance.panel import BODY_PAD_PX
+
+    window = _guided(qtbot)
+    card = window.guidance.findChild(QFrame, "structureStepCard")
+
+    assert card is not None
+    # 卡片贴着最后一块内容收边：直接子部件里最靠下那一块的底，加上卡片下内边距，就应该到卡
+    # 片底。``sizeHint`` 在换行标签上不可靠（宽度一变，正文的行数和高度都变），所以量的是实际
+    # 摆好后内容底与卡片底之间还剩多少空——改之前那里是 454px 空 spacer，改之后只剩下内边距。
+    bottoms = [
+        child.geometry().bottom()
+        for child in card.findChildren(QWidget)
+        if child.parentWidget() is card and child.isVisibleTo(card)
+    ]
+    slack = card.height() - max(bottoms)
+    assert 0 <= slack <= BODY_PAD_PX + theme.SPACE_SM, (slack, card.height(), max(bottoms))
+    # 而余量确实落到了页面：卡片不再填满整页（改之前卡片与页面等高）。
+    page = card.parentWidget()
+    assert page.height() > card.height(), (page.height(), card.height())
+
+
+def test_the_guided_step_keeps_three_type_sizes_the_way_the_design_sets_them(qtbot) -> None:
+    """``.eyebrow2{12px}`` / ``h3{21px}`` / ``.sub{13.5px}``（HTML 498-500）：三档分明。
+
+    量下来是 12 / 19 / 12：标题借 ``emptyTitle`` 那条全局规则（``FONT_PT_LG`` = 14pt 在 96dpi
+    下落 19px），而正文只挂了 ``mutedText``——那条规则只给颜色，字号没人给，于是继承到 12px 和
+    眉标同档。一页三档塌成两档，正文读起来是眉标的续行。
+
+    标题不能靠改 ``emptyTitle`` 修：``plots/panel.py`` 的画布空态标题共用那一条，改它会漂到画
+    布上。按 ``STEP_EYEBROW_FONT_PX`` 的既有形状补像素档——本仓库已从 pt 迁到 px，理由记在
+    ``theme.py`` 那几条注释里：pt 在 96dpi 下会漂一档，和设计稿对不上。
+
+    13.5px 取 14：Qt 的 ``setPixelSize`` 只收整数，而半像素字号写进 QSS 会让整条规则静默失效。
+    """
+    window = _guided(qtbot)
+    panel = window.guidance
+
+    sizes = {
+        suffix: QFontInfo(panel.findChild(QLabel, f"structureStep{suffix}").font()).pixelSize()
+        for suffix in ("Eyebrow", "Title", "Body")
+    }
+
+    assert sizes["Eyebrow"] == 12, sizes
+    assert sizes["Title"] == 21, sizes
+    assert sizes["Body"] == 14, sizes
+    # 三档必须真的分开：正文严格大于眉标、严格小于标题。
+    assert sizes["Eyebrow"] < sizes["Body"] < sizes["Title"], sizes
+
+
 def _oxide_project(tmp_path: Path):
     """帧② 画的那份结构：空气 / 自动加入的 SiO₂ / a-Si 主体层 / c-Si 基底。
 
@@ -621,3 +737,59 @@ def test_an_auto_added_oxide_shows_the_hint_frame_two_prints(qtbot, tmp_path) ->
 
     assert tip is not None
     assert tip.isVisibleTo(window.guidance) is True
+
+
+@pytest.mark.parametrize("structured", (False, True))
+def test_onboarding_only_advances_and_finishes_at_home(qtbot, tmp_path, monkeypatch, structured) -> None:
+    """An empty or populated project can finish onboarding without running workflows."""
+    from xrr_fitter.gui.data.panel import DataPanel
+    from xrr_fitter.gui.main_window import MainWindow
+
+    calls: list[str] = []
+    monkeypatch.setattr(DataPanel, "_import_files", lambda _self: calls.append("import"))
+    monkeypatch.setattr(MainWindow, "start_fit", lambda _self: calls.append("fit"))
+    window = _window(qtbot, _project(tmp_path, structured=True) if structured else None)
+    window.set_guidance_visible(True)
+    before = window.document.project
+    panel = window.guidance
+
+    for name in panel.step_names():
+        assert panel.current_step() == name
+        assert panel.step_is_available(name)
+        action = panel.findChild(QPushButton, f"{name}Action")
+        assert action is not None and action.isEnabled()
+        action.click()
+
+    assert calls == []
+    assert window.document.project is before
+    assert not window.guidance_is_visible()
+    assert window.central_stack.currentWidget() is window.plot_panel
+
+
+def test_onboarding_has_no_operational_actions(qtbot) -> None:
+    from xrr_fitter.gui.guidance.panel import STEP_SPECS
+
+    assert {spec.action for spec in STEP_SPECS} <= {"next_step", "leave_guidance"}
+
+
+def test_onboarding_disables_fit_commands_until_returning_home(qtbot, tmp_path, monkeypatch) -> None:
+    window = _window(qtbot, _project(tmp_path, structured=True))
+    calls: list[str] = []
+    monkeypatch.setattr(window.fit_panel, "start_fit", lambda: calls.append("fit") or True)
+    action = window._workflow_actions["startFitAction"]
+    assert action.isEnabled()
+
+    window.set_guidance_visible(True)
+
+    assert not action.isEnabled()
+    assert not window.fit_panel.start_button.isEnabled()
+    action.trigger()
+    assert calls == []
+
+    window.guidance.show_step("resultStep")
+    window.guidance.findChild(QPushButton, "resultStepAction").click()
+
+    assert action.isEnabled()
+    assert window.fit_panel.start_button.isEnabled()
+    action.trigger()
+    assert calls == ["fit"]

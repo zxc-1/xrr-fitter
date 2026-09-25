@@ -1,17 +1,11 @@
-"""Guided four-step workflow surface.
+"""Read-only onboarding: explain the workflow, then return to the homepage.
 
-Expert mode was the only working surface: standard mode merely hid a handful of
-controls, so a newcomer still faced the whole dock workspace at once. This panel
-walks import to result and shows only what the current step needs.
-
-Every gate is answered by reading the immutable project through the public API,
-so the guided surface adds no API of its own and can never disagree with what a
-fit would actually accept.
+No import, structure mutation, or fitting callbacks are attached to this surface.
+Existing project data is shown only as context, never as a navigation gate.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
 from PySide6.QtCore import QPropertyAnimation, QSize, Qt, Signal
@@ -37,6 +31,15 @@ from xrr_fitter.gui.structure.stack import component_fill
 # 向导抬头两行字的尺寸，照设计稿的 ``.wizhead .wh``：标题 13.5px（就近取 14）、副行 11px。
 STEP_TITLE_FONT_PX = 14
 STEP_SUBLINE_FONT_PX = 11
+
+# 引导页正文区（``.wizbody``）的两档字号，和上面抬头格子的两行是两码事：设计稿
+# ``h3{font-size:21px}`` 与 ``.sub{font-size:13.5px}``（就近取 14，``setPixelSize`` 只收整数）。
+# 标题这一档此前借 ``emptyTitle`` 那条全局 QSS 规则（``FONT_PT_LG`` 14pt 在 96dpi 落 19px），
+# 而正文只挂 ``mutedText``（那条规则只给颜色，字号没人给，继承到 12px），三档于是塌成两档。
+# 按像素给、直接落在字体对象上，理由和 ``STEP_EYEBROW_FONT_PX`` 一样：pt 折算随 DPI 漂，对不上
+# 设计稿；``emptyTitle`` 又被画布空态标题（``plots/panel.py``）共用，改它会漂到画布上。
+WIZBODY_TITLE_FONT_PX = 21
+WIZBODY_BODY_FONT_PX = 14
 
 # 设计稿 ``.stack .lyr``：``padding:9px 12px``、``gap:10px``。三个数都不落在 ``theme.SPACE_*``
 # 那四档阶梯（4/8/12/16）上，所以写成局部常量而不是就近取一档——纵向 9 取 4 会让每行矮
@@ -84,34 +87,36 @@ class StepSpec:
 STEP_SPECS = (
     StepSpec(
         "importStep",
-        "导入数据",
-        "尚未导入",
-        "选择 .xy / .dat / .txt 反射率数据文件。导入时确认光路与仪器设置。",
-        "导入数据文件…",
-        "import_files",
+        "了解数据导入",
+        "在主页操作",
+        "回到主页后，可选择多个 .xy / .dat / .txt 文件，也可直接选择文件夹批量导入。"
+        "首次导入时确认光路与仪器设置；引导不会导入数据或启动计算。",
+        "下一步 →",
+        "next_step",
     ),
     StepSpec(
         "structureStep",
-        "确认样品结构",
-        "检查自动建议",
-        "初始化样品结构，必要时添加膜层。默认基底为 Si，可在结构面板调整。",
-        "初始化样品结构",
-        "initialize_structure",
+        "了解样品结构",
+        "检查层序与材料",
+        "主页会根据文件名或文件夹声明的材料栈建立初始结构。请核对层序、材料与基底；"
+        "没有明确材料声明时，需要在主页手动建层。",
+        "下一步 →",
+        "next_step",
     ),
     StepSpec(
         "fitStep",
-        "开始拟合",
-        "全自动",
-        "一键拟合会先全局筛选再局部精修。拟合过程中可以随时取消。",
-        "开始一键拟合",
-        "start_fit",
+        "了解拟合流程",
+        "在主页启动",
+        "完成引导后，在主页确认数据和结构，再点击“一键拟合”。运行进度、暂停和停止都在主页操作；本页不会执行拟合。",
+        "下一步 →",
+        "next_step",
     ),
     StepSpec(
         "resultStep",
-        "查看结果",
-        "置信度与参数",
-        "查看候选解与可信度。需要完整的参数表、诊断图或导出时，切换到专家模式。",
-        "切换到专家模式",
+        "进入主页",
+        "准备开始使用",
+        "拟合后可在主页查看曲线、候选解、可信度和参数，并按需导出结果。点击下方按钮结束引导，开始使用主页。",
+        "完成引导，进入主页",
         "leave_guidance",
     ),
 )
@@ -150,20 +155,9 @@ OXIDE_TIP_TEXT = (
 # 「专家模式」加粗照设计稿 585 行：这一句的正文是理由，加粗的那三个字是读者要去找的那颗
 # 开关的名字。加粗它，这一句就能扫读；不加粗，这句脚注要整句读完才知道去处叫什么。
 EXPERT_HINT_TEXT = "需要精细控制每个参数的边界、先验或跨数据集共享？切换到<b>专家模式</b>即可。"
-MANUAL_TEXT = "＋ 我要手动加/删层"
-
-# Step 2 confirms a structure that exists and builds one that does not:
-# "初始化样品结构" run against a finished stack would discard exactly what this
-# step is asking the user to approve.
-STRUCTURE_ACTION_BUILD = ("初始化样品结构", "initialize_structure")
-STRUCTURE_ACTION_CONFIRM = ("看起来没问题，开始拟合 →", "confirm_structure")
-
-# The prose follows the same fork. This wording is the only place in the guided
-# surface that says where the structure came from and what happens if it is not
-# exact, so it appears as soon as there is a structure to say it about.
+MANUAL_TEXT = "跳过引导，进入主页"
 STRUCTURE_BODY_CONFIRM = (
-    "我们根据你的数据和常见薄膜体系，自动搭好了一个初始结构。看一眼是否合理——"
-    "不确定也没关系，拟合会在允许范围内自动修正每一层。"
+    "下方是当前数据集已有的结构，仅供核对。引导不会修改或重新初始化它；需要添加、删除或调整膜层时，请返回主页操作。"
 )
 
 # ``.wizbody{max-width:720px;margin:0 auto}``. With both side columns hidden the
@@ -179,16 +173,6 @@ BODY_MAX_WIDTH = 720
 # 就贴边了。设计稿的 ``--xl:24px`` 在七帧的 DOM 里零引用（只用在文档装帧上），所以这一处
 # 不该顺手补一档 token 出来。
 BODY_PAD_PX = 24
-
-# Which steps carry a secondary 「下一步」 beside their primary.
-#
-# It cannot be derived from ``spec.action``: step 2's build-time action is
-# ``initialize_structure`` and only ``_sync_structure_step`` swaps it for
-# ``confirm_structure``. Import opens a file dialog and fit runs asynchronously, so
-# on neither does the primary itself advance the step -- these two need a way past.
-# Step 2's primary *is* the advance and step 4's is the exit out of the mode, so a
-# forward button beside either would be a second control doing the same thing.
-STEPS_OFFERING_NEXT = frozenset({"importStep", "fitStep"})
 
 
 def import_subline(project: api.XrrProject) -> str:
@@ -488,18 +472,34 @@ class _StepHeader(QWidget):
             # 四格同一个拉伸因子：整行的空余按因子分，四份相等，谁的标题长短都不参与。
             layout.addWidget(self._build_cell(spec, index), 1)
             if index < len(STEP_SPECS) - 1:
-                layout.addWidget(self._build_separator(spec))
+                self._build_separator(spec)
         self.set_current(0)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """把每条分隔线摆到相邻两格的交界处，贯通整条抬头的高度。
+
+        分隔线不进 ``QHBoxLayout``，改由这里按几何摆放：一旦进了布局，它的高度就得由 sizeHint
+        表达，而「贴住抬头高」只能靠 ``setFixedHeight`` 把当前高钉回去——那会反过来抬高抬头自己
+        的 sizeHint（抬头是 ``Fixed`` 纵向策略，取 sizeHint 为高），构造期一个偏大的瞬时高度就
+        被钉死、抬头再也收不回窄带。作为浮在格子之上的子件，它的几何不参与 sizeHint，抬头照
+        常收在自己的窄带高度，而线仍旧从顶贯到底、盖满整格（离屏 ``Expanding`` 能填满、cocoa
+        原生样式不填，这条几何摆放两个平台一致）。
+        """
+        super().resizeEvent(event)
+        for index, separator in enumerate(self._separators):
+            cell = self._cells[index]
+            x = cell.x() + cell.width() - self.SEPARATOR_WIDTH
+            separator.setGeometry(x, 0, self.SEPARATOR_WIDTH, self.height())
+            separator.raise_()
 
     def _build_separator(self, spec: StepSpec) -> QWidget:
         """``.wh{border-right:1px solid var(--border)}``：贴在这一格右缘、贯通整格高的细线。"""
-        # QWidget 而不是 QFrame(VLine)：VLine 的 sizeHint 返回 -1，QHBoxLayout
-        # 于是只给 26px 而不是行高 38px。纯 QWidget + QSS background 没有这个问题。
+        # 浮在格子之上的子件，不进布局（见 ``resizeEvent``）：进布局会让它的高度反噬抬头的
+        # sizeHint。纯 ``QWidget`` + ``WA_StyledBackground``，底色由 ``pipelineRail`` 的 QSS 给。
         separator = QWidget(self)
         separator.setObjectName(f"guidanceSeparator_{spec.name}")
         separator.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         separator.setFixedWidth(self.SEPARATOR_WIDTH)
-        separator.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         separator.setProperty("pipelineRail", True)
         self._separators.append(separator)
         return separator
@@ -589,7 +589,7 @@ class _StepHeader(QWidget):
 
 
 class GuidancePanel(QWidget):
-    """Project one step at a time, gated on the real project state."""
+    """Explain one topic at a time without executing project operations."""
 
     step_changed = Signal(str)
     leave_requested = Signal()
@@ -597,17 +597,14 @@ class GuidancePanel(QWidget):
     def __init__(
         self,
         document: ProjectDocument,
-        actions: dict[str, Callable[[], object]],
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("guidancePanel")
         self.setAccessibleName("引导流程")
         self._document = document
-        self._actions = dict(actions)
         self._pages: dict[str, QWidget] = {}
         self._action_buttons: dict[str, QPushButton] = {}
-        self._next_buttons: dict[str, QPushButton] = {}
         # Step 2's action, prose and row list all follow whether a structure
         # exists, so each is held by name for ``_sync_structure_step`` to repaint.
         self._bodies: dict[str, QLabel] = {}
@@ -674,11 +671,21 @@ class GuidancePanel(QWidget):
         card_layout.addWidget(eyebrow)
         title = QLabel(spec.title, card)
         title.setObjectName(f"{spec.name}Title")
-        title.setProperty("emptyTitle", True)
+        # ``h3{font-size:21px}``：不走 ``emptyTitle``——那条 QSS 规则的 font-size 会盖过这里设的
+        # 像素字号，且它被画布空态标题共用。字号与字重都落在字体对象上。
+        title_font = title.font()
+        title_font.setPixelSize(WIZBODY_TITLE_FONT_PX)
+        title_font.setWeight(QFont.Weight.Bold)
+        title.setFont(title_font)
         card_layout.addWidget(title)
         body = QLabel(spec.body, card)
         body.setObjectName(f"{spec.name}Body")
+        # ``mutedText`` 只给颜色，字号（``.sub{13.5px}`` → 14）自己在字体对象上给，否则继承到
+        # 眉标那一档、三档层次塌成两档。
         body.setProperty("mutedText", True)
+        body_font = body.font()
+        body_font.setPixelSize(WIZBODY_BODY_FONT_PX)
+        body.setFont(body_font)
         body.setWordWrap(True)
         card_layout.addWidget(body)
         self._bodies[spec.name] = body
@@ -692,15 +699,16 @@ class GuidancePanel(QWidget):
         card_layout.addLayout(self._build_cta_row(spec, card))
         if spec.name == "structureStep":
             card_layout.addWidget(self._build_expert_hint(card))
-        # Block flow: the height left over belongs below the last block, not spread
-        # between the paragraphs.
-        card_layout.addStretch(1)
         # ``margin:0 auto``: the column takes most of the shell up to its cap, and
-        # whatever the cap leaves over splits evenly between the two sides.
+        # whatever the cap leaves over splits evenly between the two sides.  The card
+        # is top-aligned so it ends where its last block ends and the leftover height
+        # falls to the page below it -- the same handling ``_StepHeader`` gives its
+        # band.  A stretch *inside* the card instead grew the card to fill the shell
+        # and parked 454px of empty space under the prose.
         row = QHBoxLayout(page)
         row.setContentsMargins(0, 0, 0, 0)
         row.addStretch(1)
-        row.addWidget(card, 8)
+        row.addWidget(card, 8, Qt.AlignmentFlag.AlignTop)
         row.addStretch(1)
         return page
 
@@ -738,34 +746,14 @@ class GuidancePanel(QWidget):
         return row
 
     def _build_secondary(self, spec: StepSpec, card: QWidget) -> QPushButton | None:
-        """The one alternative beside the primary, or nothing where the step needs none.
-
-        Step 2 gets the escape hatch: guided mode owns no layer editor, so a user who
-        can see the suggestion is wrong would otherwise be left fitting the structure
-        they just judged wrong.  Import and fit get 「下一步」 because their primary opens
-        a file dialog or starts a background run rather than advancing the step; step 2's
-        primary *is* the advance and step 4's is the way out of the mode, so a forward
-        button beside either would be a second control doing the same thing.
-
-        手动那一枚是描边按钮而不是无框的 ``ghost``：设计稿帧② 把它写成 ``<span class="btn
-        lg">``，与主按钮同框同高，只是不填 accent 底色。它是与「开始拟合」并列的另一条路，
-        无框会把它降成一句可点的说明。「下一步 →」照旧无框——设计稿六帧一次都没画过它，
-        给它换档就是自己发明。
-        """
-        if spec.name == "structureStep":
-            manual = QPushButton(MANUAL_TEXT, card)
-            manual.setObjectName("structureStepManual")
-            manual.setAccessibleName(MANUAL_TEXT)
-            manual.clicked.connect(lambda _checked=False: self._run("leave_guidance"))
-            return manual
-        if spec.name not in STEPS_OFFERING_NEXT:
+        """Offer a direct exit without requiring any completed project operations."""
+        if spec.action == "leave_guidance":
             return None
-        forward = QPushButton("下一步 →", card)
-        forward.setObjectName(f"{spec.name}Next")
-        forward.setProperty("ghost", True)
-        forward.clicked.connect(lambda _checked=False, name=spec.name: self._step(name, 1))
-        self._next_buttons[spec.name] = forward
-        return forward
+        skip = QPushButton(MANUAL_TEXT, card)
+        skip.setObjectName("structureStepManual" if spec.name == "structureStep" else f"{spec.name}Skip")
+        skip.setAccessibleName(MANUAL_TEXT)
+        skip.clicked.connect(lambda _checked=False: self._run("leave_guidance"))
+        return skip
 
     def _build_expert_hint(self, card: QWidget) -> QLabel:
         """Step 2's closing ``.help``: the pointer to expert mode, last on the page.
@@ -826,25 +814,11 @@ class GuidancePanel(QWidget):
         )
 
     def _sync_structure_step(self) -> None:
-        """Point step 2 at the project it actually has.
-
-        Confirming a stack and building one are different offers, and the design
-        makes the difference visible in three places at once: the action, the prose
-        above it, and the row list. Rebuilding all three from the project on every
-        change is what stops 「我们自动搭好了一个初始结构」 from appearing over an
-        empty stack -- and it runs whichever step is on screen, because a caller may
-        read step 2 while step 1 is current.
-        """
+        """Display an existing stack without changing the onboarding action."""
         rows = self.structure_rows()
         self._stack_list.set_rows(rows)
         self._oxide_tip.setVisible(any(role == ROLE_OXIDE for _name, role, _measure in rows))
-        built = bool(rows)
-        text, key = STRUCTURE_ACTION_CONFIRM if built else STRUCTURE_ACTION_BUILD
-        action = self._action_buttons["structureStep"]
-        action.setText(text)
-        action.setAccessibleName(text)
-        self._action_keys["structureStep"] = key
-        body = STRUCTURE_BODY_CONFIRM if built else SPEC_BY_NAME["structureStep"].body
+        body = STRUCTURE_BODY_CONFIRM if rows else SPEC_BY_NAME["structureStep"].body
         self._bodies["structureStep"].setText(body)
 
     def step_names(self) -> tuple[str, ...]:
@@ -888,24 +862,16 @@ class GuidancePanel(QWidget):
         animation.start()
 
     def step_is_available(self, name: str) -> bool:
-        """Answer a step's gate from the project, never from local UI state."""
-        project = self._document.project
-        dataset = self._active_dataset(project)
-        if name == "importStep":
-            return True
-        if name == "structureStep":
-            return bool(project.datasets)
-        if name == "fitStep":
-            return dataset is not None and dataset.structure is not None
-        if name == "resultStep":
-            return dataset is not None and dataset.last_valid_result is not None
-        raise KeyError(f"unknown guidance step: {name}")
+        """Every onboarding topic is accessible even for an empty project."""
+        if name not in self._pages:
+            raise KeyError(f"unknown guidance step: {name}")
+        return True
 
     def _active_dataset(self, project: api.XrrProject) -> object | None:
         active = project.ui_state.active_dataset_id
         return next(
             (dataset for dataset in project.datasets if dataset.dataset_id == active),
-            None,
+            project.datasets[0] if project.datasets else None,
         )
 
     def _step(self, name: str, offset: int) -> None:
@@ -938,28 +904,11 @@ class GuidancePanel(QWidget):
     def _run(self, key: str) -> None:
         if key == "leave_guidance":
             self.leave_requested.emit()
-            return
-        # Step 2's confirming form does not touch the project: the structure is
-        # already what the user just approved, so the only thing left is to advance.
-        if key == "confirm_structure":
-            self.show_step("fitStep")
-            return
-        operation = self._actions.get(key)
-        if operation is not None:
-            operation()
+        elif key == "next_step":
+            self._step(self.current_step(), 1)
+        else:
+            raise KeyError(f"unknown guidance action: {key}")
 
     def _refresh(self, *_args) -> None:
-        current = self.current_step()
-        names = self.step_names()
-        index = names.index(current)
         self._step_header.set_subline(0, import_subline(self._document.project))
         self._sync_structure_step()
-        # The action for a step the project is not ready for would fail, so it is
-        # disabled rather than left to raise.  Forward is gated on the *next* step's
-        # own precondition, so the flow cannot run ahead of the project -- the old
-        # unconditional ``setEnabled(True)`` contradicted this comment.
-        self._action_buttons[current].setEnabled(self.step_is_available(current))
-        forward = self._next_buttons.get(current)
-        following = names[index + 1] if index + 1 < len(names) else None
-        if forward is not None and following is not None:
-            forward.setEnabled(self.step_is_available(following))

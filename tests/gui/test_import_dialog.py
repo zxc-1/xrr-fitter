@@ -302,3 +302,25 @@ def test_detecting_the_convention_reports_a_batch_that_disagrees_with_itself(qtb
 
     assert dialog.two_theta_convention.isChecked()
     assert dialog.convention_status.text() == DETECT_CONFLICT
+
+
+def test_folder_preview_lists_files_and_refreshes_recursion(qtbot, tmp_path) -> None:
+    from xrr_fitter.gui.data.import_dialog import PREVIEW_READY, ImportDialog
+
+    folder = tmp_path / "batch"
+    _write_curve(folder / "first.xy")
+    _write_curve(folder / "nested" / "second.XY")
+    (folder / "ignored.csv").write_text("ignored")
+    dialog = ImportDialog((folder,), folder_mode=True)
+    qtbot.addWidget(dialog)
+    dialog.select_beam_kind("monochromatic")
+
+    assert dialog.preview_table.item(0, 0).text() == "first.xy"
+    assert dialog.preview_table.item(0, 4).text() == PREVIEW_READY
+    assert dialog.import_button().text() == "导入 1 个"
+
+    dialog.recursive_check.setChecked(True)
+
+    assert dialog.preview_table.rowCount() == 2
+    assert dialog.import_button().text() == "导入 2 个"
+    assert dialog.preview_table.item(1, 0).text() == "second.XY"

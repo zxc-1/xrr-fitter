@@ -60,6 +60,7 @@ ACCESSIBILITY_SPECS = (
         "点击选择文件，展开可选文件夹或更换测量预设",
         "导入 XRR 数据文件、文件夹，或更换测量预设",
     ),
+    AccessibilitySpec("importFolderQuickButton", "导入文件夹", "从文件夹批量导入 XRR 数据"),
     AccessibilitySpec("importFilesButton", "导入文件", "选择一个或多个 XRR 数据文件并确认导入设置"),
     AccessibilitySpec("importFolderButton", "导入文件夹", "选择 XRR 数据文件夹并确认批量导入设置"),
     AccessibilitySpec("datasetTree", "数据集列表", "使用键盘选择活动数据集"),
@@ -131,6 +132,7 @@ FOCUS_ORDER = (
     # 移进 ＋ 的菜单后就属于另一个窗口，而 setTabOrder 跨窗口是空操作——Qt 只打印一句
     # 警告，于是「模式段 → 数据集树」这一段链子会静悄悄断掉。菜单里的三条命令由菜单
     # 自己的方向键接管，这也是弹出菜单一贯的键盘走法。
+    "importFolderQuickButton",
     "datasetAddButton",
     "datasetTree",
     "initializeStructureButton",

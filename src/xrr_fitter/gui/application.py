@@ -64,14 +64,30 @@ def _build_app_icon() -> QIcon:
     return icon
 
 
+class _StagedSplash(QSplashScreen):
+    """启动画面：入口逐段调 ``showMessage`` 报告进度，文字统一排在底部居中。"""
+
+    def __init__(self, pixmap: QPixmap, color: QColor) -> None:
+        super().__init__(pixmap)
+        self._color = color
+        font = self.font()
+        font.setPointSize(11)
+        self.setFont(font)
+
+    def showMessage(self, message: str, *_args: object) -> None:  # noqa: N802 - Qt override
+        # 图标和标题画在上半部；消息固定在底边居中，每段替换上一段。
+        alignment = Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom
+        super().showMessage(message, alignment, self._color)
+
+
 def show_splash(application: QApplication) -> QSplashScreen:
     """Display a lightweight splash screen matching the current theme."""
     size = 360
     pixmap = QPixmap(size, size)
     palette = application.palette()
-    is_dark = palette.window().color().lightness() < 128
-    bg = QColor("#1E1F22") if is_dark else QColor("#FFFFFF")
-    fg = QColor("#E8E8EA") if is_dark else QColor("#202020")
+    # 取应用调色板而非写死的色值，启动画面与随后出现的主窗口同一个底色。
+    bg = palette.window().color()
+    fg = palette.windowText().color()
     pixmap.fill(bg)
     p = QPainter(pixmap)
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -90,18 +106,11 @@ def show_splash(application: QApplication) -> QSplashScreen:
     p.setPen(fg)
     p.drawText(QRectF(0, size * 0.55, size, 30), Qt.AlignmentFlag.AlignHCenter, "XRR Fitter")
 
-    # Loading text
-    sub_font = p.font()
-    sub_font.setPointSize(11)
-    sub_font.setBold(False)
-    p.setFont(sub_font)
+    p.end()
     muted = QColor(fg)
     muted.setAlpha(160)
-    p.setPen(muted)
-    p.drawText(QRectF(0, size * 0.68, size, 24), Qt.AlignmentFlag.AlignHCenter, "正在加载…")
-
-    p.end()
-    splash = QSplashScreen(pixmap)
+    splash = _StagedSplash(pixmap, muted)
+    splash.showMessage("正在加载…")
     splash.show()
     application.processEvents()
     return splash

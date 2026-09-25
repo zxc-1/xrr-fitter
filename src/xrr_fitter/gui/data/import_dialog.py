@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.accessibility import localize_standard_buttons
+from xrr_fitter.gui.data.sources import folder_data_paths
 from xrr_fitter.gui.noise import NOISE_MODE_LABELS, NOISE_MODE_REQUIREMENTS
 from xrr_fitter.gui.sizing import CompactDoubleSpinBox, ContentSizedTable
 
@@ -280,11 +281,15 @@ class ImportDialog(QDialog):
         paths: tuple[Path, ...] | list[Path],
         *,
         folder_mode: bool = False,
+        preset: api.MeasurementPreset | None = None,
         noise_model: str = "robust_log",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._paths = tuple(Path(path) for path in paths)
+        self._selected_paths = tuple(Path(path) for path in paths)
+        self._paths = self._selected_paths
+        self._folder_mode = folder_mode
+        self._preset = preset
         self._column_mapping: api.DataColumnMapping | None = None
         self._noise_model = noise_model
         self._failed_count = 0
@@ -301,6 +306,36 @@ class ImportDialog(QDialog):
         # 首次预览放在按钮构建之后：刷新要把批次计数写到确认按钮上，顺序反了就没有按钮可写。
         self._refresh_preview()
         self._arrange()
+        if preset is not None:
+            self._load_saved_preset(preset)
+
+    def _load_saved_preset(self, preset: api.MeasurementPreset) -> None:
+        """Folder options reuse, rather than silently replace, the saved measurement."""
+        beam, instrument = preset.beam, preset.instrument
+        for editor, value in (
+            (self.mono_wavelength, beam.wavelength_a),
+            (self.wavelength_1, beam.wavelength_1_a),
+            (self.wavelength_2, beam.wavelength_2_a),
+            (self.intensity_ratio, beam.intensity_ratio_21),
+            (self.sample_length, instrument.sample_length_mm),
+            (self.beam_width, instrument.beam_width_mm),
+        ):
+            if value is not None:
+                editor.setValue(value)
+        self.instrument_id.setText(instrument.instrument_id or "")
+        for editor, value in (
+            (self.footprint, instrument.footprint_mode),
+            (self.background, instrument.background_kind),
+            (self.resolution_domain, instrument.resolution_domain),
+        ):
+            editor.setCurrentIndex(editor.findData(value))
+        self.theta_convention.setChecked(preset.angle_convention == "theta")
+        self.two_theta_convention.setChecked(preset.angle_convention == "two_theta")
+        self.angle_row.setEnabled(False)
+        self.select_beam_kind(beam.kind)
+        self.preview_help.setText(
+            f"沿用测量预设：{preset.preset_id}。可选择是否递归导入子目录；更换测量预设请返回主页。"
+        )
 
     def _build_source_controls(self, folder_mode: bool) -> None:
         self.heading = QLabel(DIALOG_HEADING)
@@ -333,6 +368,7 @@ class ImportDialog(QDialog):
         self.recursive_check = QCheckBox("递归导入子目录")
         self.recursive_check.setObjectName("recursiveFolderImportCheck")
         self.recursive_check.setVisible(bool(folder_mode))
+        self.recursive_check.toggled.connect(self._refresh_preview)
 
     def _build_beam_controls(self) -> None:
         self.beam_group = QButtonGroup(self)
@@ -421,15 +457,14 @@ class ImportDialog(QDialog):
         self.log_intensity_check.setToolTip(LOG_INTENSITY_TIP)
 
     def _preview_beam(self) -> api.BeamSpec:
-        """The beam to parse previews with, falling back before a choice is made.
+        """The beam to parse previews with before and after a choice is made.
 
-        The preview is drawn before the reader has committed to a light path, so
-        an unselected or half-edited beam must still yield a readable curve
-        rather than an empty pane blaming the file.
+        Before beam selection, preview with the wavelength currently displayed
+        in the monochromatic editor; the import action still requires a choice.
         """
-        if self.beam_kind() is None:
-            return api.BeamSpec("monochromatic", wavelength_a=1.5406)
         try:
+            if self.beam_kind() is None:
+                return api.BeamSpec("monochromatic", wavelength_a=self.mono_wavelength.value())
             return self.beam_spec()
         except (ValueError, TypeError):
             return api.BeamSpec("monochromatic", wavelength_a=1.5406)
@@ -457,6 +492,12 @@ class ImportDialog(QDialog):
 
     def _refresh_preview(self) -> None:
         """Re-scan the batch and re-label the confirm button."""
+        if self._folder_mode:
+            self._paths = tuple(
+                source
+                for path in self._selected_paths
+                for source in (folder_data_paths(path, self.recursive_check.isChecked()) if path.is_dir() else (path,))
+            )
         self._refresh_preview_table()
         self._apply_import_button_text()
 
@@ -477,6 +518,7 @@ class ImportDialog(QDialog):
                 path,
                 beam,
                 column_mapping=self._column_mapping,
+                import_angle_offset_deg=0.0 if self._preset is None else self._preset.import_angle_offset_deg,
                 angle_convention=convention,
                 noise_model=self._noise_model,
             )
@@ -505,11 +547,12 @@ class ImportDialog(QDialog):
         self._failed_count = 0
         for row, path in enumerate(self._paths):
             rows, angle, status, detail = self._scan_path(path, beam)
-            self._failed_count += int(status == PREVIEW_FAILED)
+            failed = status == PREVIEW_FAILED
+            self._failed_count += int(failed)
             name = QTableWidgetItem(path.name)
             name.setToolTip(str(path))
             kind = QTableWidgetItem(angle)
-            mapping_text = PREVIEW_UNKNOWN if status == PREVIEW_FAILED else preview_mapping_text(self._column_mapping)
+            mapping_text = PREVIEW_UNKNOWN if failed else preview_mapping_text(self._column_mapping)
             mapping = QTableWidgetItem(mapping_text)
             mapping.setToolTip(PREVIEW_MAPPING_TIP)
             count = QTableWidgetItem(str(rows))
@@ -532,6 +575,7 @@ class ImportDialog(QDialog):
         if self._failed_count:
             label = f"{label}（跳过 {self._failed_count} 个失败）"
         self._import_button.setText(label)
+        self._import_button.setEnabled(self.beam_kind() is not None and importable > 0)
 
     def _build_buttons(self) -> None:
         self.mapping_button = QPushButton("高级列映射…")
@@ -575,6 +619,8 @@ class ImportDialog(QDialog):
             )
         ):
             _wrap2_field(instrument_grid, index, caption, field)
+        beam_box.setEnabled(self._preset is None)
+        instrument_box.setEnabled(self._preset is None)
         layout = QVBoxLayout(self)
         layout.addWidget(self.heading)
         layout.addWidget(self.preview_help)
@@ -661,6 +707,8 @@ class ImportDialog(QDialog):
         return self.validation_label.text()
 
     def beam_spec(self) -> api.BeamSpec:
+        if self._preset is not None:
+            return self._preset.beam
         kind = self.beam_kind()
         if kind is None:
             raise ValueError("beam kind must be selected")
@@ -674,6 +722,8 @@ class ImportDialog(QDialog):
         )
 
     def instrument_spec(self) -> api.InstrumentSpec:
+        if self._preset is not None:
+            return self._preset.instrument
         mode = str(self.footprint.currentData())
         instrument_id = self.instrument_id.text().strip() or None
         if mode != "geometry":
@@ -698,6 +748,8 @@ class ImportDialog(QDialog):
         )
 
     def angle_convention(self) -> str:
+        if self._preset is not None:
+            return self._preset.angle_convention
         return "theta" if self.theta_convention.isChecked() else "two_theta"
 
     def column_mapping(self) -> api.DataColumnMapping | None:
@@ -728,3 +780,7 @@ class ImportDialog(QDialog):
 
     def recursive_folder_import(self) -> bool:
         return self.recursive_check.isChecked()
+
+    def source_paths(self) -> tuple[Path, ...]:
+        """Return exactly the file list displayed by this preview."""
+        return self._paths

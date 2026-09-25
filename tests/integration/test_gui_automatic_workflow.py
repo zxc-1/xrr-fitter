@@ -149,3 +149,39 @@ def test_partial_import_waits_for_manual_fit_keeps_failure_recovery_and_publishe
         failures.item(0, 0).text(),
         bool(failures.item(0, 2).text()),
     ) == (True, 1, "bad-name.xy", True)
+
+
+def test_home_fit_action_uses_automatic_pipeline_for_imported_data(qtbot, tmp_path, monkeypatch) -> None:
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.gui.main_window import MainWindow
+
+    preset = api.MeasurementPreset("lab", api.BeamSpec("monochromatic"), api.InstrumentSpec())
+    window = MainWindow(ProjectDocument(replace(api.new_project(), measurement_preset=preset)))
+    qtbot.addWidget(window)
+    window.data_panel.import_paths((_write_curve(tmp_path / "P1 Zr.xy"),))
+    routes = []
+    monkeypatch.setattr(window.fit_panel, "start_fit", lambda: routes.append("full") or True)
+    monkeypatch.setattr(window.fit_panel, "start_automatic_fit", lambda: routes.append("automatic") or True)
+
+    window._workflow_actions["startFitAction"].trigger()
+
+    assert routes == ["automatic"]
+
+
+def test_home_fit_action_respects_automatic_readiness_without_full_search_fallback(
+    qtbot, tmp_path, monkeypatch
+) -> None:
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.gui.main_window import MainWindow
+
+    preset = api.MeasurementPreset("lab", api.BeamSpec("monochromatic"), api.InstrumentSpec())
+    window = MainWindow(ProjectDocument(replace(api.new_project(), measurement_preset=preset)))
+    qtbot.addWidget(window)
+    window.data_panel.import_paths((_write_curve(tmp_path / "P1 Zr.xy"),))
+    monkeypatch.setattr(
+        api, "preflight_automatic_fit", lambda project: api.FitReadiness(False, "no runnable automatic datasets")
+    )
+
+    window._refresh_operation_state()
+
+    assert not window._workflow_actions["startFitAction"].isEnabled()

@@ -39,7 +39,7 @@ from xrr_fitter.gui.structure import naming
 # columns are the parameters panel's own 显示高级选项, which is persisted on the
 # project, so a surface switch must not touch it.  Only the segment wears 专家.
 WORKSPACE_MODE_SPECS = (
-    ("guided", "workspaceModeGuided", "引导", "引导：按导入、结构、拟合、导出四步逐一完成"),
+    ("guided", "workspaceModeGuided", "引导", "引导：了解操作流程，完成后进入主页；不会执行拟合"),
     ("expert", "workspaceModeExpert", "专家", "专家：完整三栏工作区，导航、图表与检查器同屏"),
 )
 

@@ -35,11 +35,13 @@ def layer_kz(qz_a_inv: np.ndarray, sld_a2: np.ndarray) -> np.ndarray:
     relative = (sld - sld[0]).copy()
     relative.imag[relative.imag == 0.0] = BRANCH_EPSILON_A2
     with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
-        radicand = (qz[:, None] / 2.0) ** 2 - 4.0 * np.pi * relative[None, :]
+        # A contiguous query axis lets each interface operate on dense vectors.
+        # Keep the public (query, medium) shape as a view of that storage.
+        radicand = (qz[None, :] / 2.0) ** 2 - 4.0 * np.pi * relative[:, None]
         wavevectors = select_decaying_branch(np.sqrt(radicand.astype(np.complex128)))
     if np.any(~np.isfinite(wavevectors.real)) or np.any(~np.isfinite(wavevectors.imag)):
         raise FloatingPointError("nonfinite layer wavevectors")
-    return wavevectors
+    return wavevectors.T
 
 
 def _validated_wavevectors(kz: np.ndarray) -> np.ndarray:

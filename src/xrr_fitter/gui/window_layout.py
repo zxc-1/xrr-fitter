@@ -786,19 +786,6 @@ def apply_default_columns(splitter: QSplitter) -> None:
     splitter.setSizes([LEFT_COLUMN_WIDTH, canvas, RIGHT_COLUMN_WIDTH])
 
 
-def _guidance_actions(window) -> dict:
-    """Bind each guided step's action to the panel that already performs it.
-
-    Guidance never reimplements a workflow; it routes to the same buttons and
-    methods the expert surface uses, so both paths share one code path.
-    """
-    return {
-        "import_files": window.data_panel.import_files_button.click,
-        "initialize_structure": window.structure_panel.initialize_button.click,
-        "start_fit": window.start_fit,
-    }
-
-
 def _layer_bounds_lookup(window):
     """选中层那张卡上的界限从哪儿来：参数声明，和参数表读的是同一份。
 
@@ -883,7 +870,7 @@ def _build_panels(window, document) -> None:
     window.export_button.clicked.connect(window.export_results_dialog)
     # Guidance and the plot share the canvas: they are two surfaces onto one
     # project, so a stack swaps them without either being rebuilt.
-    window.guidance = GuidancePanel(document, _guidance_actions(window))
+    window.guidance = GuidancePanel(document)
     window.central_stack = QStackedWidget()
     window.central_stack.setObjectName("centralStack")
     window.central_stack.addWidget(window.guidance)

@@ -260,3 +260,10 @@ def test_example_write_failure_leaves_no_partial_set(
 
     assert not destination.exists()
     assert not tuple(tmp_path.glob(".partial-*"))
+
+
+def test_examples_use_the_same_interactive_budget_as_a_new_project() -> None:
+    from xrr_fitter.model.fitting import FitConfig
+
+    for project in (build_single_layer_example(), build_mo_si_periodic_example()):
+        assert project.fit_config == FitConfig.fast(project.master_seed)

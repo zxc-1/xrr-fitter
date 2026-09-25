@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from PySide6.QtWidgets import QAbstractButton
+
 from xrr_fitter.gui.chrome import refresh_status, set_command_bar_running
 
 
@@ -27,6 +29,82 @@ def has_exportable_results(window: object) -> bool:
     return bool(datasets) and all(dataset.last_valid_result is not None for dataset in datasets)
 
 
+def _window_action(window: object, object_name: str) -> object | None:
+    """Find an action installed by either the project panel or the chrome."""
+    for action in (*window.actions(), *window.chrome_actions.values()):
+        if action.objectName() == object_name:
+            return action
+    return None
+
+
+def _window_button(window: object, object_name: str) -> QAbstractButton | None:
+    """Find a named homepage button, including plot empty-state buttons."""
+    return window.findChild(QAbstractButton, object_name)
+
+
+def _set_mutating_routes_enabled(window: object, *, enabled: bool) -> None:
+    """Gate every homepage entrance that can change the project or its sources."""
+    project_buttons = (
+        "newProjectButton",
+        "openProjectButton",
+        "saveProjectButton",
+    )
+    for object_name in project_buttons:
+        button = _window_button(window, object_name)
+        if button is not None:
+            button.setEnabled(enabled)
+
+    data_panel = window.data_panel
+    for button in (
+        data_panel.dataset_add_button,
+        data_panel.import_folder_quick_button,
+        data_panel.import_files_button,
+        data_panel.import_folder_button,
+        data_panel.change_preset_button,
+        _window_button(window, "emptyStateImportButton"),
+        _window_button(window, "emptyStateImportFolderButton"),
+    ):
+        if button is not None:
+            button.setEnabled(enabled)
+
+    for object_name in (
+        "newProjectAction",
+        "openProjectAction",
+        "saveProjectAction",
+        "saveAsProjectAction",
+        "importFilesMenuAction",
+        "importFolderMenuAction",
+        "undoAction",
+        "redoAction",
+    ):
+        action = _window_action(window, object_name)
+        if action is not None:
+            action.setEnabled(enabled)
+
+    active_dataset = window.document.active_dataset_id is not None
+    for object_name in ("reloadSourceAction", "relinkSourceAction"):
+        action = _window_action(window, object_name)
+        if action is not None:
+            action.setEnabled(enabled and active_dataset)
+
+    data_panel.import_files_shortcut.setEnabled(enabled)
+    data_panel.import_folder_shortcut.setEnabled(enabled)
+
+
+def _restore_idle_projection(window: object, *, running: bool, fit_enabled: bool) -> None:
+    """Restore idle-only controls without touching the live operation controls."""
+    if running:
+        return
+    window.fit_panel.start_button.setEnabled(fit_enabled)
+    for object_name, enabled in (
+        ("undoAction", window.document.can_undo),
+        ("redoAction", window.document.can_redo),
+    ):
+        action = _window_action(window, object_name)
+        if action is not None:
+            action.setEnabled(enabled)
+
+
 def running_kind(*, fit: bool, mcmc: bool, external: bool) -> str | None:
     """Name the live operation for the status bar, or ``None`` when idle.
 
@@ -48,17 +126,16 @@ def refresh_operation_state(window: object) -> None:
     mcmc_running = window.result_panel.controller.is_running
     external = window._operation_controller
     external_running = external is not None and bool(external.is_running)
-    running = fit_running or mcmc_running or external_running
+    running = any((fit_running, mcmc_running, external_running))
     readiness = window._fit_readiness()
-    window._workflow_actions["startFitAction"].setEnabled(readiness.ready and not running)
+    fit_enabled = readiness.ready and not window.guidance_is_visible()
+    window._workflow_actions["startFitAction"].setEnabled(fit_enabled and not running)
     window._workflow_actions["cancelFitAction"].setEnabled(fit_running)
     export_enabled = has_exportable_results(window) and not running
     window._workflow_actions["exportResultsAction"].setEnabled(export_enabled)
     window.export_button.setEnabled(export_enabled)
     window.fit_panel.setEnabled(not mcmc_running and not external_running)
     window.result_panel.setEnabled(not fit_running and not external_running)
-    if not running:
-        window.fit_panel.start_button.setEnabled(readiness.ready)
     # 帧④：跑起来之后命令栏换成 ⏸ 暂停 / ⏹ 停止，灰着的 一键拟合/导出 让位。
     set_command_bar_running(window, fit_running)
     # 帧⑤ 左栏第四行：链在采时钉成「N walkers · 采样中」，停了交还给报告。两头都在这里推，
@@ -70,3 +147,7 @@ def refresh_operation_state(window: object) -> None:
         readiness,
         running_kind(fit=fit_running, mcmc=mcmc_running, external=external_running),
     )
+    # ``refresh_status`` restores source actions from the active-dataset state, so
+    # apply the operation gate after all status projections have run.
+    _set_mutating_routes_enabled(window, enabled=not running)
+    _restore_idle_projection(window, running=running, fit_enabled=fit_enabled)

@@ -26,6 +26,31 @@ def test_parratt_jacobian_rejects_nonfinite_nevot_croce_path() -> None:
         )
 
 
+def test_parratt_jacobian_keeps_finite_large_interface_cancellation() -> None:
+    stack = SlabStack(
+        [0.0, 7.50344687, 1259.19309769, 3332.72786241, 0.0],
+        [
+            1.13524689e-05j,
+            1.43978976e-04 + 1.47957432e-05j,
+            4.03322613e-05 + 6.32290605e-06j,
+            7.81663285e-05 + 2.01335130e-06j,
+            -1.46866469e-04 + 7.41519866e-06j,
+        ],
+        [1.92383095, 3.32467999, 595.24373189, 1101.54876673],
+    )
+    values, jacobian = parratt_reflectivity_jacobian(
+        np.array([7.14770265e-06]),
+        stack,
+        np.array([[0.05762203]]),
+        np.array([[-1488.34246521], [1626.3788172], [-725.50776185], [-109.54522831], [479.25181699]]),
+        np.zeros((5, 1), complex),
+        np.array([[54.6641023], [977.02279696], [2227.28592803], [-1308.22801134]]),
+    )
+
+    np.testing.assert_allclose(values, [0.99974673], atol=5e-9)
+    np.testing.assert_allclose(jacobian, [[-2.19246616]], atol=5e-9)
+
+
 def test_periodic_mobius_jacobian_matches_expanded_recurrence() -> None:
     repeats = 8
     thickness = np.array([0] + [28, 42] * repeats + [0], float)
@@ -92,7 +117,8 @@ def test_parratt_jacobian_supports_zero_parameters() -> None:
         assert jacobian.shape == (q.size, 0)
 
 
-def test_parratt_jacobian_evaluates_only_active_tangent_columns(monkeypatch) -> None:
+@pytest.mark.parametrize("periodic", (False, True))
+def test_parratt_jacobian_evaluates_only_active_tangent_columns(monkeypatch, periodic) -> None:
     module = import_module("xrr_fitter.physics.derivatives")
     stack = SlabStack(
         [0, 28, 42, 28, 42, 0],
@@ -105,7 +131,7 @@ def test_parratt_jacobian_evaluates_only_active_tangent_columns(monkeypatch) -> 
             24e-6 + 0.3e-6j,
         ],
         [2.5, 4, 3, 4, 5],
-        (PeriodicSpan(1, 2, 2),),
+        (PeriodicSpan(1, 2, 2),) if periodic else (),
     )
     q = np.linspace(0.01, 0.3, 80)
     q_jacobian = np.zeros((q.size, 4))
@@ -115,13 +141,14 @@ def test_parratt_jacobian_evaluates_only_active_tangent_columns(monkeypatch) -> 
     sld_jacobian = np.zeros((6, 4), complex)
     roughness_jacobian = np.zeros((5, 4))
     observed_counts: list[int] = []
-    original = module._periodic_jacobian
+    target = "_periodic_jacobian" if periodic else "_standard_jacobian"
+    original = getattr(module, target)
 
     def audited(stack_value, inputs):
         observed_counts.append(inputs.parameter_count)
         return original(stack_value, inputs)
 
-    monkeypatch.setattr(module, "_periodic_jacobian", audited)
+    monkeypatch.setattr(module, target, audited)
     primal, jacobian = module.parratt_reflectivity_jacobian(
         q,
         stack,
