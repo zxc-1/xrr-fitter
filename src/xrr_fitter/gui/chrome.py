@@ -8,8 +8,8 @@ window and its panels.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSettings, QSignalBlocker, Qt
-from PySide6.QtGui import QAction, QActionGroup, QGuiApplication
+from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
     QDialogButtonBox,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QMenuBar,
+    QMessageBox,
     QSizePolicy,
     QStatusBar,
     QToolBar,
@@ -89,6 +90,10 @@ ABOUT_TEXT = (
     "导入 .xy / .dat / .txt 反射率数据，初始化样品结构，一键拟合并导出结果。"
     "需要批量处理时，同一套分析也可以在 Python 脚本里通过 xrr_fitter.api 调用。"
 )
+
+# wheel 与 exe 都不带 ``docs/``，手册只在公开仓库里。指向装的这一版的标签（发版即打
+# ``v<版本>``），读者看到的才是自己这一版的界面，而不是 main 上已经往前走了的那份。
+USER_GUIDE_URL = f"https://github.com/zxc-1/xrr-fitter/blob/v{__version__}/docs/user-guide.md"
 
 
 def _window_action(window: QWidget, object_name: str) -> QAction:
@@ -765,9 +770,17 @@ def _show_about_dialog(window: QWidget) -> None:
     dialog.exec()
 
 
+def _open_user_guide(window: QWidget) -> None:
+    if not QDesktopServices.openUrl(QUrl(USER_GUIDE_URL)):
+        QMessageBox.warning(window, "无法打开用户手册", f"系统没有打开浏览器，手册地址：\n{USER_GUIDE_URL}")
+
+
 def _install_help_menu(window: QWidget, bar: QMenuBar) -> None:
     menu = QMenu("帮助", bar)
     menu.setObjectName("helpMenu")
+    guide = _action(window, "userGuideAction", "用户手册（在线）", lambda: _open_user_guide(window))
+    window.chrome_actions["userGuideAction"] = guide
+    menu.addAction(guide)
     about = _action(
         window,
         "aboutAction",
