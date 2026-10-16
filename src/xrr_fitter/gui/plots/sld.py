@@ -669,6 +669,10 @@ def _draw_legend(axes: object, overlays: list[object]) -> None:
     设计稿帧③ 的图区里没有图例框，卡片抬头下面那排色标就是这张图的图例；四条 pyqtgraph
     面板同样只有色标、不画内嵌图例。所以色标已经说过的记号在这里一律不重复，剩下的什么
     都不剩时就干脆不画框——那正是帧③ 的样子。
+
+    剩下的图例挂在轴外右上角。结果步的拟合剖面卡会被压到 ``MIN_SLD_PLOT_H`` 那条地板，
+    这时四行图例比轴还高；放在轴里的话，constrained_layout 只能压扁剖面来给它让边距。
+    挂在轴外，它只占宽度。
     """
     handles, labels = axes.get_legend_handles_labels()
     entries = [
@@ -687,7 +691,9 @@ def _draw_legend(axes: object, overlays: list[object]) -> None:
         [handle for handle, _ in entries],
         [label for _, label in entries],
         fontsize=theme.FONT_PT_SM,
-        loc="best",
+        loc="upper left",
+        bbox_to_anchor=(1.01, 1.0),
+        borderaxespad=0.0,
         framealpha=0.75,
     )
 
