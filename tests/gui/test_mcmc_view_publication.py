@@ -8,7 +8,11 @@ publication must retain the newer view without accepting a stale fit input.
 from dataclasses import replace
 
 import pytest
-from tests.gui.test_mcmc_interaction import _click, _deliver
+from tests.gui.test_mcmc_interaction import (  # noqa: F401 - pytest fixture shared with the sampling cases
+    _click,
+    _deliver,
+    sampling,
+)
 from tests.gui.test_results import _mcmc_report
 
 import xrr_fitter.api as api
@@ -30,7 +34,7 @@ def _completed(source):
         {"active_dataset_id": None},
     ),
 )
-def test_mcmc_publication_preserves_readonly_view_changes(qtbot, sampling, view_changes):
+def test_mcmc_publication_preserves_readonly_view_changes(qtbot, sampling, view_changes):  # noqa: F811
     panel, _dialog, job, starts = sampling
     source = panel.document.project
     completed = []
@@ -50,7 +54,7 @@ def test_mcmc_publication_preserves_readonly_view_changes(qtbot, sampling, view_
 
 
 @pytest.mark.parametrize("change", ("candidate", "config", "dataset", "base_directory"))
-def test_mcmc_publication_still_rejects_changed_sampling_inputs(qtbot, sampling, change):
+def test_mcmc_publication_still_rejects_changed_sampling_inputs(qtbot, sampling, change):  # noqa: F811
     panel, _dialog, job, _starts = sampling
     source = panel.document.project
     _click(qtbot, panel.mcmc_button)
@@ -70,5 +74,5 @@ def test_mcmc_publication_still_rejects_changed_sampling_inputs(qtbot, sampling,
     )
 
     assert panel.document.project is concurrent
-    assert "stale" in panel.status_text()
+    assert "作废" in panel.status_text()
     assert not panel.controller.is_running

@@ -47,6 +47,7 @@ from xrr_fitter.gui.parameters.grouping import (
     row_layout,
     row_name,
 )
+from xrr_fitter.gui.results.inference_text import correlation_unavailable_reason
 
 HEADERS = ("参数", "结果值", "±1σ", "单位")
 
@@ -113,11 +114,30 @@ def _number(value: float, exponent: int | None) -> str:
     return f"{value / 10.0**exponent:.{MANTISSA_DECIMALS}f}e{exponent}"
 
 
-def _sigma_by_name(report: object | None) -> dict[str, float]:
-    """Pair the per-parameter sigma with the names it was published against."""
-    if report is None or report.parameter_sigma is None:
+def _owned(report: object | None, candidate_id: str | None) -> bool:
+    """报告是不是这个候选解的——未归属（``None``）的旧报告照判定卡的规矩算作它的。"""
+    return report is not None and report.candidate_id in (None, candidate_id)
+
+
+def _sigma_by_name(report: object | None, candidate_id: str | None) -> dict[str, float]:
+    """Pair the per-parameter sigma with the names it was published against.
+
+    σ 跟着报告的归属走：别的候选解那一列 σ 摆在这一行的值旁边，读起来就是这个值的误差。
+    """
+    if not _owned(report, candidate_id) or report.parameter_sigma is None:
         return {}
     return {name: float(value) for name, value in zip(report.correlation_names, report.parameter_sigma, strict=True)}
+
+
+def _sigma_reason(report: object | None, candidate_id: str | None) -> str:
+    """±1σ 写「不可用」时的原因：没有报告、报告属于别人、报告自己说了为什么没有 σ。"""
+    if report is None:
+        return "当前候选解尚无不确定度证据"
+    if not _owned(report, candidate_id):
+        return f"不确定度证据属于候选 {report.candidate_id}"
+    if report.parameter_sigma is None:
+        return correlation_unavailable_reason(report) or "报告未给出逐参数 σ"
+    return "该参数不在协方差参数轴上"
 
 
 def _values_by_name(candidate: object | None) -> dict[str, float]:
@@ -217,15 +237,34 @@ class ResultValueDelegate(QStyledItemDelegate):
     """
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
-        super().paint(painter, option, index)
         view_option = QStyleOptionViewItem(option)
         self.initStyleOption(view_option, index)
+        locked = bool(index.data(LOCKED_ROLE))
+        if locked:
+            self._elide_for_lock(view_option)
+        widget = view_option.widget
+        style = widget.style() if widget is not None else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, view_option, painter, widget)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self._paint_hairline(painter, view_option)
-        if index.data(LOCKED_ROLE):
+        if locked:
+            painter.setClipRect(view_option.rect)
             self._paint_lock(painter, view_option)
         painter.restore()
+
+    def _elide_for_lock(self, option: QStyleOptionViewItem) -> None:
+        """Cut a long name short enough that the lock box still fits inside its cell.
+
+        Qt elides against the whole cell, so the box drawn after the name had no room
+        left and landed on the 结果值 column, or off the viewport. The full name stays
+        in the row's tooltip.
+        """
+        widget = option.widget
+        style = widget.style() if widget is not None else QApplication.style()
+        text_rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, option, widget)
+        room = text_rect.width() - LOCK_BOX_PX - 2 * theme.SPACE_XS
+        option.text = QFontMetrics(option.font).elidedText(option.text, Qt.TextElideMode.ElideRight, max(0, room))
 
     def _paint_hairline(self, painter: QPainter, option: QStyleOptionViewItem) -> None:
         colour = QColor(option.palette.text().color())
@@ -277,6 +316,9 @@ class ResultValueTable(QTableWidget):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.setItemDelegate(ResultValueDelegate(self))
+        # 有一格 ±1σ 写「不可用」时那句原因；格子里只放得下三个字，原因写在表下。
+        self._sigma_reason = ""
+        self._sigma_missing = False
         vertical = self.verticalHeader()
         vertical.hide()
         vertical.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
@@ -324,7 +366,9 @@ class ResultValueTable(QTableWidget):
         shown, elided = _shown_definitions(tuple(result.parameter_definitions), bulk)
         rows = row_layout(shown, captions)
         values = _values_by_name(candidate)
-        sigma = _sigma_by_name(result.uncertainty)
+        sigma = _sigma_by_name(result.uncertainty, candidate_id)
+        self._sigma_reason = _sigma_reason(result.uncertainty, candidate_id)
+        self._sigma_missing = False
         backing_density = bulk.get("backing")
         if backing_density is not None:
             values[BACKING_DENSITY_NAME] = backing_density
@@ -364,9 +408,14 @@ class ResultValueTable(QTableWidget):
             lines.append(f"{row_name(definition.display_name, None, bulk)} {text}{f' {unit}' if unit else ''}")
         return "\n".join(lines)
 
+    def sigma_note(self) -> str:
+        """表下那一行：±1σ 有一格写着「不可用」时说为什么，否则是空串。"""
+        return f"±1σ 不可用：{self._sigma_reason}" if self._sigma_missing else ""
+
     def clear_projection(self) -> None:
         self.clearSpans()
         self.setRowCount(0)
+        self._sigma_missing = False
         self.setVisible(False)
         self.updateGeometry()
 
@@ -402,5 +451,10 @@ class ResultValueTable(QTableWidget):
         exponent = None if scaled is None else _exponent(scaled)
         text = UNAVAILABLE_TEXT if scaled is None else _number(scaled, exponent)
         self.setItem(row, 1, _read_only(text, numeric=True))
-        self.setItem(row, 2, _read_only(_sigma_text(definition, sigma, exponent, bulk_density), numeric=True))
+        sigma_text = _sigma_text(definition, sigma, exponent, bulk_density)
+        sigma_item = _read_only(sigma_text, numeric=True)
+        if sigma_text == UNAVAILABLE_TEXT:
+            self._sigma_missing = True
+            sigma_item.setToolTip(self._sigma_reason)
+        self.setItem(row, 2, sigma_item)
         self.setItem(row, 3, _read_only(display_unit(definition, bulk_density) or DIMENSIONLESS))

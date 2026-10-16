@@ -82,7 +82,8 @@ def test_progress_view_renders_stage_identity_objective_and_message(qtbot) -> No
     assert 0 < bar.value() < 1000
     assert "curve" in stage.text()
     assert "3/10" in detail.text()
-    assert "local search" in detail.text()
+    # 求解器的英文消息留在日志里，不上卡片。
+    assert "local search" not in detail.text()
     assert "0.0125" in detail.text()
 
 
@@ -142,7 +143,7 @@ def test_fit_panel_checkpoint_adopts_project_before_terminal_result(
 
     assert panel.document.project is checkpoint
     assert results == []
-    assert panel.status_text() == "已取消：requested，已保存检查点，可从中恢复"
+    assert panel.status_text() == "已取消：按请求停止，已保存检查点，可从中恢复"
 
 
 def test_fit_panel_preflight_failure_does_not_start_worker(
@@ -218,7 +219,8 @@ def test_progress_bar_never_moves_backwards_across_stage_changes(qtbot) -> None:
     assert observed == sorted(observed), f"bar moved backwards: {observed}"
     assert bar.maximum() == 1000
     assert observed[0] > 0
-    assert observed[-1] == 1000
+    # The last unit belongs to the published result (``complete``), not to a frame.
+    assert observed[-1] == 999
 
 
 def test_progress_view_reports_stage_ordinal_and_localized_stage_name(qtbot) -> None:
@@ -355,8 +357,8 @@ def test_progress_view_reads_out_the_scale_its_card_promises(qtbot) -> None:
     view.set_progress(api.FitProgress("curve", "B", 5, 10, 1.0, "search"))
 
     bar = view.findChild(QProgressBar, "fitProgressBar")
-    # Stage B opens at 0.06 and spans 0.34, so half of it lands on 230/1000.
-    assert bar.value() == 230
+    # Stage B opens at 0.04 and spans 0.03, so half of it lands on 55/1000.
+    assert bar.value() == 55
     assert f"进度 {bar.value()} / {PROGRESS_RESOLUTION}" in view.findChild(QLabel, "fitProgressMetaPosition").text()
     assert not bar.isTextVisible(), "the bar restates the position in percent"
 
@@ -388,7 +390,7 @@ def test_progress_view_publishes_a_one_line_summary_for_the_status_bar(qtbot) ->
     # 话既没法分段加粗也没法分左右。说明文字「阶段 」「预计剩余 」住在状态栏那一段里，
     # 所以这里的 stage 只有序数。
     assert summary.stage == f"2 / {len(STAGE_WEIGHTS)}"
-    assert summary.position == f"进度 230 / {PROGRESS_RESOLUTION}"
+    assert summary.position == f"进度 55 / {PROGRESS_RESOLUTION}"
     assert summary.remaining != ""
     # Every frame republishes, so the bar never lags the card.
     assert published[-1] == summary
@@ -531,7 +533,7 @@ def test_progress_freeze_stops_the_heartbeat(qtbot) -> None:
 def test_remaining_estimator_tracks_recent_rate_not_cumulative_average() -> None:
     from xrr_fitter.gui.fitting.progress import _RemainingEstimator
 
-    estimator = _RemainingEstimator(smoothing=1.0)  # follow the latest rate fully
+    estimator = _RemainingEstimator(window_seconds=4.0)  # forget the opening burst
     # A fast opening burst: 40% of the bar in 4s (rate 0.10/s).
     estimator.update(0.0, 0.0)
     estimator.update(4.0, 0.40)
@@ -548,7 +550,7 @@ def test_remaining_estimator_tracks_recent_rate_not_cumulative_average() -> None
 def test_remaining_estimator_counts_down_between_updates() -> None:
     from xrr_fitter.gui.fitting.progress import _RemainingEstimator
 
-    estimator = _RemainingEstimator(smoothing=1.0)
+    estimator = _RemainingEstimator()
     estimator.update(0.0, 0.0)
     estimator.update(10.0, 0.50)  # 0.05/s → finish projected at t=20
 
@@ -648,7 +650,7 @@ def test_fit_panel_cancel_without_checkpoint_reports_no_resume(
     panel.start_fit()
     panel.controller.poll_now()
 
-    assert panel.status_text() == "已取消：requested，本次未产生检查点"
+    assert panel.status_text() == "已取消：按请求停止，本次未产生检查点"
 
 
 def test_start_button_reads_new_fit_without_checkpoint(qtbot, tmp_path) -> None:
@@ -760,20 +762,24 @@ def test_fit_panel_publishes_joint_layout_on_start(qtbot, tmp_path, monkeypatch)
 
 
 def test_the_stop_control_says_what_stopping_keeps(qtbot, tmp_path) -> None:
-    """帧④ 控制段的第三颗写「⏹ 停止并保留最优」，下面一句说明停了会留下什么。
+    """控制段的停止键只承诺它做得到的事：保留进度，而不是「保留最优」。
 
-    「取消」在这一屏读作「作废这一次运行」——而这个命令实际上保留当前最优候选和已经
-    跑完的阶段，停完可以直接进结果复核。一个字面意思与行为相反的按钮，跑到一半的人
-    多半不敢按，只能等它跑完或强制杀掉。
+    「取消」读作「作废这一次运行」，不敢按；可「保留最优、直接进结果复核」也说过头了——
+    跑到一半停下的那条数据集不产生新结果，搜索服务在取消时只交出检查点。所以按钮写「保留
+    进度」，说明句把两件事分开讲：跑完的保留结果，没跑完的留检查点、下次从那里接着跑。
     """
     panel = _panel(qtbot, tmp_path)
 
     cancel = panel.findChild(QPushButton, "cancelFitButton")
     help_label = panel.findChild(QLabel, "fitStopHelp")
 
-    assert cancel is not None and cancel.text() == "⏹ 停止并保留最优"
+    assert cancel is not None and cancel.text() == "⏹ 停止并保留进度"
+    assert cancel.accessibleName() == "停止拟合并保留已完成的进度"
     assert help_label is not None
-    assert help_label.text() == "停止后保留当前最优候选，可直接进入结果复核，不丢弃已完成阶段。"
+    assert help_label.text() == (
+        "停止后，已跑完的数据集保留结果；没跑完的只保存检查点，不产生新结果，再次拟合时从检查点继续。"
+    )
+    assert "最优" not in help_label.text() and "结果复核" not in help_label.text()
 
 
 def test_the_refresh_badge_follows_the_poller_when_it_backs_off(qtbot, tmp_path) -> None:
@@ -873,7 +879,7 @@ def test_the_skip_control_asks_the_worker_to_drop_the_current_stage(qtbot, tmp_p
 
 
 def test_running_control_row_shows_only_the_three_commands_frame_four_draws(qtbot, tmp_path, monkeypatch) -> None:
-    """设计稿帧④ 的控制段只有 ⏸ 暂停 / ⏭ 跳过本阶段 / ⏹ 停止并保留最优 三枚。
+    """设计稿帧④ 的控制段只有 ⏸ 暂停 / ⏭ 跳过本阶段 / ⏹ 停止并保留进度 三枚。
 
     跑起来之后「自动拟合」和「开始拟合」都按不动，留在原位只是两块灰，还把真正要用的
     三个命令挤到一边。「强制停止」是「停止」的升级而不是它的并列项：先按停止让 worker

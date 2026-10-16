@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QShortcut
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QDialogButtonBox
 from tests.gui.control_operation_driver import setup_project, source_curve
@@ -25,12 +24,21 @@ def _cycle_instrument_modes(driver, dialog):
         assert dialog.sample_length.isEnabled() is (mode == "geometry")
 
 
-def _import_fields(driver, dialog, *, mixed=False):
+def _beam_fields(driver, dialog, *, mixed):
+    # 只填选中的那条光路：另一组波长此时是灰的（F50h），键盘根本进不去。
     driver.click(dialog.mixed_button if mixed else dialog.mono_button)
-    driver.type(dialog.mono_wavelength, "1.1")
-    driver.type(dialog.wavelength_1, "1.54056")
-    driver.type(dialog.wavelength_2, "1.54439")
-    driver.type(dialog.intensity_ratio, "0.42")
+    if mixed:
+        driver.type(dialog.wavelength_1, "1.54056")
+        driver.type(dialog.wavelength_2, "1.54439")
+        driver.type(dialog.intensity_ratio, "0.42")
+    else:
+        driver.type(dialog.mono_wavelength, "1.1")
+    assert dialog.mono_wavelength.isEnabled() is not mixed
+    assert dialog.wavelength_1.isEnabled() is mixed
+
+
+def _import_fields(driver, dialog, *, mixed=False):
+    _beam_fields(driver, dialog, mixed=mixed)
     driver.type(dialog.instrument_id, "qtest-import")
     driver.select(dialog.footprint, dialog.footprint.findData("geometry"))
     driver.type(dialog.sample_length, "12.0")
@@ -208,8 +216,8 @@ def test_folder_recursion_checkbox_changes_actual_import(controls, tmp_path):
         "emptyStateImportButton",
         "emptyStateImportFolderButton",
         "importFolderMenuAction",
-        "importFilesShortcut",
-        "importFolderShortcut",
+        "importFilesMenuAction:keys",
+        "importFolderMenuAction:keys",
     ),
 )
 def test_import_alternative_entry_cancel_preserves_empty_project(controls, entry):
@@ -217,12 +225,13 @@ def test_import_alternative_entry_cancel_preserves_empty_project(controls, entry
     original = window.document.project
 
     def activate():
-        if entry.endswith("MenuAction"):
-            controls.menu(window, entry)
-        elif entry.endswith("Shortcut"):
-            shortcut = window.findChild(QShortcut, entry)
+        if entry.endswith(":keys"):
+            # 导入快捷键挂在数据面板的 QAction 上（窗口范围），文件菜单复用同一枚。
+            action = window.chrome_actions[entry.removesuffix(":keys")]
             window.data_panel.tree.setFocus()
-            QTest.keySequence(window.data_panel.tree, shortcut.key())
+            QTest.keySequence(window.data_panel.tree, action.shortcut())
+        elif entry.endswith("MenuAction"):
+            controls.menu(window, entry)
         else:
             controls.named_click(window, entry)
 

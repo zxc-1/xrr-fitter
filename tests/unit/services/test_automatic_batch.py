@@ -542,6 +542,57 @@ def test_joint_cancellation_subclass_stops_later_groups_without_failure(
     assert all(dataset.automation.status is AutomaticStatus.REFINING for dataset in result.updated_project.datasets)
 
 
+def test_a_stopped_prefit_keeps_its_checkpoint_and_stays_runnable(monkeypatch) -> None:
+    """停下来的预拟合不是失败：检查点留着，状态仍可再跑，「自动拟合」能从检查点继续。
+
+    记成 FAILED 会同时抹掉检查点并把它踢出可运行集合——停一次，这条数据就再也跑不动了。
+    """
+    value = replace(
+        project(
+            _automatic_dataset("done", ("Zr",)),
+            _automatic_dataset("cut", ("TaN",)),
+        ),
+        measurement_preset=_preset(),
+    )
+    value = replace(value, fit_config=replace(value.fit_config, local_workers=1))
+    records = tuple(
+        SimpleNamespace(dataset_id=item.dataset_id, status=SimpleNamespace(value="ok")) for item in value.datasets
+    )
+    monkeypatch.setattr(
+        batch,
+        "inspect_sources",
+        lambda _value: SimpleNamespace(valid=True, issues=(), datasets=records),
+    )
+    calls = RecordingAutomaticFits()
+    stop = Event()
+    saved = FitCheckpoint("a" * 64, "b" * 64, "c" * 64, "C", final_fit_result().candidates, (101,))
+
+    def fit_dataset(prepared, *, checkpoint, **_kwargs):
+        if prepared.dataset_id == "done":
+            return AutomaticPreparedResult(prepared, final_fit_result(), True, None)
+        checkpoint(saved)
+        stop.set()
+        raise InterruptedError("cancelled")
+
+    result = batch.fit_automatic_transaction(
+        value,
+        None,
+        None,
+        calls.checkpoint,
+        stop.is_set,
+        seed_branches=calls.seeds,
+        prepare_dataset=calls.prepare,
+        fit_dataset=fit_dataset,
+        fit_joint=calls.fit_joint,
+    )
+
+    assert result.cancelled is True
+    last = {dataset.dataset_id: dataset for dataset in calls.checkpoints[-1].datasets}
+    assert last["done"].automation.status is AutomaticStatus.PASSED
+    assert last["cut"].checkpoint is saved
+    assert last["cut"].automation.status in batch.AUTOMATIC_RUNNABLE_STATUSES
+
+
 def test_passed_isolated_retry_retains_its_auditable_reason(monkeypatch) -> None:
     value = replace(
         project(

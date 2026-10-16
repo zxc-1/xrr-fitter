@@ -28,6 +28,7 @@ from xrr_fitter.gui.plots.diagnostics import (
     apply_figure_palette,
     finish_view,
 )
+from xrr_fitter.gui.plots.parameter_labels import result_definitions, titled_labels
 from xrr_fitter.gui.plots.sld import (
     _owned_report,
     _page_placeholder,
@@ -35,6 +36,7 @@ from xrr_fitter.gui.plots.sld import (
     draw_correlation_page,
     draw_profile_page,
 )
+from xrr_fitter.gui.results.convergence import unmixed_chain_reason
 
 # The three marginal quantiles drawn on every parameter panel.  A median alone
 # makes "determined to ±1 Å" and "the prior width handed straight back" look
@@ -117,15 +119,19 @@ def _quantile_readout(values: np.ndarray) -> str:
     return f"P16 {low:.{QUANTILE_DIGITS}g} · P50 {mid:.{QUANTILE_DIGITS}g} · P84 {high:.{QUANTILE_DIGITS}g}"
 
 
-def _draw_marginal(axes: object, name: str, values: np.ndarray, palette: object) -> None:
-    """One parameter's marginal posterior with its three quantile markers."""
+def _draw_marginal(axes: object, name: str, values: np.ndarray, palette: object, withheld: str | None) -> None:
+    """One parameter's marginal posterior with its three quantile markers.
+
+    ``withheld`` 是链没混合的原因（``unmixed_chain_reason``）：那时三个分位只是各 walker 停在哪里，
+    不写数也不画线，横轴名改说为什么——与右栏分位卡同一个判定。
+    """
     axes.hist(
         values,
         bins=POSTERIOR_BINS,
         color=theme.DATA_OBSERVED,
         alpha=0.55,
     )
-    for probability in POSTERIOR_QUANTILES:
+    for probability in () if withheld else POSTERIOR_QUANTILES:
         position = float(np.quantile(values, probability))
         # The median is solid and the pair around it dashed: the three would
         # otherwise be three identical lines, and which one is the centre is the
@@ -137,8 +143,9 @@ def _draw_marginal(axes: object, name: str, values: np.ndarray, palette: object)
             linestyle="-" if probability == 0.5 else "--",
         )
     axes.set_title(name, fontsize=theme.FONT_PT_SM)
-    # 自动刻度精度保留窄分布差异；为科学计数倍率另留一行，避免与分位读数重叠。
-    axes.set_xlabel(_quantile_readout(values), fontsize=theme.FONT_PT_SM, labelpad=16)
+    # 自动刻度精度保留窄分布差异；为科学计数倍率另留一行，避免与分位读数（或不给分位的原因）重叠。
+    readout = f"{withheld}，不给分位" if withheld else _quantile_readout(values)
+    axes.set_xlabel(readout, fontsize=theme.FONT_PT_SM, labelpad=16)
     axes.xaxis.set_major_locator(MaxNLocator(nbins=4))
     axes.xaxis.set_major_formatter(ScalarFormatter())
     axes.tick_params(labelsize=theme.FONT_PT_SM)
@@ -246,8 +253,11 @@ class McmcHistogramPlot(QWidget):
             return
         self._reset()
         palette = apply_figure_palette(self._view.figure)
-        for index, (axes, name) in enumerate(zip(self._panel_axes(len(names)), names, strict=True)):
-            _draw_marginal(axes, name, samples[:, index], palette)
+        # 标题照剖面图例的写法（「厚度 d·ox」）：同一个参数在几张证据图上叫同一个名字。
+        titles = titled_labels(names, result_definitions(result))
+        withheld = unmixed_chain_reason(chain)
+        for index, (axes, title) in enumerate(zip(self._panel_axes(len(names)), titles, strict=True)):
+            _draw_marginal(axes, title, samples[:, index], palette, withheld)
         finish_view(self._view)
 
 

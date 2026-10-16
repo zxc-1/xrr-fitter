@@ -123,7 +123,9 @@ def _mcmc_report(**changes) -> api.McmcReport:
         "samples_physical": np.array([[10.0, 1.0], [20.0, 2.0], [30.0, 3.0], [40.0, 4.0]]),
         "log_probability": np.zeros(4),
         "acceptance_fraction": np.array([0.2, 0.6, 0.4, 0.8]),
-        "split_rhat": np.array([1.05, 1.12]),
+        # 混合了的链（split-R̂ 都在 1.10 以下）：后验页要读出分位。没混合的链不给分位，见
+        # ``test_plot_posterior_unmixed_chain``。
+        "split_rhat": np.array([1.02, 1.04]),
         "effective_sample_size": np.array([120.0, 80.0]),
         "boundary_hits": (),
         "candidate_id": "candidate-a",

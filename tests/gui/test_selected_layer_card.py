@@ -178,7 +178,7 @@ def test_a_perfectly_smooth_interface_still_reads_as_a_number_not_as_blank(qtbot
 
     assert card.roughness_editor.value() == pytest.approx(0.0)
     assert card.roughness_editor.text() != BLANK_NUMBER_TEXT
-    assert card.roughness_editor.text() == "0.00000000"
+    assert card.roughness_editor.text() == "0.0000"
 
 
 DESIGN_BOUNDS = {"thickness": (40.0, 60.0), "roughness": (0.0, 1.0), "density": (2.0, 2.5)}
@@ -302,11 +302,10 @@ def test_the_bounds_are_the_ones_the_parameter_table_reads_from(qtbot, tmp_path)
 
 
 def test_the_numbers_carry_the_precision_the_design_writes_them_with(qtbot) -> None:
-    """设计稿这三个框写的是 ``48.70000000`` / ``0.44000000`` / ``2.28000000``——八位小数。
+    """四位小数：nm 下 10–99 的厚度正好六位有效数字，和参数表读出同一个数。
 
-    四位在这张卡上会截掉真实位数：拟合解出来的厚度是 48.7031 nm 这种数，四位显示还
-    行，可读者把框里的数改一位再提交时，被写回结构的是显示出来的那份，末几位就这么
-    悄悄丢了。八位也是本仓库另外四处数字输入的既有惯例。
+    设计稿原写八位（``48.70000000``）；审计（F50）发现那串零只是噪声，读者数不清位。末几位
+    不会因此被悄悄改掉：没碰过的框逐位照抄原层（见下面「只改密度」那条）。
     """
     card, _commits = _card(qtbot)
 
@@ -314,12 +313,12 @@ def test_the_numbers_carry_the_precision_the_design_writes_them_with(qtbot) -> N
     card.show()
     qtbot.waitExposed(card)
 
-    assert card.thickness_editor.decimals() == 8
-    assert card.roughness_editor.decimals() == 8
-    assert card.density_editor.decimals() == 8
-    assert card.thickness_editor.text() == "48.70000000"
-    assert card.roughness_editor.text() == "0.44000000"
-    assert card.density_editor.text() == "2.28000000"
+    assert card.thickness_editor.decimals() == 4
+    assert card.roughness_editor.decimals() == 4
+    assert card.density_editor.decimals() == 4
+    assert card.thickness_editor.text() == "48.7000"
+    assert card.roughness_editor.text() == "0.4400"
+    assert card.density_editor.text() == "2.2800"
 
 
 MATERIAL_LABELS = (
@@ -555,12 +554,12 @@ def test_the_fields_are_spaced_the_way_the_design_spaces_them(qtbot) -> None:
 # 全部要在这个宽度里放下。
 INSPECTOR_CARD_WIDTH_PX = 316
 
-# 设计稿这三格里写的数，配 ``NUMBER_DECIMALS`` 位小数：``48.70000000`` / ``0.44000000`` /
-# ``2.28000000``。粗糙度用 4.4 Å 的层才写得出设计稿那个 0.44 nm。
+# 设计稿这三格里写的数，配 ``NUMBER_DECIMALS``（4）位小数（设计稿原写八位，见 F50）。
+# 粗糙度用 4.4 Å 的层才写得出设计稿那个 0.44 nm。
 DESIGN_NUMBERS = (
-    ("thickness_editor", "48.70000000"),
-    ("roughness_editor", "0.44000000"),
-    ("density_editor", "2.28000000"),
+    ("thickness_editor", "48.7000"),
+    ("roughness_editor", "0.4400"),
+    ("density_editor", "2.2800"),
 )
 
 

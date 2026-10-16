@@ -67,6 +67,11 @@ def test_first_finished_dataset_does_not_complete_the_whole_batch(qtbot, tmp_pat
         assert "curve-1" in panel.progress_view.stage_label.text()
 
         panel.controller._dispatch_batch((_event(2, "curve-1", stage="finalizing", total=1),))
+        # 汇总帧不是终点，结果发布才是：自动路线在汇总之后还会再跑一轮。
+        assert panel.progress_view.overall_percent() == 99
+
+        result = api.ProjectFitResult("independent", (), (), panel.document.project)
+        panel.controller._dispatch_batch((api.OperationEvent(3, "fit_result", fit_result=result),))
         assert panel.progress_view.overall_percent() == 100
     finally:
         _stop(panel.controller)

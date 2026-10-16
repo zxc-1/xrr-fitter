@@ -18,6 +18,7 @@ import xrr_fitter.api as api
 from xrr_fitter.gui.parameters.grouping import (
     caption_text,
     display_scale,
+    owner_prefix,
     row_layout,
     uses_nm,
 )
@@ -215,6 +216,13 @@ class ParameterTable(QTableWidget):
         # 档位落在 setting 上，声明里没有；表只画不存，所以按名字接一份只读映射。缺名字读作
         # 「自由/固定」由声明的 ``locked`` 决定，这样没传映射的调用点行为不变。
         self._freedom: dict[str, api.ParameterFreedom] = {}
+        # 「仅范围」那几行自己的区间。编译出来的声明对这一档保留硬边界（区间改由 soft_range
+        # 先验执行），照声明画的话这一行显示的是硬边界；下一次切档整行读回，硬边界就被当成新
+        # 区间写进 setting，读者自己写的区间从此找不回来。
+        self._intervals: dict[str, tuple[float, float]] = {}
+        # 归属前缀到材料体密度（``grouping.bulk_densities``）。密度声明是倍率，乘上体密度才是
+        # 卡片与结果表写的 g·cm⁻³；直接给 SLD 的材料不在表里，那一行仍写倍率。
+        self._densities: dict[str, float] = {}
 
     @property
     def definitions(self) -> tuple[api.ParameterDefinition, ...]:
@@ -250,10 +258,14 @@ class ParameterTable(QTableWidget):
         expert_mode: bool,
         captions: Mapping[str, str] | None = None,
         freedom: Mapping[str, api.ParameterFreedom] | None = None,
+        intervals: Mapping[str, tuple[float, float]] | None = None,
+        densities: Mapping[str, float] | None = None,
     ) -> None:
         visible = tuple(definition for definition in definitions if expert_mode or not definition.expert_only)
         names = {} if captions is None else captions
         self._freedom = {} if freedom is None else dict(freedom)
+        self._intervals = dict(intervals or {})
+        self._densities = dict(densities or {})
         rows = row_layout(visible, names)
         # 读者站在哪个量上，按名字记下来。行号记不得：重填的原因往往正是行的构成变了
         # （换数据集、切高级选项），第 n 行装的会是另一份声明。
@@ -263,15 +275,7 @@ class ParameterTable(QTableWidget):
         self.setRowCount(len(rows))
         self._definitions = visible
         self._rows = rows
-        # ``row_layout`` emits no captions for a single group, and a row whose
-        # owner is named nowhere above it has to name it itself, so the prefix is
-        # only dropped under a caption that was actually drawn.
-        caption: str | None = None
-        for row, (key, definition) in enumerate(rows):
-            if definition is None:
-                caption = self._render_caption(row, key, names)
-            else:
-                self._render_row(row, definition, caption=caption)
+        self._render_rows(names)
         if standing_on is not None:
             self._restore_current(standing_on)
         del blocker
@@ -285,6 +289,21 @@ class ParameterTable(QTableWidget):
         self._apply_prior_width()
         self._apply_bounds_widths()
         self._apply_name_width()
+
+    def _render_rows(self, names: Mapping[str, str]) -> None:
+        # ``row_layout`` emits no captions for a single group, and a row whose
+        # owner is named nowhere above it has to name it itself, so the prefix is
+        # only dropped under a caption that was actually drawn.
+        caption: str | None = None
+        for row, (key, definition) in enumerate(self._rows):
+            if definition is None:
+                caption = self._render_caption(row, key, names)
+            else:
+                self._render_row(row, definition, caption=caption)
+
+    def group_rows(self, key: str) -> tuple[int, ...]:
+        """属于 ``key`` 那一组（``component.N``、``backing``、``instrument``）的物理行，标题行在前。"""
+        return tuple(row for row, (row_key, _definition) in enumerate(self._rows) if row_key == key)
 
     def _restore_current(self, name: str) -> None:
         """把当前行落回 ``name`` 那一行；那个量不在了就不落。
@@ -378,9 +397,7 @@ class ParameterTable(QTableWidget):
         return matches[0]
 
     def display_values(self, name: str) -> tuple[float, float, float]:
-        definition = self.definition(name)
-        scale = display_scale(definition)
-        return tuple(value * scale for value in (definition.initial, definition.lower, definition.upper))
+        return self._display_values(self.definition(name))
 
     def current_name(self) -> str | None:
         """当前行是哪个参数，站在分组标题行或者没有当前行时是 ``None``。
@@ -411,7 +428,10 @@ class ParameterTable(QTableWidget):
 
     def display_unit(self, name: str) -> str:
         definition = self.definition(name)
-        return parameter_display_unit(definition)
+        return parameter_display_unit(definition, self._bulk_density(definition))
+
+    def _bulk_density(self, definition: api.ParameterDefinition) -> float | None:
+        return self._densities.get(owner_prefix(definition.name))
 
     def entered_value(self, item: QTableWidgetItem) -> float:
         """Read a numeric cell back without losing digits the display rounded off.
@@ -434,8 +454,13 @@ class ParameterTable(QTableWidget):
         upper: float,
     ) -> tuple[float, float, float]:
         definition = self.definition(name)
-        scale = 10.0 if uses_nm(definition) else 1.0
-        return initial * scale, lower * scale, upper * scale
+        if uses_nm(definition):
+            return initial * 10.0, lower * 10.0, upper * 10.0
+        # 密度行显示的是有效密度（体密度 × 倍率），存回去的是倍率。
+        bulk = self._bulk_density(definition) if definition.name.endswith(".density_scale") else None
+        if bulk is None:
+            return initial, lower, upper
+        return initial / bulk, lower / bulk, upper / bulk
 
     def _render_caption(self, row: int, key: str, captions: Mapping[str, str]) -> str:
         """Open a group with a bold, inert row naming its owner.
@@ -467,7 +492,7 @@ class ParameterTable(QTableWidget):
     ) -> None:
         numbers = self._display_values(definition)
         values = (
-            _name_text(definition, caption=caption),
+            _name_text(definition, caption=caption, bulk_density=self._bulk_density(definition)),
             _number(numbers[0]),
             _number(numbers[1]),
             _number(numbers[2]),
@@ -495,11 +520,12 @@ class ParameterTable(QTableWidget):
         self,
         definition: api.ParameterDefinition,
     ) -> tuple[float, float, float]:
-        scale = display_scale(definition)
+        scale = display_scale(definition, self._bulk_density(definition))
+        lower, upper = self._intervals.get(definition.name, (definition.lower, definition.upper))
         return (
             definition.initial * scale,
-            definition.lower * scale,
-            definition.upper * scale,
+            lower * scale,
+            upper * scale,
         )
 
 
@@ -581,7 +607,12 @@ def _apply_lock(
     item.setCheckState(FREEDOM_CHECK_STATES[freedom])
 
 
-def _name_text(definition: api.ParameterDefinition, *, caption: str | None) -> str:
+def _name_text(
+    definition: api.ParameterDefinition,
+    *,
+    caption: str | None,
+    bulk_density: float | None = None,
+) -> str:
     """What the name cell reads: the quantity, its unit, and nothing else.
 
     The unit rides with the quantity the way the design writes it -- ``<label>厚度
@@ -597,8 +628,8 @@ def _name_text(definition: api.ParameterDefinition, *, caption: str | None) -> s
     than a prefixed quantity -- keeps every character through the strip; it shortens
     to ``粗糙度 σ`` one step later, by whole-name rewrite (``grouping.ROW_ALIASES``).
     """
-    text = parameter_row_name(definition.display_name, caption)
-    unit = parameter_display_unit(definition)
+    text = parameter_row_name(definition.display_name, caption, bulk_density)
+    unit = parameter_display_unit(definition, bulk_density)
     return f"{text}（{unit}）" if unit else text
 
 

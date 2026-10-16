@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtGui import QAction, QKeySequence
@@ -196,26 +197,28 @@ def test_project_dialog_reports_a_known_open_error_once(qtbot, tmp_path, monkeyp
 
 
 def test_active_dataset_selection_updates_project_ui_state(monkeypatch) -> None:
+    """Selection routes through the API but is a view change, not an edit."""
+    from tests.support.model_cases import dataset_project
+
     from xrr_fitter.gui.document import ProjectDocument
 
-    original = api.new_project()
-    updated = api.set_expert_mode(api.new_project(), True)
+    original = api.XrrProject.new((dataset_project("curve"), dataset_project("sample")), master_seed=1201)
+    original = replace(original, base_directory="/private/tmp")
+    select = api.select_active_dataset
     calls: list[tuple[object, ...]] = []
     monkeypatch.setattr(
         api,
         "select_active_dataset",
-        lambda project, dataset_id: (
-            calls.append((project, dataset_id)),
-            updated,
-        )[1],
+        lambda project, dataset_id: (calls.append((project, dataset_id)), select(project, dataset_id))[1],
     )
     document = ProjectDocument(original)
 
     document.select_active_dataset("sample")
 
     assert calls == [(original, "sample")]
-    assert document.project is updated
-    assert document.is_dirty is True
+    assert document.active_dataset_id == "sample"
+    assert document.is_dirty is False
+    assert document.can_undo is False
 
 
 def test_manual_save_discards_the_autosave_draft(qtbot, tmp_path, monkeypatch) -> None:

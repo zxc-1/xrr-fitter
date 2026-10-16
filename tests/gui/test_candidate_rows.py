@@ -43,15 +43,22 @@ def _candidate(
     )
 
 
-def _row(candidate, *, selected: bool = False, adopted: bool = False, confidence: str | None = None):
+def _row(
+    candidate,
+    *,
+    selected: bool = False,
+    adopted: bool = False,
+    graded: bool = False,
+    confidence: str | None = None,
+):
     from xrr_fitter.gui.results.candidate_row import candidate_row
 
-    return candidate_row(candidate, selected=selected, adopted=adopted, confidence=confidence)
+    return candidate_row(candidate, selected=selected, adopted=adopted, graded=graded, confidence=confidence)
 
 
-def test_the_adopted_candidate_carries_the_verdict_passed_down_to_it() -> None:
-    """采信的那一行就是被判定的那一行，所以判定的形状画在它身上。"""
-    row = _row(_candidate(), adopted=True, confidence="可信")
+def test_the_graded_candidate_carries_the_verdict_passed_down_to_it() -> None:
+    """判定是对推荐那一解算的，所以判定的形状画在它身上。"""
+    row = _row(_candidate(), graded=True, confidence="可信")
 
     assert row.glyph == "●"
     assert row.kind == "ok"
@@ -60,20 +67,21 @@ def test_the_adopted_candidate_carries_the_verdict_passed_down_to_it() -> None:
 
 def test_a_correlated_verdict_reaches_the_row_as_its_own_shape() -> None:
     """``可用但相关`` 在状态栏折到 warn，这里不折：四种判定四种形状。"""
-    row = _row(_candidate(), adopted=True, confidence="可用但相关")
+    row = _row(_candidate(), graded=True, confidence="可用但相关")
 
     assert row.glyph == "◆"
     assert row.kind == "info"
     assert row.state == "可用但相关"
 
 
-def test_a_candidate_nobody_adopted_reads_as_one_of_several_solutions() -> None:
-    """没被采信的可用解就是「目标值相近的候选不止一个」，也就是设计稿的 ``多解``。"""
+def test_a_candidate_nobody_graded_reads_as_ungraded_rather_than_as_a_verdict() -> None:
+    """「多解」是一个判定（还有别的解跟它一样好）。没被判过的行一律写「多解」，等于替一个 J 大了
+    四倍的解宣称它与推荐解一样好。没判过就说没判过：空心圈、静音色。"""
     row = _row(_candidate())
 
-    assert row.glyph == "▲"
-    assert row.kind == "warn"
-    assert row.state == "多解"
+    assert row.glyph == theme.CONFIDENCE_FALLBACK_GLYPH
+    assert row.kind == theme.CONFIDENCE_FALLBACK_KIND
+    assert row.state == "未判定"
 
 
 def test_an_unusable_candidate_is_shaped_as_the_verdict_that_refuses_it() -> None:
@@ -84,17 +92,17 @@ def test_an_unusable_candidate_is_shaped_as_the_verdict_that_refuses_it() -> Non
     assert row.state == "不可信"
 
 
-def test_being_adopted_does_not_make_an_unusable_candidate_trustworthy() -> None:
+def test_being_graded_does_not_make_an_unusable_candidate_trustworthy() -> None:
     """打开一个算不出来的解是允许的（检查用），把它画成 ● 不是。"""
-    row = _row(_candidate(valid=False), selected=True, adopted=True, confidence="可信")
+    row = _row(_candidate(valid=False), selected=True, graded=True, confidence="可信")
 
     assert row.glyph == "■"
     assert row.kind == "error"
 
 
-def test_an_adopted_row_without_a_verdict_draws_the_hollow_ring() -> None:
+def test_a_graded_row_without_a_verdict_draws_the_hollow_ring() -> None:
     """旧存档没有判定字段。空心圈读作「还没测」，不是第五档可信度。"""
-    row = _row(_candidate(), adopted=True, confidence=None)
+    row = _row(_candidate(), graded=True, confidence=None)
 
     assert row.glyph == theme.CONFIDENCE_FALLBACK_GLYPH
     assert row.kind == theme.CONFIDENCE_FALLBACK_KIND
@@ -103,7 +111,7 @@ def test_an_adopted_row_without_a_verdict_draws_the_hollow_ring() -> None:
 
 def test_the_shapes_are_distinct_so_colour_is_never_the_only_signal() -> None:
     """四档四形。两档共用一个形状就把双编码退回成纯色编码。"""
-    shapes = {_row(_candidate(), adopted=True, confidence=grade).glyph for grade in theme.CONFIDENCE_GLYPHS}
+    shapes = {_row(_candidate(), graded=True, confidence=grade).glyph for grade in theme.CONFIDENCE_GLYPHS}
 
     assert len(shapes) == len(theme.CONFIDENCE_GLYPHS)
 
@@ -137,31 +145,31 @@ def test_a_candidate_without_a_ranking_objective_leaves_that_field_empty() -> No
     assert row.ranking == ""
 
 
-def test_the_inspected_candidate_is_marked_current_rather_than_described() -> None:
+def test_the_viewed_but_unadopted_candidate_is_marked_as_being_viewed() -> None:
+    """点一行只是看它；「查看中」说的是这一行开着，不是它已经被采用。"""
     row = _row(_candidate(), selected=True)
 
-    assert row.mark == "当前"
+    assert row.mark == "查看中"
 
 
-def test_every_other_row_offers_the_switch_the_design_draws_on_it() -> None:
-    """设计稿候选 B/C 右缘各有一枚「切换」：这一行不是当前，但点它就能是。"""
+def test_every_other_row_offers_a_look_not_a_switch() -> None:
+    """点别的行只是去看它，项目不变，所以那枚幽灵字写「查看」而不是「切换」。"""
     row = _row(_candidate(), selected=False)
 
-    assert row.mark == "切换"
+    assert row.mark == "查看"
 
 
 def test_an_unusable_candidate_can_still_be_opened_for_inspection() -> None:
-    """无效解不能被采信，但读者要能打开它看为什么算不出来，所以照样写「切换」。"""
+    """无效解不能被采用，但读者要能打开它看为什么算不出来，所以照样写「查看」。"""
     row = _row(_candidate(valid=False), selected=False)
 
-    assert row.mark == "切换"
+    assert row.mark == "查看"
 
 
-def test_the_adopted_row_is_not_marked_twice_while_it_is_the_one_open() -> None:
-    """一行只有一枚标记的宽度：当前压过一切，它回答「我在看哪个」。"""
-    row = _row(_candidate(), selected=True, adopted=True, confidence="可信")
-
-    assert row.mark == "当前"
+def test_the_adopted_row_says_so_whether_or_not_it_is_open() -> None:
+    """「已采用」回答「导出与图用的是哪一个」，它压过「查看中」：一行只有一枚标记的宽度。"""
+    assert _row(_candidate(), selected=True, adopted=True).mark == "已采用"
+    assert _row(_candidate(), selected=False, adopted=True).mark == "已采用"
 
 
 def test_the_title_is_the_position_the_row_holds() -> None:
@@ -199,7 +207,7 @@ def test_the_hollow_ring_keeps_the_muted_alpha_instead_of_painting_solid() -> No
     """空心圈取 ``muted_text``，设计稿里是 #5B6270（不透明灰）。"""
     from xrr_fitter.gui.results.candidate_row import glyph_colour
 
-    colour = glyph_colour(_row(_candidate(), adopted=True, confidence=None), _light_palette())
+    colour = glyph_colour(_row(_candidate(), graded=True, confidence=None), _light_palette())
 
     assert (colour.red(), colour.green(), colour.blue(), colour.alpha()) == (91, 98, 112, 255)
 
@@ -343,14 +351,14 @@ def test_every_loaded_row_hands_the_delegate_its_segments(qtbot) -> None:
 
     assert tuple(row.title for row in rows) == ("候选 A", "候选 B")
     assert tuple(row.objective for row in rows) == ("J=1.83", "J=1.97")
-    assert tuple(row.mark for row in rows) == ("当前", "切换")
+    assert tuple(row.mark for row in rows) == ("已采用", "查看")
 
 
-def test_the_verdict_reaches_the_adopted_row_and_only_that_row(qtbot) -> None:
-    """判定是整份结果的，画在被采信的那一行上；另一行照旧是「多解」。
+def test_the_verdict_reaches_the_graded_row_and_only_that_row(qtbot) -> None:
+    """判定是整份结果的，画在被判定的那一行上；另一行没被判过，读作「未判定」。
 
-    设计稿候选 A 是 ●（可信），B 是 ▲（多解）。同一份结果里两行取同一个判定的话，
-    三行都会画成 ●，读者于是读到「三个都可信」——而这份结果恰恰只推荐了一个。
+    同一份结果里两行取同一个判定的话，三行都会画成 ●，读者于是读到「三个都可信」——而这份
+    结果恰恰只推荐了一个。另一行也不能一律写 ▲ 多解：那是另一个判定，说的是它与推荐解一样好。
     """
     from xrr_fitter.gui.results.candidate_row import CANDIDATE_ROW_ROLE
     from xrr_fitter.gui.results.candidates import CandidateList
@@ -366,8 +374,8 @@ def test_the_verdict_reaches_the_adopted_row_and_only_that_row(qtbot) -> None:
 
     rows = tuple(widget.item(index).data(CANDIDATE_ROW_ROLE) for index in range(widget.count()))
 
-    assert tuple(row.glyph for row in rows) == ("●", "▲")
-    assert tuple(row.kind for row in rows) == ("ok", "warn")
+    assert tuple(row.glyph for row in rows) == ("●", theme.CONFIDENCE_FALLBACK_GLYPH)
+    assert tuple(row.kind for row in rows) == ("ok", theme.CONFIDENCE_FALLBACK_KIND)
 
 
 def test_projecting_a_result_reads_the_verdict_off_the_result_itself(qtbot) -> None:
@@ -385,11 +393,11 @@ def test_projecting_a_result_reads_the_verdict_off_the_result_itself(qtbot) -> N
 
     rows = tuple(widget.item(index).data(CANDIDATE_ROW_ROLE) for index in range(widget.count()))
     assert rows[0].state == "可信"
-    assert rows[1].state == "多解"
+    assert rows[1].state == "未判定"
 
 
 def test_the_inspected_row_keeps_the_verdict_after_a_candidate_switch(qtbot) -> None:
-    """切到 B 去看时 A 仍是被采信的那一行，它的 ● 不能因为焦点移开就没了。"""
+    """切到 B 去看时 A 仍是被采用、被判定的那一行，它的 ● 与「已采用」不能因为焦点移开就没了。"""
     from tests.support.model_cases import final_fit_result
 
     from xrr_fitter.gui.results.candidate_row import CANDIDATE_ROW_ROLE
@@ -403,8 +411,8 @@ def test_the_inspected_row_keeps_the_verdict_after_a_candidate_switch(qtbot) -> 
     widget.inspect("candidate-b")
 
     rows = tuple(widget.item(index).data(CANDIDATE_ROW_ROLE) for index in range(widget.count()))
-    assert (rows[0].glyph, rows[0].mark) == ("●", "切换")
-    assert (rows[1].glyph, rows[1].mark) == ("▲", "当前")
+    assert (rows[0].glyph, rows[0].mark) == ("●", "已采用")
+    assert (rows[1].glyph, rows[1].mark) == (theme.CONFIDENCE_FALLBACK_GLYPH, "查看中")
 
 
 def test_the_list_is_exactly_as_tall_as_the_rows_it_holds(qtbot) -> None:

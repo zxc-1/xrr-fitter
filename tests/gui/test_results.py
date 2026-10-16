@@ -6,7 +6,8 @@ an explicit confirmation and invalid evidence never mutates the project.
 
 Uncertainty and MCMC records are candidate-owned.  A visible row must not make
 evidence from another (or an unowned legacy record) appear applicable.  MCMC
-completion is also bound to the exact project identity used to start the job;
+completion is also bound to the project content used to start the job (pages
+and the active dataset may move; see ``test_mcmc_survives_looking_around``);
 otherwise an asynchronous result could revive invalidated data or discard a
 newer selection.
 
@@ -198,6 +199,7 @@ def test_archived_candidate_requires_confirmation_before_persisting(
     monkeypatch,
     confirmed,
 ) -> None:
+    """看一个早期淘汰的候选不需要确认，也不改项目；采用它才要确认。"""
     panel = _panel(qtbot, _project_with_result(_candidate_audit_result()))
     before = panel.document.project
     monkeypatch.setattr(
@@ -210,6 +212,10 @@ def test_archived_candidate_requires_confirmation_before_persisting(
     panel.candidates.setCurrentRow(1)
 
     assert panel.selected_candidate_id() == "candidate-archived"
+    assert panel.document.project is before
+
+    panel.adopt_viewed_candidate()
+
     expected = (("curve", "candidate-archived"),) if confirmed else ()
     assert panel.document.project.ui_state.selected_candidate_ids == expected
     if not confirmed:
@@ -622,7 +628,7 @@ def test_mcmc_completion_rejects_stale_source_project(
 
     assert panel.document.project is concurrent
     assert len(failures) == 1
-    assert "stale" in failures[0].message
+    assert "作废" in failures[0].message
 
 
 def test_running_mcmc_locks_result_mutations(qtbot) -> None:
@@ -639,7 +645,7 @@ def test_running_mcmc_locks_result_mutations(qtbot) -> None:
 @pytest.mark.parametrize(
     ("signal_name", "payload", "status_fragment"),
     (
-        ("cancelled", "requested", "requested"),
+        ("cancelled", "requested", "按请求停止"),
         (
             "failed",
             api.OperationError("ValueError", "bad chain", "traceback text"),

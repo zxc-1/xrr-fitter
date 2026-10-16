@@ -33,6 +33,7 @@ PUBLIC_NAMES = (
     "ImportBatchPreview",
     "ImportFilePreview",
     "ImportFailure",
+    "INITIAL_DENSITIES_G_CM3",
     "InstrumentSpec",
     "InterfaceTransition",
     "JointFitLayout",

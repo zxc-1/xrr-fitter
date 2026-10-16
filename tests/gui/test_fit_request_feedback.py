@@ -112,6 +112,7 @@ def test_automatic_run_clears_last_run_feedback_and_uses_only_selected_batch(qtb
         assert panel._preview_last_emit is None
         assert panel.progress_view.joint_label.isHidden()
         panel.controller.progress_changed.emit(api.FitProgress("curve-1", "finalizing", 1, 1, 1.0, "done"))
-        assert panel.progress_view.overall_percent() == 100
+        # 只有选中批次的一条：它到汇总就是整批 99%（终点留给结果发布），而不是两条平均的 50%。
+        assert panel.progress_view.overall_percent() == 99
     finally:
         panel.controller._finish()

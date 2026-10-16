@@ -41,6 +41,14 @@ def stop_input(driver, window, route, focus):
     QTest.keySequence(focus, QKeySequence("Escape"))
 
 
+def repeat_stop(driver, window, route, focus):
+    # 停止请求已发出后，菜单里的「取消拟合」灰掉，只剩强停；再按 Esc 不再发第二次请求。
+    if route == "menu":
+        assert not window._workflow_actions["cancelFitAction"].isEnabled()
+        return
+    stop_input(driver, window, route, focus)
+
+
 @pytest.mark.parametrize("route", ("menu", "shortcut"))
 @pytest.mark.parametrize("focus_name", ("panel", "plot"))
 def test_window_stop_routes_acknowledge_and_deduplicate(controls, tmp_path, monkeypatch, route, focus_name):
@@ -55,7 +63,7 @@ def test_window_stop_routes_acknowledge_and_deduplicate(controls, tmp_path, monk
         assert not panel.pause_button.isEnabled()
         assert not panel.skip_button.isEnabled()
         assert panel.force_button.isEnabled() and panel.force_button.isVisible()
-        stop_input(controls, window, route, focus)
+        repeat_stop(controls, window, route, focus)
         assert calls == ["cancel"]
         identities = ("cancelFitAction",) if route == "menu" else ("cancelFitAction:shortcut",)
         controls.record(

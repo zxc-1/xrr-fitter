@@ -48,6 +48,8 @@ class Projection:
     visible_range: tuple[float, float] | None
     dataset_id: str | None = None
     structure: object | None = None
+    # 当前数据集读不出来时画布上那句说明；跟着投影走，回滚时说明也一起回到上一次的样子。
+    source_issue: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,16 +164,18 @@ def current_projection(
     visible_range: tuple[float, float] | None,
     structure: object | None,
     changes: Mapping[str, object] | None = None,
+    source_issue: str | None = None,
 ) -> Projection:
     values: dict[str, object] = {
-        "data": None if dataset_id is None else datasets[dataset_id],
-        "mask": None if dataset_id is None else masks[dataset_id],
+        "data": datasets.get(dataset_id) if dataset_id is not None else None,
+        "mask": masks.get(dataset_id) if dataset_id is not None else None,
         "result": result,
         "candidate_id": candidate_id,
         "trends": trends,
         "visible_range": visible_range,
         "dataset_id": dataset_id,
         "structure": structure,
+        "source_issue": source_issue,
     }
     if changes is not None:
         values.update(changes)
@@ -187,13 +191,14 @@ def committed_projection(
     trends: BatchTrends | None,
     visible_range: tuple[float, float] | None,
     structure: object | None,
+    source_issue: str | None = None,
 ) -> Projection:
     data = None
     mask = None
     if dataset_id is not None and dataset_id in datasets:
         data = datasets[dataset_id]
         mask = masks[dataset_id]
-    return Projection(data, mask, result, candidate_id, trends, visible_range, dataset_id, structure)
+    return Projection(data, mask, result, candidate_id, trends, visible_range, dataset_id, structure, source_issue)
 
 
 def comparison_candidates(result: object | None, candidate_id: str | None) -> tuple[object, ...]:
@@ -222,6 +227,19 @@ def reset_band_view(
     selector: QComboBox,
 ) -> None:
     set_alignment_index(selector, alignment_index_from_bands(persisted, selector.itemText(1)))
+
+
+def check_new_bands(toggle: QCheckBox, previous: object | None, incoming: object | None) -> None:
+    """一组新的带到来时勾上开关——只在这一刻勾，此后勾不勾由读者决定。
+
+    按带对象本身判「新」：同一份结果反复投影（换步骤、换视图都会）带是同一个对象，读者在结果页
+    取消的勾选就留着；没有 MCMC 报告、只有自助抽样带的结果也算到来。
+    """
+    if incoming is None or incoming is previous:
+        return
+    toggle.blockSignals(True)
+    toggle.setChecked(True)
+    toggle.blockSignals(False)
 
 
 def set_alignment_index(selector: QComboBox, index: int) -> None:
@@ -292,22 +310,28 @@ def visible_bands(
     return None
 
 
+# 带是围着拟合结果算的；结构与参数两步画的是读者正在编辑的标称剖面，把它叠上去就成了「我刚改的
+# 这套结构有多确定」——那不是这条带回答的问题。开关在那两步灰掉，并说出为什么。
+BANDS_NEED_MCMC_TIP = "需要先运行 MCMC"
+BANDS_FOLLOW_FIT_TIP = "不确定度带以拟合结果为中心，结构编辑时画的是标称剖面，回到结果页查看"
+
+
 def sync_band_controls(
     toggle: QCheckBox,
     selector: QComboBox,
     *,
     bands: object | None,
     has_structure: bool,
+    drawable: bool = True,
 ) -> None:
-    enabled = bands is not None
-    was_enabled = toggle.isEnabled()
+    """只管能不能点；勾不勾由读者决定，新报告到来时由面板勾上一次（``reset_band_view``）。
+
+    此前每次从灰变亮都替读者勾一次，于是在结果页取消勾选、去结构页再回来，带又自己回来了。
+    """
+    enabled = bands is not None and drawable
     toggle.setEnabled(enabled)
-    toggle.setToolTip("" if enabled else "需要先运行 MCMC")
+    toggle.setToolTip("" if enabled else BANDS_FOLLOW_FIT_TIP if bands is not None else BANDS_NEED_MCMC_TIP)
     selector.setEnabled(enabled and has_structure)
-    if enabled and not was_enabled:
-        toggle.blockSignals(True)
-        toggle.setChecked(True)
-        toggle.blockSignals(False)
 
 
 def project_structure(project: api.XrrProject, dataset_id: str | None) -> object | None:

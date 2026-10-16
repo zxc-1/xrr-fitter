@@ -15,11 +15,12 @@ must never make a project unopenable.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QFontInfo, QPalette
+from PySide6.QtGui import QColor, QFontInfo, QPalette
 from PySide6.QtWidgets import QDockWidget, QFrame, QLabel, QScrollArea, QSplitter, QWidget
 from tests.gui.paint_support import painted, painted_at
 
@@ -201,6 +202,33 @@ def test_the_rail_has_no_divider_of_its_own(qtbot) -> None:
     rail = window.nav_column.findChild(QSplitter, "leftSplitter")
     assert rail is not None
     assert rail.handleWidth() == 0
+
+
+def test_legacy_wide_side_columns_do_not_push_the_canvas_below_its_floor(qtbot, tmp_path: Path) -> None:
+    """F29：两侧栏是钉死的，可旧项目里存着更宽的侧栏；照单恢复会把画布压到它的下限以下。"""
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.gui.main_window import MainWindow
+    from xrr_fitter.gui.window_layout import MINIMUM_SHELL_WIDTH
+
+    project = api.set_workspace_state(
+        api.new_project(),
+        replace(api.new_project().ui_state, workspace_splitter_sizes=(400, 372, 500)),
+    )
+    window = MainWindow(ProjectDocument(project))
+    qtbot.addWidget(window)
+    window.set_guidance_visible(False)
+    window.resize(MINIMUM_SHELL_WIDTH, 800)
+    window.show()
+    qtbot.waitExposed(window)
+    qtbot.wait(20)
+
+    # 缺的宽度从两侧还回来，各自退回到自己的预算；画布拿到的就是最小窗口下它本来就有的那一份：
+    # 设计稿的 666（两道 1px 接缝在列外）。
+    left, canvas, right = window.workspace_splitter.sizes()
+    assert (left, right) == (LEFT_COLUMN_WIDTH, RIGHT_COLUMN_WIDTH), window.workspace_splitter.sizes()
+    seams = 2 * window.workspace_splitter.handleWidth()
+    assert canvas == window.workspace_splitter.width() - seams - LEFT_COLUMN_WIDTH - RIGHT_COLUMN_WIDTH
+    assert canvas == CANVAS_COLUMN_FLOOR - seams, window.workspace_splitter.sizes()
 
 
 def test_the_navigation_column_holds_datasets_pipeline_and_a_summary(qtbot) -> None:
@@ -493,6 +521,29 @@ def test_the_summary_sits_on_the_rail_s_bottom_edge_once_it_has_a_count(
     summary_top = summary.mapTo(column, summary.rect().topLeft()).y()
     pipeline = window.pipeline_nav
     assert summary_top >= pipeline.mapTo(column, pipeline.rect().bottomLeft()).y()
+
+
+def test_the_summary_is_padded_and_ruled_off_like_the_design_footer(qtbot, tmp_path: Path) -> None:
+    """F44：``.ds-summary{padding:var(--md);border-top:1px solid var(--border)}``。
+
+    没有内边距，那一行字贴着机架左缘和窗口底边，读起来像被裁掉的一截；上面那道线是它和管线之间
+    唯一的分界——没有它，页脚就成了管线最后一步下面多出来的一行字。量的是发货外观：边距与线都
+    写在样式表里。
+    """
+    window = _populated(qtbot, tmp_path, datasets=2, layers=0)
+    palette = theme.light_palette()
+    window.setPalette(palette)
+    window.setStyleSheet(theme.build_stylesheet(palette))
+    window.resize(1280, 760)
+    window.show()
+    qtbot.waitExposed(window)
+
+    summary = window.dataset_summary
+    inner = summary.contentsRect()
+    assert inner.left() >= theme.SPACE_MD and summary.width() - 1 - inner.right() >= theme.SPACE_MD, inner
+    assert inner.top() >= theme.SPACE_MD and summary.height() - 1 - inner.bottom() >= theme.SPACE_MD, inner
+    rule = painted(window).at_point(summary.mapTo(window, QPoint(summary.width() // 2, 0)))
+    assert rule == QColor(theme.LIGHT_TOKENS.surface_border), rule.name()
 
 
 def test_the_navigation_column_fits_its_budget(qtbot, tmp_path: Path) -> None:

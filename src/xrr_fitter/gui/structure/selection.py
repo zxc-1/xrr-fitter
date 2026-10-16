@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.railbar import RailBar
+from xrr_fitter.gui.structure.errors import structure_error_text
 
 CommitLayer = Callable[[int, api.LayerSpec], object]
 
@@ -51,7 +52,7 @@ LocksLookup = Callable[[int], LayerLocks]
 # ``48.70000000``），而屏上的字号由系统给；所以它是下限，不是定值，见 :func:`_field_width`。
 FIELD_WIDTH_PX = 96
 
-# 设计稿在这只框里写的是 ``48.70000000``：两位整数、一个小数点、``NUMBER_DECIMALS`` 位小数。
+# 一只框里的取值：两位整数、一个小数点、``NUMBER_DECIMALS`` 位小数。
 FIELD_INTEGER_DIGITS = 2
 
 # 框自己占掉的那一圈：样式表给的左右各 ``SPACE_SM`` 内缩，加两道 1px 的边。
@@ -63,15 +64,24 @@ FIELD_CHROME_PX = 2 * theme.SPACE_SM + 2
 FIELD_GAP_PX = 3
 FIELD_MARGIN_PX = 10
 
-# 设计稿这三个框写的是 ``48.70000000`` / ``0.44000000`` / ``2.28000000``。四位会截掉真实位数：
-# 拟合解出来的厚度是 48.7031… 这种数，读者把框里的数改一位再提交时，被写回结构的是显示
-# 出来的那份，末几位就这么悄悄丢了。八位也是本仓库另外四处数字输入的既有惯例。
-NUMBER_DECIMALS = 8
+# 四位小数：nm 下 10–99 的厚度正好六位有效数字，和参数表 ``DISPLAY_SIGNIFICANT`` 读出同一个数。
+# 设计稿原写八位（``48.70000000``），审计发现那串零只是噪声，读者数不清位。没碰过的框不会把
+# 截掉的位写回去：提交时没动的字段逐位照抄原层（见 :meth:`SelectedLayerCard._commit`）。
+NUMBER_DECIMALS = 4
 
 # 周期块、梯度层没有单一的厚度或密度，一组填进去的数字只会是假的；卡片整体禁用并
 # 说明去哪里改，而不是给一个提交出去就会被拒的表单。
-UNSUPPORTED_HINT = "该组件不是普通层，请用「添加周期块」对话框编辑。"
+UNSUPPORTED_HINT = "该组件不是普通层，没有单一的厚度与密度可在这里改。"
 EMPTY_HINT = "在层堆叠里选一层即可就地编辑它的材料与几何。"
+PERIODIC_HINT = (
+    "「{name}」是周期块（{layers} 层 × {repeats} 个周期），块内各层随块一起编辑。"
+    "双击该块或右键选「编辑周期块 / 梯度层…」。"
+)
+GRADIENT_HINT = "「{name}」是梯度层（SLD 线性渐变）。双击该行或右键选「编辑周期块 / 梯度层…」。"
+
+# 模型对层厚的下限是 2 Å（``model.structure._thickness``）。框的下限写成 0.02 nm 时，读者能
+# 键入一个注定被拒的数。
+MIN_THICKNESS_NM = 0.2
 
 # 设计稿在化学式框下摆了一行 ``.help``。它说的两件事——这个框会拿化学式去算 SLD、
 # 密度也可以另给——是这个框唯一的用法说明；只挂 tooltip 等于要求使用者先猜到该悬停，
@@ -95,11 +105,10 @@ DENSITY_LABEL = "密度 ρ（g·cm⁻³）"
 CUSTOM_DENSITY_SUFFIX = "（自定义密度）"
 DIRECT_SLD_SUFFIX = "（直接给定 SLD）"
 
-# 设计稿这一格右端是一枚 ``▾``：常见材料点一下就有，不用记怎么拼。这五个是
-# ``services.materials`` 的初始密度表——填表以外的化学式一样能算，但只有这几个是应用能
-# 立刻给出体密度的。表在服务层，没有经 ``api`` 转出来，所以这里只抄名字：抄错了对不上，
-# 点出来的化学式算不出密度，界面上一眼就能看见。
-KNOWN_FORMULAS = ("Si", "SiO2", "Si3N4", "TaN", "Zr")
+# 设计稿这一格右端是一枚 ``▾``：常见材料点一下就有，不用记怎么拼。这几个是初始密度表里的
+# 化学式——填表以外的化学式一样能算，但只有这几个是应用能立刻给出体密度的。名字和密度从
+# ``api`` 的同一张表读，选中一项时带入的密度因此不可能和菜单列出的名字对不上。
+KNOWN_FORMULAS = tuple(api.INITIAL_DENSITIES_G_CM3)
 MENU_GLYPH = "▾"
 MENU_TOOLTIP = "常见材料"
 
@@ -119,6 +128,11 @@ BLANK_NUMBER_TEXT = "—"
 # 声明里长度以 Å 存，可见的每一处都是 nm。``parameters.grouping`` 对参数表做的是同一
 # 道换算，两处共用一个常数才不会有一处漏改。
 NM_PER_ANGSTROM = 0.1
+
+# :func:`layer_bounds` 里这一项不是界限，是密度声明此刻的倍率（setting 改过的初值优先于
+# 结构里的 ``density_scale``）。卡片、参数表、结果表都写有效密度 = 体密度 × 这个倍率；
+# 卡片照体密度画的话，同一层在三处读出三个数。两端写同一个数是为了和其余各项同一形状。
+DENSITY_SCALE_KEY = "density_scale"
 
 
 def layer_bounds(
@@ -146,6 +160,9 @@ def layer_bounds(
         if definition is None or scale is None:
             continue
         bounds[key] = (definition.lower * scale, definition.upper * scale)
+    density = by_name.get(f"component.{index}.density_scale")
+    if density is not None:
+        bounds[DENSITY_SCALE_KEY] = (density.initial, density.initial)
     return bounds
 
 
@@ -167,6 +184,21 @@ def layer_locks(definitions: Sequence[api.ParameterDefinition], index: int) -> d
             continue
         locks[key] = bool(definition.locked)
     return locks
+
+
+def component_hint(component: object | None) -> str:
+    """卡片关着时那一句：没选中、选中的是周期块（或它的子层）、梯度层，还是别的什么。
+
+    点到周期块的子层时，编辑器报的是那个块；这里说清这一层属于哪个块、去哪儿改，而不是让
+    读者以为自己什么都没选中。
+    """
+    if component is None:
+        return EMPTY_HINT
+    if isinstance(component, api.PeriodicBlock):
+        return PERIODIC_HINT.format(name=component.name, layers=len(component.layers), repeats=component.repeats)
+    if isinstance(component, api.GradientLayerSpec):
+        return GRADIENT_HINT.format(name=component.name)
+    return UNSUPPORTED_HINT
 
 
 def material_label(material: api.MaterialSpec) -> str:
@@ -197,11 +229,10 @@ class BoundState(NamedTuple):
 
 
 def _field_width(editor: QDoubleSpinBox) -> int:
-    """框宽：设计稿的 96px，但至少要写得下 ``48.70000000`` 这样一个取值。
+    """框宽：设计稿的 96px，但至少要写得下 ``NUMBER_DECIMALS`` 位小数的一个取值。
 
-    这三格显示八位小数是有意的——拟合解出来的厚度是 48.7031… 这种数，读者改一位再提交
-    时，被写回结构的是显示出来的那份。屏上只写得出 ``48.700`` 时他读到的是一个更精确、
-    而且错的数：他不知道自己没看见后面几位，也就不知道这一次提交会把它们抹掉。
+    框里显示的位数必须整个写在屏上：屏上只写得出一部分时，读者读到的是一个看起来更精确、
+    而且错的数，他也不知道自己没看见后面几位。
 
     十个数字的字形不一定同宽（``1`` 常比 ``0`` 窄），按此刻恰好写着的那串去量，换一层材料
     就可能差几像素；取最宽的那个数字，一次算准所有取值。
@@ -263,6 +294,7 @@ def _edited_material(
     bound: BoundState,
     label: str,
     density: float,
+    scale: float,
 ) -> api.MaterialSpec:
     """把两格里改动过的那些写回材料，没动过的原样留着。
 
@@ -272,17 +304,50 @@ def _edited_material(
 
     体密度是 ``None`` 的层（直接给定 SLD）那一格是空的，空格里读出来的数不是这一层的密度，
     不能顺手写进去。
+
+    框里写的是有效密度（体密度 × ``scale``），所以写回体密度时除掉倍率：倍率不动，有效密度
+    就正好是读者键入的那个数。
     """
     if label == bound.label:
         if material.bulk_density_g_cm3 is None or density == bound.density:
             return material
-        return replace(material, bulk_density_g_cm3=density)
+        return replace(material, bulk_density_g_cm3=density / scale)
     return replace(
         material,
+        name=followed_name(material.name, material.formula, label),
         formula=label,
-        bulk_density_g_cm3=None if material.bulk_density_g_cm3 is None else density,
+        bulk_density_g_cm3=_changed_density(material, bound, label, density, scale),
         sld_override_a2=None,
     )
+
+
+def followed_name(name: str, old_formula: str | None, new_formula: str | None) -> str:
+    """名字原本就是旧化学式（叫 ``SiO2`` 的 SiO2 层）时跟着化学式换；读者起过的名字原样留着。
+
+    不跟的话，从菜单换成 Si3N4 之后层堆叠、抬头、参数表分组行仍然写着 SiO2。
+    """
+    if old_formula is None or new_formula is None or name != old_formula:
+        return name
+    return new_formula
+
+
+def _changed_density(
+    material: api.MaterialSpec,
+    bound: BoundState,
+    formula: str,
+    density: float,
+    scale: float,
+) -> float | None:
+    """换了化学式之后这一层的体密度。
+
+    这一次提交里读者亲手改过密度，就用他的；否则表里有这个化学式就带入名义密度——旧密度属于
+    旧材料，留着它等于说 Si3N4 的密度是 2.2；表里没有就留着屏上那个数，读者看得见、改得了。
+    「改没改过」按框里的显示值比：换算回体密度再比，八位小数的取整会让没碰过的框看起来改过。
+    """
+    if material.bulk_density_g_cm3 is not None and density != bound.density:
+        return density / scale
+    nominal = api.INITIAL_DENSITIES_G_CM3.get(formula)
+    return material.bulk_density_g_cm3 if nominal is None else nominal
 
 
 class SelectedLayerCard(QWidget):
@@ -331,7 +396,7 @@ class SelectedLayerCard(QWidget):
         self.formula_help.setObjectName("selectedLayerFormulaHelp")
         self.formula_help.setProperty("mutedText", True)
         self.formula_help.setWordWrap(True)
-        self.thickness_editor = _number("selectedLayerThicknessInput", THICKNESS_LABEL, 0.02)
+        self.thickness_editor = _number("selectedLayerThicknessInput", THICKNESS_LABEL, MIN_THICKNESS_NM)
         self.roughness_editor = _number("selectedLayerRoughnessInput", ROUGHNESS_LABEL, 0.0)
         self.density_editor = _number("selectedLayerDensityInput", DENSITY_LABEL, 0.000001)
         self.thickness_rail = RailBar("selectedLayerThicknessRail")
@@ -449,6 +514,13 @@ class SelectedLayerCard(QWidget):
             ("density", self.density_editor, self.density_rail),
         )
 
+    def _density_scale(self, layer: api.LayerSpec) -> float:
+        """这一层此刻的密度倍率：声明的初值（setting 改过的优先），拿不到声明时用结构自己的。"""
+        if self._bounds_for is None or self._index is None:
+            return float(layer.density_scale)
+        span = self._bounds_for(self._index).get(DENSITY_SCALE_KEY)
+        return float(layer.density_scale) if span is None else float(span[0])
+
     def refresh_bounds(self) -> None:
         """Re-read the declarations behind the rails and the lock chip.
 
@@ -514,7 +586,7 @@ class SelectedLayerCard(QWidget):
         if layer is None:
             self._bound = None
             self._blank()
-            self.hint_label.setText(EMPTY_HINT if component is None else UNSUPPORTED_HINT)
+            self.hint_label.setText(component_hint(component))
             self.hint_label.show()
             self._refresh_rails()
             self._refresh_lock()
@@ -540,7 +612,7 @@ class SelectedLayerCard(QWidget):
             self.density_editor.setValue(self.density_editor.minimum())
             self.density_editor.setEnabled(False)
         else:
-            self.density_editor.setValue(float(density))
+            self.density_editor.setValue(float(density) * self._density_scale(layer))
         # 闸门比的是「框里此刻是什么」，所以基线也从框里读回来——八位小数的取整已经发生过，
         # 拿源数据当基线会让第一次失焦看出一次不存在的改动。
         self._bound = BoundState(
@@ -580,9 +652,11 @@ class SelectedLayerCard(QWidget):
         if (label, thickness, roughness, density) == bound:
             return
         try:
+            material = _edited_material(layer.material, bound, label, density, self._density_scale(layer))
             edited = replace(
                 layer,
-                material=_edited_material(layer.material, bound, label, density),
+                name=followed_name(layer.name, layer.material.formula, material.formula),
+                material=material,
                 # 没动过的那一格逐位照抄。nm→Å 再回来差在小数第十几位上
                 # （``48.7 / 0.1 == 486.99999999999994``），换算一遍就等于替读者改了他没碰的数。
                 thickness_a=layer.thickness_a if thickness == bound.thickness else thickness / NM_PER_ANGSTROM,
@@ -590,12 +664,40 @@ class SelectedLayerCard(QWidget):
             )
             self._commit_layer(index, edited)
         except (TypeError, ValueError) as error:
-            self.error_label.setText(str(error))
-            self.error_label.show()
+            self._reject(error, layer)
             return
         self.error_label.hide()
         # 提交会让结构重新发一遍下来，那条路径自己会把这张卡重新绑到同一层上。它没走到
         # （选中被挪开了）时才轮到这里记账，否则会把已经刷新过的基线覆盖回旧的一份。
         if self._index == index:
-            self._layer = edited
-            self._bound = BoundState(label, thickness, roughness, density)
+            self._remember(edited)
+
+    def _remember(self, edited: api.LayerSpec) -> None:
+        """把刚提交的这一层记成新基线；换化学式时带入的名义密度也要落到框里。"""
+        self._layer = edited
+        density = edited.material.bulk_density_g_cm3
+        if density is not None:
+            self.density_editor.setValue(float(density) * self._density_scale(edited))
+        self._bound = BoundState(
+            self.formula_editor.text().strip(),
+            self.thickness_editor.value(),
+            self.roughness_editor.value(),
+            self.density_editor.value(),
+        )
+
+    def _reject(self, error: BaseException, layer: api.LayerSpec) -> None:
+        """说清楚为什么没写回，再把四格退回项目里那一层。
+
+        不退的话框里留着一串项目里不存在的化学式，此后改任何一格都会拖着它一起提交、一起
+        被拒——读者看到的是「改厚度也没反应」。
+        """
+        self.error_label.setText(f"{structure_error_text(error)}已恢复原值，项目未改动。")
+        self.error_label.show()
+        bound = self._bound
+        if bound is None:
+            return
+        self.formula_editor.setText(bound.label)
+        self.thickness_editor.setValue(bound.thickness)
+        self.roughness_editor.setValue(bound.roughness)
+        if layer.material.bulk_density_g_cm3 is not None:
+            self.density_editor.setValue(bound.density)

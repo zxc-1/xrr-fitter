@@ -353,6 +353,54 @@ def test_the_quantile_section_draws_the_histogram_the_design_puts_above_the_tabl
     assert len(axes.lines) == 3, [line.get_label() for line in axes.lines]
 
 
+def _stalled_chain() -> api.McmcReport:
+    """split-R̂ 越过 1.10 的一条链：各 walker 还没混合，采样点不是后验的样本。"""
+    return replace(_mcmc_report(), split_rhat=np.array([1.002, 41.13, 1.004, 1.011, 1.003, 1.007]))
+
+
+def test_an_unmixed_chain_withholds_its_posterior_quantiles(qtbot) -> None:
+    """链没混合时不念分位：三行退回「不可用」，图不画直方图，段里说清为什么。
+
+    R̂ 41 的链里那三个数只是各 walker 停在哪里，不是后验分位；照常摆出来，读者会把它们当成
+    参数的可信区间抄走。收敛段那一行的 ⚠ 在另一张卡上，不足以拦住这一张卡上的三个数。
+    """
+    window = _uncertainty_window(qtbot, mcmc=_stalled_chain())
+    card = window.inspector_column.findChild(QFrame, "inspectorPosteriorQuantile")
+    rows = _rows(window, "inspectorPosteriorQuantile")
+
+    assert set(rows.values()) == {"不可用"}, rows
+    note = card.findChild(QLabel, "posteriorQuantileWithheld")
+    assert note is not None and note.isVisibleTo(card)
+    assert "未收敛" in note.text() and "41.130" in note.text() and "1.10" in note.text()
+    axes = card.findChild(QWidget, "posteriorQuantilePlot").view.figure.axes[0]
+    assert not axes.patches and not axes.lines
+    heading = card.findChild(QLabel, "inspectorPosteriorQuantileTitle")
+    assert heading.text() == "后验分位"
+
+
+def test_a_mixed_chain_hides_the_withheld_note(qtbot) -> None:
+    """收敛的链照常念分位，那句「未收敛」不在屏上。"""
+    window = _uncertainty_window(qtbot)
+    card = window.inspector_column.findChild(QFrame, "inspectorPosteriorQuantile")
+    note = card.findChild(QLabel, "posteriorQuantileWithheld")
+
+    assert note is not None and not note.isVisibleTo(card)
+
+
+def test_the_expert_prose_marks_unmixed_quantiles_as_untrustworthy(qtbot) -> None:
+    """专家证据散文仍列出数值，但抬头先说它们不可信、为什么不可信。"""
+    from xrr_fitter.gui.results.uncertainty import UncertaintyView
+
+    view = UncertaintyView()
+    qtbot.addWidget(view)
+    result = _result(mcmc=_stalled_chain())
+    view.set_result(result, "candidate-0")
+    lines = view.text().splitlines()
+    header = next(line for line in lines if line.startswith("后验分位数"))
+
+    assert "不可信" in header and "未收敛" in header and "41.130" in header
+
+
 def test_the_bootstrap_section_reads_the_resampling_it_was_given(qtbot) -> None:
     """三行自助读数算自报告：次数、失败率（连基数）、边界命中数。
 

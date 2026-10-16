@@ -123,6 +123,9 @@ def _select_joint_mode(window) -> None:
 
 def _exercise_recoverable_layer_dialog(window) -> None:
     add_button = window.findChild(QPushButton, "addLayerButton")
+    # 新组件插在选中行下面；选中基底行就追加到底，下面按名字找它、按界面序号报错都以此为准。
+    tree = window.findChild(QTreeWidget, "structureTree")
+    tree.setCurrentItem(tree.topLevelItem(tree.topLevelItemCount() - 1))
     observed: list[tuple[bool, bool, str, tuple[int, ...]]] = []
 
     def configure(dialog: QDialog) -> None:
@@ -154,12 +157,12 @@ def _exercise_recoverable_layer_dialog(window) -> None:
         configure,
     )
     # The native oxide makes this a four-layer stack, so the rejected interface is
-    # index 4 rather than 3.
+    # index 4 rather than 3; the dialog reads it to the user counted from the air side.
     assert observed == [
         (
             True,
             True,
-            "interface.4.roughness_a must be below 4.9 A",
+            "从空气侧数第 5 道界面的粗糙度须小于 0.49 nm。",
             (4, 4),
         )
     ]
@@ -171,7 +174,6 @@ def _exercise_recoverable_layer_dialog(window) -> None:
     # Locate the added layer by name: the tree also shows the ambient row and the
     # native oxide, so a fixed row index silently targets the wrong component
     # whenever the stack changes.
-    tree = window.findChild(QTreeWidget, "structureTree")
     target = next(
         tree.topLevelItem(row)
         for row in range(tree.topLevelItemCount())

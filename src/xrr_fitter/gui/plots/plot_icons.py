@@ -14,17 +14,19 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import (
     QColor,
     QIcon,
+    QIconEngine,
     QPainter,
     QPainterPath,
+    QPalette,
     QPen,
     QPixmap,
     QPolygonF,
 )
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QStyleOption
 
 # Canonical design grid.  Every painter draws as though the icon were 16 px and
 # the transform in plot_icon scales it to the requested size, so one set of
@@ -369,6 +371,19 @@ def _paint_force_stop(p: QPainter, c: QColor) -> None:
     p.setPen(_pen(c))
 
 
+def _paint_sld_profile(p: QPainter, c: QColor) -> None:
+    # 一条台阶线：深度剖面就是一级一级的平台（空气 → 膜层 → 基底），读者在剖面图上见过的就是它。
+    path = QPainterPath()
+    path.moveTo(2.0, 12.5)
+    path.lineTo(5.5, 12.5)
+    path.lineTo(5.5, 6.0)
+    path.lineTo(10.0, 6.0)
+    path.lineTo(10.0, 3.5)
+    path.lineTo(14.0, 3.5)
+    p.drawPath(path)
+    p.drawLine(QPointF(2.0, 14.0), QPointF(14.0, 14.0))
+
+
 PAINTERS: dict[str, Callable[[QPainter, QColor], None]] = {
     "view": _paint_view,
     "range": _paint_range,
@@ -379,6 +394,7 @@ PAINTERS: dict[str, Callable[[QPainter, QColor], None]] = {
     "zoom_to_range": _paint_zoom_to_range,
     "reset_zoom": _paint_reset_zoom,
     "overlay": _paint_overlay,
+    "sld_profile": _paint_sld_profile,
     "data_curve": _paint_data_curve,
     "layer_stack": _paint_layer_stack,
     "fit_progress": _paint_fit_progress,
@@ -398,25 +414,87 @@ PAINTERS: dict[str, Callable[[QPainter, QColor], None]] = {
 }
 
 
-def plot_icon(name: str, *, size: int = 20) -> QIcon:
-    """The glyph for one plot control, painted in the active theme's text colour.
-
-    Painting on demand -- rather than caching -- means the next toolbar built
-    after a palette change picks up the new colour, matching how the figures
-    themselves re-read the palette on every redraw.
-    """
-    painter_fn = PAINTERS.get(name)
-    if painter_fn is None:
-        raise KeyError(f"no plot glyph for control: {name!r}")
-    color = _text_color()
-    pixmap = QPixmap(size, size)
+def _glyph_pixmap(painter_fn: Callable[[QPainter, QColor], None], side: int, scale: float) -> QPixmap:
+    """按 ``side`` 逻辑像素、``scale`` 倍设备像素画一枚字形，墨色取此刻的调色板。"""
+    device = max(round(side * scale), 1)
+    pixmap = QPixmap(device, device)
     pixmap.fill(Qt.GlobalColor.transparent)
+    color = _text_color()
     painter = QPainter(pixmap)
     try:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.scale(size / GRID, size / GRID)
+        painter.scale(device / GRID, device / GRID)
         painter.setPen(_pen(color))
         painter_fn(painter, color)
     finally:
         painter.end()
-    return QIcon(pixmap)
+    pixmap.setDevicePixelRatio(scale)
+    return pixmap
+
+
+class GlyphIconEngine(QIconEngine):
+    """每次取图都按当时的调色板重画，已经挂在按钮和菜单上的字形才会跟着外观切换。
+
+    ``QIcon(QPixmap)`` 把创建那一刻的墨色烧进像素：切到深色以后，条上那几枚还是深墨压在深底上。
+    禁用、选中这些状态仍交给样式从常态那张图派生——和此前 ``QIcon(QPixmap)`` 走的是同一条路，
+    只是派生用的底图换成了此刻的墨色。
+    """
+
+    def __init__(self, painter_fn: Callable[[QPainter, QColor], None], size: int) -> None:
+        super().__init__()
+        self._painter_fn = painter_fn
+        self._size = size
+        # 同一份调色板下画好的图留着：按钮每次重绘、悬停都会来取，而且取走的图要和图标活得一样久——
+        # 测试与调用方都直接读它的像素。调色板一换，整份作废。
+        self._palette_key: int | None = None
+        self._cache: dict[tuple[int, int, float], QPixmap] = {}
+
+    def actualSize(self, size: QSize, _mode: QIcon.Mode, _state: QIcon.State) -> QSize:
+        # 与 ``QIcon(QPixmap)`` 一样只缩不放：要得比画的尺寸大时给原尺寸，不把 16 格的笔放粗。
+        side = min(self._size, size.width(), size.height())
+        return QSize(side, side)
+
+    def pixmap(self, size: QSize, mode: QIcon.Mode, state: QIcon.State) -> QPixmap:
+        return self.scaledPixmap(size, mode, state, 1.0)
+
+    def scaledPixmap(self, size: QSize, mode: QIcon.Mode, state: QIcon.State, scale: float) -> QPixmap:
+        side = self.actualSize(size, mode, state).width()
+        if side <= 0:
+            return QPixmap()
+        palette = QApplication.palette()
+        if palette.cacheKey() != self._palette_key:
+            self._palette_key = palette.cacheKey()
+            self._cache.clear()
+        key = (int(mode.value), side, float(scale))
+        cached = self._cache.get(key)
+        if cached is None:
+            cached = self._cache[key] = self._render(side, mode, scale, palette)
+        return cached
+
+    def _render(self, side: int, mode: QIcon.Mode, scale: float, palette: QPalette) -> QPixmap:
+        pixmap = _glyph_pixmap(self._painter_fn, side, scale)
+        if mode == QIcon.Mode.Normal:
+            return pixmap
+        option = QStyleOption()
+        option.palette = palette
+        return QApplication.style().generatedIconPixmap(mode, pixmap, option)
+
+    def paint(self, painter: QPainter, rect: QRect, mode: QIcon.Mode, state: QIcon.State) -> None:
+        pixmap = self.scaledPixmap(rect.size(), mode, state, painter.device().devicePixelRatioF())
+        painter.drawPixmap(rect.topLeft(), pixmap)
+
+    def clone(self) -> GlyphIconEngine:
+        return GlyphIconEngine(self._painter_fn, self._size)
+
+
+def plot_icon(name: str, *, size: int = 20) -> QIcon:
+    """The glyph for one plot control, painted in the active theme's text colour.
+
+    The colour is read when the icon is drawn, not when it is made (see
+    ``GlyphIconEngine``), matching how the figures themselves re-read the palette
+    on every redraw.
+    """
+    painter_fn = PAINTERS.get(name)
+    if painter_fn is None:
+        raise KeyError(f"no plot glyph for control: {name!r}")
+    return QIcon(GlyphIconEngine(painter_fn, size))

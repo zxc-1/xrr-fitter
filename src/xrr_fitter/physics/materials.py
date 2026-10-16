@@ -27,8 +27,16 @@ def _finite_sld(value: complex) -> complex:
 
 @lru_cache(maxsize=256)
 def _parsed_formula(formula: str):
-    """Parse each declared formula once while leaving SLD inputs dynamic."""
-    return periodictable.formula(formula)
+    """Parse each declared formula once while leaving SLD inputs dynamic.
+
+    periodictable 的语法错误是 pyparsing 的 ``ParseException``，不是 ``ValueError``；而服务层
+    和 GUI 都按 ``ValueError`` 收拒绝，漏过去的那一种会直接落进 excepthook。pyparsing 不是本
+    仓库声明的依赖，所以按异常基类收，原异常挂在 ``__cause__`` 上、原文留在消息里。
+    """
+    try:
+        return periodictable.formula(formula)
+    except Exception as error:
+        raise ValueError(f"invalid material formula {formula!r}: {error}") from error
 
 
 def _formula_sld(

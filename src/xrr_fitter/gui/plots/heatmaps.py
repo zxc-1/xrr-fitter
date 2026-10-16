@@ -15,11 +15,15 @@ import numpy as np
 from xrr_fitter.gui.noise import residual_label
 from xrr_fitter.gui.plots.diagnostics import (
     DiagnosticView,
+    apply_figure_palette,
     candidate_is_inspection_only,
     diverging_colormap,
     draw_empty,
     finish_view,
+    listed_candidates,
 )
+from xrr_fitter.gui.plots.parameter_labels import result_definitions, short_labels
+from xrr_fitter.gui.results.candidate_row import candidate_title
 
 RESIDUAL_TITLE = "残差热图"
 PARAMETER_TITLE = "参数热图"
@@ -59,13 +63,16 @@ def _unavailable(view: DiagnosticView, title: str, message: str) -> None:
     draw_empty(view, title, message)
 
 
-def _row_labels(candidates: tuple[object, ...], candidate_id: str | None) -> tuple[str, ...]:
+def _row_labels(result: object, candidates: tuple[object, ...], candidate_id: str | None) -> tuple[str, ...]:
     # The candidate on screen elsewhere is marked, so a row can be tied back to
-    # the curves and the SLD profile the other panes are showing.
-    return tuple(
-        f"▶ {candidate.candidate_id}" if candidate.candidate_id == candidate_id else str(candidate.candidate_id)
-        for candidate in candidates
-    )
+    # the curves and the SLD profile the other panes are showing.  行名用候选在结果
+    # 列表里的序号（候选 A / B …），和列表、候选比较图同一套叫法；行序仍按目标值。
+    ordinals = {candidate.candidate_id: ordinal for ordinal, candidate in enumerate(listed_candidates(result))}
+    labels = []
+    for candidate in candidates:
+        title = candidate_title(ordinals[candidate.candidate_id])
+        labels.append(f"▶ {title}" if candidate.candidate_id == candidate_id else title)
+    return tuple(labels)
 
 
 def _label_rows(axes: object, labels: tuple[str, ...]) -> None:
@@ -117,21 +124,30 @@ def draw_residual_heatmap(
     axes = reset_single_axes(view)
     image = axes.imshow(matrix, aspect="auto", cmap=diverging_colormap(), vmin=-limit, vmax=limit)
     view.figure.colorbar(image, ax=axes, label=residual_label(candidates[0]))
-    _label_rows(axes, _row_labels(candidates, candidate_id))
+    _label_rows(axes, _row_labels(result, candidates, candidate_id))
     xlabel = _label_columns_with_qz(axes, candidates[0], matrix.shape[1])
     axes.set(title=RESIDUAL_TITLE, xlabel=xlabel, ylabel="候选")
-    axes.text(
+    _caption(view, f"固定范围 ±{limit:.3g}")
+    finish_view(view)
+
+
+def _caption(view: DiagnosticView, text: str) -> None:
+    """标题右上那行小字，与标题同色。
+
+    颜色从调色板取，不从标题身上抄：``clear()`` 之后、``finish_view`` 套调色板之前，标题还是
+    matplotlib 的默认黑，深色画布上这行字就跟着成了黑字。
+    """
+    view.axes.text(
         1.0,
         1.02,
-        f"固定范围 ±{limit:.3g}",
-        transform=axes.transAxes,
+        text,
+        transform=view.axes.transAxes,
         ha="right",
         va="bottom",
         fontsize=8,
-        color=view.figure.axes[0].title.get_color(),
+        color=apply_figure_palette(view.figure).foreground,
         alpha=0.7,
     )
-    finish_view(view)
 
 
 def _normalized_parameters(parameters: tuple[object, ...]) -> np.ndarray:
@@ -177,22 +193,14 @@ def draw_parameter_heatmap(
     axes = reset_single_axes(view)
     image = axes.imshow(matrix, aspect="auto", cmap="viridis", vmin=0.0, vmax=1.0)
     view.figure.colorbar(image, ax=axes)
-    _label_rows(axes, _row_labels(candidates, candidate_id))
-    axes.set_xticks(tuple(range(len(names))), names, rotation=45, ha="right")
+    _label_rows(axes, _row_labels(result, candidates, candidate_id))
+    # 列名与相关矩阵的刻度同一套短名（``d·ox``）：两张图是拿来互相对照的，一边写机器路径就多一次翻译。
+    labels = short_labels(names, result_definitions(result))
+    axes.set_xticks(tuple(range(len(names))), labels, rotation=45, ha="right")
     axes.set(
         title=PARAMETER_TITLE,
         xlabel="参数",
         ylabel="候选",
     )
-    axes.text(
-        1.0,
-        1.02,
-        "各参数独立归一化至 [0, 1]",
-        transform=axes.transAxes,
-        ha="right",
-        va="bottom",
-        fontsize=8,
-        color=axes.title.get_color(),
-        alpha=0.7,
-    )
+    _caption(view, "各参数独立归一化至 [0, 1]")
     finish_view(view)

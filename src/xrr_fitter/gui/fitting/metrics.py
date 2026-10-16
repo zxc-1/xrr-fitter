@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
-from xrr_fitter.gui.fitting.progress import stage_text
+from xrr_fitter.gui.fitting.progress import stage_text, unit_running
 
 OBJECTIVE_HEADERS = ("数据集", "J", "趋势")
 
@@ -86,6 +86,17 @@ def _step(value: float | None) -> str:
     return UNKNOWN if value is None else f"{value:.6g}"
 
 
+def _objective_label(progress: api.FitProgress) -> str:
+    """联合拟合只有一个目标函数，才叫「全局」；独立批量里这一行是某一条曲线自己的 J。"""
+    return METRIC_OBJECTIVE if progress.dataset_id is None else f"目标 J · {progress.dataset_id}"
+
+
+def _stage_count(progress: api.FitProgress) -> str:
+    """跑完几个写 ``n / N``；求解器还在跑的那一个写「第 n / N 个」，它还没跑完。"""
+    prefix, suffix = ("第 ", " 个") if unit_running(progress) else ("", "")
+    return f"{prefix}{progress.completed} / {progress.total}{suffix}"
+
+
 def _trend(previous: float | None, current: float) -> str:
     """两次目标值之间是降、是平、还是升。"""
     if previous is None:
@@ -101,6 +112,7 @@ class LiveMetricsView(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("liveMetricsView")
+        self._labels: dict[str, QLabel] = {}
         self._values: dict[str, QLabel] = {}
         self._objectives: dict[str | None, float] = {}
         self._trends: dict[str | None, str] = {}
@@ -133,6 +145,7 @@ class LiveMetricsView(QWidget):
         cells.addWidget(label)
         cells.addStretch(1)
         cells.addWidget(value)
+        self._labels[key] = label
         self._values[key] = value
         return row
 
@@ -154,14 +167,27 @@ class LiveMetricsView(QWidget):
         self._order.clear()
         for value in self._values.values():
             value.setText(UNKNOWN)
+        self._labels[METRIC_OBJECTIVE].setText(METRIC_OBJECTIVE)
         self._render_table()
 
     def set_progress(self, progress: api.FitProgress) -> None:
-        trend = self._record(progress.dataset_id, progress.best_objective)
+        """Record a frame and show it: the frame of the member the card is telling."""
+        self.record(progress)
+        self.show_frame(progress)
+
+    def record(self, progress: api.FitProgress) -> None:
+        """Keep a frame's objectives for the table without repainting the readings.
+
+        A parallel batch interleaves its datasets' frames, while the rows above the
+        table describe one dataset; the others still update their own table rows.
+        """
+        self._record(progress.dataset_id, progress.best_objective)
         for dataset_id, objective in progress.dataset_objectives or ():
             self._record(dataset_id, objective)
-        self._show_metrics(progress, trend)
         self._render_table()
+
+    def show_frame(self, progress: api.FitProgress) -> None:
+        self._show_metrics(progress, self._trends.get(progress.dataset_id, UNKNOWN))
 
     def _record(self, key: str | None, objective: float) -> str:
         """记下一个读数，返回它相对同一个键上一次读数的趋势。"""
@@ -176,8 +202,9 @@ class LiveMetricsView(QWidget):
     def _show_metrics(self, progress: api.FitProgress, trend: str) -> None:
         arrow = "" if trend == UNKNOWN else f" {trend[0]}"
         self._values[METRIC_STAGE].setText(stage_text(progress.stage))
+        self._labels[METRIC_OBJECTIVE].setText(_objective_label(progress))
         self._values[METRIC_OBJECTIVE].setText(f"{_number(progress.best_objective)}{arrow}")
-        self._values[METRIC_STEP].setText(f"{progress.completed} / {progress.total}")
+        self._values[METRIC_STEP].setText(_stage_count(progress))
         self._values[METRIC_ITERATION].setText(_count(progress.iteration))
         self._values[METRIC_NFEV].setText(_count(progress.nfev))
         self._values[METRIC_ACCEPTANCE].setText(_rate(progress.acceptance_rate))
@@ -187,6 +214,9 @@ class LiveMetricsView(QWidget):
 
     def metric_text(self, key: str) -> str:
         return self._values[key].text()
+
+    def metric_label(self, key: str) -> str:
+        return self._labels[key].text()
 
     def objective_rows(self) -> tuple[tuple[str, str, str], ...]:
         return self.table.rows()

@@ -10,8 +10,10 @@ from xrr_fitter.gui.results.candidate_row import (
     CANDIDATE_ROW_ROLE,
     ROW_PAD_V_PX,
     CandidateRowDelegate,
+    candidate_is_archived,
     candidate_is_selectable,
     candidate_row,
+    candidate_selection_objective,
 )
 
 # 空列表的高度：Qt 给一张滚动视图的默认高是 192px，与内容无关，三张这样的列表叠在
@@ -50,13 +52,32 @@ def _audit_state(candidate: object) -> str:
     return f"仅供检查 · 无效 · {reason}"
 
 
-def candidate_line(candidate: object, *, selected: bool, recommended: bool) -> str:
+def candidate_line(candidate: object, *, selected: bool, recommended: bool, adopted: bool = False) -> str:
     parts = [str(candidate.candidate_id), _objective_text(candidate), _audit_state(candidate)]
     if recommended and candidate_is_selectable(candidate):
         parts.append("推荐")
+    if adopted:
+        parts.append("已采用")
     if selected:
         parts.append("查看中")
     return " · ".join(parts)
+
+
+def _display_order(candidates: tuple[object, ...], recommended_id: str | None) -> tuple[object, ...]:
+    """推荐解排第一，其余可采用的按排序目标值升序，早期淘汰的在后，算不出来的垫底。
+
+    求解器按阶段产出候选，推荐那一个往往是最后一个 E 阶段候选——照原样排，它在列表末尾，
+    读者先读到的是最差的几个。同分时保持原序，排列因此是确定的。
+    """
+
+    def key(candidate: object) -> tuple[int, float]:
+        if candidate.candidate_id == recommended_id:
+            return 0, 0.0
+        if candidate_is_selectable(candidate):
+            return 1, candidate_selection_objective(candidate)
+        return (2 if candidate_is_archived(candidate) else 3), 0.0
+
+    return tuple(sorted(candidates, key=key))
 
 
 def active_dataset(project: object) -> object | None:
@@ -97,6 +118,7 @@ class CandidateList(QListWidget):
         self._dataset_id: str | None = None
         self._result: object | None = None
         self._recommended_id: str | None = None
+        self._adopted_id: str | None = None
         self._confidence: str | None = None
         self._inspection_result: object | None = None
         self._inspection_candidate_id: str | None = None
@@ -155,6 +177,11 @@ class CandidateList(QListWidget):
     def recommended_id(self) -> str | None:
         return self._recommended_id
 
+    @property
+    def adopted_id(self) -> str | None:
+        """导出与图用的那一个——存过的选择，没有就是推荐解。"""
+        return self._adopted_id
+
     def project_result(
         self,
         dataset_id: str,
@@ -175,16 +202,20 @@ class CandidateList(QListWidget):
             self.clear_inspection()
         self._dataset_id = dataset_id
         self._result = result
+        # 导出与图用的那一个：存过选择就是它，没存过就是推荐解（``services.exports`` 同一条规矩）。
+        self._adopted_id = persisted_id or self._recommended_id
         visible_id = self._inspection_candidate_id or persisted_id or self._recommended_id
         self.load(
             result.candidates,
             selected_id=visible_id,
             recommended_id=self._recommended_id,
             confidence=self._confidence,
+            adopted_id=self._adopted_id,
         )
         return visible_id
 
     def inspect(self, candidate_id: str) -> object:
+        """只是去看这一个：项目不变，导出与图仍用已采用的那个。"""
         candidate = self.candidate(candidate_id)
         if candidate is None or self._result is None:
             raise ValueError("fit result is no longer current")
@@ -195,6 +226,7 @@ class CandidateList(QListWidget):
             selected_id=candidate_id,
             recommended_id=self._recommended_id,
             confidence=self._confidence,
+            adopted_id=self._adopted_id,
         )
         return candidate
 
@@ -214,6 +246,7 @@ class CandidateList(QListWidget):
         self._dataset_id = None
         self._result = None
         self._recommended_id = None
+        self._adopted_id = None
         self._confidence = None
         self.clear_inspection()
         self.clear_candidates()
@@ -225,39 +258,55 @@ class CandidateList(QListWidget):
         selected_id: str | None,
         recommended_id: str | None,
         confidence: str | None = None,
+        adopted_id: str | None = None,
     ) -> None:
+        """``adopted_id`` 缺省为推荐解：没存过选择时，导出用的就是它。"""
+        adopted_id = recommended_id if adopted_id is None else adopted_id
         blocker = QSignalBlocker(self)
         self.clear()
         selected_row = -1
-        for row, candidate in enumerate(candidates):
-            selected = candidate.candidate_id == selected_id
-            recommended = candidate.candidate_id == recommended_id
-            line = candidate_line(candidate, selected=selected, recommended=recommended)
-            item = QListWidgetItem(line)
-            item.setData(Qt.ItemDataRole.UserRole, candidate.candidate_id)
-            # 名字换成序号之后，求解器 ID 只剩这里一处出口：跟日志或存档对照时要拿得到
-            # ``E-13``，而序号是随这次结果的排序来的，换一次拟合就换一个含义。
-            item.setToolTip(line)
-            # 画面走分段自绘，可访问文本仍是上面那句散文：自绘接管的是排版，
-            # 不是信息量。
-            item.setData(
-                CANDIDATE_ROW_ROLE,
-                candidate_row(
-                    candidate,
-                    selected=selected,
-                    # 判定画在被采信的那一行上：整份结果只有一个判定，而它判的正是这个解。
-                    adopted=recommended,
-                    confidence=confidence,
-                    ordinal=row,
-                ),
-            )
-            self.addItem(item)
-            if selected:
+        for row, candidate in enumerate(_display_order(tuple(candidates), recommended_id)):
+            self.addItem(self._item(candidate, row, selected_id, recommended_id, adopted_id, confidence))
+            if candidate.candidate_id == selected_id:
                 selected_row = row
         self.setCurrentRow(selected_row)
         del blocker
         # 行数变了高度就变了：这张列表按内容占高，不通知一次布局它还按上一份的行数占位。
         self.updateGeometry()
+
+    @staticmethod
+    def _item(
+        candidate: object,
+        row: int,
+        selected_id: str | None,
+        recommended_id: str | None,
+        adopted_id: str | None,
+        confidence: str | None,
+    ) -> QListWidgetItem:
+        candidate_id = candidate.candidate_id
+        selected = candidate_id == selected_id
+        adopted = candidate_id == adopted_id
+        line = candidate_line(candidate, selected=selected, recommended=candidate_id == recommended_id, adopted=adopted)
+        item = QListWidgetItem(line)
+        item.setData(Qt.ItemDataRole.UserRole, candidate_id)
+        # 名字换成序号之后，求解器 ID 只剩这里一处出口：跟日志或存档对照时要拿得到
+        # ``E-13``，而序号是随这次结果的排序来的，换一次拟合就换一个含义。
+        item.setToolTip(line)
+        # 画面走分段自绘，可访问文本仍是上面那句散文：自绘接管的是排版，不是信息量。
+        # 判定画在推荐那一行上：整份结果只有一个判定，它是对那个解算的——采用了别的解不会
+        # 把判定一起搬过去。
+        item.setData(
+            CANDIDATE_ROW_ROLE,
+            candidate_row(
+                candidate,
+                selected=selected,
+                adopted=adopted,
+                graded=candidate_id == recommended_id,
+                confidence=confidence,
+                ordinal=row,
+            ),
+        )
+        return item
 
     def clear_candidates(self) -> None:
         blocker = QSignalBlocker(self)

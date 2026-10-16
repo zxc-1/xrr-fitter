@@ -9,6 +9,7 @@ curve family.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from math import isfinite
 
@@ -26,6 +27,12 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QTabWidget, QVBoxLayo
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.noise import residual_label
 from xrr_fitter.gui.plots.live import LiveReflectivityPlot
+from xrr_fitter.gui.plots.series_key import SERIES_KEY_CARDS, build_series_key
+from xrr_fitter.gui.results.candidate_row import candidate_title
+
+# 候选 A / B … 是结果列表那一行的位置，而列表不按求解器产出的先后排（推荐解排第一，其余按目标值）。
+# 图例与热图行名要和列表叫同一个名字，就得用列表那一套排法，不另写一份。
+from xrr_fitter.gui.results.candidates import _display_order
 
 # χ²ᵥ 只算一遍。残差卡的抬头和右栏判定卡的指标行读的是同一个数，两处各自实现会在某天
 # 一处改了自由度口径而另一处没改时，让同一屏出现两个「约化 χ²ᵥ」。判定卡先有这个函数，
@@ -94,10 +101,11 @@ RESIDUAL_CHI_UNAVAILABLE_TEXT = "χ²ᵥ 不可用"
 # axis width of text, so it carries no in-plot title of its own; the card header
 # spans the pane and is where the reading is spelled out.
 PLOT_CARD_SPECS = {
-    "log": ("反射率 R vs 入射角 2θ", "归一化"),
+    "log": ("反射率 R vs 散射角 2θ", "归一化"),
     "raw": ("原始强度 vs 存储角度", "拟合点与排除点"),
     "qz4": ("qz⁴·R vs 散射矢量 qz", "抑制菲涅尔衰减 · 非拟合数据"),
-    "residual": ("加权残差 vs 散射矢量 qz", RESIDUAL_UNFITTED_TEXT),
+    # 残差卡压在反射率卡正下方，横轴跟它同为散射角：同一个点在两张卡上落在同一条竖线上。
+    "residual": ("加权残差 vs 散射角 2θ", RESIDUAL_UNFITTED_TEXT),
 }
 
 # 数据集名只冠在画数据的那三张卡上。残差卡的第二句写这次拟合的判读（χ²ᵥ 与有无系统性
@@ -112,14 +120,16 @@ MIN_RESIDUAL_PLOT_H = 96
 # ``theme.build_legend``.  These are read off ``live.py``'s managed items rather
 # than copied from the mockup: the fit window lands only on the log and raw panes
 # (``panel._draw_range``) and the clipped glyph only on the log pane, so keying
-# either one elsewhere would name a mark that never appears there.  The two glyph
-# entries carry their mark in the caption and so ask for no swatch.
+# either one elsewhere would name a mark that never appears there; the masked ✕ is
+# drawn on both, so both key it.  The glyph entries carry their mark in the caption
+# and so ask for no swatch.
 PLOT_CARD_LEGENDS = {
     "log": (
         ("dot", "observed", "观测数据"),
         ("dash", "candidate", "当前拟合模型"),
         ("box", "range", "拟合窗口"),
         ("plain", "neutral", "▽ 截断点（低于本底）"),
+        ("plain", "neutral", "✕ 掩膜排除点"),
     ),
     "raw": (
         ("dot", "observed", "拟合点"),
@@ -257,12 +267,59 @@ def apply_figure_font(figure: Figure) -> None:
     replace every other property along with it, which reset each artist's size
     back to the rcParam default and made a caller's explicit ``fontsize`` dead on
     arrival: a caption asking to be smaller than its title came out the same size.
+
+    只走已经存在的文字，不用 ``findobj``：``Axes.clear()`` 把刻度恢复成惰性列表，``findobj`` 经
+    ``Axis.get_children`` 会按定位器把整列刻度一个个造出来——一次投影里这一遍就占了三成时间，而且
+    大多落在不在屏上的视图里。这里每根轴至多造出第 0 个刻度（见 ``_axes_texts``）。
     """
-    families = _cjk_font().get_family()
-    for artist in figure.findobj(match=Text):
-        artist.set_fontfamily(families)
     _left_align_titles(figure)
     apply_figure_palette(figure)
+    for axes in figure.axes:
+        _settle_spines(axes)
+    families = _cjk_font().get_family()
+    for artist in _existing_texts(figure):
+        artist.set_fontfamily(families)
+
+
+def _settle_spines(axes: object) -> None:
+    """先把四条脊线定位，渲染时补刻度才不会把第 0 个刻度连同它的字体一起扔掉。
+
+    ``Axes.clear()`` 之后第 0 个刻度已经在了、脊线却还没定位；渲染要更多刻度时第一次取脊线变换会
+    定位脊线，而定位会调 ``Axis.reset_ticks()``——带着字体的第 0 个刻度被丢弃，后面的刻度全按默认
+    字体重造。这里提前定位（定过的再取一次是空操作），之后造的刻度才从套过字体的第 0 个那里抄。
+    """
+    for name in ("left", "right", "bottom", "top"):
+        spine = axes.spines.get(name)
+        if spine is not None and spine.axis is not None:
+            spine.get_spine_transform()
+    for child in axes.child_axes:
+        _settle_spines(child)
+
+
+def _existing_texts(figure: Figure) -> Iterator[Text]:
+    """图上此刻已经存在的文字：标题、轴标签、注记、图例，以及已经造出来的刻度标签。"""
+    yield from figure.texts
+    for axes in figure.axes:
+        yield from _axes_texts(axes)
+
+
+def _axes_texts(axes: object) -> Iterator[Text]:
+    yield from (child for child in axes.get_children() if isinstance(child, Text))
+    for axis in (axes.xaxis, axes.yaxis):
+        yield axis.label
+        yield axis.offsetText
+        # 读一次刻度列表：已经造好的整列都过一遍；还是惰性的只造出第 0 个——渲染时补出来的刻度从它
+        # 那里抄字体（``Axis._copy_tick_props``），所以它得在这一遍里先套上，而不是指望别处先造了它。
+        for tick in (*axis.majorTicks, *axis.minorTicks):
+            yield tick.label1
+            yield tick.label2
+    legend = axes.get_legend()
+    if legend is not None:
+        yield from legend.get_texts()
+        yield legend.get_title()
+    # ``inset_axes`` 造出来的子轴（相关矩阵的读数栏）不在 ``figure.axes`` 里，挂在父轴下面。
+    for child in axes.child_axes:
+        yield from _axes_texts(child)
 
 
 def _left_align_titles(figure: Figure) -> None:
@@ -377,7 +434,51 @@ def apply_figure_palette(figure: Figure) -> theme.PlotPalette:
             spine.set_color(palette.muted)
         for text in (axes.title, axes.xaxis.label, axes.yaxis.label):
             text.set_color(palette.foreground)
+        legend = axes.get_legend()
+        if legend is not None:
+            _paint_legend(legend, palette)
     return palette
+
+
+def _paint_legend(legend: object, palette: theme.PlotPalette) -> None:
+    """图例的底、框与字跟着画布换色。
+
+    matplotlib 的图例底色取 rcParams 的 ``axes.facecolor``（默认白），不看所在轴的底色：深色画布上
+    于是浮着一块白底黑字的框。框线取网格色叠在画布上的那个实色——``framealpha`` 会盖掉颜色自带的
+    透明度，直接给网格色的话框线比网格本身还重。
+    """
+    frame = legend.get_frame()
+    frame.set_facecolor(palette.background)
+    alpha = palette.grid[3]
+    edge = tuple(
+        alpha * ink + (1.0 - alpha) * base for ink, base in zip(palette.grid[:3], palette.background[:3], strict=True)
+    )
+    frame.set_edgecolor((*edge, 1.0))
+    for text in (*legend.get_texts(), legend.get_title()):
+        text.set_color(palette.foreground)
+
+
+# 一族曲线的外观轮转。颜色只取 ``theme.DATA_SEQUENCE``；轮完一圈换线型与记号，两者周期互质，
+# 加上颜色要到第 120 条才会与前面某一条同貌。
+SERIES_LINESTYLES = ("-", "--", ":", "-.")
+SERIES_MARKERS = ("o", "s", "^", "D", "v")
+
+
+def series_style(index: int, *, markers: bool = True) -> dict[str, object]:
+    """第 ``index`` 条系列曲线的颜色、线型与记号，直接展开给 ``axes.plot``。
+
+    不交给 matplotlib 默认的 tab10 轮转：那十色里的红与绿在常见色觉缺陷下读成同一种颜色，深浅两种
+    画布上的对比也没人校过；而十色一轮，17 个自由参数的剖面里第 1 条和第 11 条同色同形。
+    """
+    colours = theme.DATA_SEQUENCE
+    cycle = index // len(colours)
+    style: dict[str, object] = {
+        "color": colours[index % len(colours)],
+        "linestyle": SERIES_LINESTYLES[cycle % len(SERIES_LINESTYLES)],
+    }
+    if markers:
+        style["marker"] = SERIES_MARKERS[cycle % len(SERIES_MARKERS)]
+    return style
 
 
 # Matplotlib labels the axes it creates for a colorbar, and that label is the
@@ -495,6 +596,8 @@ def _plot_card(canvas: QWidget, key: str) -> QFrame:
         else theme.build_legend(card, f"{name}Legend", PLOT_CARD_LEGENDS[key])
     )
     body.addWidget(legend)
+    if key in SERIES_KEY_CARDS:
+        body.addWidget(build_series_key(card, f"{name}SeriesKey"))
     body.addWidget(canvas, 1)
     return card
 
@@ -687,8 +790,18 @@ def finish_view(view: DiagnosticView) -> None:
     view.canvas.draw_idle()
 
 
-def candidate_label(candidate: object, *, selected: bool) -> str:
-    parts = [str(candidate.candidate_id), f"J={candidate.objective:g}"]
+def listed_candidates(result: object | None) -> tuple[object, ...]:
+    """结果里的候选，按结果列表自上而下的次序：第 n 个就是列表里的「候选 n」（``candidate_title``）。"""
+    if result is None:
+        return ()
+    best = result.best_candidate
+    return _display_order(tuple(result.candidates), None if best is None else best.candidate_id)
+
+
+def candidate_label(candidate: object, *, selected: bool, ordinal: int) -> str:
+    # 按候选在结果列表里的序号称呼（候选 A / B …，见 ``listed_candidates``）：读者在列表里认的是
+    # 这个名字，图例写求解器 ID 两处就对不上。ID 仍在列表那一行的悬停里。
+    parts = [candidate_title(ordinal), f"J={candidate.objective:g}"]
     if candidate_is_inspection_only(candidate):
         parts.append("仅供检查")
     else:
@@ -707,23 +820,27 @@ def draw_candidate_comparison(
 ) -> None:
     axes = view.axes
     axes.clear()
-    candidates = () if result is None else result.candidates
-    for candidate in candidates:
+    palette = current_plot_palette()
+    candidates = listed_candidates(result)
+    for index, candidate in enumerate(candidates):
         qz = np.asarray(candidate.qz_a_inv, dtype=float)
         model = np.asarray(candidate.model_normalized, dtype=float)
         display = np.where(np.isfinite(model) & (model > 0.0), model, np.nan)
         selected = candidate.candidate_id == candidate_id
+        # 颜色跟着候选在列表里的位置走，不跟着选中走：读者认的是「B 是那条橙线」，换一个选中不该
+        # 让每条线都换色。选中只加粗、加实。按列表次序画，图例也就自上而下念 A、B、C。
         axes.plot(
             qz,
             display,
+            **series_style(index, markers=False),
             linewidth=2.0 if selected else 1.0,
             alpha=1.0 if selected else 0.65,
-            label=candidate_label(candidate, selected=selected),
+            label=candidate_label(candidate, selected=selected, ordinal=index),
         )
     if not candidates:
-        axes.text(0.5, 0.5, "暂无候选解", ha="center", va="center", transform=axes.transAxes)
+        axes.text(0.5, 0.5, "暂无候选解", ha="center", va="center", transform=axes.transAxes, color=palette.muted)
     elif candidate_id is None:
-        axes.text(0.02, 0.02, "尚未选择候选解", transform=axes.transAxes)
+        axes.text(0.02, 0.02, "尚未选择候选解", transform=axes.transAxes, color=palette.muted)
     axes.set(title="候选解比较", xlabel="qz (Å⁻¹)", ylabel="归一化 R", yscale="log")
     axes.yaxis.set_major_formatter(LogFormatter())
     if candidates:
@@ -759,8 +876,8 @@ def draw_batch_trends(
     axes = view.axes
     axes.clear()
     positions = tuple(range(len(dataset_ids)))
-    axes.plot(positions, np.asarray(thickness_a) / 10.0, "o-", label="厚度")
-    axes.plot(positions, np.asarray(period_a) / 10.0, "s--", label="周期")
+    axes.plot(positions, np.asarray(thickness_a) / 10.0, "o-", color=theme.DATA_SEQUENCE[0], label="厚度")
+    axes.plot(positions, np.asarray(period_a) / 10.0, "s--", color=theme.DATA_SEQUENCE[1], label="周期")
     axes.set_xticks(positions, dataset_ids)
     axes.set(title="批量趋势", xlabel="数据集", ylabel="长度 (nm)")
     axes.legend()
