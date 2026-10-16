@@ -907,6 +907,8 @@ def install_workspace(window, document) -> None:
 
 
 def install_workflow_actions(window) -> None:
+    # The window action owns Escape here; the panel binding is for standalone use.
+    window.fit_panel.cancel_shortcut.setEnabled(False)
     window._workflow_actions = {}
     for object_name, text, shortcut, callback_name in WORKFLOW_ACTION_SPECS:
         action = QAction(text, window)

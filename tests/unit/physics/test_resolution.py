@@ -262,7 +262,23 @@ def test_quadrature_chunks_large_query_grids_without_changing_values() -> None:
         gaussian_smear(q, smooth, absolute_sigma_a_inv=0.002), q**2 + 0.002**2, rtol=2e-13, atol=2e-15
     )
     assert len(calls) <= 8
-    assert max(np.prod(shape) for shape in calls) <= 4096
+    assert max(np.prod(shape) for shape in calls) <= 8192
+
+
+def test_1200_point_quadrature_avoids_tiny_batches() -> None:
+    samples = np.linspace(0.02, 0.4, 1200)
+    widths = np.full(samples.shape, 0.002)
+    calls = []
+
+    def quadratic(query):
+        calls.append(query.size)
+        return query**2
+
+    values = gauss_hermite_values(samples, widths, quadratic, 17)
+
+    np.testing.assert_allclose(values, samples**2 + widths**2, rtol=2e-13, atol=2e-15)
+    assert len(calls) <= 3
+    assert max(calls) <= 8192
 
 
 def test_theta_domain_smear_leaves_constant_function_unchanged() -> None:

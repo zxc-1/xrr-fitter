@@ -215,22 +215,20 @@ def _automatic_reason(
     return "automatic quality review required"
 
 
-def _commit_automatic_result(
-    working: XrrProject,
-    index: int,
+def _automatic_result_dataset(
+    current: DatasetProject,
     previous_prepared: PreparedDatasetFit | None,
     result: AutomaticPreparedResult,
     *,
     refining: bool,
-) -> tuple[XrrProject, DatasetFitResult]:
-    """Publish one automatic result with coherent settings and checkpoints.
+) -> tuple[DatasetProject, DatasetFitResult]:
+    """Build one automatic dataset result without publishing a partial project.
 
     Parameter changes invalidate stale checkpoints; invalid winners clear the
     publishable result while preserving the prepared declaration state.
     """
 
     prepared, fit_result, passed, reason = _automatic_fit_parts(result)
-    current = working.datasets[index]
     prepared_dataset = prepared.updated_dataset
     winner_settings = _winner_settings(
         prepared_dataset.parameter_settings,
@@ -273,8 +271,50 @@ def _commit_automatic_result(
         last_valid_result=last_valid_result,
         checkpoint=_checkpoint_with_result_diagnostics(checkpoint, fit_result),
     )
-    updated = _replace_dataset(working, index, dataset)
-    return updated, DatasetFitResult(dataset.dataset_id, fit_result)
+    return dataset, DatasetFitResult(dataset.dataset_id, fit_result)
+
+
+def _commit_automatic_result(
+    working: XrrProject,
+    index: int,
+    previous_prepared: PreparedDatasetFit | None,
+    result: AutomaticPreparedResult,
+    *,
+    refining: bool,
+) -> tuple[XrrProject, DatasetFitResult]:
+    """Publish one independent automatic result after building its dataset."""
+
+    dataset, published = _automatic_result_dataset(
+        working.datasets[index], previous_prepared, result, refining=refining
+    )
+    return _replace_dataset(working, index, dataset), published
+
+
+def _automatic_failure_dataset(
+    current: DatasetProject,
+    original: DatasetProject,
+    error: BaseException,
+) -> tuple[DatasetProject, DatasetFitResult]:
+    """Build a row-level automatic failure without publishing a partial project.
+
+    The exception type and message become both warning and automation reason.
+    """
+
+    fit_result = _failure_result(original, error)
+    message = f"{type(error).__name__}: {error}"
+    automation = replace(
+        current.automation,
+        status=AutomaticStatus.FAILED,
+        statistics_member=False,
+        reason=message,
+    )
+    dataset = replace(
+        current,
+        automation=automation,
+        last_valid_result=None,
+        checkpoint=None,
+    )
+    return dataset, DatasetFitResult(dataset.dataset_id, fit_result)
 
 
 def _commit_automatic_failure(
@@ -283,24 +323,7 @@ def _commit_automatic_failure(
     original: DatasetProject,
     error: BaseException,
 ) -> tuple[XrrProject, DatasetFitResult]:
-    """Publish a row-level automatic failure without a stale candidate.
+    """Publish one independent automatic failure without a stale candidate."""
 
-    The exception type and message become both warning and automation reason.
-    """
-
-    fit_result = _failure_result(original, error)
-    message = f"{type(error).__name__}: {error}"
-    automation = replace(
-        working.datasets[index].automation,
-        status=AutomaticStatus.FAILED,
-        statistics_member=False,
-        reason=message,
-    )
-    dataset = replace(
-        working.datasets[index],
-        automation=automation,
-        last_valid_result=None,
-        checkpoint=None,
-    )
-    updated = _replace_dataset(working, index, dataset)
-    return updated, DatasetFitResult(dataset.dataset_id, fit_result)
+    dataset, published = _automatic_failure_dataset(working.datasets[index], original, error)
+    return _replace_dataset(working, index, dataset), published

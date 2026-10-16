@@ -23,3 +23,16 @@ def load_tool_module():
         return module
 
     return load
+
+
+@pytest.fixture
+def controls(qtbot, request):
+    """The real-input control driver every control sweep shares.
+
+    It lives here instead of being imported into each sweep module: an imported fixture reads
+    as an unused import, and ruff's autofix in the pre-commit hook deletes it, which leaves the
+    sweep without its driver. Qt is imported only when a test asks for this fixture.
+    """
+    from tests.gui.control_operation_driver import driven_controls
+
+    yield from driven_controls(qtbot, request)

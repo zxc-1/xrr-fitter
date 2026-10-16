@@ -137,8 +137,8 @@ class DataPanel(QWidget):
         # width without re-deriving them from the project.
         # 运行中卡片小字改报这一次运行，所以这三样跟着进度事件走。
         self._running = False
-        self._run_objective: float | None = None
-        self._run_trend = ""
+        self._run_objectives: dict[str, float] = {}
+        self._run_trends: dict[str, str] = {}
         # 项目走到哪一步。卡片小字与页脚在结构那一步换说法，而步骤不是项目字段——它由
         # ``window_layout.apply_step_scope`` 从外面递进来，所以在窗口接线之前它是 ``None``。
         self._step: int | None = None
@@ -151,6 +151,7 @@ class DataPanel(QWidget):
         self._mask_editor.mask_changed.connect(self.mask_changed.emit)
         document.project_changed.connect(self._render_project)
         document.source_validation_changed.connect(self._render_project)
+        document.document_replaced.connect(self._clear_import_feedback)
         self._render_project()
 
     def _build_controls(self) -> None:
@@ -415,6 +416,12 @@ class DataPanel(QWidget):
                 self.batch_preview_table.setItem(row, column, QTableWidgetItem(value))
         self.batch_preview_table.setVisible(bool(preview.files))
 
+    def _clear_import_feedback(self) -> None:
+        """Retire transient import rows only after another document is adopted."""
+        for table in (self.batch_preview_table, self.failure_table):
+            table.setRowCount(0)
+            table.hide()
+
     def _render_failures(self, failures: tuple[api.ImportFailure, ...]) -> None:
         self.failure_table.setRowCount(len(failures))
         for row, failure in enumerate(failures):
@@ -613,28 +620,42 @@ class DataPanel(QWidget):
         一刻起就是上一轮的数了。
         """
         self._running = running
-        if not running:
-            self._run_objective = None
-            self._run_trend = ""
+        self._run_objectives.clear()
+        self._run_trends.clear()
         self._render_project()
 
     def set_run_progress(self, progress: api.FitProgress) -> None:
-        """一次进度事件。联合批量下它不带数据集——J 是几条曲线共享的那一个。"""
-        objective = float(progress.best_objective)
-        self._run_trend = metrics_trend(self._run_objective, objective)
-        self._run_objective = objective
-        self._render_project()
+        """Update only the owning cards; progress must not reset tree selection."""
+        values = self._progress_objectives(progress)
+        for dataset_id, objective in values.items():
+            self._run_trends[dataset_id] = metrics_trend(self._run_objectives.get(dataset_id), objective)
+            self._run_objectives[dataset_id] = objective
+        for row in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(row)
+            dataset_id = item.data(0, Qt.ItemDataRole.UserRole)
+            if dataset_id in values:
+                item.setData(0, DATASET_CARD_ROLE, dataset_card(self, dataset_id))
 
-    def run_subline(self, _dataset_id: str) -> str:
+    def _progress_objectives(self, progress: api.FitProgress) -> dict[str, float]:
+        if progress.dataset_id is not None:
+            return {progress.dataset_id: float(progress.best_objective)}
+        if progress.dataset_objectives:
+            return dict(progress.dataset_objectives)
+        # A joint summary is not a member reading; retain the last identified values.
+        return {}
+
+    def run_subline(self, dataset_id: str) -> str:
         """运行中那一行小字，不运行时是空串。
 
         趋势只留箭头：``≈ 平台``「下降」这些词在 264px 的卡片小字里挤掉文件名的宽度，
         而箭头本身已经说清是降是平。第一次读数没有可比对象，所以它没有箭头。
         """
-        if not self._running or self._run_objective is None:
+        objective = self._run_objectives.get(dataset_id)
+        if not self._running or objective is None:
             return ""
-        arrow = "" if self._run_trend in ("", UNKNOWN) else self._run_trend[0]
-        return f"拟合中 · J={self._run_objective:.2f}{arrow}"
+        trend = self._run_trends.get(dataset_id, "")
+        arrow = "" if trend in ("", UNKNOWN) else trend[0]
+        return f"拟合中 · J={objective:.2f}{arrow}"
 
     def set_step(self, step: int | None) -> None:
         """项目走到了哪一步。

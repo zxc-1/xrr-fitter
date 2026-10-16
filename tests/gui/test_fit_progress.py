@@ -580,7 +580,7 @@ def _preview_progress(value):
     qz = np.array([0.1, 0.2, 0.3], dtype=float)
     model = np.array([value, value, value], dtype=float)
     return api.FitProgress(
-        "curve",
+        "curve-0",
         "B",
         5,
         10,

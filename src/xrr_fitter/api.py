@@ -74,6 +74,7 @@ from xrr_fitter.model.structure import (
 from xrr_fitter.services.datasets import (
     add_dataset,
     detect_angle_convention,
+    detect_wavelength,
     import_data,
     import_dataset_batch,
     preview_import_batch,
@@ -240,6 +241,7 @@ __all__ = (
     "describe_joint_layout",
     "describe_parameters",
     "detect_angle_convention",
+    "detect_wavelength",
     "export_result",
     "fit_project",
     "fit_automatically",

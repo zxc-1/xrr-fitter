@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from xrr_fitter.io.wavelength import declared_wavelength, validate_declared_wavelength
 from xrr_fitter.model.data import (
     ANGLE_CONVENTIONS,
     AngleConvention,
@@ -444,6 +445,7 @@ def _prepare_xy(
     parsed = tuple(_numeric_columns(row) for row in raw_rows)
     parseable, numeric = _row_flags(parsed, mapping)
     start, end = _data_window(parseable, numeric, source_path)
+    validate_declared_wavelength(raw_rows[:start], beam)
     statuses, records = _collect_rows(parsed, parseable, start, end, mapping)
     merged = _merge_records(records, mapping)
     if angle_convention == "theta":
@@ -613,3 +615,9 @@ def scan_angle_convention(path: str | Path) -> AngleConventionEvidence:
         return AngleConventionEvidence("two_theta", False, named, "表头同时写了 θ 与 2θ，无法判定")
     convention: AngleConvention = "two_theta" if scattering else "theta"
     return AngleConventionEvidence(convention, True, named, None)
+
+
+def scan_wavelength(path: str | Path) -> float | None:
+    """Read only data-header wavelength declarations, not trailing comments."""
+    rows = tuple(Path(path).read_bytes().decode("utf-8-sig").splitlines())
+    return declared_wavelength(_header_rows(rows))

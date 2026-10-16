@@ -80,14 +80,16 @@ def _assert_frozen_candidates(result) -> None:
         "E-2",
         "E-3",
     )
+    # Exact-start reuse changes only performed work, not the frozen physical
+    # coordinates, lineage, progress, or checkpoint assertions below.
     assert tuple(candidate.nfev for candidate in result.candidates) == (
         67,
         2,
         2,
-        106,
-        106,
-        106,
-        106,
+        100,
+        100,
+        100,
+        100,
     )
     np.testing.assert_array_equal(
         np.asarray([candidate.unit_vector[0] for candidate in result.candidates]),
@@ -108,7 +110,7 @@ def _assert_frozen_candidates(result) -> None:
         67,
         2,
         2,
-        424,
+        400,
     )
 
 

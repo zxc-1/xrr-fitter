@@ -100,6 +100,54 @@ def test_column_mapping_dialog_blocks_invalid_mapping_with_inline_error(qtbot) -
     assert "distinct nonnegative" in error.text()
 
 
+@pytest.mark.parametrize("accepted", (True, False))
+@pytest.mark.parametrize(
+    "mapping",
+    (
+        api.DataColumnMapping(1, 0),
+        api.DataColumnMapping(2, 3, 0, 1, "fwhm_two_theta_deg"),
+        api.DataColumnMapping(2, 1, 0),
+        api.DataColumnMapping(2, 1, None, 0, "sigma_q_a_inv"),
+    ),
+)
+def test_reopening_column_mapping_dialog_reflects_committed_values(
+    qtbot, tmp_path, monkeypatch, mapping, accepted
+) -> None:
+    from xrr_fitter.gui.data.import_dialog import ColumnMappingDialog, ImportDialog
+
+    dialog = ImportDialog((_write_curve(tmp_path / "sample.xy"),))
+    qtbot.addWidget(dialog)
+    dialog.set_column_mapping(
+        two_theta=mapping.two_theta,
+        intensity=mapping.intensity,
+        intensity_sigma=mapping.intensity_sigma,
+        resolution=mapping.resolution,
+        resolution_kind=mapping.resolution_kind,
+    )
+    observed: list[api.DataColumnMapping] = []
+
+    def inspect(mapping_dialog: ColumnMappingDialog):
+        observed.append(mapping_dialog.mapping())
+        assert mapping_dialog.two_theta.value() == mapping.two_theta + 1
+        assert mapping_dialog.intensity.value() == mapping.intensity + 1
+        assert mapping_dialog.sigma_enabled.isChecked() == (mapping.intensity_sigma is not None)
+        assert mapping_dialog.intensity_sigma.isEnabled() == (mapping.intensity_sigma is not None)
+        assert mapping_dialog.resolution_enabled.isChecked() == (mapping.resolution is not None)
+        assert mapping_dialog.resolution.isEnabled() == (mapping.resolution is not None)
+        assert mapping_dialog.resolution_kind.isEnabled() == (mapping.resolution is not None)
+        if accepted:
+            mapping_dialog.accept()
+            return mapping_dialog.result()
+        mapping_dialog.two_theta.setValue(8)
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(ColumnMappingDialog, "exec", inspect)
+    dialog._edit_column_mapping()
+
+    assert observed == [mapping]
+    assert dialog.column_mapping() == mapping
+
+
 def test_import_dialog_exposes_real_instrument_choices_and_geometry_fields(
     qtbot,
     tmp_path,

@@ -783,7 +783,11 @@ class LiveReflectivityPlot(pg.PlotWidget):
             if self.range_item is None:
                 brush = pg.mkColor(theme.DATA_RANGE)
                 brush.setAlpha(50)
-                region = pg.LinearRegionItem(brush=pg.mkBrush(brush), pen=pg.mkPen(theme.DATA_RANGE))
+                region = pg.LinearRegionItem(
+                    values=self._fit_range or tuple(self.plot_item.vb.viewRange()[0]),
+                    brush=pg.mkBrush(brush),
+                    pen=pg.mkPen(theme.DATA_RANGE),
+                )
                 region.sigRegionChangeFinished.connect(self._emit_range)
                 # The region handles must own the drag gesture.  Save the current
                 # ViewBox state so leaving range mode restores the user's pan/zoom
@@ -799,7 +803,9 @@ class LiveReflectivityPlot(pg.PlotWidget):
                 # duration of range mode and restore the exact button set later.
                 vb.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
                 region.setZValue(10)
-                self.addItem(region)
+                # A selector is an overlay: including it in autoRange moves the
+                # coordinate system while its handles are being dragged.
+                self.addItem(region, ignoreBounds=True)
                 self.range_item = region
             return
         if self.range_item is not None:

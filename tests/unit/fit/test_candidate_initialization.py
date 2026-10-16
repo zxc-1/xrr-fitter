@@ -22,6 +22,7 @@ from xrr_fitter.fit.candidates import (
 from xrr_fitter.fit.initialization import (
     estimate_initial_candidates,
     footprint_angle_candidates,
+    structure_evidence,
 )
 from xrr_fitter.model.data import BeamSpec, DataColumnMapping, PreparedData
 from xrr_fitter.model.instrument import InstrumentSpec
@@ -210,6 +211,19 @@ def test_extreme_q_range_keeps_fallback_thicknesses_inside_hard_bounds() -> None
     assert np.all(np.isfinite(initial.thickness_a))
     assert tuple(sorted(initial.thickness_a)) == initial.thickness_a
     assert 2.0 <= initial.thickness_a[0] <= initial.thickness_a[-1] <= 2e5
+
+
+def test_sparse_damped_fringe_keeps_significant_thickness_evidence() -> None:
+    qz = np.linspace(0.01, 0.15, 79)
+    observed = 1e-7 * (1.0 + 0.65 * np.cos(210.0 * qz)) * np.exp(-500.0 * qz**2) / qz**4
+    data = _prepared_data(qz, observed)
+    structure = _single_layer_structure()
+    evidence = structure_evidence(data, structure)
+    assert any(abs(value - 210.0) < 30.0 for value in evidence.peak_positions_a)
+
+    initial = estimate_initial_candidates(data, structure, FIT_INSTRUMENT, np.random.default_rng(7))
+
+    assert any(abs(value - 210.0) < 30.0 for value in initial.thickness_a)
 
 
 def test_subnormal_q_span_uses_bounded_fallback_without_inverse_overflow() -> None:

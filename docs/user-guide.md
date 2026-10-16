@@ -283,22 +283,27 @@ dataset 的有效结果。
 
 ### 联合拟合
 
-`batch_mode="joint"` 使用显式 `SharingRule`。允许共享的业务 family 包括兼容
-的 material density/SLD，以及明确允许的 instrument resolution/footprint。
-共享 resolution 或 footprint 时，所有成员必须保存相同且非空的
-`instrument_id`，且 resolution domain、active footprint mode 等定义兼容。
+`batch_mode="joint"` 的手动路径使用显式 `SharingRule`。每条规则至少包含两个
+唯一的 `ParameterReference`，成员可以来自同一 dataset 的不同参数；同一 local
+parameter 不能进入两条规则。能否实际共享由 joint compile 检查：
 
-下列参数保持 dataset-local，禁止共享：
+- 每个成员必须存在，并且是自由坐标，不能是锁定参数或约束目标；
+- category、参数名末段、transform、integer、unit 以及上下界必须一致；
+- instrument 类成员还要求完整 `InstrumentSpec` 相同，包括仪器身份和测量语义，
+  仅 `instrument_id` 相同不足以通过检查。
 
-- thickness、period/repeats 和 roughness；
-- angle offset 与 scale；
-- constant/linear/power-law background 的全部参数。
+因此没有一条笼统禁止 thickness、roughness、scale 或 background 的 family
+黑名单；这些参数仍必须满足上述兼容性约束，而非任意两个自由参数都能共享。
 
-每条规则需要不同 dataset 的唯一成员；同一 local parameter 不能进入两条规则。
-调用 `api.validate_sharing_rules(project, rules)` 校验声明，再通过
-`api.set_sharing_rules(project, rules)` 持久化并使受影响结果失效。真实 joint compile
-仍由 `api.preflight_fit()` 在启动 solver 前完成；joint 不合法或 resume 失败时不得
-静默 fallback 到 independent。
+调用 `api.validate_sharing_rules(project, rules)` 只校验声明图，不读取源数据，
+也不保证成员仍然存在、自由或兼容。通过 `api.set_sharing_rules(project, rules)`
+持久化后会使受影响结果失效；启动前仍需由 `api.preflight_fit()` 完成真实 joint
+compile。joint 不合法或 resume 失败时不得静默 fallback 到 independent。
+
+自动联合路径的规则生成不同于手动显式共享：按材料名归组自由的 density/实部
+SLD；吸收项仅在每个出现位置都有显式释放证据时归组。粗糙度按相同结构路径
+可选共享，thickness 与 instrument 参数不会自动共享。因此手动与自动结果或
+耗时不能直接当作相同共享约束下的比较。
 
 ### 单 dataset 与 joint objective
 

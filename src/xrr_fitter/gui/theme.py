@@ -110,6 +110,8 @@ FONT_PT_LG = 14
 # unset), which is what made neighbouring controls in one row look mismatched.
 # 设计稿 `.btn{height:30px}`（HTML line 90）——所有常规按钮、工具按钮和输入框的统一高度。
 CONTROL_MIN_H = 30
+# 导入表单的紧凑档：内容高 22px，加上下内边距和边框后为 28px；不影响主窗口控件。
+IMPORT_CONTROL_CONTENT_H_PX = 22
 
 # 设计稿把命令条里的按钮单列一档（``.btn.sm``，26px，比独立的 ``.btn`` 矮 4px）。矮下来
 # 不是为了省地方：这一档按钮总是跟 tab 或分段控件并排站在同一条 chrome 带里，一旦比旁边
@@ -1054,6 +1056,15 @@ QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {{
     min-height: {CONTROL_MIN_H}px;
     background: transparent;
 }}
+QDialog#importDialog QComboBox, QDialog#importDialog QSpinBox,
+QDialog#importDialog QDoubleSpinBox, QDialog#importDialog QLineEdit {{
+    padding: 2px {SPACE_XS}px;
+    min-height: {IMPORT_CONTROL_CONTENT_H_PX}px;
+}}
+QDialog#importDialog QPushButton {{
+    padding: 2px {SPACE_MD}px;
+    min-height: {IMPORT_CONTROL_CONTENT_H_PX}px;
+}}
 QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus {{
     border-color: {tokens.accent};
     outline: none;
@@ -1537,12 +1548,13 @@ def apply_step_eyebrow(label: QLabel) -> None:
     Qt 的样式表没有 ``letter-spacing``，字号与字距同出设计稿的一条规则，字重按
     ``set_step_state`` 的分工归各自的字体对象（那条规则只给颜色）。
     """
-    set_step_state(label, "current")
     font = label.font()
     font.setPixelSize(STEP_EYEBROW_FONT_PX)
     font.setWeight(QFont.Weight.Bold)
     font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, STEP_EYEBROW_TRACKING_PX)
     label.setFont(font)
+    # QSS 首次 polish 会保存原字体，必须先设字体，否则 show/换肤会恢复成旧字体。
+    set_step_state(label, "current")
 
 
 def titled_card(

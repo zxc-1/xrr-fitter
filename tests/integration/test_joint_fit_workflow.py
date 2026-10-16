@@ -5,6 +5,7 @@ from hashlib import sha256
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 import xrr_fitter.api as api
 from xrr_fitter.io.xy import xy_bytes
@@ -289,16 +290,19 @@ def test_joint_fit_workflow_publishes_one_aligned_result_transaction() -> None:
     assert report.bootstrap_evidence.intervals == ()
 
 
+@pytest.mark.parametrize("batch_mode", ("independent", "joint"))
 def test_automatic_joint_workflow_refines_matching_points_with_shared_material(
     tmp_path: Path,
+    batch_mode: str,
 ) -> None:
-    value = _automatic_joint_project(tmp_path)
+    value = api.set_batch_mode(_automatic_joint_project(tmp_path), batch_mode)
     checkpoints: list[api.XrrProject] = []
 
     result = fit_automatically(value, checkpoint_callback=checkpoints.append)
 
     left, right = result.datasets
     final_datasets = result.updated_project.datasets
+    assert result.updated_project.batch_mode == batch_mode
     density_name = "component.0.density_scale"
     assert _dataset_ids(result.datasets) == ("left", "right")
     assert _published_candidates(result.datasets) == (True, True)

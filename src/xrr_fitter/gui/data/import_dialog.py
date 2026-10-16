@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-from math import asin, degrees
+from math import asin, degrees, isclose
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -56,6 +56,7 @@ PREVIEW_READY = "✓ 就绪"
 # 骗人，也不该跟无数据列的坏文件同色，所以第三档信息色单独一行。
 PREVIEW_THIN = "ℹ 点数不足"
 PREVIEW_FAILED = "✕ 无数据列"
+PREVIEW_MEASUREMENT = "✕ 测量参数冲突"
 PREVIEW_HELP = "已自动检测分隔符、列映射与角度约定；可逐文件覆盖。无有效数据列的文件将被跳过，不影响其余导入。"
 PREVIEW_MAPPING_TIP = "列号从 1 开始（文件里的第几列），与「列映射」对话框中的列编辑器一致。"
 # 用户看得见的列号一律从 1 数起：文件里数得出来的是第一列、第二列，而
@@ -168,7 +169,7 @@ def _wrap2(box: QWidget | None = None) -> QGridLayout:
     ``.wrap2`` 不在任何 ``.groupbox`` 里，直接摞在表格下面。
     """
     grid = QGridLayout(box) if box is not None else QGridLayout()
-    grid.setHorizontalSpacing(theme.SPACE_MD)
+    grid.setHorizontalSpacing(theme.SPACE_XS)
     grid.setVerticalSpacing(theme.SPACE_XS)
     # 两个字段列吃掉多余的宽度，两个标签列贴着文字走，这样两栏才对得齐。
     grid.setColumnStretch(1, 1)
@@ -200,7 +201,12 @@ def _undecided_convention_text(
 class ColumnMappingDialog(QDialog):
     """Collect an explicit validated mapping for optional source columns."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        mapping: api.DataColumnMapping | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("columnMappingDialog")
         self.setWindowTitle("列映射")
@@ -222,7 +228,23 @@ class ColumnMappingDialog(QDialog):
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         localize_standard_buttons(self.buttons, confirm="应用映射")
         self._connect_controls()
+        if mapping is not None:
+            self._load_mapping(mapping)
         self._arrange()
+
+    def _load_mapping(self, mapping: api.DataColumnMapping) -> None:
+        """Reopen the committed mapping, including enabled optional columns."""
+        self.two_theta.setValue(mapping.two_theta + COLUMN_DISPLAY_OFFSET)
+        self.intensity.setValue(mapping.intensity + COLUMN_DISPLAY_OFFSET)
+        for enabled, editor, column in (
+            (self.sigma_enabled, self.intensity_sigma, mapping.intensity_sigma),
+            (self.resolution_enabled, self.resolution, mapping.resolution),
+        ):
+            if column is not None:
+                enabled.setChecked(True)
+                editor.setValue(column + COLUMN_DISPLAY_OFFSET)
+        if mapping.resolution_kind is not None:
+            self.resolution_kind.setCurrentIndex(self.resolution_kind.findData(mapping.resolution_kind))
 
     def _connect_controls(self) -> None:
         self.sigma_enabled.toggled.connect(self.intensity_sigma.setEnabled)
@@ -291,6 +313,7 @@ class ImportDialog(QDialog):
         self._folder_mode = folder_mode
         self._preset = preset
         self._column_mapping: api.DataColumnMapping | None = None
+        self._wavelength_sources = None
         self._noise_model = noise_model
         self._failed_count = 0
         self.setObjectName("importDialog")
@@ -308,6 +331,39 @@ class ImportDialog(QDialog):
         self._arrange()
         if preset is not None:
             self._load_saved_preset(preset)
+        for editor in (self.mono_wavelength, self.wavelength_1, self.wavelength_2, self.intensity_ratio):
+            editor.valueChanged.connect(self._refresh_preview)
+
+    def _source_wavelength(self, path: Path) -> float | None:
+        """Only importable sources participate in the batch wavelength choice."""
+        value = api.detect_wavelength(path)
+        if value is not None:
+            self._read_preview_data(path, api.BeamSpec("monochromatic", wavelength_a=value))
+        return value
+
+    def _prefill_wavelength(self) -> None:
+        """Show source-declared metadata without replacing an existing preset."""
+        declared: list[float] = []
+        failures: list[str] = []
+        for path in self._paths:
+            try:
+                value = self._source_wavelength(path)
+            except (OSError, ValueError) as error:
+                failures.append(f"{path.name}: {error}")
+                continue
+            if value is not None:
+                declared.append(value)
+        self.wavelength_status.setToolTip("\n".join(failures))
+        if not declared:
+            message = failures[0] if failures else "表头未声明波长；请核对仪器波长，勿直接沿用默认值。"
+            self.wavelength_status.setText(message)
+            return
+        if not all(isclose(value, declared[0], rel_tol=1e-7) for value in declared):
+            self.wavelength_status.setText("文件波长不一致，请按测量波长分批导入；不匹配的文件不会导入。")
+            return
+        with QSignalBlocker(self.mono_wavelength):
+            self.mono_wavelength.setValue(declared[0])
+        self.wavelength_status.setText(f"源文件表头声明单色波长 {declared[0]:g} Å，已填入；请确认光路类型。")
 
     def _load_saved_preset(self, preset: api.MeasurementPreset) -> None:
         """Folder options reuse, rather than silently replace, the saved measurement."""
@@ -380,6 +436,9 @@ class ImportDialog(QDialog):
         self.wavelength_1 = _double_spin("mixedWavelength1Editor", 1.54056, suffix=" Å")
         self.wavelength_2 = _double_spin("mixedWavelength2Editor", 1.54439, suffix=" Å")
         self.intensity_ratio = _double_spin("mixedIntensityRatioEditor", 0.5)
+        self.wavelength_status = QLabel()
+        self.wavelength_status.setObjectName("importWavelengthStatus")
+        self.wavelength_status.setWordWrap(True)
         self.beam_group.buttonToggled.connect(self._refresh_validation)
 
     def _build_instrument_controls(self) -> None:
@@ -498,8 +557,22 @@ class ImportDialog(QDialog):
                 for path in self._selected_paths
                 for source in (folder_data_paths(path, self.recursive_check.isChecked()) if path.is_dir() else (path,))
             )
+        sources = (self._paths, self._column_mapping)
+        if sources != self._wavelength_sources and self._preset is None:
+            self._prefill_wavelength()
+            self._wavelength_sources = sources
         self._refresh_preview_table()
         self._apply_import_button_text()
+
+    def _read_preview_data(self, path: Path, beam: api.BeamSpec) -> api.PreparedData:
+        return api.import_data(
+            path,
+            beam,
+            column_mapping=self._column_mapping,
+            import_angle_offset_deg=0.0 if self._preset is None else self._preset.import_angle_offset_deg,
+            angle_convention=self.angle_convention(),
+            noise_model=self._noise_model,
+        )
 
     def _scan_path(self, path: Path, beam: api.BeamSpec) -> tuple[int, str, str, str]:
         """Row count, angle convention, status and detail for one candidate file.
@@ -514,17 +587,11 @@ class ImportDialog(QDialog):
         """
         convention = self.angle_convention()
         try:
-            data = api.import_data(
-                path,
-                beam,
-                column_mapping=self._column_mapping,
-                import_angle_offset_deg=0.0 if self._preset is None else self._preset.import_angle_offset_deg,
-                angle_convention=convention,
-                noise_model=self._noise_model,
-            )
+            data = self._read_preview_data(path, beam)
         except Exception as exc:
             LOG.debug("preview scan failed for %s: %s", path, exc)
-            return 0, PREVIEW_UNKNOWN, PREVIEW_FAILED, f"{type(exc).__name__}: {exc}"
+            status = PREVIEW_MEASUREMENT if str(exc).startswith("wavelength") else PREVIEW_FAILED
+            return 0, PREVIEW_UNKNOWN, status, f"{type(exc).__name__}: {exc}"
         rows = len(data.two_theta_deg)
         # 这一格报的是「刚才按哪个轴读的」，所以它跟着选择走：θ 那一档读进来的数已经 ×2
         # 归一过了，仍写 ``2θ`` 会把唯一能看出轴选错的地方也遮掉。
@@ -541,13 +608,14 @@ class ImportDialog(QDialog):
             PREVIEW_READY: tokens.ok,
             PREVIEW_THIN: tokens.info,
             PREVIEW_FAILED: tokens.error,
+            PREVIEW_MEASUREMENT: tokens.error,
         }
         beam = self._preview_beam()
         self.preview_table.setRowCount(len(self._paths))
         self._failed_count = 0
         for row, path in enumerate(self._paths):
             rows, angle, status, detail = self._scan_path(path, beam)
-            failed = status == PREVIEW_FAILED
+            failed = status in (PREVIEW_FAILED, PREVIEW_MEASUREMENT)
             self._failed_count += int(failed)
             name = QTableWidgetItem(path.name)
             name.setToolTip(str(path))
@@ -622,6 +690,7 @@ class ImportDialog(QDialog):
         beam_box.setEnabled(self._preset is None)
         instrument_box.setEnabled(self._preset is None)
         layout = QVBoxLayout(self)
+        layout.setSpacing(theme.SPACE_XS)
         layout.addWidget(self.heading)
         layout.addWidget(self.preview_help)
         layout.addWidget(self.preview_table)
@@ -637,6 +706,7 @@ class ImportDialog(QDialog):
         layout.addLayout(convention_grid)
         # 判定依据是一整行表头原文，独占整宽才不至于把那一栏挤成两个字一行。
         layout.addWidget(self.convention_status)
+        layout.addWidget(self.wavelength_status)
         layout.addWidget(self._advanced_section(beam_box, instrument_box))
         layout.addWidget(self.validation_label)
         layout.addWidget(self.button_box)
@@ -655,14 +725,17 @@ class ImportDialog(QDialog):
         advanced_grid = _wrap2()
         _wrap2_field(advanced_grid, 0, HEADER_SKIP_CAPTION, self.header_skip_field)
         _wrap2_field(advanced_grid, 1, LOG_INTENSITY_CAPTION, self.log_intensity_check)
-        advanced.addLayout(advanced_grid)
+        # 列映射是同组的入口，放在说明字段旁，避免额外按钮行把确认区挤出短屏。
+        advanced_header = QHBoxLayout()
+        advanced_header.addLayout(advanced_grid, 1)
+        advanced_header.addWidget(self.mapping_button)
+        advanced.addLayout(advanced_header)
         # 帧⑥ 的 ``.wrap2`` 把成对的字段并排放，正是这一点让对话框收得住：这两组表单
         # 竖着摞是 408px 的刚性下限，未按下的「导入」按钮会被 1440×900 的窗管裁掉。
         settings_row = QHBoxLayout()
         settings_row.addWidget(beam_box)
         settings_row.addWidget(instrument_box)
         advanced.addLayout(settings_row)
-        advanced.addWidget(self.mapping_button)
         return self.advanced_box
 
     def _refresh_geometry_controls(self, _index: int = -1) -> None:
@@ -678,7 +751,7 @@ class ImportDialog(QDialog):
         self._refresh_preview()
 
     def _edit_column_mapping(self) -> None:
-        dialog = ColumnMappingDialog(self)
+        dialog = ColumnMappingDialog(self, mapping=self._column_mapping)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._column_mapping = dialog.mapping()
             self._refresh_preview()
@@ -689,6 +762,20 @@ class ImportDialog(QDialog):
         if self.mixed_button.isChecked():
             return "mixed_kalpha"
         return None
+
+    def accept(self) -> None:
+        """Keyboard acceptance must obey the same live validation as the button."""
+        self._refresh_preview()
+        if not self._import_button.isEnabled():
+            return
+        try:
+            self.beam_spec()
+            self.instrument_spec()
+        except (ValueError, TypeError) as error:
+            self.validation_label.setText(str(error))
+            self.validation_label.show()
+            return
+        super().accept()
 
     def select_beam_kind(self, kind: str) -> None:
         buttons = {

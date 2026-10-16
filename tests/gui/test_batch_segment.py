@@ -120,16 +120,21 @@ def test_guided_mode_puts_the_batch_segment_away(qtbot) -> None:
     assert group.isVisibleTo(window) is True
 
 
-def test_a_running_fit_locks_the_batch_segment(qtbot) -> None:
+def test_a_running_fit_locks_the_batch_segment(qtbot, tmp_path, monkeypatch) -> None:
     """拟合跑起来之后改批量模式没有意义：这次拟合已经按旧模式排好阶段了。"""
-    window = _window(qtbot)
+    from tests.gui.test_running_input_gates import _running_window
+
+    window = _running_window(qtbot, tmp_path, monkeypatch)
     group = window.findChild(QWidget, "batchModeGroup")
 
-    window.fit_panel.running_changed.emit(True)
-    assert group.isEnabled() is False
-
-    window.fit_panel.running_changed.emit(False)
-    assert group.isEnabled() is True
+    try:
+        assert window.fit_panel.is_running
+        window._refresh_operation_state()
+        assert group.isEnabled() is False
+        window.fit_panel.controller._finish()
+        assert group.isEnabled() is True
+    finally:
+        window.fit_panel.controller._finish()
 
 
 def test_the_fit_card_no_longer_repeats_the_choice(qtbot) -> None:

@@ -611,6 +611,10 @@ class PlotPanel(QWidget):
     def set_expert_mode(self, enabled: bool) -> None:
         self._interactions.set_expert_mode(enabled)
 
+    def set_editing_enabled(self, enabled: bool) -> None:
+        """Lock scientific inputs without disabling zoom, pan, or inspection."""
+        self._interactions.set_editing_enabled(enabled)
+
     #
     # Apply workspace
     #
