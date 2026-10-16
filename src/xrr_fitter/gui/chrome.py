@@ -8,8 +8,8 @@ window and its panels.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QActionGroup
+from PySide6.QtCore import QSettings, QSignalBlocker, Qt
+from PySide6.QtGui import QAction, QActionGroup, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
     QDialogButtonBox,
@@ -33,6 +33,7 @@ from xrr_fitter.gui.results.uncertainty import sampling_readings
 from xrr_fitter.gui.results.verdict import free_parameter_count, reduced_chi_squared
 from xrr_fitter.gui.segmented import SegmentedControl
 from xrr_fitter.gui.structure import naming
+from xrr_fitter.version import __version__
 
 # The design's 引导↔专家 segment (frame ①), described there as "两种模式是同一文档的
 # 两个投影，功能等价".  The halves name surfaces, not depths: the deeper parameter
@@ -82,12 +83,11 @@ GUIDED_READINESS_TEXT = "引导模式"
 # 那句话没错，但它盖住了此刻更要紧的一件事：盘上那一份和屏幕上这一份已经不是同一个样品。
 UNSAVED_STRUCTURE_TEXT = "结构已修改（未保存）"
 
+# 关于框正文。写给用这个程序的人：它做什么、怎么用；脚本那一句说的是读者能拿它做什么，
+# 不是「支持的 Python 边界」这种只有开发者读得懂的架构约定（F51）。
 ABOUT_TEXT = (
-    "XRR Fitter\n\n"
-    "X 射线反射率全自动拟合桌面应用。\n"
-    "导入 .xy / .dat / .txt 反射率数据，初始化样品结构，"
-    "一键拟合并导出结果。\n\n"
-    "支持的 Python 边界：xrr_fitter.api"
+    "导入 .xy / .dat / .txt 反射率数据，初始化样品结构，一键拟合并导出结果。"
+    "需要批量处理时，同一套分析也可以在 Python 脚本里通过 xrr_fitter.api 调用。"
 )
 
 
@@ -169,9 +169,37 @@ def _install_appearance_toggle(window: QWidget) -> QWidget:
     button.setText(theme.APPEARANCE_DARK_GLYPH)
     button.setAccessibleName("切换深色外观")
     button.setToolTip("切换深色外观")
+    # 开窗时按存下的那一档（从没选过就按系统）先摆好，不经过 ``toggled``：那条线只记读者亲手
+    # 按的，跟随系统的这一次要是也落盘，系统换回亮色之后程序就再也不跟了（F52）。
+    dark = _preferred_dark()
+    if dark:
+        with QSignalBlocker(button):
+            button.setChecked(True)
+        _apply_appearance(button, True)
     button.toggled.connect(lambda dark: _apply_appearance(button, dark))
+    button.toggled.connect(_remember_appearance)
     window.appearance_toggle = button
     return button
+
+
+#: 读者亲手选过的明暗外观；没有这一项时跟随系统。
+APPEARANCE_SETTINGS_KEY = "appearance/dark"
+
+
+def _system_prefers_dark() -> bool:
+    hints = QGuiApplication.styleHints()
+    return hints is not None and hints.colorScheme() == Qt.ColorScheme.Dark
+
+
+def _preferred_dark() -> bool:
+    stored = QSettings().value(APPEARANCE_SETTINGS_KEY)
+    if stored is None:
+        return _system_prefers_dark()
+    return stored is True or str(stored).lower() in ("true", "1")
+
+
+def _remember_appearance(dark: bool) -> None:
+    QSettings().setValue(APPEARANCE_SETTINGS_KEY, dark)
 
 
 def _apply_appearance(button: QToolButton, dark: bool) -> None:
@@ -322,6 +350,8 @@ def _install_running_commands(window: QWidget) -> QWidget:
         layout.addWidget(button)
     # 暂停键按下之后改口说「▶ 继续」；命令栏这一枚跟着源按钮改，否则两处措辞会打架。
     window.toolbar_pause_button = group.findChild(QToolButton, "toolbarPauseButton")
+    # 停止键转发点击，可用状态却得自己跟：源按钮灰了它还亮着，就是一枚按了没反应的键。
+    window.toolbar_stop_button = group.findChild(QToolButton, "toolbarStopButton")
     panel.pause_button.clicked.connect(lambda: _sync_pause_command(window))
     window.running_command_group = group
     return group
@@ -454,19 +484,18 @@ def _install_file_menu(window: QWidget, bar: QMenuBar) -> None:
     for name in ("saveProjectAction", "saveAsProjectAction"):
         menu.addAction(_window_action(window, name))
     menu.addSeparator()
+    # 两条导入命令是数据面板自己的 ``QAction``（连着 Ctrl+I / Ctrl+Shift+I）：菜单收的是同一枚，
+    # 不再另建一份，否则按键与菜单项又成了两条各管各的路。
+    data_panel = window.data_panel
+    for action, command in (
+        (data_panel.import_files_action, "import_files"),
+        (data_panel.import_folder_action, "import_folder"),
+    ):
+        action.setIcon(command_icon(command))
+        window.chrome_actions[action.objectName()] = action
+        menu.addAction(action)
+    menu.addSeparator()
     specs = (
-        (
-            "importFilesMenuAction",
-            "导入数据文件…",
-            window.data_panel.import_files_button.click,
-            "import_files",
-        ),
-        (
-            "importFolderMenuAction",
-            "导入数据文件夹…",
-            window.data_panel.import_folder_button.click,
-            "import_folder",
-        ),
         ("reloadSourceAction", "重新加载数据源", window.reload_source_dialog, "reload_source_dialog"),
         ("relinkSourceAction", "重新链接数据源…", window.relink_source_dialog, "relink_source_dialog"),
     )
@@ -474,8 +503,7 @@ def _install_file_menu(window: QWidget, bar: QMenuBar) -> None:
         action = _action(window, object_name, text, callback, command=command)
         window.chrome_actions[object_name] = action
         menu.addAction(action)
-        if object_name in ("importFolderMenuAction", "relinkSourceAction"):
-            menu.addSeparator()
+    menu.addSeparator()
     menu.addAction(_window_action(window, "exportResultsAction"))
     bar.addMenu(menu)
 
@@ -617,19 +645,48 @@ def _install_fit_menu(window: QWidget, bar: QMenuBar) -> None:
     cancel = _window_action(window, "cancelFitAction")
     menu.addAction(_window_action(window, "startFitAction"))
     menu.addAction(cancel)
+    # 强制停止是停止的升级：和卡上那一枚一样，先请求过停止它才可用。
     force = _action(
         window,
         "forceStopFitAction",
         "强制停止拟合",
-        window.fit_panel.controller.force_stop,
+        window.fit_panel.request_force_stop,
         command="force_stop",
     )
-    force.setEnabled(cancel.isEnabled())
-    cancel.changed.connect(lambda: force.setEnabled(cancel.isEnabled()))
     window.chrome_actions["forceStopFitAction"] = force
     menu.addAction(force)
+    window.fit_panel.stop_state_changed.connect(lambda: _sync_stop_commands(window))
+    _sync_stop_commands(window)
+    window.document.project_changed.connect(lambda _project: _sync_fit_route(window))
+    _sync_fit_route(window)
     _install_result_actions(window, menu)
     bar.addMenu(menu)
+
+
+def _sync_fit_route(window: QWidget) -> None:
+    """Write the route 一键拟合 will take into the command's own tip and onto the fit card.
+
+    The menu entry, the command-bar button and the status-bar tip all read this one
+    ``QAction``, so the route is stated wherever the command is offered; the card's
+    「本次」line says the same route to a reader who never hovers.
+    """
+    title, detail = window.fit_route()
+    text = f"一键拟合 · {title}：{detail}。{window.fit_route_hint()}"
+    action = _window_action(window, "startFitAction")
+    action.setToolTip(text)
+    action.setStatusTip(text)
+    window.fit_panel.set_route(window.fit_route_key())
+
+
+def _sync_stop_commands(window: QWidget) -> None:
+    """Keep the menu and command-bar stop entrances in step with the fit card."""
+    panel = window.fit_panel
+    _window_action(window, "cancelFitAction").setEnabled(panel.can_request_stop())
+    window.chrome_actions["forceStopFitAction"].setEnabled(panel.can_force_stop())
+    for name in ("toolbar_pause_button", "toolbar_stop_button"):
+        button = getattr(window, name, None)
+        if button is not None:
+            button.setEnabled(panel.can_request_stop())
 
 
 def _install_result_actions(window: QWidget, menu: QMenu) -> None:
@@ -697,11 +754,12 @@ def _show_about_dialog(window: QWidget) -> None:
     icon_label.setPixmap(_build_app_icon().pixmap(64, 64))
     icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
     dialog.body_layout.addWidget(icon_label)
-    info = QLabel(
-        "导入 .xy / .dat / .txt 反射率数据，初始化样品结构，\n"
-        "一键拟合并导出结果。\n\n"
-        "支持的 Python 边界：xrr_fitter.api"
-    )
+    # 报问题、对照发行说明时第一句要说的就是装的哪一版（F51）。
+    version = QLabel(f"版本 {__version__}")
+    version.setObjectName("aboutVersionLabel")
+    version.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    dialog.body_layout.addWidget(version)
+    info = QLabel(ABOUT_TEXT)
     info.setWordWrap(True)
     dialog.body_layout.addWidget(info)
     dialog.exec()
@@ -951,6 +1009,18 @@ def refresh_run_summary(window: QWidget, summary: object) -> None:
     一句拼好的话没法这么排。
     """
     _write_run_summary(window, summary.stage, summary.position, summary.remaining)
+
+
+def refresh_sampling_summary(window: QWidget, summary: str) -> None:
+    """Repeat the sampling card's one-line summary in the position segment (F43).
+
+    采样与拟合不会同时跑，所以借拟合那一段报位置：对话框关掉以后，底栏是唯一还看得见采样走到
+    哪的地方。句子由进度视图拼好（``McmcProgressView.summary_changed``），停了它发空串，这一段随之隐去。
+    """
+    label = window.findChild(QLabel, "fitPositionStatus")
+    if label is not None:
+        label.setText(summary)
+    status_bar.sync(window)
 
 
 def _project_run_summary(window: QWidget, running: str | None) -> None:

@@ -103,6 +103,23 @@ def short_labels(names: Iterable[str], definitions: Iterable[object]) -> tuple[s
     return tuple(labels.get(name, short_label(name)) for name in names)
 
 
+def result_definitions(result: object | None) -> tuple[object, ...]:
+    """结果自己带的参数声明——短名的素材，缺席时轴上退回机器路径。"""
+    return tuple(getattr(result, "parameter_definitions", ()) or ())
+
+
+def titled_labels(names: Iterable[str], definitions: Iterable[object]) -> tuple[str, ...]:
+    """量名在前、短名在后的一句：「厚度 d·ox」。图例与小图标题用它，矩阵刻度只用短名。
+
+    一条曲线、一张小图第一次出现的地方，``d`` 这个符号还没人教过读者；矩阵刻度那里格子挨着格子，
+    写不下量名，也不必写——读者是拿图例上的名字去刻度上找它。
+    """
+    names = tuple(names)
+    definitions = tuple(definitions)
+    pairs = zip(quantity_names(names, definitions), short_labels(names, definitions), strict=True)
+    return tuple(" ".join(part for part in pair if part) for pair in pairs)
+
+
 def quantity_name(display_name: str | None) -> str:
     """``display_name`` 尾段里的中文量名——「aSi 相对密度」里的「相对密度」；取不到是空串。
 

@@ -9,6 +9,7 @@ import numpy as np
 from tests.support.model_cases import final_fit_result, simple_structure
 
 from xrr_fitter.io.xy import xy_bytes
+from xrr_fitter.model.fitting import FitCheckpoint
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.services import batch, fitting
 from xrr_fitter.services.datasets import add_dataset
@@ -42,17 +43,22 @@ def _fit_independently(
     *,
     progress_callback=None,
     checkpoint_callback=None,
+    cancelled=None,
 ):
     return batch.fit_project_transaction(
         value,
         progress_callback,
         checkpoint_callback,
-        None,
+        cancelled,
         seed_branches=fitting.service_seed_branches,
         prepare_dataset=prepare,
         fit_dataset=fit,
         fit_joint=None,
     )
+
+
+def _stage_checkpoint(stage: str) -> FitCheckpoint:
+    return FitCheckpoint("a" * 64, "b" * 64, "c" * 64, stage, final_fit_result().candidates, (101,))
 
 
 def _prepared_stub(project, dataset_id: str, _seed=None):
@@ -226,3 +232,73 @@ def test_independent_progress_reaches_the_caller_while_the_fit_still_runs(
 
     assert observed_inside == [("zeta:mid",), ("zeta:mid", "alpha:mid")]
     assert published == ["zeta:mid", "alpha:mid"]
+
+
+def test_stopping_keeps_the_finished_dataset_and_the_interrupted_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """「停止」承诺的是保留进度：跑完的那条留结果，跑到一半的那条留检查点。
+
+    取消到达时第一条已经跑完、第二条刚存下 C 阶段的检查点。两样都必须出现在最后一次
+    发布的项目里——GUI 只看得到发布出来的项目，worker 取消时不再发终态结果。
+    """
+    value = _project(tmp_path)
+    value = replace(value, fit_config=replace(value.fit_config, local_workers=1))
+    stop = Event()
+    completed = final_fit_result()
+    saved = _stage_checkpoint("C")
+    published = []
+
+    def fit(prepared, *, checkpoint, **_options):
+        if prepared.dataset_id == "zeta":
+            return completed
+        checkpoint(saved)
+        stop.set()
+        raise InterruptedError("cancelled")
+
+    result = _fit_independently(
+        value,
+        _prepared_stub,
+        fit,
+        checkpoint_callback=published.append,
+        cancelled=stop.is_set,
+    )
+
+    assert result.cancelled is True
+    assert tuple(item.dataset_id for item in result.datasets) == ("zeta", "alpha")
+    last = {dataset.dataset_id: dataset for dataset in published[-1].datasets}
+    assert last["zeta"].last_valid_result is completed
+    assert last["alpha"].checkpoint is saved
+
+
+def test_a_stop_from_one_dataset_does_not_discard_a_concurrent_finished_one(
+    tmp_path: Path,
+) -> None:
+    """并行跑时，先停下的那条不能把同时跑完的另一条一起作废。"""
+    value = _project(tmp_path)
+    value = replace(value, fit_config=replace(value.fit_config, local_workers=2))
+    rendezvous = Barrier(2, timeout=2.0)
+    stop = Event()
+    completed = final_fit_result()
+    published = []
+
+    def fit(prepared, **_options):
+        rendezvous.wait()
+        if prepared.dataset_id == "zeta":
+            stop.set()
+            raise InterruptedError("cancelled")
+        assert stop.wait(timeout=2.0)
+        return completed
+
+    result = _fit_independently(
+        value,
+        _prepared_stub,
+        fit,
+        checkpoint_callback=published.append,
+        cancelled=stop.is_set,
+    )
+
+    assert result.cancelled is True
+    assert result.updated_project.datasets[1].last_valid_result is completed
+    assert published, "the finished dataset must reach a published project"
+    assert published[-1].datasets[1].last_valid_result is completed

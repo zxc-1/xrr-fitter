@@ -711,7 +711,13 @@ def with_dataset_fit_mask(
 
 
 def with_workspace_state(project: XrrProject, state: ProjectUiState) -> XrrProject:
-    """Replace the persisted workspace state after validating its references."""
+    """Replace the persisted workspace state after validating its references.
+
+    An equal state returns the same project, so a capture that found nothing
+    moved is distinguishable from a change by identity alone.
+    """
     if not isinstance(state, ProjectUiState):
         raise TypeError("state must be ProjectUiState")
+    if state == project.ui_state:
+        return project
     return replace(project, ui_state=state)

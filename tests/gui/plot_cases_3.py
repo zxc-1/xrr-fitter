@@ -63,10 +63,16 @@ def test_nonactive_mask_update_does_not_switch_plot_dataset(qtbot) -> None:
     assert _artist_snapshot(panel) == before
 
 
-def test_persisted_column_and_plot_tab_changes_mark_project_dirty(
+def test_persisted_column_and_plot_tab_changes_are_kept_without_marking_dirty(
     qtbot,
     tmp_path,
 ) -> None:
+    """Where the reader is looking rides along with the project but is not an edit.
+
+    The page and the column widths still reach the project (and so the next save),
+    but they neither mark it dirty nor take an undo step; see
+    ``test_view_state_is_not_an_edit``.
+    """
     from xrr_fitter.gui.document import ProjectDocument
     from xrr_fitter.gui.main_window import MainWindow
 
@@ -77,7 +83,7 @@ def test_persisted_column_and_plot_tab_changes_mark_project_dirty(
 
     window.plot_panel.tabs.setCurrentIndex(1)
     assert window.document.project.ui_state.plot_tab_index == 1
-    assert window.document.is_dirty is True
+    assert window.document.is_dirty is False
 
     # Column geometry is strongly typed state again, so a capture has to carry the
     # live column widths into the project.  The three columns are pinned -- the
@@ -91,7 +97,8 @@ def test_persisted_column_and_plot_tab_changes_mark_project_dirty(
     columns = tuple(window.workspace_splitter.sizes())
 
     assert window.document.project.ui_state.workspace_splitter_sizes == columns
-    assert window.document.is_dirty is True
+    assert window.document.is_dirty is False
+    assert window.document.can_undo is False
 
 
 @pytest.mark.parametrize(
@@ -297,10 +304,9 @@ def test_plot_panel_mask_mode_click_requests_prepared_point(qtbot) -> None:
     panel.set_interaction_mode("mask")
     raw = panel.view("raw")
 
-    # The pg pane reports a mask click as a scene view-x (a 2θ angle); the
-    # controller maps that angle to the nearest prepared point, the twin of the
-    # old canvas button-press the mpl pane fielded.
-    raw.point_mask_requested.emit(float(data.two_theta_deg[2]))
+    # The pg pane resolves a mask click to the prepared point under the pointer and
+    # reports its index; the controller forwards it through the panel's mode guard.
+    raw.point_mask_requested.emit(2)
 
     assert emitted == [2]
 
@@ -478,7 +484,8 @@ def test_plot_panel_replaces_stale_candidate_with_untrusted_no_best_result(qtbot
     assert panel.selected_candidate_id() is None
     assert "暂无当前候选" in (panel.view("qz4").placeholder_text() or "")
     labels = tuple(line.get_label() for line in panel.view("candidates").axes.lines)
-    assert any("candidate-invalid" in label and "仅供检查" in label for label in labels)
+    # 图例按列表序号称呼候选：只剩这一个算不出来的解，它就是「候选 A」。
+    assert any(label.startswith("候选 A") and "仅供检查" in label for label in labels)
 
 
 def test_plot_panel_teardown_does_not_leave_deleted_canvas_traceback(

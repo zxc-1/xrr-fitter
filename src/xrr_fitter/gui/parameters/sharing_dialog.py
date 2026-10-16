@@ -21,6 +21,27 @@ from PySide6.QtWidgets import (
 import xrr_fitter.api as api
 from xrr_fitter.gui.accessibility import localize_standard_buttons
 
+#: 服务层与模型层对共享规则的拒绝原文 → 屏上那句话。认不出的原样上屏：编一个原因比露出原文更糟。
+SHARING_ERROR_TEXTS = {
+    "sharing_key values must be unique": "共享组名称重复，每个共享组需要唯一的名称",
+    "sharing coordinate has multiple ownership": "同一个参数不能同时属于两个共享组",
+    "sharing rule references a missing dataset": "共享组引用了不存在的数据集",
+}
+CONSTRAINT_CONFLICT_PREFIX = "parameters are driven by both a sharing and a constraint rule: "
+
+#: (参数名, 显示名) 按显示名列出；参数名留作数据，显示名给读者。
+Choices = tuple[tuple[str, str], ...]
+
+
+def sharing_error_text(error: BaseException, key: str | None = None) -> str:
+    """把一次共享规则拒绝说成中文；``key`` 是对话框里正要添加的组名。"""
+    message = str(error)
+    if message == "sharing_key values must be unique" and key:
+        return f"共享组名称「{key}」已存在，请换一个名称"
+    if message.startswith(CONSTRAINT_CONFLICT_PREFIX):
+        return f"这些参数已由约束驱动，不能再共享：{message[len(CONSTRAINT_CONFLICT_PREFIX) :]}"
+    return SHARING_ERROR_TEXTS.get(message, message)
+
 
 class SharingDialog(QDialog):
     """Validate and commit before closing, so rejected input remains editable."""
@@ -28,7 +49,7 @@ class SharingDialog(QDialog):
     def __init__(
         self,
         dataset_ids: tuple[str, ...],
-        eligible_names: Callable[[tuple[str, ...]], tuple[str, ...]],
+        eligible_choices: Callable[[tuple[str, ...]], Choices],
         commit_rule: Callable[[api.SharingRule], None],
         parent: QWidget | None = None,
     ) -> None:
@@ -38,7 +59,7 @@ class SharingDialog(QDialog):
         self.setAccessibleName("添加参数共享组")
         self.setModal(True)
         self.setMinimumWidth(440)
-        self._eligible_names = eligible_names
+        self._eligible_choices = eligible_choices
         self._commit_rule = commit_rule
         self.key_input = QLineEdit()
         self.key_input.setObjectName("sharingKeyInput")
@@ -99,12 +120,14 @@ class SharingDialog(QDialog):
         previous = self.parameter_input.currentData()
         self.parameter_input.clear()
         try:
-            names = self._eligible_names(self._selected_ids())
+            choices = self._eligible_choices(self._selected_ids())
         except (OSError, KeyError, TypeError, ValueError) as error:
             self._show_error(str(error))
             return
-        for name in names:
-            self.parameter_input.addItem(name, name)
+        for name, label in choices:
+            self.parameter_input.addItem(label, name)
+            # 两层同名时显示名会重复；原名放在悬停里，读者仍分得清是哪一个。
+            self.parameter_input.setItemData(self.parameter_input.count() - 1, name, Qt.ItemDataRole.ToolTipRole)
         index = self.parameter_input.findData(previous)
         if index >= 0:
             self.parameter_input.setCurrentIndex(index)
@@ -126,7 +149,7 @@ class SharingDialog(QDialog):
         try:
             self._commit_rule(self._rule())
         except (TypeError, ValueError) as error:
-            self._show_error(str(error))
+            self._show_error(sharing_error_text(error, self.key_input.text().strip()))
             return
         self.error_label.hide()
         self.accept()

@@ -51,3 +51,16 @@ def test_setting_the_same_dock_state_is_identity() -> None:
     original = set_dock_state(project(), "AAAA")
 
     assert set_dock_state(original, "AAAA") is original
+
+
+def test_setting_an_equal_workspace_state_is_identity() -> None:
+    """A capture that found nothing moved must not read as a change."""
+    from dataclasses import replace
+
+    from tests.support.model_cases import project
+
+    from xrr_fitter.services.projects import set_workspace_state
+
+    original = project()
+
+    assert set_workspace_state(original, replace(original.ui_state)) is original

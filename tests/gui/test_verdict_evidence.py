@@ -96,12 +96,12 @@ def test_no_boundary_hit_is_stated_positively(qtbot) -> None:
     assert _kinds(widget)["✓ 无边界命中"] == "ok"
 
 
-def test_boundary_hits_are_counted_on_the_badge(qtbot) -> None:
+def test_boundary_hits_are_counted_and_named_on_the_badge(qtbot) -> None:
     widget = _badges(qtbot, _report(boundary_hits=("component.0.thickness_a", "instrument.scale")))
 
-    texts = _texts(widget)
-    assert "⚠ 2 处边界命中" in texts
-    assert _kinds(widget)["⚠ 2 处边界命中"] == "warn"
+    badge = next(text for text in _texts(widget) if "边界命中" in text)
+    assert badge.startswith("⚠ 2 处边界命中：") and "scale" in badge, badge
+    assert _kinds(widget)[badge] == "warn"
 
 
 def test_the_strongest_correlation_coefficient_is_shown_on_the_badge(qtbot) -> None:

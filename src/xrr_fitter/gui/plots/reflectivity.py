@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +28,50 @@ class PreparedProjectPlots:
     mask: np.ndarray | None
     result: object | None
     candidate_id: str | None
+    # 读不出来的数据集：dataset_id → 画布上那句说明。读源失败不再被吞成「暂无可用数据」。
+    issues: dict[str, str] = field(default_factory=dict)
+
+
+# 读源失败时画布上的那句话：说清是源文件的问题，并指出修复入口在哪个菜单。
+SOURCE_ISSUE_TEXT = "源文件缺失或无法读取（{name}）\n请用「文件 ▸ 重新链接数据源…」重新指定"
+
+
+class PreparedDataCache:
+    """按「源文件 + 导入参数」缓存 ``PreparedData``，未变的源在重投影时不再重读。
+
+    键里有声明的 sha256 与全部导入参数，所以重新链接、改偏移、改列映射或噪声模型都会重读；
+    再加上文件的 mtime 与大小，源文件在磁盘上被改写时也会重读。只留最近一次投影用到的条目。
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[tuple[object, ...], api.PreparedData] = {}
+        self._used: set[tuple[object, ...]] = set()
+
+    def read(self, project: api.XrrProject, dataset: api.DatasetProject) -> api.PreparedData:
+        source = _source_path(project, dataset)
+        status = source.stat()
+        key = (
+            str(source),
+            status.st_mtime_ns,
+            status.st_size,
+            dataset.source_sha256,
+            dataset.beam,
+            dataset.import_angle_offset_deg,
+            dataset.column_mapping,
+            dataset.angle_convention,
+            project.fit_config.noise_model,
+        )
+        self._used.add(key)
+        data = self._entries.get(key)
+        if data is None:
+            data = _import_source(project, dataset, source)
+            self._entries[key] = data
+        return data
+
+    def retain_used(self) -> None:
+        """丢掉这一轮投影没用到的条目，缓存不会随删掉的数据集无限长大。"""
+        self._entries = {key: value for key, value in self._entries.items() if key in self._used}
+        self._used = set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,34 +143,46 @@ def _source_path(project: api.XrrProject, dataset: api.DatasetProject) -> Path:
     return Path(project.base_directory) / source
 
 
+def _import_source(project: api.XrrProject, dataset: api.DatasetProject, source: Path) -> api.PreparedData:
+    return api.import_data(
+        source,
+        dataset.beam,
+        dataset.import_angle_offset_deg,
+        dataset.column_mapping,
+        angle_convention=dataset.angle_convention,
+        noise_model=project.fit_config.noise_model,
+    )
+
+
 def _prepared_dataset(
     project: api.XrrProject,
     dataset: api.DatasetProject,
-) -> tuple[api.PreparedData, np.ndarray] | None:
-    try:
-        data = api.import_data(
-            _source_path(project, dataset),
-            dataset.beam,
-            dataset.import_angle_offset_deg,
-            dataset.column_mapping,
-            angle_convention=dataset.angle_convention,
-            noise_model=project.fit_config.noise_model,
-        )
-    except (OSError, ValueError):
-        return None
+    cache: PreparedDataCache | None = None,
+) -> tuple[api.PreparedData, np.ndarray]:
+    """读出一个数据集的预处理数据与掩膜；源文件缺失、读不出或与掩膜对不上时抛出。"""
+    if cache is None:
+        data = _import_source(project, dataset, _source_path(project, dataset))
+    else:
+        data = cache.read(project, dataset)
     return data, validate_plot_data(data, dataset.fit_mask)
 
 
 def _prepared_datasets(
     project: api.XrrProject,
-) -> tuple[dict[str, api.PreparedData], dict[str, np.ndarray]]:
+    cache: PreparedDataCache | None = None,
+) -> tuple[dict[str, api.PreparedData], dict[str, np.ndarray], dict[str, str]]:
+    """逐个读出数据集；读不出的那个记进 ``issues``，由画布说出来，其余照常画。"""
     datasets: dict[str, api.PreparedData] = {}
     masks: dict[str, np.ndarray] = {}
+    issues: dict[str, str] = {}
     for dataset in project.datasets:
-        prepared = _prepared_dataset(project, dataset)
-        if prepared is not None:
-            datasets[dataset.dataset_id], masks[dataset.dataset_id] = prepared
-    return datasets, masks
+        try:
+            datasets[dataset.dataset_id], masks[dataset.dataset_id] = _prepared_dataset(project, dataset, cache)
+        except (OSError, ValueError):
+            issues[dataset.dataset_id] = SOURCE_ISSUE_TEXT.format(name=Path(dataset.source_path).name)
+    if cache is not None:
+        cache.retain_used()
+    return datasets, masks, issues
 
 
 def _project_dataset(
@@ -150,10 +206,10 @@ def _project_candidate_id(
     return selected if selected is not None else (None if best is None else best.candidate_id)
 
 
-def prepare_project_plots(project: api.XrrProject) -> PreparedProjectPlots:
+def prepare_project_plots(project: api.XrrProject, cache: PreparedDataCache | None = None) -> PreparedProjectPlots:
     if not isinstance(project, api.XrrProject):
         raise TypeError("project must be an XrrProject")
-    datasets, masks = _prepared_datasets(project)
+    datasets, masks, issues = _prepared_datasets(project, cache)
     dataset_id = project.ui_state.active_dataset_id
     data = None if dataset_id is None else datasets.get(dataset_id)
     mask = None if dataset_id is None else masks.get(dataset_id)
@@ -170,6 +226,7 @@ def prepare_project_plots(project: api.XrrProject) -> PreparedProjectPlots:
         mask,
         result,
         candidate_id,
+        issues,
     )
 
 
@@ -392,7 +449,8 @@ def reflectivity_pane_arrays(
         raw_mask=keep,
         raw_model=model_normalized * data.normalization,
         qz4=(data_qz, data_values, model_qz, model_values),
-        residual=(qz, np.asarray(candidate.weighted_residuals, dtype=float)),
+        # 残差卡压在反射率卡正下方，横轴跟它同为散射角，同一个点在两张卡上落在同一条竖线上。
+        residual=(angles, np.asarray(candidate.weighted_residuals, dtype=float)),
         residual_ylabel=residual_label(candidate),
         residual_sigma_reference=candidate.noise_model == "gaussian",
         qz4_ylabel=_qz4_axis_label(data_label, model_label),

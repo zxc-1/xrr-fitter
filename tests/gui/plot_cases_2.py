@@ -28,7 +28,7 @@ def test_plot_panel_labels_nonfinite_objective_as_inspection_only(value) -> None
         stop_reason="converged",
     )
 
-    assert "仅供检查" in candidate_label(candidate, selected=False)
+    assert "仅供检查" in candidate_label(candidate, selected=False, ordinal=0)
 
 
 def test_plot_panel_labels_invalid_archived_candidate_as_inspection_only() -> None:
@@ -42,7 +42,7 @@ def test_plot_panel_labels_invalid_archived_candidate_as_inspection_only() -> No
         stop_reason="early_eliminated",
     )
 
-    text = candidate_label(candidate, selected=True)
+    text = candidate_label(candidate, selected=True, ordinal=0)
     assert "仅供检查" in text
     assert "早期淘汰" in text
 
@@ -62,7 +62,8 @@ def test_plot_panel_keeps_invalid_candidates_as_unselected_evidence(qtbot) -> No
     panel = _panel(qtbot, data=data, result=result)
     labels = tuple(line.get_label() for line in panel.view("candidates").axes.lines)
 
-    assert any("candidate-invalid" in label and "仅供检查" in label for label in labels)
+    # 图例按列表序号称呼候选：算不出来的解在列表垫底，这里是第二行，即「候选 B」。
+    assert any(label.startswith("候选 B") and "仅供检查" in label for label in labels)
 
 
 def test_plot_panel_rejects_misaligned_candidate_diagnostics_without_redraw(
@@ -110,7 +111,8 @@ def test_plot_panel_select_candidate_updates_diagnostics_and_comparison_atomical
 
     assert panel.selected_candidate_id() == "candidate-b"
     labels = tuple(line.get_label() for line in panel.view("candidates").axes.lines)
-    assert any("candidate-b" in label and "查看中" in label for label in labels)
+    # 图例按结果列表里的序号称呼候选：candidate-b 在列表的第二行（推荐解排第一），即「候选 B」。
+    assert any("候选 B" in label and "查看中" in label for label in labels)
 
 
 def test_plot_panel_set_dataset_clears_stale_candidate_diagnostics(qtbot) -> None:
@@ -155,6 +157,8 @@ def test_mask_plot_requires_one_mask_value_per_prepared_point(
 def test_plot_preserves_prepared_indices_when_nonfinite_points_are_filtered(
     qtbot,
 ) -> None:
+    from PySide6.QtCore import QPointF
+
     angles = np.array([0.1, np.nan, 0.3, 0.4])
     raw = np.array([100.0, 80.0, np.nan, 40.0])
     valid = np.array([True, False, False, True])
@@ -166,8 +170,20 @@ def test_plot_preserves_prepared_indices_when_nonfinite_points_are_filtered(
         fit_mask=valid,
     )
     panel = _panel(qtbot, data=data)
+    panel.resize(1000, 800)
+    panel.show()
+    qtbot.waitExposed(panel)
+    panel.select_view("raw")
+    panel.set_interaction_mode("mask")
+    emitted: list[int] = []
+    panel.point_mask_requested.connect(emitted.append)
+    raw = panel.view("raw")
+    # 中间两点读不出来、不上图；点中最后那个点时报的仍是它在预处理数据里的下标 3，不是图上的第 2 个。
+    raw.plot_item.vb.setRange(xRange=(0.0, 0.5), yRange=(0.0, 120.0), padding=0)
+    target = raw.plot_item.vb.mapViewToScene(QPointF(0.4, 40.0))
+    raw._on_scene_clicked(SimpleNamespace(button=lambda: Qt.MouseButton.LeftButton, scenePos=lambda: target))
 
-    assert panel.displayed_prepared_indices() == (0, 3)
+    assert emitted == [3]
 
 
 def test_plots_package_initializer_is_empty() -> None:
@@ -228,11 +244,17 @@ def test_active_dataset_selection_rolls_back_when_plot_commit_fails(
     assert tree.currentItem() is first_item
 
 
-def test_diagnostic_selection_rollback_restores_previous_view(
+def test_diagnostic_selection_is_stored_without_reprojecting_the_plots(
     qtbot,
     tmp_path,
     monkeypatch,
 ) -> None:
+    """A page change is recorded, not re-projected.
+
+    The tab that reported the change already shows it, so nothing is redrawn and
+    there is no projection left to fail and roll back; redrawing every view per
+    click was what made paging slow (audit F03/F20).
+    """
     from xrr_fitter.gui.document import ProjectDocument
     from xrr_fitter.gui.main_window import MainWindow
 
@@ -240,19 +262,19 @@ def test_diagnostic_selection_rollback_restores_previous_view(
     qtbot.addWidget(window)
     window.show()
     qtbot.waitExposed(window)
+    projected: list[object] = []
     original = window.plot_panel.project_project
-
-    def reject(project_value):
-        if project_value.ui_state.plot_tab_index == 1:
-            raise RuntimeError("diagnostic selection rejected")
-        return original(project_value)
-
-    monkeypatch.setattr(window.plot_panel, "project_project", reject)
+    monkeypatch.setattr(
+        window.plot_panel,
+        "project_project",
+        lambda project_value: (projected.append(project_value), original(project_value))[1],
+    )
 
     window.plot_panel.tabs.setCurrentIndex(1)
 
-    assert window.document.project.ui_state.plot_tab_index == 0
-    assert window.plot_panel.current_view_key() == window.plot_panel.tab_keys()[0]
+    assert projected == []
+    assert window.document.project.ui_state.plot_tab_index == 1
+    assert window.plot_panel.current_view_key() == window.plot_panel.tab_keys()[1]
     assert window.document.is_dirty is False
 
 

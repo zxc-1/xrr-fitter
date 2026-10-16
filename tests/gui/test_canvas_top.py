@@ -167,7 +167,17 @@ def test_reordering_deleting_and_editing_moved_onto_the_row_they_act_on(qtbot, t
     editor = panel.editor
     menu = editor.row_menu
 
-    assert [action.text() for action in menu.actions()] == ["编辑基底", "删除", "上移", "下移", "忽略氧化层建议"]
+    # 后三条是 F32 补上的：已有周期块/梯度层的编辑入口、复制、新建梯度层，都挂在行上。
+    assert [action.text() for action in menu.actions()] == [
+        "编辑基底",
+        "删除",
+        "上移",
+        "下移",
+        "忽略氧化层建议",
+        "编辑周期块 / 梯度层…",
+        "复制",
+        "添加梯度层…",
+    ]
 
     # 没选中任何一层时，三条针对层的命令都不该是可点的——菜单弹出来全灰比弹不出来更
     # 说明「先选一行」。
@@ -304,7 +314,8 @@ def test_the_objective_trace_accumulates_one_point_per_frame(qtbot) -> None:
     view.set_progress(_running_progress(2.5, completed=300))
     view.set_progress(_running_progress(2.14, completed=600))
 
-    xs, ys = view.trace_item.getData()
+    # 读交给曲线的原值：纵轴是对数轴，``getData()`` 交回的是画在屏上的 log10 值。
+    xs, ys = view.trace_item.getOriginalDataset()
     assert list(ys) == [2.5, 2.14]
     assert len(xs) == 2
 
@@ -312,6 +323,33 @@ def test_the_objective_trace_accumulates_one_point_per_frame(qtbot) -> None:
 
     # 清空后 pyqtgraph 把两条数组置回 ``None``，所以这里问的是「没有点了」而不是长度。
     assert not len(view.trace_item.getData()[0] or ())
+
+
+def test_the_objective_trace_reads_on_a_decade_axis_against_the_whole_run(qtbot) -> None:
+    """J 在一次运行里跨好几个数量级，线性纵轴把下降压成贴底的一条；横轴走整次运行，不在每个阶段回卷。"""
+    from xrr_fitter.gui.plots.live import DecadeAxis, ObjectiveTracePlot
+
+    trace = ObjectiveTracePlot()
+    qtbot.addWidget(trace)
+    left, bottom = (trace.getPlotItem().getAxis(side) for side in ("left", "bottom"))
+
+    assert isinstance(left, DecadeAxis) and left.logMode
+    assert not bottom.logMode
+    assert (left.labelText, bottom.labelText) == ("目标值 J", "总完成比例")
+
+
+def test_the_objective_trace_skips_values_a_log_axis_cannot_place(qtbot) -> None:
+    """还没有候选时 J 是 +inf；非有限或不为正的值在对数轴上没有位置，不进轨迹，前后的点照常连。"""
+    from xrr_fitter.gui.plots.live import ObjectiveTracePlot
+
+    trace = ObjectiveTracePlot()
+    qtbot.addWidget(trace)
+    frames = ((0.1, float("inf")), (0.2, 4.0), (0.3, float("nan")), (0.4, 0.0), (0.5, -1.0), (0.6, 2.0))
+    for fraction, objective in frames:
+        trace.append(fraction, objective)
+
+    xs, ys = trace.trace_item.getOriginalDataset()
+    assert (list(xs), list(ys)) == ([0.2, 0.6], [4.0, 2.0])
 
 
 def _plot_panel(qtbot):
@@ -443,6 +481,7 @@ def test_the_five_controls_the_modebar_gave_up_are_still_reachable(qtbot) -> Non
     panel = _plot_panel(qtbot)
     actions = [action for action in panel.toolbar.tool_actions() if not action.isSeparator()]
 
+    # 末一条是结果步看拟合 SLD 剖面的入口（审计 F16：结果步此前完全看不到拟合出来的剖面）。
     assert [action.text() for action in actions] == [
         "查看",
         "范围",
@@ -450,11 +489,18 @@ def test_the_five_controls_the_modebar_gave_up_are_still_reachable(qtbot) -> Non
         "缩放到拟合范围",
         "恢复完整视图",
         "叠加对比",
+        "显示拟合 SLD 剖面",
     ]
     assert panel.toolbar.contextMenuPolicy() == Qt.ContextMenuPolicy.ActionsContextMenu
-    # 三档交互模式互斥、叠加对比是开关，所以这四条要能显示勾选状态；两个缩放命令是一次性
-    # 动作，勾了反而是在说「还停在这个状态」。
-    assert [action.text() for action in actions if action.isCheckable()] == ["查看", "范围", "掩膜", "叠加对比"]
+    # 三档交互模式互斥、叠加对比与拟合剖面是开关，所以这几条要能显示勾选状态；两个缩放命令是
+    # 一次性动作，勾了反而是在说「还停在这个状态」。
+    assert [action.text() for action in actions if action.isCheckable()] == [
+        "查看",
+        "范围",
+        "掩膜",
+        "叠加对比",
+        "显示拟合 SLD 剖面",
+    ]
 
 
 def test_the_menu_entries_drive_the_same_modes_the_buttons_did(qtbot) -> None:

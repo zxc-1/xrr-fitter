@@ -206,11 +206,11 @@ def _drag_fit_range(window, lower: float, upper: float) -> None:
     region.sigRegionChangeFinished.emit(region)
 
 
-def _click_point_mask(window, angle: float) -> None:
-    # Masking on the pyqtgraph pane resolves the clicked 2θ angle through the
-    # same view-x entry point a scene click uses, so it honours the masking
-    # guard the mask-mode button arms.
-    window.plot_panel.view("raw")._mask_from_view_x(float(angle))
+def _request_point_mask(window, index: int) -> None:
+    # A scene click hit-tests the point under the pointer and hands its prepared
+    # index to this same entry point, so it honours the guard the mask-mode
+    # button arms and the editing gate a running operation closes.
+    assert window.plot_panel.request_point_mask(index), "mask mode is not armed"
 
 
 def _install_fast_fit_config(window) -> None:
@@ -354,7 +354,7 @@ def _edit_plot_mask(window, source: Path) -> None:
     mask_button = window.plot_panel.mode_actions()["mask"]
     mask_button.trigger()
     masked_index = 20
-    _click_point_mask(window, float(prepared.two_theta_deg[masked_index]))
+    _request_point_mask(window, masked_index)
     assert window.document.project.datasets[1].fit_mask[masked_index] is False
     assert window.document.project.datasets[1].source_sha256 == active.source_sha256
 
@@ -389,26 +389,36 @@ def _assert_fit_review_feedback(window) -> None:
             assert reason in panel.status_text()
 
 
-def _select_alternate_candidate(window) -> str:
+def _alternate_selectable_row(window, candidates) -> tuple[str, int]:
+    """另一个可采用的候选与它所在的行。行序按推荐解在先重排过，所以按行上存的 ID 找，不按下标。"""
     result = window.document.project.datasets[1].last_valid_result
-    selectable = tuple(index for index, candidate in enumerate(result.candidates) if candidate_is_selectable(candidate))
+    by_id = {candidate.candidate_id: candidate for candidate in result.candidates}
+    rows = {str(candidates.item(row).data(Qt.ItemDataRole.UserRole)): row for row in range(candidates.count())}
+    return next(
+        (candidate_id, row)
+        for candidate_id, row in rows.items()
+        if row != candidates.currentRow() and candidate_is_selectable(by_id[candidate_id])
+    )
+
+
+def _left_click(widget, position) -> None:
+    QTest.mouseClick(widget, Qt.MouseButton.LeftButton, pos=position)
+    QApplication.processEvents()
+
+
+def _select_alternate_candidate(window) -> str:
+    """点一行去看另一个可采用的候选，再按「采用此候选」——只有后一步改项目。"""
     candidates = window.findChild(QListWidget, "candidateList")
     if candidates is None:
         candidates = window.result_panel.candidates
-    target_row = next(
-        (index for index in selectable if index != candidates.currentRow()),
-        selectable[0],
-    )
-    target_id = result.candidates[target_row].candidate_id
-    item = candidates.item(target_row)
-    QTest.mouseClick(
-        candidates.viewport(),
-        Qt.MouseButton.LeftButton,
-        pos=candidates.visualItemRect(item).center(),
-    )
-    QApplication.processEvents()
+    target_id, row = _alternate_selectable_row(window, candidates)
+    _left_click(candidates.viewport(), candidates.visualItemRect(candidates.item(row)).center())
     assert window.result_panel.selected_candidate_id() == target_id
     assert window.plot_panel.selected_candidate_id() == target_id
+    adopt = window.result_panel.adopt_button
+    assert adopt.isEnabled(), adopt.toolTip()
+    _left_click(adopt, adopt.rect().center())
+    assert dict(window.document.project.ui_state.selected_candidate_ids)[window.document.active_dataset_id] == target_id
     return target_id
 
 

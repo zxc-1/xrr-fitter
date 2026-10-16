@@ -130,14 +130,14 @@ def test_actual_start_path_rechecks_depth_even_for_a_queued_activation(qtbot, wi
     _open(qtbot, window)
     window.parameters_panel.expert_toggle.setChecked(False)
 
-    with pytest.raises(ValueError, match="expert mode"):
+    with pytest.raises(ValueError, match="高级模式"):
         panel.start_mcmc()
     with qtbot.capture_exceptions() as exceptions:
         panel.mcmc_button.clicked.emit()
 
     assert not exceptions
     assert dispatch_calls == []
-    assert "expert mode" in panel.status_text()
+    assert "高级模式" in panel.status_text()
     assert panel._mcmc_source_project is None
 
 

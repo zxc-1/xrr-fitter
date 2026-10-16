@@ -14,6 +14,8 @@ second copy of the rule.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
@@ -127,6 +129,17 @@ class CompactDoubleSpinBox(QDoubleSpinBox):
         widest = metrics.horizontalAdvance(self.textFromValue(self.maximum()))
         narrow = metrics.horizontalAdvance("0" * MIN_SPIN_CHARS)
         return QSize(max(hint.width() - max(widest - narrow, 0), narrow), hint.height())
+
+    def textFromValue(self, value: float) -> str:  # noqa: N802 - Qt override
+        """Show the value without the trailing zeros it does not have.
+
+        The field keeps eight decimals so a quoted line such as Cu Kα₁ 1.540598 Å
+        survives, but ``1.54060000`` reads as a claim to eight measured digits.  Only
+        the display is shortened; the stored value and ``valueFromText`` are unchanged.
+        """
+        text = super().textFromValue(value)
+        point = self.locale().decimalPoint()
+        return text.rstrip("0").rstrip(point) if point in text else text
 
 
 def _expanded_descendants(item: QTreeWidgetItem) -> int:
@@ -243,15 +256,30 @@ class ContentSizedScroll(QScrollArea):
     ``QScrollArea``'s own, which lagged a row-height change by one layout.
     """
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, floor: Callable[[QWidget], int] | None = None) -> None:
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self._floor = floor
 
     def sizeHint(self) -> QSize:
         """Report the scrolled widget's own height request, unbounded."""
         inner = self.widget()
         hint = super().sizeHint()
         return hint if inner is None else QSize(hint.width(), inner.sizeHint().height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Defend ``floor`` of the content, never more than the content itself.
+
+        Without a floor a neighbour that pins its own minimum takes every pixel the
+        rail is short of: the result step's method rows squeezed the dataset list to
+        one row and a half at 1280×800.  Capping at the content keeps a short list
+        from being padded with blank rows -- the slack still collects above the count.
+        """
+        hint = super().minimumSizeHint()
+        inner = self.widget()
+        if self._floor is None or inner is None:
+            return hint
+        return QSize(hint.width(), min(self._floor(inner), inner.sizeHint().height()))
 
 
 class AnchorSizedScroll(QScrollArea):

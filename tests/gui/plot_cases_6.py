@@ -44,12 +44,14 @@ def test_residual_heatmap_gives_each_candidate_a_row_ranked_best_first(qtbot) ->
 
     assert matrix.shape == (3, 4)
     # candidate-c holds the lower objective, so it precedes candidate-b despite
-    # arriving after it. The selected candidate is marked so a row ties back to
-    # the other panes.
+    # arriving after it. Rows are named by their results-list ordinal (候选 A/B/C) --
+    # the list puts the recommended fit first and the rest by objective, so here
+    # candidate-c is 候选 B -- and the selected candidate is marked so a row ties
+    # back to the other panes.
     assert _row_labels(panel, "residual_map") == (
-        "▶ candidate-a",
-        "candidate-c",
-        "candidate-b",
+        "▶ 候选 A",
+        "候选 B",
+        "候选 C",
     )
 
 
@@ -89,8 +91,8 @@ def test_heatmaps_leave_out_candidates_that_may_only_be_inspected(qtbot) -> None
     )
     panel = _panel(qtbot, data=data, result=result)
 
-    assert _row_labels(panel, "residual_map") == ("▶ candidate-a",)
-    assert _row_labels(panel, "parameter_map") == ("▶ candidate-a",)
+    assert _row_labels(panel, "residual_map") == ("▶ 候选 A",)
+    assert _row_labels(panel, "parameter_map") == ("▶ 候选 A",)
 
 
 def test_parameter_heatmap_places_each_parameter_within_its_own_bounds(qtbot) -> None:
@@ -114,8 +116,10 @@ def test_parameter_heatmap_places_each_parameter_within_its_own_bounds(qtbot) ->
     # scale: (1.4-0.5)/(1.5-0.5); thickness: (60-20)/(100-20)
     assert _heatmap(panel, "parameter_map") == pytest.approx(np.array([[0.9, 0.5]]))
     assert view.axes.images[0].get_clim() == (0.0, 1.0)
+    # 列名与相关矩阵刻度同一套短名：``instrument.scale`` 照设计稿写 ``scale``；这份结果没带参数声明，
+    # 厚度没有中文名可用，退回路径本身（见 ``parameter_labels.short_label``）。
     assert tuple(text.get_text() for text in view.axes.get_xticklabels()) == (
-        "instrument.scale",
+        "scale",
         "component.0.thickness_a",
     )
 

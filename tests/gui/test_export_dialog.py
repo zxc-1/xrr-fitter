@@ -25,6 +25,7 @@ from tests.support.model_cases import final_fit_result, fit_candidate, simple_st
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.fitting.progress import stage_text
 from xrr_fitter.model.fitting import FitStageSummary
 
 
@@ -242,8 +243,8 @@ def test_export_dialog_uses_scrollable_summary_after_success(
     shown: list[object] = []
 
     class CapturingSummaryDialog:
-        def __init__(self, summary: str, parent=None) -> None:
-            shown.append((summary, parent))
+        def __init__(self, summary: str, parent=None, *, run_directory) -> None:
+            shown.append((summary, parent, run_directory))
 
         def exec(self) -> None:
             shown.append("exec")
@@ -259,7 +260,8 @@ def test_export_dialog_uses_scrollable_summary_after_success(
 
     assert workflow.export_results_dialog(None) is manifest
 
-    assert shown == [(workflow.summary_text, None), "exec"]
+    # 完成框拿到的是这次运行的目录，「打开文件夹」才知道把读者带到哪里。
+    assert shown == [(workflow.summary_text, None, manifest.run_directory), "exec"]
     record = manifest.files[1]
     assert (
         f"{manifest.run_directory / record.path} ({record.size} bytes, sha256 {record.sha256})"
@@ -315,7 +317,7 @@ def test_export_repeated_multi_dataset_runs_preserve_manifest_and_curve_units(
 def test_export_summary_dialog_uses_read_only_scrollable_text(qtbot) -> None:
     module = _exports()
     summary = "\n".join(f"artifact-{index}" for index in range(100))
-    dialog = module.ExportSummaryDialog(summary)
+    dialog = module.ExportSummaryDialog(summary, run_directory=Path("run"))
     qtbot.addWidget(dialog)
 
     text = dialog.findChild(QPlainTextEdit, "exportSummaryText")
@@ -616,7 +618,8 @@ def test_export_option_dialog_manifest_preview_describes_run(qtbot, tmp_path: Pa
         "master_seed": project.master_seed,
         "datasets": 1,
         "mode": "independent",
-        "stages": list(STAGE_HISTORY),
+        # 阶段用拟合卡的名字说出来，不是裸码 A/B/E（F62）。
+        "stages": [stage_text(stage) for stage in STAGE_HISTORY],
         "confidence": api.ConfidenceClass.TRUSTED.value,
         "reproducible": True,
         # 预览报的是 ``export_result`` 会收到的整个格式集合，所以锁定的默认集合也在里面；
@@ -673,7 +676,7 @@ def test_export_summary_close_button_is_labelled_in_chinese(qtbot) -> None:
     设的「导出到文件夹…」「取消」。截图里同一步骤的两个窗口一个中文一个英文。
     """
     module = _exports()
-    dialog = module.ExportSummaryDialog("artifact")
+    dialog = module.ExportSummaryDialog("artifact", run_directory=Path("run"))
     qtbot.addWidget(dialog)
 
     buttons = dialog.findChild(QDialogButtonBox, "exportSummaryButtons")

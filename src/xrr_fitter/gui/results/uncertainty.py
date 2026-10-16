@@ -35,6 +35,12 @@ from xrr_fitter.gui import theme
 from xrr_fitter.gui.noise import candidate_mode_lines
 from xrr_fitter.gui.plots.parameter_labels import label_map, short_label
 from xrr_fitter.gui.plots.posterior import UncertaintyPages
+from xrr_fitter.gui.results.convergence import (
+    EFFECTIVE_SAMPLE_FLOOR,
+    SPLIT_RHAT_LIMIT,
+    _finite_values,
+    unmixed_chain_reason,
+)
 from xrr_fitter.gui.results.inference_text import (
     bootstrap_metadata,
     correlation_unavailable_reason,
@@ -58,7 +64,12 @@ CLASSIFICATION_LABELS = {
     "strong_correlation": "参数强相关",
     "systematic_residual": "检出系统性残差",
     "two_seed_cluster_support": "最佳聚类仅有两个种子支持",
+    "covariance_unavailable": "协方差不可用",
+    "residual_diagnostics_not_executed": "残差诊断未执行",
 }
+
+# ``FitResult.from_incomplete_search`` 拼的那句证据是英文句子而不是码，前缀固定，阶段列在后面。
+INCOMPLETE_SEARCH_PREFIX = "incomplete search: skipped stages "
 
 DIAGNOSTIC_LABELS = {
     "gauss_hermite_unconverged": "Gauss-Hermite 积分未收敛",
@@ -124,19 +135,25 @@ def _display_value(name: str, value: float) -> float:
 
 
 def _display_unit(name: str) -> str:
+    """The unit a value is shown in; empty for a ratio such as a density scale."""
     if name.endswith(LENGTH_SUFFIXES):
         return "nm"
     for suffix, unit in DISPLAY_UNITS:
         if name.endswith(suffix):
             return unit
-    return "core unit"
+    return ""
+
+
+def _with_unit(text: str, name: str) -> str:
+    unit = _display_unit(name)
+    return f"{text} {unit}" if unit else text
 
 
 def _interval_text(interval: object) -> str:
     name, lower, upper = interval
     low = _display_value(name, float(lower))
     high = _display_value(name, float(upper))
-    return f"{name} [{low:g}, {high:g}] {_display_unit(name)}"
+    return _with_unit(f"{name} [{low:g}, {high:g}]", name)
 
 
 def _profile_text(profile: object) -> str:
@@ -181,16 +198,6 @@ def _report_lines(report: object, definitions: Iterable[object] = ()) -> list[st
         *residual_diagnostic_lines(report),
     ]
     return lines
-
-
-def _finite_values(values: object) -> tuple[float, ...] | None:
-    try:
-        converted = tuple(float(value) for value in values)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if not converted or not all(isfinite(value) for value in converted):
-        return None
-    return converted
 
 
 def _metric_extreme(
@@ -238,12 +245,18 @@ def _quantile_lines(report: object) -> list[str]:
     columns = _sample_columns(report)
     if columns is None:
         return ["后验分位数：不可用"]
-    lines = ["后验分位数（P16 / P50 / P84）："]
+    reason = unmixed_chain_reason(report)
+    # 专家散文照旧列出数值（排查一条坏链时要看各 walker 停在哪），但抬头先说它们不是分位。
+    lines = [
+        "后验分位数（P16 / P50 / P84）："
+        if reason is None
+        else f"后验分位数（P16 / P50 / P84）不可信：{reason}，以下数值仅供诊断，不是后验分位："
+    ]
     for name, column in zip(report.parameter_names, columns, strict=True):
         ordered = tuple(sorted(column))
         quantiles = (_linear_quantile(ordered, value) for value in (0.16, 0.5, 0.84))
         values = " / ".join(f"{_display_value(name, value):g}" for value in quantiles)
-        lines.append(f"{name}：{values} {_display_unit(name)}")
+        lines.append(_with_unit(f"{name}：{values}", name))
     return lines
 
 
@@ -267,13 +280,6 @@ def _mcmc_lines(report: object, candidate_id: str) -> list[str]:
     lines.extend(_quantile_lines(mcmc))
     lines.extend(f"MCMC 警告：{warning}" for warning in mcmc.warnings)
     return lines
-
-
-# 底栏采样那一段的两个阈值，照 ``analysis.mcmc.problem_mcmc_warnings`` 的判据抄：split-R̂
-# 到了 1.10 出一条警告，ESS 掉到 100 以下出另一条。GUI 层不许 import 那个模块（它带 numpy），
-# 所以这里镜像一份并注明出处——判据要改，改的是那边，这里跟着走。
-SPLIT_RHAT_LIMIT = 1.10
-EFFECTIVE_SAMPLE_FLOOR = 100.0
 
 
 def sampling_readings(result: object, candidate_id: str | None) -> tuple[str, str, str]:
@@ -301,8 +307,16 @@ def sampling_readings(result: object, candidate_id: str | None) -> tuple[str, st
     return f"{worst_rhat:.3f}", f"{round(worst_size):,}", "ok" if converged else "warn"
 
 
+def classification_label(code: str) -> str:
+    """一条分类证据的中文；没登记的码原样返回，好拿去日志里对。"""
+    if code.startswith(INCOMPLETE_SEARCH_PREFIX):
+        stages = code.removeprefix(INCOMPLETE_SEARCH_PREFIX).split(", ")
+        return f"搜索未完成：跳过了阶段 {'、'.join(stages)}"
+    return CLASSIFICATION_LABELS.get(code, code)
+
+
 def _classification_lines(result: object) -> list[str]:
-    return [f"分类证据：{CLASSIFICATION_LABELS.get(code, code)}（{code}）" for code in result.classification_evidence]
+    return [f"分类证据：{classification_label(code)}（{code}）" for code in result.classification_evidence]
 
 
 def classification_summary(result: object) -> str:
@@ -313,9 +327,16 @@ def classification_summary(result: object) -> str:
     reasons as a badge tooltip answers "why" exactly where the question is asked.
     Returns an empty string when no reasons exist, so the caller can fall back to
     the bare classification name rather than assert a meaning the data lacks.
+
+    「可用但相关」是分类器的兜底档：贴边、区间未闭合、协方差不可用都落在这一档。强相关不在原因
+    里时先说破，否则判定写着「相关」，紧挨着的徽章写着「无强相关」或「相关不可用」，读者只能认定
+    其中一处说错了。
     """
-    reasons = [CLASSIFICATION_LABELS.get(code, code) for code in result.classification_evidence]
-    return "；".join(reasons)
+    codes = tuple(result.classification_evidence)
+    reasons = "；".join(classification_label(code) for code in codes)
+    if result.confidence == api.ConfidenceClass.CORRELATED and reasons and "strong_correlation" not in codes:
+        return f"原因（非强相关）：{reasons}"
+    return reasons
 
 
 def _diagnostic_text(diagnostic: object) -> str:
@@ -428,6 +449,12 @@ class McmcControls(QGroupBox):
             10000000,
         )
         self.thin = _spin("mcmcThin", "MCMC thinning 间隔", 1, 1000000)
+        # walkers 下限写在它的数值框底下：只写在左栏页脚时，在这里改数的人读不到那条规矩。文字由
+        # 结果面板按当前候选填，与页脚是同一个函数（``walkers_rule_summary``）。
+        self.walkers_hint = QLabel("")
+        self.walkers_hint.setObjectName("mcmcWalkersHint")
+        self.walkers_hint.setProperty("mutedText", True)
+        self.walkers_hint.setWordWrap(True)
         self.recommend_button = QPushButton("推荐配置")
         self.recommend_button.setObjectName("mcmcRecommendButton")
         self.recommend_button.setToolTip("根据当前候选的自由参数数量填入推荐采样参数")
@@ -455,11 +482,13 @@ class McmcControls(QGroupBox):
         form.setContentsMargins(theme.SPACE_SM, 2, theme.SPACE_SM, 2)
         form.setHorizontalSpacing(theme.SPACE_SM)
         form.setVerticalSpacing(theme.SPACE_XS)
-        for row, values in enumerate(
+        for row, values in zip(
+            (0, 2),
             (
                 (("walkers", self.walkers), ("burn-in", self.burn_in)),
                 (("production", self.production), ("thin", self.thin)),
-            )
+            ),
+            strict=True,
         ):
             for column, (text, control) in enumerate(values):
                 label = QLabel(text)
@@ -470,7 +499,9 @@ class McmcControls(QGroupBox):
             # QSS sets an explicit minimum below the native spin editor's hint.
             # Keep the evidence pane from shrinking the input rows to that floor.
             form.setRowMinimumHeight(row, max(control.minimumSizeHint().height() for _text, control in values))
-        form.addLayout(buttons, 2, 0, 1, 4)
+        self._configuration_widgets.append(self.walkers_hint)
+        form.addWidget(self.walkers_hint, 1, 0, 1, 4)
+        form.addLayout(buttons, 3, 0, 1, 4)
         form.setColumnStretch(1, 1)
         form.setColumnStretch(3, 1)
         form.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
@@ -512,12 +543,19 @@ class McmcControls(QGroupBox):
         )
 
     def validated_config(self, free_count: int) -> api.McmcConfig:
-        config = self.config()
-        if config.walkers < 2 * free_count + 2:
-            raise ValueError("walkers must be even and at least 2*nfree+2")
-        if config.production_steps < 4 or config.thin >= config.production_steps:
-            raise ValueError("invalid MCMC step configuration")
-        return config
+        """Check the inputs before ``McmcConfig`` sees them, and say the actual numbers.
+
+        ``McmcConfig`` rejects an odd walker count with an English message; the bound
+        is stated here first, as the count the reader has to type.
+        """
+        walkers = self.walkers.value()
+        required = 2 * free_count + 2
+        if walkers < required or walkers % 2:
+            raise ValueError(f"walkers 需为偶数且至少 {required}（{free_count} 个自由参数 × 2 + 2），当前 {walkers}")
+        production, thin = self.production.value(), self.thin.value()
+        if production < 4 or thin >= production:
+            raise ValueError(f"采样步数至少 4，且抽稀间隔要小于采样步数（当前 {production} 步、间隔 {thin}）")
+        return self.config()
 
     def set_operation_state(self, *, running: bool, ready: bool) -> None:
         self.run_button.setEnabled(ready and not running)

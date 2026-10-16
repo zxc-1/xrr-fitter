@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import replace
 
-from PySide6.QtCore import QSignalBlocker, Qt, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -39,6 +39,8 @@ class FitPanel(QWidget):
     checkpoint_published = Signal(object)
     operation_failed = Signal(object)
     preview_available = Signal(object, object)
+    # 停止与强制停止能不能按变了。菜单、命令栏那几枚是同一条命令的别的入口，跟着这一声改。
+    stop_state_changed = Signal()
 
     # Minimum wall-clock gap between forwarded preview curves. A local search
     # can emit previews many times per second; repainting every one makes the
@@ -57,9 +59,20 @@ class FitPanel(QWidget):
         self.setObjectName("fitPanel")
         self._clock = clock
         self._preview_last_emit: float | None = None
+        # 限流窗口里到达的最新一帧，窗口一过由这只单发计时器画出来。
+        self._preview_pending: api.FitProgress | None = None
+        self._preview_flush = QTimer(self)
+        self._preview_flush.setObjectName("fitPreviewFlush")
+        self._preview_flush.setSingleShot(True)
+        self._preview_flush.setInterval(round(1000 * self.PREVIEW_MIN_INTERVAL_S))
+        self._preview_flush.timeout.connect(self._flush_preview)
         self._checkpoint_saved = False
+        # 本次运行是否已写回过文档：之后的检查点与结果并进那一格撤销，不再另开。与项目里有没有
+        # 检查点（``_checkpoint_saved``）是两回事——回滚发布的项目照样是一次写回。
+        self._run_written_back = False
         self._paused = False
         self._cancel_requested = False
+        self._force_requested = False
         self._skip_available = False
         self.controller = FitController(self)
         self.progress_view = ProgressView(self)
@@ -75,8 +88,10 @@ class FitPanel(QWidget):
         self._build_controls()
         self._connect_controller()
         document.project_changed.connect(self._refresh_readiness)
+        document.project_changed.connect(self._follow_active_dataset)
         document.source_validation_changed.connect(self._refresh_readiness)
         self._refresh_readiness()
+        self._follow_active_dataset()
 
     def _build_controls(self) -> None:
         self._build_noise_controls()
@@ -91,7 +106,7 @@ class FitPanel(QWidget):
         self.start_button = QPushButton("开始拟合")
         self.start_button.setObjectName("startFitButton")
         # 设计稿帧④ 控制段的第一个命令。暂停停在下一个阶段边界，不丢已跑完的阶段，
-        # 所以它与「停止并保留最优」是两件事而不是强弱两档。
+        # 所以它与「停止并保留进度」是两件事而不是强弱两档。
         self.pause_button = QPushButton(PAUSE_TEXT)
         self.pause_button.setObjectName("pauseFitButton")
         self._refresh_pause_label()
@@ -101,30 +116,43 @@ class FitPanel(QWidget):
         self.skip_button.setObjectName("skipStageButton")
         self.skip_button.setAccessibleName("跳过当前拟合阶段")
         self.skip_button.setToolTip("作废当前阶段，直接进入下一阶段；已完成阶段与候选都保留")
-        # 设计稿帧④ 控制段的措辞：这个命令保留当前最优候选与已跑完的阶段，「取消」把它
-        # 说反了——字面意思与行为相反的按钮，跑到一半的人多半不敢按。
-        self.cancel_button = QPushButton("⏹ 停止并保留最优")
+        # 「取消」把这个命令说反了（它不作废已跑完的部分），设计稿的「保留最优」又说过头：
+        # 搜索在取消时只交出检查点，跑到一半的那条数据集不产生新结果。所以只承诺保留进度。
+        self.cancel_button = QPushButton("⏹ 停止并保留进度")
         self.cancel_button.setObjectName("cancelFitButton")
-        self.cancel_button.setAccessibleName("停止拟合并保留最优候选")
+        self.cancel_button.setAccessibleName("停止拟合并保留已完成的进度")
         self.force_button = QPushButton("强制停止")
         self.force_button.setObjectName("forceStopFitButton")
         self.automatic_button.clicked.connect(self.start_automatic_fit)
         self.start_button.clicked.connect(self.start_fit)
         self.pause_button.clicked.connect(self._toggle_pause)
         self.skip_button.clicked.connect(self.controller.skip_stage)
-        self.cancel_button.clicked.connect(self._request_cancel)
-        self.force_button.clicked.connect(self.controller.force_stop)
+        self.cancel_button.clicked.connect(self.request_cancel)
+        self.force_button.clicked.connect(self.request_force_stop)
+        # Esc 只在拟合卡里停拟合：在别处按 Esc 是在取消输入或关弹窗，不该连带停掉一次运行。
         self.cancel_shortcut = QShortcut(QKeySequence("Escape"), self)
         self.cancel_shortcut.setObjectName("cancelFitShortcut")
         self.cancel_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.cancel_shortcut.activated.connect(self._request_cancel)
-        self.stop_help = QLabel("停止后保留当前最优候选，可直接进入结果复核，不丢弃已完成阶段。")
+        self.cancel_shortcut.activated.connect(self.request_cancel)
+        self.stop_help = QLabel(
+            "停止后，已跑完的数据集保留结果；没跑完的只保存检查点，不产生新结果，再次拟合时从检查点继续。"
+        )
         self.stop_help.setObjectName("fitStopHelp")
         self.stop_help.setProperty("mutedText", True)
         self.stop_help.setWordWrap(True)
         self.status_label = QLabel()
         self.status_label.setObjectName("fitStatusLabel")
         self.status_label.setWordWrap(True)
+        # 「本次：<路线> — <做法>」。路线由主窗口按项目算（``MainWindow.fit_route``）再交给这里；
+        # 没交之前不画，免得空着一行「本次：」。
+        self.route_label = QLabel()
+        # 本次路线的键（``messages.FIT_ROUTES``）；窗口没交之前是 ``None``，两枚启动键照旧按高级开关摆。
+        self._route: str | None = None
+        self.route_label.setObjectName("fitRouteLine")
+        self.route_label.setAccessibleName("本次拟合路线")
+        self.route_label.setProperty("mutedText", True)
+        self.route_label.setWordWrap(True)
+        self.route_label.hide()
         # 四枚按钮换行，而不是把四枚之和（296px）当成地板：检视器视口只有 322px 且水平
         # 滚动条是关掉的，一行放不下时超出的按钮不是滚动而是无声裁掉——「强制停止」是
         # 拟合跑飞时唯一的出路，它被裁掉时屏幕上没有任何东西说明少了一个命令。
@@ -143,6 +171,7 @@ class FitPanel(QWidget):
         noise_row.addWidget(self.noise_selector, 1)
         layout.addLayout(noise_row)
         layout.addWidget(self.noise_requirements)
+        layout.addWidget(self.route_label)
         layout.addWidget(self.command_bar)
         layout.addWidget(self.stop_help)
         layout.addWidget(self.progress_view)
@@ -178,8 +207,9 @@ class FitPanel(QWidget):
 
     def _connect_controller(self) -> None:
         self.controller.running_changed.connect(self._project_running_state)
+        # 进度卡先收，指标后收：卡片决定了这一帧是不是它正在讲的那条曲线的，指标照它的口径走。
         self.controller.progress_changed.connect(self.progress_view.set_progress)
-        self.controller.progress_changed.connect(self.live_metrics.set_progress)
+        self.controller.progress_changed.connect(self._project_metrics)
         self.controller.progress_changed.connect(self._project_preview)
         self.controller.progress_changed.connect(self._project_skip_state)
         self.controller.poll_interval_changed.connect(self.progress_view.set_refresh_interval_ms)
@@ -188,24 +218,65 @@ class FitPanel(QWidget):
         self.controller.cancelled.connect(self._show_cancelled)
         self.controller.failed.connect(self._show_failure)
 
+    def _project_metrics(self, progress: api.FitProgress) -> None:
+        """Every frame feeds the per-dataset table; only the card's own frame the readings."""
+        if self.progress_view.draws(progress):
+            self.live_metrics.set_progress(progress)
+        else:
+            self.live_metrics.record(progress)
+
+    def _follow_active_dataset(self, *_args) -> None:
+        """The card tells the run of the dataset selected in the left rail, if it is in the run."""
+        if self.progress_view.follow_dataset(self.document.active_dataset_id):
+            self.live_metrics.show_frame(self.progress_view.focused_frame())
+
     def _project_skip_state(self, progress: api.FitProgress) -> None:
         self._skip_available = progress.stage in {"A", "B", "C", "D", "E"}
         self._refresh_controls()
 
     def _project_preview(self, progress: api.FitProgress) -> None:
-        """Forward preview curves at a bounded rate to avoid canvas flicker."""
-        if progress.dataset_id is None or progress.dataset_id != self.document.active_dataset_id:
-            return
-        qz = progress.preview_qz_a_inv
-        model = progress.preview_model_normalized
-        if qz is None or model is None:
+        """Forward preview curves at a bounded rate to avoid canvas flicker.
+
+        A frame inside the window is held rather than dropped -- the newest one wins
+        -- and drawn once the window has passed: the frames a local search ends on
+        arrive together, and dropping them left the canvas on the second-to-last
+        curve until the next stage spoke, which during profile can be a minute.
+        """
+        if not self._shows_preview(progress):
             return
         now = self._clock()
         last = self._preview_last_emit
         if last is not None and now - last < self.PREVIEW_MIN_INTERVAL_S:
+            self._preview_pending = progress
+            if not self._preview_flush.isActive():
+                self._preview_flush.start()
             return
+        self._emit_preview(progress, now)
+
+    def _shows_preview(self, progress: api.FitProgress) -> bool:
+        """A frame carrying a curve of the dataset the canvas shows."""
+        return (
+            progress.dataset_id is not None
+            and progress.dataset_id == self.document.active_dataset_id
+            and progress.preview_qz_a_inv is not None
+            and progress.preview_model_normalized is not None
+        )
+
+    def _emit_preview(self, progress: api.FitProgress, now: float) -> None:
+        self._drop_pending_preview()
         self._preview_last_emit = now
-        self.preview_available.emit(qz, model)
+        self.preview_available.emit(progress.preview_qz_a_inv, progress.preview_model_normalized)
+
+    def _flush_preview(self) -> None:
+        """Draw the frame held through the window, if it still belongs on the canvas."""
+        pending = self._preview_pending
+        if pending is not None and self._shows_preview(pending):
+            self._emit_preview(pending, self._clock())
+        self._drop_pending_preview()
+
+    def _drop_pending_preview(self) -> None:
+        self._preview_pending = None
+        self._preview_flush.stop()
 
     @property
     def is_running(self) -> bool:
@@ -222,7 +293,8 @@ class FitPanel(QWidget):
             self._refresh_controls()
             return False
         layout = self._joint_layout()
-        self._prepare_run(tuple(dataset.dataset_id for dataset in self.document.project.datasets), layout)
+        members = tuple(dataset.dataset_id for dataset in self.document.project.datasets)
+        self._prepare_run(members, layout, "manual" if layout is None else "joint")
         return self.controller.start_fit(self.document.project, checkpoint_path)
 
     def _toggle_pause(self) -> None:
@@ -249,14 +321,16 @@ class FitPanel(QWidget):
         self.pause_button.setAccessibleName(name)
         self.pause_button.setToolTip(help_text)
 
-    def _request_cancel(self) -> None:
+    def request_cancel(self) -> None:
         """Give immediate feedback, then ask the worker to stop gracefully.
 
         The worker cannot abandon the seed it is mid-evaluation on, so a cancel
         request has visible latency. Announcing it on the progress view keeps the
         button press from feeling ignored while the current seed winds down.
+        Every stop entrance (button, Esc, menu, command bar, window close) comes
+        through here so the card always says what was asked.
         """
-        if not self.is_running or self._cancel_requested:
+        if not self.can_request_stop():
             return
         self.progress_view.mark_cancelling()
         # 「强制停止」是「停止」的升级而不是并列项：先按停止让 worker 自己收尾，收不住时
@@ -264,6 +338,20 @@ class FitPanel(QWidget):
         self._cancel_requested = True
         self._refresh_controls()
         self.controller.cancel()
+
+    def request_force_stop(self) -> None:
+        """Escalate a pending stop the worker has not wound down from."""
+        if not self.can_force_stop():
+            return
+        self._force_requested = True
+        self._refresh_controls()
+        self.controller.force_stop()
+
+    def can_request_stop(self) -> bool:
+        return self.is_running and not self._cancel_requested
+
+    def can_force_stop(self) -> bool:
+        return self.is_running and self._cancel_requested and not self._force_requested
 
     def start_automatic_fit(
         self,
@@ -281,17 +369,20 @@ class FitPanel(QWidget):
         if not readiness.ready:
             self._refresh_controls()
             return False
-        self._prepare_run(self._automatic_members(import_batch_id), None)
+        self._prepare_run(self._automatic_members(import_batch_id), None, "automatic")
         return self.controller.start_automatic_fit(
             self.document.project,
             import_batch_id,
             checkpoint_path,
         )
 
-    def _prepare_run(self, members: tuple[str, ...], layout: object | None) -> None:
+    def _prepare_run(self, members: tuple[str, ...], layout: object | None, route: str) -> None:
         self._preview_last_emit = None
+        self._drop_pending_preview()
         self._checkpoint_saved = False
+        self._run_written_back = False
         self.progress_view.reset()
+        self.progress_view.set_weighting(route)
         self.progress_view.set_members(members)
         self.progress_view.set_joint_layout(layout)
         self._reset_metrics(layout)
@@ -328,6 +419,18 @@ class FitPanel(QWidget):
             return None
         return api.describe_joint_layout(self.document.project)
 
+    def set_route(self, route: str) -> None:
+        """Name the route the next fit takes and offer only its start; the window works it out from the project.
+
+        未开高级选项时，卡片上露出的那一枚就是命令栏一键拟合走的那条路（F56）：同一件事不该有两个名字，
+        也不该在手动路线下只摆一枚灰着的「自动拟合」。
+        """
+        title, detail = messages.FIT_ROUTES[route]
+        self._route = route
+        self.route_label.setText(f"本次：{title} — {detail}")
+        self.route_label.show()
+        self._sync_mode_visibility()
+
     def set_batch_mode(self, mode: str) -> bool:
         current = self.document.project
         updated = api.set_batch_mode(current, mode)
@@ -347,12 +450,15 @@ class FitPanel(QWidget):
         return any(dataset.checkpoint is not None for dataset in self.document.project.datasets)
 
     def _publish_checkpoint(self, project: api.XrrProject) -> None:
+        # 一次运行在撤销栈里只占一格：第一次写回开一格，之后的检查点与最终结果都并进这一格。
+        self.document.adopt_operation_result(project, amend=self._run_written_back)
+        self._run_written_back = True
+        # 回滚时发布的是不带检查点的项目，取消提示不能再说「可从中恢复」。
         self._checkpoint_saved = any(dataset.checkpoint is not None for dataset in project.datasets)
-        self.document.replace_project(project)
         self.checkpoint_published.emit(project)
 
     def _publish_fit_result(self, result: api.ProjectFitResult) -> None:
-        self.document.replace_project(result.updated_project)
+        self.document.adopt_operation_result(result.updated_project, amend=self._run_written_back)
         feedback = fit_result_feedback(result)
         self._show_status(feedback.text, kind=feedback.kind)
         if feedback.completed:
@@ -367,7 +473,7 @@ class FitPanel(QWidget):
             hint = "，已保存检查点，可从中恢复"
         else:
             hint = "，本次未产生检查点"
-        self._show_status(f"已取消：{reason}{hint}", kind="warn")
+        self._show_status(f"已取消：{messages.cancellation_text(reason)}{hint}", kind="warn")
 
     def _show_failure(self, error: api.OperationError) -> None:
         self._show_status(messages.operation_error_text(error), kind="error")
@@ -398,6 +504,9 @@ class FitPanel(QWidget):
             # The worker is done, so stop the live clock; the last rendered
             # elapsed/remaining values stay put instead of ticking on forever.
             self.progress_view.freeze()
+            # The canvas now shows the committed result; a held preview drawn after
+            # this would paint the searching model back over it.
+            self._drop_pending_preview()
             # 收工后暂停键回到未按下的样子，否则下一次开跑它还写着「▶ 继续」。
             self._paused = False
             self._refresh_pause_label()
@@ -429,14 +538,18 @@ class FitPanel(QWidget):
 
     def _sync_mode_visibility(self, running: bool | None = None) -> None:
         # 跑起来之后两枚启动键都按不动，留在原位只是两块灰，还把真正要用的三个命令挤到一边。
+        # 专家两条路都要；未开高级选项时只露本次路线那一枚（``set_route``）。
         active = self.is_running if running is None else running
-        self.start_button.setVisible(self.document.project.ui_state.expert_mode and not active)
-        self.automatic_button.setVisible(not active)
+        expert = self.document.project.ui_state.expert_mode
+        routed_by_table = self._route in {"manual", "joint"}
+        self.start_button.setVisible((expert or routed_by_table) and not active)
+        self.automatic_button.setVisible((expert or not routed_by_table) and not active)
 
     def _refresh_controls(self, running: bool | None = None) -> None:
         active = self.is_running if running is None else running
         if not active:
             self._cancel_requested = False
+            self._force_requested = False
         self._sync_mode_visibility(active)
         self.force_button.setVisible(active and self._cancel_requested)
         self.start_button.setEnabled(self._readiness.ready and not active)
@@ -445,9 +558,10 @@ class FitPanel(QWidget):
         self.cancel_button.setEnabled(can_request)
         self.pause_button.setEnabled(can_request)
         self.skip_button.setEnabled(can_request and self._skip_available and not self._paused)
-        self.force_button.setEnabled(active)
+        self.force_button.setEnabled(active and not self._force_requested)
         self.noise_selector.setEnabled(not active)
         self._refresh_start_label()
+        self.stop_state_changed.emit()
 
     def _refresh_start_label(self) -> None:
         """Relabel the start action when a resume from checkpoint is pending."""

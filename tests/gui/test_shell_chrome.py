@@ -439,6 +439,19 @@ def test_the_appearance_toggle_sits_at_the_far_right_and_flips_the_palette(qtbot
         theme.apply_theme(application)
 
 
+class _ToolbarJob:
+    """A worker stand-in that only records the requests forwarded to it."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def pause(self) -> None:
+        self.calls.append("pause")
+
+    def cancel(self) -> None:
+        self.calls.append("cancel")
+
+
 def test_the_command_bar_swaps_the_fit_group_for_pause_and_stop_while_running(qtbot) -> None:
     """设计稿帧④ 的命令栏在跑起来之后换了一套：⏸ 暂停 与 ⏹ 停止 顶替 一键拟合/导出。
 
@@ -457,21 +470,34 @@ def test_the_command_bar_swaps_the_fit_group_for_pause_and_stop_while_running(qt
     assert running_group.isVisibleTo(window) is True
     assert window.expert_command_group.isVisibleTo(window) is False
 
-    pause = window.findChild(QToolButton, "toolbarPauseButton")
-    stop = window.findChild(QToolButton, "toolbarStopButton")
-    assert pause is not None and stop is not None
-    # 命令栏这两枚是检视器里那两枚的同一条命令，不是各走各的第二条路：点击转发过去，
-    # 所以暂停/继续的措辞、可用状态与快捷键都只有一份。
-    window.fit_panel.pause_button.setEnabled(True)
-    with qtbot.waitSignal(window.fit_panel.pause_button.clicked, timeout=500):
-        pause.click()
-    window.fit_panel.cancel_button.setEnabled(True)
-    with qtbot.waitSignal(window.fit_panel.cancel_button.clicked, timeout=500):
-        stop.click()
-
     set_command_bar_running(window, False)
     assert running_group.isVisibleTo(window) is False
     assert window.expert_command_group.isVisibleTo(window) is True
+
+
+def test_the_command_bar_pause_and_stop_forward_to_the_fit_card(qtbot) -> None:
+    """命令栏这两枚是检视器里那两枚的同一条命令，不是各走各的第二条路。
+
+    点击转发过去，所以暂停/继续的措辞、可用状态与快捷键都只有一份。可用状态跟着卡走，所以
+    要一次真的在跑的运行（只替换 worker），而不是手工把卡上的按钮点亮。
+    """
+    window = _window(qtbot)
+    pause = window.findChild(QToolButton, "toolbarPauseButton")
+    stop = window.findChild(QToolButton, "toolbarStopButton")
+    controller = window.fit_panel.controller
+    controller._job = _ToolbarJob()
+    controller.running_changed.emit(True)
+    try:
+        assert pause.isEnabled() and stop.isEnabled()
+        with qtbot.waitSignal(window.fit_panel.pause_button.clicked, timeout=500):
+            pause.click()
+        with qtbot.waitSignal(window.fit_panel.cancel_button.clicked, timeout=500):
+            stop.click()
+        assert controller._job.calls == ["pause", "cancel"]
+        assert stop.isEnabled() is False
+    finally:
+        controller._job = None
+        controller.running_changed.emit(False)
 
 
 def _window_with_structure(qtbot, tmp_path):

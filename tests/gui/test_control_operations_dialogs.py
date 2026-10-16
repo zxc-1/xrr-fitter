@@ -135,9 +135,11 @@ def test_import_reserved_controls_and_preview_remain_readonly(controls, tmp_path
     previous = delimiter.currentIndex()
     controls.qtbot.keyClick(delimiter, Qt.Key.Key_Down)
     assert not delimiter.isEnabled() and delimiter.currentIndex() == previous
-    check = dialog.log_intensity_check
-    controls.qtbot.mouseClick(check, Qt.MouseButton.LeftButton)
-    assert not check.isEnabled() and not check.isChecked()
+    # 「强度列取对数」不再是永远灰着的复选框，而是只读陈述（F50h）：键盘改不动它。
+    statement = dialog.log_intensity_field
+    stated = statement.text()
+    controls.qtbot.keyClicks(statement, "yes")
+    assert statement.isReadOnly() and statement.text() == stated
     table = dialog.preview_table
     text = preview_values(table)
     controls.qtbot.mouseDClick(
@@ -147,7 +149,7 @@ def test_import_reserved_controls_and_preview_remain_readonly(controls, tmp_path
     after = preview_values(table)
     assert text == after and not [w for w in table.findChildren(QLineEdit) if w.isVisible()]
     controls.record(
-        ("columnDelimiterEditor", "headerSkipEditor", "logIntensityCheck", "readOnly:importPreviewTable"),
+        ("columnDelimiterEditor", "headerSkipEditor", "logIntensityEditor", "readOnly:importPreviewTable"),
         "attempt reserved field edits and preview table editing",
         "declared read-only/disabled affordances do not mutate input",
     )

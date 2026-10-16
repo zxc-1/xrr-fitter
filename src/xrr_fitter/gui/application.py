@@ -116,15 +116,28 @@ def show_splash(application: QApplication) -> QSplashScreen:
     return splash
 
 
+def _name_settings_scope(application: QApplication) -> None:
+    """给 ``QSettings()`` 一个落脚处：明暗偏好（F52）存在这个组织 / 应用名下。
+
+    只在还没有名字时才给——复用别人建好的应用（测试、嵌入）时不改它的身份。
+    """
+    if not application.organizationName():
+        application.setOrganizationName("XRR Fitter")
+    if not application.applicationName():
+        application.setApplicationName("XRR Fitter")
+
+
 def create_application(argv: Sequence[str] | None = None) -> QApplication:
     """Reuse the QApplication or create one from an owned argument copy."""
     existing = QCoreApplication.instance()
     if isinstance(existing, QApplication):
+        _name_settings_scope(existing)
         apply_theme(existing)
         return existing
     if existing is not None:
         raise RuntimeError("existing QCoreApplication is not a QApplication")
     application = QApplication(list(argv or ()))
+    _name_settings_scope(application)
     # 壳、面板、机架三层洗色得先装进调色板，样式表才有得可读：``build_stylesheet`` 是从
     # Window / Base / AlternateBase 三个角色里取这三层的，而平台默认的亮色板把它们给成同一
     # 个白，机架那一层于是一个像素也画不出来。复用已有应用时不动它的板——那多半是深色外观，

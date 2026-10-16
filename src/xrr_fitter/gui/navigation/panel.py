@@ -460,6 +460,17 @@ class PipelineNav(QWidget):
     def step_titles(self) -> tuple[str, ...]:
         return tuple(title for title, _ in PIPELINE_STEPS)
 
+    def map_height(self) -> int:
+        """六步地图本身要的高度，不含结果步才展开的方法段。
+
+        机架按它给管线这一带定下限：方法段随步骤进出、还能折起，算进下限就等于让它在结果步
+        把数据集列表挤到一两行（F19）。
+        """
+        height = self.minimumSizeHint().height()
+        if not self._methods.isHidden():
+            height -= self._methods.minimumSizeHint().height()
+        return height
+
     def method_captions(self) -> tuple[str, ...]:
         """方法段那四行小字此刻读什么。"""
         return self._methods.captions()

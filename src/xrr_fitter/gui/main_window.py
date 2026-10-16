@@ -10,6 +10,7 @@ the GUI event loop.
 from __future__ import annotations
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QLabel, QMainWindow, QMessageBox, QWidget
 
 import xrr_fitter.api as api
@@ -18,9 +19,9 @@ from xrr_fitter.gui.accessibility import (
     configure_accessibility,
     configure_focus_navigation,
 )
-from xrr_fitter.gui.chrome import install_chrome, refresh_run_summary, set_command_bar_guided
+from xrr_fitter.gui.chrome import install_chrome, refresh_run_summary, refresh_sampling_summary, set_command_bar_guided
 from xrr_fitter.gui.document import ProjectDocument
-from xrr_fitter.gui.export.dialog import ExportWorkflow
+from xrr_fitter.gui.export.dialog import ExportWorkflow, export_unavailable_reason, show_export_unavailable_reason
 from xrr_fitter.gui.operation_state import (
     has_exportable_results,
     operation_controllers,
@@ -43,6 +44,9 @@ from xrr_fitter.gui.workspace import (
     configure_splitters,
     restore_project,
 )
+
+# 开跑时状态栏报出路线的时长：够读完一句，又不压住随后的进度摘要。
+ROUTE_MESSAGE_MS = 6000
 
 
 class MainWindow(QMainWindow):
@@ -116,6 +120,10 @@ class MainWindow(QMainWindow):
         self.plot_panel.view_changed.connect(self._plot_tab_changed)
         self.plot_panel.import_requested.connect(self.data_panel.import_files_button.click)
         self.plot_panel.folder_import_requested.connect(self.data_panel.import_folder_button.click)
+        # 空状态提示念的按键与菜单那一条同源，按平台写（macOS 上是 ⌘I）。
+        self.plot_panel.set_import_shortcut_text(
+            self.data_panel.import_files_action.shortcut().toString(QKeySequence.SequenceFormat.NativeText)
+        )
         self.plot_panel.structure_edit_requested.connect(self._plot_structure_edited)
         # Geometry is only worth persisting when a handle moved, and
         # ``splitterMoved`` is emitted for that alone: ``setSizes``, which is how
@@ -141,6 +149,7 @@ class MainWindow(QMainWindow):
         # Guided mode hides the inspector holding the progress card, so the card
         # publishes its position for the status bar to repeat.
         self.fit_panel.progress_view.summary_changed.connect(self._project_run_summary)
+        self.result_panel.mcmc_progress.summary_changed.connect(lambda summary: refresh_sampling_summary(self, summary))
         self.result_panel.controller.running_changed.connect(self._operation_running_changed)
         # 帧⑤ 左栏页脚那句 walkers 下界预告的是「下一次采样会不会被拦」，所以它跟着 spin box
         # 走而不是跟着报告走：读者把 walkers 从 32 调到 8，页脚要当即改口说未满足。
@@ -238,10 +247,17 @@ class MainWindow(QMainWindow):
         self.data_panel.set_fit_range(dataset_id, lower, upper)
 
     def _plot_point_requested(self, index: int) -> None:
+        """Toggle the clicked point: a second click on the same point puts it back."""
         dataset_id = self.document.active_dataset_id
         if dataset_id is None:
             raise RuntimeError("plot point mask requires an active dataset")
-        self.data_panel.set_point_enabled(dataset_id, index, False)
+        dataset = next(item for item in self.document.project.datasets if item.dataset_id == dataset_id)
+        try:
+            self.data_panel.set_point_enabled(dataset_id, index, not dataset.fit_mask[index])
+        except ValueError as error:
+            # 放回一个本身无效的点（强度非正、角度越界）会被服务拒绝；这是读者能看懂的一句，
+            # 不是程序错误，所以报在状态栏而不是从槽里抛出去。
+            self.statusBar().showMessage(f"该点不能纳入拟合：{messages.readiness_text(str(error))}", ROUTE_MESSAGE_MS)
 
     def _plot_tab_changed(self, index: int) -> None:
         """换了画布那一页，右栏跟着重算一次该摆哪三段。
@@ -295,12 +311,21 @@ class MainWindow(QMainWindow):
             restore_project(self.workspace_view, self.document.project)
 
     def _capture_workspace(self) -> None:
+        """Record the page and column widths on screen into the project.
+
+        Where the reader is looking is not an edit, so it is applied as a view
+        update; only the expert toggle, which picks the fit route, still counts
+        as one.
+        """
         current = self.document.project
         updated = capture_project(current, self.workspace_view)
         if updated is current:
             return
         try:
-            self.document.replace_project(updated)
+            if updated.ui_state.expert_mode == current.ui_state.expert_mode:
+                self.document.apply_view(updated)
+            else:
+                self.document.replace_project(updated)
         except Exception:
             restore_project(self.workspace_view, current)
 
@@ -458,12 +483,27 @@ class MainWindow(QMainWindow):
     def start_fit(self) -> bool:
         if self._operation_is_running():
             raise RuntimeError("cannot start fit while an operation is running")
-        if self._uses_automatic_fit():
-            return self.fit_panel.start_automatic_fit()
-        return self.fit_panel.start_fit()
+        route = self.fit_route()
+        started = self.fit_panel.start_automatic_fit() if self._uses_automatic_fit() else self.fit_panel.start_fit()
+        if started:
+            self.statusBar().showMessage(f"已开始{route[0]}：{route[1]}", ROUTE_MESSAGE_MS)
+        return started
 
     def cancel_fit(self) -> None:
-        self.fit_panel.cancel_button.click()
+        self.fit_panel.request_cancel()
+
+    def _request_stop(self, *, force: bool) -> None:
+        """Stop every running operation through the card that shows it.
+
+        The cards own the stopping state, so asking their controllers directly
+        left the fit card saying 运行中 with a live stop button while it wound down.
+        """
+        for panel in (self.fit_panel, self.result_panel):
+            if panel.controller.is_running:
+                (panel.request_force_stop if force else panel.request_cancel)()
+        external = self._operation_controller
+        if external is not None and external.is_running:
+            (external.force_stop if force else external.cancel)()
 
     def export_results(self, directory: str | object):
         manifest = self.export_workflow.export_results(directory)
@@ -485,14 +525,38 @@ class MainWindow(QMainWindow):
         readiness = self._fit_readiness()
         return "已就绪" if readiness.ready else messages.readiness_text(readiness.message)
 
-    def _uses_automatic_fit(self) -> bool:
+    def _could_fit_automatically(self) -> bool:
+        """The project qualifies for the automatic route, whatever the advanced switch says."""
         project = self.document.project
         return (
             project.batch_mode == "independent"
-            and not project.ui_state.expert_mode
             and bool(project.datasets)
             and all(dataset.automation.role is not api.AutomaticRole.MANUAL for dataset in project.datasets)
         )
+
+    def _uses_automatic_fit(self) -> bool:
+        return self._could_fit_automatically() and not self.document.project.ui_state.expert_mode
+
+    def fit_route(self) -> tuple[str, str]:
+        """Name the route 一键拟合 takes right now, with one line on what it does.
+
+        The advanced switch decides the route, so the command has to say which one
+        it is; otherwise ticking a checkbox silently swaps how the same button fits.
+        """
+        return messages.FIT_ROUTES[self.fit_route_key()]
+
+    def fit_route_key(self) -> str:
+        """The ``messages.FIT_ROUTES`` key of the route 一键拟合 takes right now."""
+        if self._uses_automatic_fit():
+            return "automatic"
+        return "joint" if self.document.project.batch_mode == "joint" else "manual"
+
+    def fit_route_hint(self) -> str:
+        """Say how to reach the automatic route when only the advanced switch blocks it."""
+        if self._uses_automatic_fit() or not self._could_fit_automatically():
+            return ""
+        label = self.parameters_panel.expert_toggle.text()
+        return f"取消勾选「{label}」可改走{messages.FIT_ROUTES['automatic'][0]}。"
 
     def _fit_readiness(self) -> api.FitReadiness:
         if self._operation_is_running():
@@ -554,6 +618,10 @@ class MainWindow(QMainWindow):
 
     def _refresh_operation_state(self, *_args) -> None:
         refresh_operation_state(self)
+        show_export_unavailable_reason(
+            (self.export_button, self._workflow_actions["exportResultsAction"]),
+            export_unavailable_reason(self.document.project, running=self._operation_is_running()),
+        )
 
     def _refresh_sampling_footer(self, *_args) -> None:
         refresh_sampling_footer(self)
@@ -609,9 +677,7 @@ class MainWindow(QMainWindow):
             return
         self._close_pending = True
         self._close_cancel_timer.start()
-        for controller in self._operation_controllers():
-            if controller.is_running:
-                controller.cancel()
+        self._request_stop(force=False)
 
     def _resume_pending_close(self, running: bool) -> None:
         if running or self._operation_is_running() or not self._close_pending:
@@ -638,9 +704,7 @@ class MainWindow(QMainWindow):
             self._close_pending = False
             self._close_cancel_timer.stop()
             return
-        for controller in self._operation_controllers():
-            if controller.is_running:
-                controller.force_stop()
+        self._request_stop(force=True)
 
     def close_cancel_deadline_reached(self) -> None:
         self._close_cancel_timer.stop()

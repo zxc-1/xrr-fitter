@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
+from dataclasses import fields, replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
@@ -12,12 +13,55 @@ import xrr_fitter.api as api
 
 MAX_UNDO_DEPTH = 50
 
+# 「读者在看哪里」：翻页、拖分隔条、换当前数据集。它们随项目存盘，却不是编辑——不置脏、
+# 不进撤销栈、不清 redo。候选选择与专家模式不在此列：前者决定导出哪一个解，后者决定拟合
+# 走哪条路线，两者都改变项目的意思。
+LAYOUT_FIELDS = (
+    "workspace_splitter_sizes",
+    "left_splitter_sizes",
+    "plot_tab_index",
+    "analysis_tab_index",
+    "dock_state",
+)
+VIEW_FIELDS = ("active_dataset_id", *LAYOUT_FIELDS)
+
 
 def _with_active_dataset(project: api.XrrProject) -> api.XrrProject:
     """Give an opened project a usable selection without marking it dirty."""
     if project.ui_state.active_dataset_id is None and project.datasets:
         return api.select_active_dataset(project, project.datasets[0].dataset_id)
     return project
+
+
+def same_content(first: api.XrrProject, second: api.XrrProject) -> bool:
+    """Report whether two snapshots differ at most in where the reader is looking.
+
+    Fields are compared by identity: every view transition is a ``replace`` of
+    ``ui_state`` alone, so an unedited field is the very same object, and
+    identity never has to decide what equality means for the arrays a result
+    carries.
+    """
+    if any(
+        getattr(first, item.name) is not getattr(second, item.name)
+        for item in fields(api.XrrProject)
+        if item.name != "ui_state"
+    ):
+        return False
+    before, after = first.ui_state, second.ui_state
+    return all(
+        getattr(before, item.name) == getattr(after, item.name)
+        for item in fields(api.ProjectUiState)
+        if item.name not in VIEW_FIELDS
+    )
+
+
+def with_view(project: api.XrrProject, view: api.XrrProject, names: tuple[str, ...]) -> api.XrrProject:
+    """Return ``project`` showing ``view``'s values for the named view fields."""
+    state = project.ui_state
+    if all(getattr(state, name) == getattr(view.ui_state, name) for name in names):
+        return project
+    adopted = replace(state, **{name: getattr(view.ui_state, name) for name in names})
+    return api.set_workspace_state(project, adopted)
 
 
 class ProjectDocument(QObject):
@@ -95,7 +139,14 @@ class ProjectDocument(QObject):
         *,
         dirty: bool = True,
         source_validation: api.ProjectValidation | None = None,
+        amend: bool = False,
     ) -> None:
+        """Commit one edit.
+
+        ``amend`` folds the commit into the undo step already on top of the
+        stack instead of opening a new one: a fit writes several checkpoints and
+        then its result, and the reader undoes that run as one action.
+        """
         if not isinstance(project, api.XrrProject):
             raise TypeError("project must be an XrrProject")
         if source_validation is not None and not isinstance(
@@ -103,9 +154,10 @@ class ProjectDocument(QObject):
             api.ProjectValidation,
         ):
             raise TypeError("source_validation must be a ProjectValidation")
-        self._undo_stack.append(self._project)
-        self._redo_stack.clear()
         self._precommit_project(project)
+        if not amend:
+            self._undo_stack.append(self._project)
+        self._redo_stack.clear()
         self._project = project
         if source_validation is not None:
             self._source_validation = source_validation
@@ -114,6 +166,36 @@ class ProjectDocument(QObject):
             self.source_validation_changed.emit(source_validation)
         self._set_dirty(dirty)
         self._emit_undo_state()
+
+    def apply_view(self, project: api.XrrProject) -> None:
+        """Adopt a snapshot that changes only where the reader is looking.
+
+        No dirty mark, no undo step, no lost redo.  A page or splitter change is
+        stored without re-projecting: the widgets that reported it already show
+        it, and redrawing every panel per click was what made paging slow.  A new
+        active dataset changes what every panel shows, so it is projected.
+        """
+        if not same_content(self._project, project):
+            raise ValueError("a view update must not change project content")
+        previous = self._project
+        if project.ui_state == previous.ui_state:
+            return
+        if project.ui_state.active_dataset_id == previous.ui_state.active_dataset_id:
+            self._project = project
+            return
+        self._precommit_project(project)
+        self._project = project
+        self.project_changed.emit(project)
+
+    def adopt_operation_result(self, project: api.XrrProject, *, amend: bool = False) -> None:
+        """Commit what a background operation produced without moving the reader.
+
+        The worker computed from the snapshot it started with, so its view is the
+        one the run began on.  Pages and the active dataset moved on since then
+        are carried over; mutating routes are locked while it runs, so the view is
+        the only thing that can have changed underneath it.
+        """
+        self.replace_project(with_view(project, self._project, VIEW_FIELDS), amend=amend)
 
     def _precommit_project(self, project: api.XrrProject) -> None:
         previous = self._project
@@ -142,25 +224,26 @@ class ProjectDocument(QObject):
         return bool(self._redo_stack)
 
     def undo(self) -> bool:
-        if not self._undo_stack:
-            return False
-        self._redo_stack.append(self._project)
-        previous = self._undo_stack.pop()
-        self._precommit_project(previous)
-        self._project = previous
-        self.project_changed.emit(previous)
-        self._set_dirty(True)
-        self._emit_undo_state()
-        return True
+        return self._step(self._undo_stack, self._redo_stack)
 
     def redo(self) -> bool:
-        if not self._redo_stack:
+        return self._step(self._redo_stack, self._undo_stack)
+
+    def _step(self, source, target) -> bool:
+        """Restore the top of ``source`` while the reader stays on their page.
+
+        A snapshot remembers the page its edit was made from; restoring that page
+        made every undo look like a page change.  The active dataset does come
+        back with the snapshot, so the reverted edit is the one on screen.
+        """
+        if not source:
             return False
-        self._undo_stack.append(self._project)
-        next_project = self._redo_stack.pop()
-        self._precommit_project(next_project)
-        self._project = next_project
-        self.project_changed.emit(next_project)
+        restored = with_view(source[-1], self._project, LAYOUT_FIELDS)
+        self._precommit_project(restored)
+        source.pop()
+        target.append(self._project)
+        self._project = restored
+        self.project_changed.emit(restored)
         self._set_dirty(True)
         self._emit_undo_state()
         return True
@@ -219,10 +302,7 @@ class ProjectDocument(QObject):
         self._set_dirty(False)
 
     def select_active_dataset(self, dataset_id: str | None) -> None:
-        self.replace_project(
-            api.select_active_dataset(self._project, dataset_id),
-            dirty=True,
-        )
+        self.apply_view(api.select_active_dataset(self._project, dataset_id))
 
     def refresh_sources(self) -> api.ProjectValidation:
         validation = api.inspect_sources(self._project)

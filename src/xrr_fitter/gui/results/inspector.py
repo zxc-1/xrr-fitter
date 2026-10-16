@@ -5,7 +5,7 @@
 同一份报告，但摆成读数：切到不确定度那一页的人正对着中栏的相关矩阵，他要问的是「这条链
 能不能当证据用」，而那是六个数字加两个判定，不是一段话。
 
-判定一律镜像既有出处，不在这里新造阈值：R̂ 与 ESS 的界取 ``results.uncertainty`` 的
+判定一律镜像既有出处，不在这里新造阈值：R̂ 与 ESS 的界取 ``results.convergence`` 的
 ``SPLIT_RHAT_LIMIT`` / ``EFFECTIVE_SAMPLE_FLOOR``（那两个又镜像 ``analysis.mcmc``
 的 ``problem_mcmc_warnings``），接受率与 walkers 的界镜像同一个模块的
 ``problem_mcmc_warnings`` 与 ``_validate_walker_geometry``，失败率的界取
@@ -35,17 +35,20 @@ from xrr_fitter.gui.plots.posterior import (
     PosteriorQuantilePlot,
 )
 from xrr_fitter.gui.plots.sld import _owned_report
-from xrr_fitter.gui.results.inference_text import correlation_unavailable_reason
-from xrr_fitter.gui.results.uncertainty import (
+from xrr_fitter.gui.results.convergence import (
     EFFECTIVE_SAMPLE_FLOOR,
     SPLIT_RHAT_LIMIT,
+    _finite_values,
+    unmixed_chain_reason,
+)
+from xrr_fitter.gui.results.inference_text import correlation_unavailable_reason
+from xrr_fitter.gui.results.uncertainty import (
     _display_unit,
     _display_value,
-    _finite_values,
     _linear_quantile,
     _sample_columns,
 )
-from xrr_fitter.gui.results.verdict import FAILURE_RATE_WARN, UNAVAILABLE_TEXT
+from xrr_fitter.gui.results.verdict import FAILURE_RATE_WARN, INSUFFICIENT_SAMPLES_REASON, UNAVAILABLE_TEXT
 from xrr_fitter.gui.wrapping import wrapping_row
 
 # 接受率的健康区间，两端都是开的——镜像 ``analysis.mcmc.problem_mcmc_warnings`` 里
@@ -76,6 +79,9 @@ BOOTSTRAP_CAPTIONS = ("重采样次数", "失败率", "边界命中")
 
 # 未运行没有采样记录；已运行的次数与失败数直接来自当前 sampling evidence。
 BOOTSTRAP_NOT_RUN_TEXT = "未运行"
+
+# 链没混合时分位图上只留这一句。图是一条窄带，放不下原因；原因写在图下那一行。
+POSTERIOR_WITHHELD_TEXT = "链未收敛，不画后验形状"
 
 
 def mcmc_evidence(result: object | None, candidate_id: str | None) -> object | None:
@@ -326,7 +332,9 @@ def bootstrap_readings(report: object) -> tuple[tuple[str, str], ...]:
     rate = float(evidence.failure_rate)
     kind = "ok" if rate <= FAILURE_RATE_WARN else "warn"
     share = f"{rate:.0%}（{len(evidence.failure_reasons)}/{count:,}）"
-    return ((f"{count:,}", ""), (share, kind), _boundary_reading(report))
+    # 次数本身没有合格线，但服务层判过「样本不足以给区间」时，这一行就是那个判断的出处。
+    count_kind = "warn" if evidence.unavailable_reason == INSUFFICIENT_SAMPLES_REASON else ""
+    return ((f"{count:,}", count_kind), (share, kind), _boundary_reading(report))
 
 
 class _ReadingPanel(QWidget):
@@ -433,6 +441,12 @@ class QuantilePanel(_ReadingPanel):
         # 单位另起一列，不缀在数字后面：三行要按小数点对齐读，而「nm」跟在数字后面会把
         # 「32.32」与「330.00」的右边缘错开一个字符。
         self._units = tuple(self._build_unit(row) for row in range(len(QUANTILE_CAPTIONS)))
+        # 不给分位时说为什么。收敛段那一行的 ⚠ 在另一张卡上，拦不住这张卡上的三个数被抄走。
+        self.withheld_note = QLabel(self)
+        self.withheld_note.setObjectName("posteriorQuantileWithheld")
+        self.withheld_note.setWordWrap(True)
+        theme.set_status_kind(self.withheld_note, "warn")
+        self._body.addWidget(self.withheld_note)
         self._blank()
 
     def _build_unit(self, row: int) -> QLabel:
@@ -445,6 +459,8 @@ class QuantilePanel(_ReadingPanel):
         super()._blank()
         for label in self._units:
             label.setText("")
+        self.withheld_note.setText("")
+        self.withheld_note.setVisible(False)
 
     def current_short_name(self) -> str:
         """此刻在读哪个参数的短名，没在读时是空串。
@@ -455,17 +471,31 @@ class QuantilePanel(_ReadingPanel):
         """
         return self._short_name
 
-    def set_result(self, result: object | None, candidate_id: str | None) -> None:
-        """画并念这个候选解自己那条链里最值得看的一列。"""
+    @staticmethod
+    def _target(result: object | None, candidate_id: str | None) -> tuple[object | None, int, tuple | None, str]:
+        """这条链、要念的那一列（位置与采样点）、空态时那句话；缺了任何一样，列就是 ``None``。"""
         report, message = _owned_report(result, candidate_id)
         mcmc = None if report is None else mcmc_evidence(result, candidate_id)
-        columns = None if mcmc is None else _sample_columns(mcmc)
-        index = None if mcmc is None else quantile_target(report, mcmc)
-        if columns is None or index is None:
-            self.clear_result(message if report is None else POSTERIOR_UNAVAILABLE_TEXT)
+        if mcmc is None:
+            return None, 0, None, message if report is None else POSTERIOR_UNAVAILABLE_TEXT
+        columns = _sample_columns(mcmc)
+        index = None if columns is None else quantile_target(report, mcmc)
+        if index is None:
+            return mcmc, 0, None, POSTERIOR_UNAVAILABLE_TEXT
+        return mcmc, index, columns[index], POSTERIOR_UNAVAILABLE_TEXT
+
+    def set_result(self, result: object | None, candidate_id: str | None) -> None:
+        """画并念这个候选解自己那条链里最值得看的一列。"""
+        mcmc, index, column, message = self._target(result, candidate_id)
+        if column is None:
+            self.clear_result(message)
             return
+        reason = unmixed_chain_reason(mcmc)
+        if reason is not None:
+            self._withhold(reason)
+            return
+        self.withheld_note.setVisible(False)
         name = tuple(mcmc.parameter_names)[index]
-        column = columns[index]
         # ``_linear_quantile`` 按位置插值，要的是排好序的一列；链里的采样点按步数排，不按值排。
         quantiles = tuple(_linear_quantile(tuple(sorted(column)), p) for p in POSTERIOR_QUANTILES)
         unit = _display_unit(name)
@@ -482,6 +512,16 @@ class QuantilePanel(_ReadingPanel):
         self._blank()
         self.plot.show_unavailable(message)
         self._restate("")
+
+    def _withhold(self, reason: str) -> None:
+        """链没混合：三行不念、图不画，抬头不点名参数，图下说一句为什么。
+
+        R̂ 41 的链里那三个数只是各 walker 停在哪里。摆出来，读者会把它们当参数的可信区间抄走；
+        标个「不可信」再摆出来，数字照样会被抄走，标记留不下来。所以不给数，只给原因。
+        """
+        self.clear_result(POSTERIOR_WITHHELD_TEXT)
+        self.withheld_note.setText(f"{reason}：各 walker 尚未混合，采样点不是后验样本，这里不给分位。")
+        self.withheld_note.setVisible(True)
 
     def _restate(self, short_name: str) -> None:
         """换了参数才出声：同一个名字反复广播会让抬头每次投影都重排一次版。"""

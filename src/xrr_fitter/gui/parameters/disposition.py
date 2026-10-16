@@ -36,16 +36,18 @@ CONSTRAINT_DRIVEN_TOOLTIP = (
 def sharing_summary(
     definition: api.ParameterDefinition,
     rules: Sequence[api.SharingRule],
+    dataset_id: str | None,
 ) -> str:
     """这个量和几份数据集绑在一起，没绑时是空串。
 
-    数的是数据集而不是成员条目：联合拟合里一个数据集可能贡献多个成员，报成员数会把
-    「跨 3 集」说成「跨 5 项」。
+    按成员认，不按声明的 ``sharing_key``：编译出来的声明从不给那个字段赋值，按它判断的徽标
+    在真实项目里永远不亮。数的是数据集而不是成员条目：联合拟合里一个数据集可能贡献多个成员，
+    报成员数会把「跨 3 集」说成「跨 5 项」。
     """
-    key = definition.sharing_key
-    if key is None:
+    if dataset_id is None:
         return ""
-    members = tuple(member for rule in rules if rule.sharing_key == key for member in rule.members)
+    reference = api.ParameterReference(dataset_id, definition.name)
+    members = tuple(member for rule in rules if reference in rule.members for member in rule.members)
     return "" if not members else f"跨 {len({member.dataset_id for member in members})} 集共享"
 
 
@@ -113,11 +115,13 @@ class ParameterDisposition(QWidget):
         quantity: str | None,
         freedom: api.ParameterFreedom | None = None,
         sharing_rules: Sequence[api.SharingRule] = (),
+        dataset_id: str | None = None,
     ) -> None:
         """把这一段切到 ``definition`` 上；``None`` 表示此刻没有当前行。
 
         ``freedom`` 是这个量在 setting 里的档位。声明里只有 ``locked``，两态装不下「仅范围」，
         所以不传时按声明回落成两态——手里没有 setting 可查的调用方读到的就是声明的意思。
+        ``dataset_id`` 是这一行属于哪份数据集；共享规则按 (数据集, 参数名) 认成员。
         """
         self._name = None if definition is None else definition.name
         if definition is None:
@@ -134,7 +138,7 @@ class ParameterDisposition(QWidget):
         for gear, button in self._buttons.items():
             button.setEnabled(not constrained)
             button.setToolTip(CONSTRAINT_DRIVEN_TOOLTIP if constrained else FREEDOM_TOOLTIPS[gear])
-        self._show_badges(definition, quantity=quantity, sharing_rules=sharing_rules)
+        self._show_badges(definition, quantity=quantity, sharing_rules=sharing_rules, dataset_id=dataset_id)
 
     def _show_badges(
         self,
@@ -142,12 +146,13 @@ class ParameterDisposition(QWidget):
         *,
         quantity: str | None,
         sharing_rules: Sequence[api.SharingRule],
+        dataset_id: str | None,
     ) -> None:
         """两枚结论徽标：先验说这个量还被什么约束着，共享说它跟谁绑在一起。"""
         summary = prior_summary(definition)
         self.prior_badge.set_kind("info" if summary else "mut")
         self.prior_badge.setText(f"先验：{summary}" if summary else NO_PRIOR_TEXT)
-        shared = sharing_summary(definition, sharing_rules)
+        shared = sharing_summary(definition, sharing_rules, dataset_id)
         # 没共享就整枚不占地方：一排结论里，「未共享」和「共享」一样重会喧宾夺主。
         self.sharing_badge.setText(f"共享：{shared}{quantity or ''}" if shared else "")
 

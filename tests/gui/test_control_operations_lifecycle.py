@@ -63,7 +63,9 @@ def test_standalone_result_entry_buttons_have_live_routes(controls, tmp_path):
     dialog = panel._uncertainty_dialog
     assert dialog.isVisible() and not panel.controller.is_running
     controls.qtbot.keyClick(dialog, Qt.Key.Key_Escape)
-    controls.named_click(panel, "clearResultsButton")
+    # 清除先问一句（F27）：点「是」才清，和菜单那一条走同一个确认框。
+    yes = [lambda confirm: controls.click(confirm.button(QMessageBox.StandardButton.Yes))]
+    controls.modals(lambda: controls.named_click(panel, "clearResultsButton"), yes)
     assert panel.document.project.datasets[0].last_valid_result is None
     controls.record(
         ("openUncertaintyDialogButton", "clearResultsButton"),

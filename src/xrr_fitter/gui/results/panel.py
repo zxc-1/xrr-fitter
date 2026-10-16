@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import fields
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -69,6 +70,13 @@ VALUES_EMPTY_SUBTITLE = "尚未拟合"
 # Stands in for the dataset name when nothing is selected.  Left empty the caption
 # would keep a blank line where a curve name belongs.
 VERDICT_EMPTY_SUBTITLE = "未选择数据集"
+
+# 灰着的「采用此候选」与被拒的采用请求说的是同一件事，所以只写一遍。
+INSPECTION_ONLY_TEXT = "这个候选算不出有效结果，不能采用，只能查看"
+
+MCMC_RUN_TOOLTIP = "从正在查看的候选解开始 MCMC 采样"
+# 取消到一半的链整条作废。跑过这么久的链，取消前先问一句；短链问了只是添堵。
+LONG_CHAIN_SECONDS = 60.0
 
 
 def _same_sampling_inputs(source: api.XrrProject, current: api.XrrProject) -> bool:
@@ -168,16 +176,30 @@ class ResultsPanel(QWidget):
         )
         self.values_caption = values_card.findChild(QLabel, "resultValuesCardSubtitle")
         values_layout.addWidget(self.result_values)
+        # ±1σ 那一列写「不可用」时的原因。格子里放不下一句话，悬停提示在截图与触控板上又没有，
+        # 所以原因住在表下自己那一行，只在真有一格不可用时露面。
+        self.sigma_note = QLabel()
+        self.sigma_note.setObjectName("resultSigmaNote")
+        self.sigma_note.setProperty("mutedText", True)
+        self.sigma_note.setWordWrap(True)
+        values_layout.addWidget(self.sigma_note)
         self.candidates = CandidateList()
         candidates_card, candidates_layout = theme.titled_card(
             self, "resultCandidatesCard", "候选解", CANDIDATES_EMPTY_SUBTITLE, flat=True
         )
         self.candidates_caption = candidates_card.findChild(QLabel, "resultCandidatesCardSubtitle")
         candidates_layout.addWidget(self.candidates)
+        # 点一行（或用方向键走到一行）只是看它；换掉导出、SLD 与参数读数所用的那个解，只有这一枚。
+        self.adopt_button = QPushButton("采用此候选")
+        self.adopt_button.setObjectName("adoptCandidateButton")
+        self.adopt_button.setAccessibleName("采用正在查看的候选解")
+        self.adopt_button.clicked.connect(self._adopt_clicked)
+        candidates_layout.addWidget(self.adopt_button, 0, Qt.AlignmentFlag.AlignLeft)
         self.automatic_points = AutomaticPointLayerTable()
         self.automatic_uniformity = AutomaticUniformityTable()
         self.clear_button = QPushButton("清除结果")
         self.clear_button.setObjectName("clearResultsButton")
+        self.clear_button.setToolTip("只清除当前数据集的拟合结果、候选与不确定度证据；其他数据集不动，可撤销")
         self.uncertainty = UncertaintyView()
         # 帧⑤ 右栏那三段。读的是同一份 ``UncertaintyReport``，换了一套读法：``self.uncertainty``
         # 把它念成散文（专家对话框里那一版），这三段把它摆成读数。归属留在这里，因为投影这件事
@@ -313,10 +335,11 @@ class ResultsPanel(QWidget):
         self.document.project_changed.connect(self._refresh)
         self.document.document_replaced.connect(self._discard_completed_progress)
         self.candidates.candidate_requested.connect(self._candidate_requested)
-        self.clear_button.clicked.connect(lambda: self.clear_results())
+        self.clear_button.clicked.connect(self._clear_clicked)
+        self.walkers.valueChanged.connect(self._refresh_walkers_hint)
         self.mcmc_button.clicked.connect(self._start_mcmc_clicked)
-        self.cancel_button.clicked.connect(self._request_cancel)
-        self.force_button.clicked.connect(self._request_force_stop)
+        self.cancel_button.clicked.connect(self.request_cancel)
+        self.force_button.clicked.connect(self.request_force_stop)
         self.controller.progress_changed.connect(self.mcmc_progress.set_progress)
         self.controller.running_changed.connect(self._running_changed)
         self.controller.mcmc_finished.connect(self._publish_mcmc)
@@ -366,10 +389,10 @@ class ResultsPanel(QWidget):
         return self.status_label.text()
 
     def select_candidate(self, candidate_id: str) -> bool:
-        self._require_idle("select a candidate")
+        self._require_idle("换选候选")
         candidate = self._candidate(candidate_id)
         if not candidate_is_selectable(candidate):
-            raise ValueError("candidate is inspection-only")
+            raise ValueError(INSPECTION_ONLY_TEXT)
         return self._persist_candidate(candidate_id)
 
     def _persist_candidate(self, candidate_id: str) -> bool:
@@ -384,7 +407,7 @@ class ResultsPanel(QWidget):
         return True
 
     def clear_results(self, dataset_ids=None) -> bool:
-        self._require_idle("clear results")
+        self._require_idle("清除结果")
         requested = (self._require_active_dataset_id(),) if dataset_ids is None else tuple(dataset_ids)
         current = self.document.project
         updated = api.clear_fit_results(current, requested)
@@ -393,6 +416,30 @@ class ResultsPanel(QWidget):
         self.document.replace_project(updated)
         self.results_cleared.emit(requested)
         return True
+
+    def _clear_clicked(self) -> None:
+        """Ask first, naming the one dataset that loses its result and how to get it back.
+
+        The button and its menu twin read only 清除结果, and a click used to clear
+        without a word: nothing said that other datasets keep theirs, or that the
+        edit can be undone.
+        """
+        dataset_id = self.document.active_dataset_id
+        if dataset_id is None:
+            return
+        undo = QKeySequence(QKeySequence.StandardKey.Undo).toString(QKeySequence.SequenceFormat.NativeText)
+        hint = f"「撤销」（{undo}）" if undo else "「撤销」"
+        response = QMessageBox.question(
+            self,
+            "清除拟合结果",
+            f"清除数据集 {dataset_id} 的拟合结果、候选与不确定度证据？\n其他数据集的结果不受影响；清除后可用{hint}恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if response != QMessageBox.StandardButton.Yes:
+            return
+        if self.clear_results():
+            self._show_status(f"已清除 {dataset_id} 的拟合结果；可用{hint}恢复", kind="ok")
 
     def sampling_rule_summary(self) -> str | None:
         """帧⑤ 左栏页脚那句 walkers 下界，没有候选解可数时是 ``None``。
@@ -411,13 +458,13 @@ class ResultsPanel(QWidget):
         return self.mcmc_group.config()
 
     def start_mcmc(self) -> bool:
-        self._require_idle("start MCMC")
+        self._require_idle("再启动一次")
         if not self.document.project.ui_state.expert_mode:
-            raise ValueError("MCMC requires expert mode")
+            raise ValueError("MCMC 采样只在高级模式下可用：先在参数卡勾选「高级模式」")
         dataset_id = self._require_active_dataset_id()
         candidate = self._selected_candidate()
         if not self._mcmc_ready(candidate):
-            raise ValueError("MCMC requires current candidate-owned uncertainty evidence")
+            raise ValueError("这个候选还没有属于它自己的不确定度证据，不能从它开始 MCMC")
         config = self.mcmc_group.validated_config(len(candidate.unit_vector))
         source = self.document.project
         self._mcmc_source_project = source
@@ -444,21 +491,59 @@ class ResultsPanel(QWidget):
             self._show_status(str(error), kind="error")
 
     def _candidate_requested(self, candidate_id: str) -> None:
-        candidate = self._candidate(candidate_id)
-        if candidate is None:
+        """点一行（或用方向键走到一行）只是看它：项目、导出解与撤销栈都不动。"""
+        if self._candidate(candidate_id) is None:
             self._refresh()
             self._show_status("拟合结果已过期，候选列表已刷新", kind="warn")
             return
         try:
-            if candidate_is_selectable(candidate):
-                self.select_candidate(candidate_id)
-                return
             self._inspect_candidate(candidate_id)
-            if candidate_is_archived(candidate) and self._confirm_archived_candidate(candidate):
-                self._persist_candidate(candidate_id)
         except (KeyError, ValueError) as error:
             self._refresh()
             self._show_status(str(error), kind="error")
+
+    def adopt_viewed_candidate(self) -> bool:
+        """把正在看的候选设为导出与图所用的那个——浏览之外唯一改项目的一步。
+
+        早期淘汰的候选要先确认：它没跑到收敛，目标值不能跟别的候选比。算不出来的候选只能看。
+        """
+        self._require_idle("换采用的候选")
+        candidate = self._selected_candidate()
+        if candidate is None:
+            raise ValueError("先在候选列表里选一个候选解")
+        if candidate_is_archived(candidate):
+            return self._confirm_archived_candidate(candidate) and self._persist_candidate(candidate.candidate_id)
+        if not candidate_is_selectable(candidate):
+            raise ValueError(INSPECTION_ONLY_TEXT)
+        return self._persist_candidate(candidate.candidate_id)
+
+    def _adopt_clicked(self) -> None:
+        try:
+            if self.adopt_viewed_candidate():
+                self._show_status("已采用这个候选：导出、SLD 与参数读数改用它", kind="ok")
+        except (KeyError, RuntimeError, ValueError) as error:
+            self._refresh()
+            self._show_status(str(error), kind="error")
+
+    def _adopt_state(self) -> tuple[bool, str]:
+        """「采用此候选」此刻能不能按，以及为什么——灰着的按钮要说清自己为什么灰。"""
+        candidate = self._selected_candidate()
+        if self.controller.is_running:
+            return False, "MCMC 运行中，结束后才能换采用的候选"
+        if candidate is None:
+            return False, "先在上面选一个候选解"
+        if candidate.candidate_id == self.candidates.adopted_id:
+            return False, "正在查看的就是已采用的候选"
+        if not (candidate_is_selectable(candidate) or candidate_is_archived(candidate)):
+            return False, INSPECTION_ONLY_TEXT
+        return True, "让导出、SLD 与参数读数改用正在查看的这个候选"
+
+    def _refresh_adopt_button(self) -> None:
+        enabled, reason = self._adopt_state()
+        self.adopt_button.setVisible(self.candidates.result is not None)
+        self.adopt_button.setEnabled(enabled)
+        self.adopt_button.setToolTip(reason)
+        self.adopt_button.setAccessibleDescription(reason)
 
     def _inspect_candidate(self, candidate_id: str) -> None:
         self._require_active_dataset_id()
@@ -470,6 +555,7 @@ class ResultsPanel(QWidget):
             self._group_captions(),
             self._bulk_densities(),
         )
+        self._project_sigma_note()
         self._project_verdict(result, candidate_id)
         self.uncertainty.set_result(result, candidate_id)
         self._project_sampling_evidence(result, candidate_id)
@@ -508,6 +594,7 @@ class ResultsPanel(QWidget):
             group_captions(dataset.structure),
             bulk_densities(dataset.structure),
         )
+        self._project_sigma_note()
         self._project_verdict(result, visible_id)
         self.uncertainty.set_result(result, visible_id)
         self._project_sampling_evidence(result, visible_id)
@@ -561,6 +648,11 @@ class ResultsPanel(QWidget):
             return VALUES_EMPTY_SUBTITLE
         return f"{free_parameter_count(result)} 自由"
 
+    def _project_sigma_note(self) -> None:
+        text = self.result_values.sigma_note()
+        self.sigma_note.setText(text)
+        self.sigma_note.setVisible(bool(text))
+
     def _project_verdict(self, result: object | None, candidate_id: str | None) -> None:
         """Read the badges off the report that names this candidate.
 
@@ -571,7 +663,7 @@ class ResultsPanel(QWidget):
         report = None if result is None else result.uncertainty
         if report is not None and report.candidate_id not in (None, candidate_id):
             report = None
-        self.verdict_evidence.set_report(report)
+        self.verdict_evidence.set_report(report, () if result is None else tuple(result.parameter_definitions))
         candidate = self._candidate(candidate_id)
         self.verdict_evidence.set_objective(None if candidate is None else candidate.objective)
         # χ²ᵥ 与 J 同源：同一个候选解的残差，除以同一份声明数出来的自由度。
@@ -600,6 +692,7 @@ class ResultsPanel(QWidget):
         self._set_confidence("不可用")
         self.verdict_evidence.clear_report()
         self.result_values.clear_projection()
+        self._project_sigma_note()
         self.candidates.clear_projection()
         self._refresh_captions()
         self.uncertainty.clear_result(message)
@@ -642,18 +735,36 @@ class ResultsPanel(QWidget):
         candidate_id = None if candidate is None else candidate.candidate_id
         dimension = 0 if candidate is None else len(candidate.unit_vector)
         self.mcmc_group.configure(candidate_id, dimension)
+        self._refresh_walkers_hint()
         self._refresh_mcmc_buttons()
+
+    def _refresh_walkers_hint(self, *_args) -> None:
+        self.mcmc_group.walkers_hint.setText(self.sampling_rule_summary() or "")
+
+    def _mcmc_unavailable_reason(self, active: bool) -> str | None:
+        """Why 运行 MCMC is greyed, or ``None`` when it can start."""
+        candidate = self._selected_candidate()
+        if active:
+            return "MCMC 正在运行"
+        if not self.document.project.ui_state.expert_mode:
+            return "MCMC 采样只在高级模式下可用"
+        if candidate is None:
+            return "先在候选列表里选一个候选解"
+        if not self._mcmc_ready(candidate):
+            # 不确定度证据只为推荐解算过一份；别的候选没有自己的协方差，采样就没有起点。
+            return "这个候选没有属于它自己的不确定度证据（只有推荐解有），不能从它开始采样"
+        return None
 
     def _refresh_mcmc_buttons(self, running: bool | None = None) -> None:
         active = self.controller.is_running if running is None else running
         self.candidates.setEnabled(not active)
         self.clear_button.setEnabled(not active and self.candidates.result is not None)
-        self.mcmc_group.set_operation_state(
-            running=active,
-            ready=self.document.project.ui_state.expert_mode and self._mcmc_ready(self._selected_candidate()),
-        )
+        reason = self._mcmc_unavailable_reason(active)
+        self.mcmc_group.set_operation_state(running=active, ready=reason is None)
+        self.mcmc_button.setToolTip(MCMC_RUN_TOOLTIP if reason is None else reason)
         self.cancel_button.setEnabled(active and not self._cancel_requested)
         self.force_button.setEnabled(active and not self._force_requested)
+        self._refresh_adopt_button()
         self._project_uncertainty_dialog(running=active)
 
     def _mcmc_ready(self, candidate: object | None) -> bool:
@@ -664,8 +775,10 @@ class ResultsPanel(QWidget):
             self.mcmc_progress.freeze()
         self._refresh_mcmc_buttons(running)
 
-    def _request_cancel(self) -> None:
+    def request_cancel(self) -> None:
         if not self.controller.is_running or self._cancel_requested:
+            return
+        if not self._confirm_long_chain_cancel():
             return
         self._cancel_requested = True
         self.mcmc_progress.mark_stopping()
@@ -673,7 +786,22 @@ class ResultsPanel(QWidget):
         self._refresh_mcmc_buttons()
         self.controller.cancel()
 
-    def _request_force_stop(self) -> None:
+    def _confirm_long_chain_cancel(self) -> bool:
+        """A chain cancelled mid-way is discarded whole, so a long one is not dropped on one click."""
+        elapsed = self.mcmc_progress.elapsed_seconds()
+        if elapsed < LONG_CHAIN_SECONDS:
+            return True
+        minutes = max(1, round(elapsed / 60))
+        response = QMessageBox.question(
+            self,
+            "取消 MCMC 采样",
+            f"这条链已经跑了约 {minutes} 分钟。取消后整条链作废，不会留下部分样本。确定取消吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return response == QMessageBox.StandardButton.Yes
+
+    def request_force_stop(self) -> None:
         if not self.controller.is_running or self._force_requested:
             return
         self._cancel_requested = True
@@ -684,6 +812,8 @@ class ResultsPanel(QWidget):
         self.controller.force_stop()
 
     def _publish_mcmc(self, project: api.XrrProject) -> None:
+        # 过期与否看内容，不看对象身份：翻页、换数据集只换掉 ``ui_state``，链仍然属于它开跑时
+        # 的那份科学输入；换了候选、改了结构才算项目变了。
         source = self._mcmc_source_project
         current = self.document.project
         self._mcmc_source_project = None
@@ -691,11 +821,13 @@ class ResultsPanel(QWidget):
             self._show_failure(
                 api.OperationError(
                     "RuntimeError",
-                    "stale MCMC result rejected because the project changed",
+                    "项目在采样期间改动过，这条 MCMC 链已作废，未写入结果；请重新运行",
                     "MCMC sampling inputs changed before completion",
                 )
             )
             return
+        # 采样期间只动过界面状态（看别的页、切数据集、改高级模式）：把此刻的整份界面状态盖到结果上，
+        # 读者回来看到的是自己离开时的样子；没人动过就原样采用 worker 交回的项目。
         if current is not source:
             project = api.set_workspace_state(project, current.ui_state)
         self.document.replace_project(project)
@@ -706,7 +838,7 @@ class ResultsPanel(QWidget):
     def _show_cancelled(self, reason: str) -> None:
         self._mcmc_source_project = None
         self.mcmc_progress.freeze()
-        self._show_status(f"MCMC 已取消：{reason}", kind="warn")
+        self._show_status(f"MCMC 已取消：{messages.cancellation_text(reason)}", kind="warn")
 
     def _show_failure(self, error: api.OperationError) -> None:
         self._mcmc_source_project = None
@@ -724,12 +856,12 @@ class ResultsPanel(QWidget):
     def _require_active_dataset_id(self) -> str:
         dataset_id = self.document.active_dataset_id
         if dataset_id is None:
-            raise ValueError("an active dataset is required")
+            raise ValueError("先在左栏选中一个数据集")
         return dataset_id
 
     def _require_idle(self, operation: str) -> None:
         if self.controller.is_running:
-            raise RuntimeError(f"cannot {operation} while MCMC is running")
+            raise RuntimeError(f"MCMC 运行中，不能{operation}")
 
     def _candidate(self, candidate_id: str | None) -> object | None:
         return self.candidates.candidate(candidate_id)

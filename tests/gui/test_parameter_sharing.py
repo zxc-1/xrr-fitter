@@ -112,7 +112,8 @@ def test_duplicate_sharing_key_error_is_visible_and_preserves_project(
         panel.apply_sharing_rules((_rule("duplicate"), _rule("duplicate")))
 
     assert panel.document.project is before
-    assert panel.sharing_error_text() == "sharing_key values must be unique"
+    # 异常仍是原文（程序调用方按它匹配）；页面上那一行改说中文并点名重复的组名。
+    assert panel.sharing_error_text() == "共享组名称重复，每个共享组需要唯一的名称"
     assert events == []
 
 
@@ -218,7 +219,8 @@ def test_constraint_tree_shows_root_leaf_payload(qtbot, tmp_path) -> None:
 
     item = panel.constraint_editor.tree.topLevelItem(0)
     assert item is not None
-    assert item.text(1) == "second:component.0.thickness_a"
+    assert item.text(1) == "second · film 厚度"
+    assert item.toolTip(1) == "second:component.0.thickness_a"
 
 
 def test_unknown_constraint_parameter_error_is_visible_and_preserves_project(
@@ -278,7 +280,8 @@ def test_constraint_dialog_builds_expression_and_commits_rule(qtbot, tmp_path) -
     dialog.findChild(QDoubleSpinBox, "constraintConstantInput").setValue(2.0)
     qtbot.mouseClick(dialog.findChild(QPushButton, "constraintAddConstantButton"), Qt.LeftButton)
     qtbot.mouseClick(dialog.findChild(QPushButton, "constraintAddParameterButton"), Qt.LeftButton)
-    dialog.findChild(QComboBox, "constraintOperatorInput").setCurrentText("mul")
+    operator = dialog.findChild(QComboBox, "constraintOperatorInput")
+    operator.setCurrentIndex(operator.findData("mul"))
     qtbot.mouseClick(dialog.findChild(QPushButton, "constraintAddOperatorButton"), Qt.LeftButton)
     buttons = dialog.findChild(QDialogButtonBox, "constraintDialogButtons")
     qtbot.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Ok), Qt.LeftButton)
@@ -428,4 +431,4 @@ def test_constraint_add_command_surfaces_validation_errors_without_mutation(
     )
 
     assert panel.document.project is before
-    assert "unique" in panel.constraint_error_text()
+    assert "约束目标重复" in panel.constraint_error_text()

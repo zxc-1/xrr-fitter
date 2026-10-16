@@ -47,6 +47,23 @@ def test_formula_material_reuses_parsed_formula_across_sld_calls(
     assert calls == ["Si"]
 
 
+@pytest.mark.parametrize(
+    ("formula", "detail"),
+    (("sio2", "Expected"), ("SiO2;", "Expected"), ("Xx2", "unknown element Xx")),
+)
+def test_unparseable_formula_raises_value_error_naming_the_formula(formula: str, detail: str) -> None:
+    """periodictable 的语法错误是 pyparsing 的 ParseException，不是 ValueError。
+
+    调用方（服务层、GUI）一律按 ValueError 收拒绝；漏过去的那一种会直接落进 excepthook。
+    """
+    material = MaterialSpec(formula, formula, 2.2)
+
+    with pytest.raises(ValueError, match="invalid material formula") as caught:
+        material_sld(material, 1.0, 1.5406)
+
+    assert repr(formula) in str(caught.value) and detail in str(caught.value)
+
+
 def test_direct_sld_material_uses_passive_absorption_sign() -> None:
     material = MaterialSpec("custom", None, None, 12e-6 + 0.4e-6j)
     assert material_sld(material, 0.5, 1.5406) == 6e-6 + 0.2e-6j

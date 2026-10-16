@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from math import isfinite
 
+from xrr_fitter.gui.messages import reason_text
+
 INTERVAL_LABELS = {
     "loss_support": "损失支持（探索）",
     "likelihood_ratio": "似然比区间",
@@ -19,7 +21,7 @@ def correlation_unavailable_reason(report: object) -> str | None:
     if evidence is None:
         return "缺少协方差证据"
     if evidence.matrix is None:
-        return evidence.unavailable_reason
+        return reason_text(evidence.unavailable_reason)
     if not report.correlation_names:
         return "参数轴为空"
     if any(not isfinite(float(value)) for row in report.correlation_matrix for value in row):
@@ -37,7 +39,7 @@ def interval_metadata(evidence: object) -> str:
         f"方法：{evidence.method}",
     ]
     if evidence.unavailable_reason is not None:
-        parts.append(f"不可用原因：{evidence.unavailable_reason}")
+        parts.append(f"不可用原因：{reason_text(evidence.unavailable_reason)}")
     return "；".join(parts)
 
 
@@ -61,7 +63,7 @@ def bootstrap_metadata(report: object) -> list[str]:
         f"Bootstrap {interval_metadata(evidence)}",
     ]
     if evidence.diagnostic_unavailable_reason is not None:
-        lines.append(f"Bootstrap 诊断资格不可用原因：{evidence.diagnostic_unavailable_reason}")
+        lines.append(f"Bootstrap 诊断资格不可用原因：{reason_text(evidence.diagnostic_unavailable_reason)}")
     return lines
 
 
@@ -95,7 +97,7 @@ def _member_residual_line(evidence: object) -> str:
             )
         )
     else:
-        parts.append(f"原因：{evidence.unavailable_reason}")
+        parts.append(f"原因：{reason_text(evidence.unavailable_reason)}")
     return "；".join(parts)
 
 
@@ -153,8 +155,8 @@ def _calibration_lines(evidence: object) -> list[str]:
             f"分辨率={calibration.resolution:g}（不是误差条）"
         )
     if calibration.unavailable_reason is not None:
-        lines.append(f"校准不可用原因：{calibration.unavailable_reason}")
-    lines.extend(f"重拟合失败 [{index}]：{reason}" for index, reason in calibration.failure_reasons)
+        lines.append(f"校准不可用原因：{reason_text(calibration.unavailable_reason)}")
+    lines.extend(f"重拟合失败 [{index}]：{reason_text(reason)}" for index, reason in calibration.failure_reasons)
     return [*lines, *_calibration_statistics(evidence)]
 
 

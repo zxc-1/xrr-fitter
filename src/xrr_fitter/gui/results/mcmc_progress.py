@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import QLabel, QProgressBar, QVBoxLayout, QWidget
 
 import xrr_fitter.api as api
@@ -20,6 +20,10 @@ def _duration(seconds: float) -> str:
 
 class McmcProgressView(QWidget):
     """Keep one operation's identity, measured steps and elapsed time visible."""
+
+    # 对话框关掉之后状态栏是唯一能看见采样的地方：每次读数更新都把「步数 · 接受率 · 预计剩余」
+    # 这一句发出去，停了发空串。与拟合卡 ``summary_changed`` 同一个用意，状态栏不必自己再估一遍。
+    summary_changed = Signal(str)
 
     def __init__(self, parent: QWidget | None = None, *, clock: Callable[[], float] = time.monotonic) -> None:
         super().__init__(parent)
@@ -108,11 +112,19 @@ class McmcProgressView(QWidget):
 
     def _render_time(self, now: float) -> None:
         if self._started is not None:
-            self.timing.setText(f"已用 {_duration(now - self._started)} · 预计剩余 {self._remaining_text(now)}")
+            remaining = self._remaining_text(now)
+            self.timing.setText(f"已用 {_duration(now - self._started)} · 预计剩余 {remaining}")
+            self.summary_changed.emit(f"{self.details.text()} · 预计剩余 {remaining}")
 
     def _tick(self) -> None:
         if self._active:
             self._render_time(self._clock())
+
+    def elapsed_seconds(self) -> float:
+        """How long the live chain has run; 0 when none is running."""
+        if not self._active or self._started is None:
+            return 0.0
+        return self._clock() - self._started
 
     def mark_stopping(self) -> None:
         self._stopping = True
@@ -121,5 +133,6 @@ class McmcProgressView(QWidget):
     def freeze(self) -> None:
         if self._active and self._started is not None:
             self.timing.setText(f"已用 {_duration(self._clock() - self._started)} · 已结束")
+            self.summary_changed.emit("")
         self._active = False
         self._heartbeat.stop()

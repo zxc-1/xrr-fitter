@@ -120,7 +120,7 @@ def test_import_action_is_keyboard_accessible_and_shows_path_error(
     button = panel.import_files_button
 
     assert button.accessibleName() == "导入文件"
-    assert panel.import_files_shortcut.key() == QKeySequence("Ctrl+I")
+    assert panel.import_files_action.shortcut() == QKeySequence("Ctrl+I")
     assert module.accessible_error_text(bad_path, ValueError("not an XRR dataset")) == (
         f"{bad_path}\nValueError: not an XRR dataset"
     )
@@ -239,7 +239,7 @@ def test_project_and_fit_commands_are_visible_and_accessible_at_minimum_size(qtb
             assert button.isVisible()
             assert button.accessibleName() and button.toolTip()
 
-    # 「强制停止」不在常驻命令里：它只在按过「停止并保留最优」之后才露出来，因为在没有
+    # 「强制停止」不在常驻命令里：它只在按过「停止并保留进度」之后才露出来，因为在没有
     # 待停的拟合时它没有可执行的语义。没露出来的命令仍要带得住读屏的名字与提示，否则它
     # 露出来的那一刻是个无名按钮。
     for name in ("startFitButton", "forceStopFitButton"):

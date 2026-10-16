@@ -68,6 +68,8 @@ def test_first_finished_dataset_does_not_complete_the_whole_batch(qtbot, tmp_pat
         assert "curve-1" in panel.progress_view.stage_label.text()
 
         panel.controller._dispatch_batch((_event(2, "curve-1", stage="finalizing", total=1),))
+        # 汇总帧不是终点，结果发布才是：自动路线在汇总之后还会再跑一轮。发布后补满到 100% 的那一步
+        # 只给真有可用结果的发布（见 test_fit_terminal_feedback / test_fit_terminal_progress）。
         assert panel.progress_view.overall_percent() == 99
     finally:
         _stop(panel.controller)

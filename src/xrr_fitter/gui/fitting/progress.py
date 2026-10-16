@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -22,6 +23,8 @@ import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.canvas_top import canvas_top
 from xrr_fitter.gui.plots.live import LiveReflectivityPlot, ObjectiveTracePlot
+
+LOG = logging.getLogger(__name__)
 
 PROGRESS_RESOLUTION = 1000
 
@@ -44,20 +47,65 @@ OBJECTIVE_TRACE_X_LABEL = ObjectiveTracePlot.X_LABEL
 # instead of a wild guess during the fast opening stage.
 ETA_MIN_FRACTION = 0.02
 
-# Fractional share of one search that each stage occupies, measured from real
-# single-dataset runs. The bar advances monotonically across stage changes
-# because every stage maps into its own slice of one fixed global range.
+# Fractional share of one run that each stage occupies. The bar advances
+# monotonically across stage changes because every stage maps into its own slice
+# of one fixed global range.
+#
+# The shares are wall-clock shares of the 1201-point GUI benchmark (single and
+# double layer, Gaussian / Poisson / robust-log noise, default ``fast`` budget):
+# the last seed search E carries about half of a manual run and three quarters of
+# an automatic one, and the manual route's profile likelihoods most of the rest.
+# The former table gave B a third of the bar and E a sixth, so a 60 s fit read
+# 72 % at 6 s and then sat at 95 % for its last minute.
 STAGE_WEIGHTS: tuple[tuple[str, float], ...] = (
-    ("A", 0.06),
-    ("B", 0.34),
-    ("C", 0.16),
-    ("D", 0.16),
-    ("E", 0.16),
+    ("A", 0.04),
+    ("B", 0.03),
+    ("C", 0.005),
+    ("D", 0.035),
+    ("E", 0.48),
     ("basin-recovery", 0.02),
-    ("bootstrap", 0.05),
-    ("profile", 0.04),
-    ("finalizing", 0.01),
+    ("bootstrap", 0.01),
+    ("profile", 0.375),
+    ("finalizing", 0.005),
 )
+
+# The automatic route runs no bootstrap, and its short profile pass comes after a
+# first, fast summary -- the quality gate reads that summary before choosing the
+# profiles -- so profile time falls inside the finalizing slice rather than before
+# it. A slice the frames jump over would only make the bar leap.
+AUTOMATIC_STAGE_WEIGHTS: tuple[tuple[str, float], ...] = (
+    ("A", 0.06),
+    ("B", 0.045),
+    ("C", 0.005),
+    ("D", 0.05),
+    ("E", 0.785),
+    ("basin-recovery", 0.005),
+    ("bootstrap", 0.0),
+    ("profile", 0.0),
+    ("finalizing", 0.05),
+)
+
+# A joint run reports each stage once, runs no profile, and resamples its
+# bootstrap inside the joint summary, so that time also lives in finalizing.
+# Measured on one two-dataset run only; treat it as the coarsest of the three.
+JOINT_STAGE_WEIGHTS: tuple[tuple[str, float], ...] = (
+    ("A", 0.02),
+    ("B", 0.07),
+    ("C", 0.05),
+    ("D", 0.005),
+    ("E", 0.80),
+    ("basin-recovery", 0.0),
+    ("bootstrap", 0.0),
+    ("profile", 0.0),
+    ("finalizing", 0.055),
+)
+
+# Keyed like ``messages.FIT_ROUTES``: the panel knows which route it started.
+ROUTE_STAGE_WEIGHTS = {
+    "manual": STAGE_WEIGHTS,
+    "joint": JOINT_STAGE_WEIGHTS,
+    "automatic": AUTOMATIC_STAGE_WEIGHTS,
+}
 
 # Each name carries the key the fit itself reports, so a row can be matched
 # against a progress event, a resume checkpoint or a worker log line. Only A-E
@@ -76,24 +124,39 @@ STAGE_LABELS = {
     # This stage classifies the result as well as assembling it, so naming only
     # the assembly would hide where the confidence verdict is decided.
     "finalizing": "汇总与判定",
+    # Poisson 模式在基态复核之后先做残差诊断校准；独立分析与联合分析各报一个键。它不在九阶梯
+    # 上，所以只有名字，没有序数。
+    "diagnostic-calibration": "残差诊断校准",
+    "diagnostics": "残差诊断校准",
+    # 结果的阶段记录里最后一条是它（导出预览按记录列阶段），进度帧里不出现。
+    "uncertainty": "不确定度分析",
 }
 
+# 服务层以后新加、这里还没登记的阶段键。原样上屏就是一句英文；原键写进日志。
+UNKNOWN_STAGE_TEXT = "其他计算步骤"
 
-def _stage_offsets() -> dict[str, tuple[float, float]]:
+LADDER_KEYS = tuple(dict(STAGE_WEIGHTS))
+
+
+def _stage_offsets(weights: tuple[tuple[str, float], ...]) -> dict[str, tuple[float, float]]:
     offsets: dict[str, tuple[float, float]] = {}
     cursor = 0.0
-    for name, weight in STAGE_WEIGHTS:
+    for name, weight in weights:
         offsets[name] = (cursor, weight)
         cursor += weight
     return offsets
 
 
-STAGE_OFFSETS = _stage_offsets()
+def _route_offsets() -> dict[str, dict[str, tuple[float, float]]]:
+    return {route: _stage_offsets(weights) for route, weights in ROUTE_STAGE_WEIGHTS.items()}
 
 
-def stage_position(stage: str, completed: int, total: int) -> int | None:
+ROUTE_STAGE_OFFSETS = _route_offsets()
+
+
+def stage_position(stage: str, completed: int, total: int, offsets: dict[str, tuple[float, float]]) -> int | None:
     """Map one stage-local count into the fixed global progress range."""
-    placement = STAGE_OFFSETS.get(stage)
+    placement = offsets.get(stage)
     if placement is None:
         return None
     start, weight = placement
@@ -101,8 +164,17 @@ def stage_position(stage: str, completed: int, total: int) -> int | None:
     return round((start + weight * fraction) * PROGRESS_RESOLUTION)
 
 
+def _ladder_ordinal(stage: str) -> int | None:
+    """One-based place on the nine-stage ladder, or ``None`` for an extra step."""
+    return LADDER_KEYS.index(stage) + 1 if stage in LADDER_KEYS else None
+
+
 def stage_text(stage: str) -> str:
-    return STAGE_LABELS.get(stage, stage)
+    label = STAGE_LABELS.get(stage)
+    if label is None:
+        LOG.debug("unregistered fit stage reached the screen: %s", stage)
+        return UNKNOWN_STAGE_TEXT
+    return label
 
 
 def joint_layout_text(layout: object) -> str:
@@ -130,17 +202,51 @@ def joint_layout_text(layout: object) -> str:
     return f"🔗 <b>联合拟合。</b>数据集：{datasets} · {shared}"
 
 
-def _stage_percent_text(completed: int, total: int) -> str:
+def unit_running(progress: api.FitProgress) -> bool:
+    """Whether this frame reports on a unit the solver is still working on.
+
+    A stage publishes two kinds of frame. Solver telemetry carries an
+    ``iteration`` and names the unit in flight -- seed 4's first generation
+    already reads 4/4 -- while a unit's closing frame carries none and counts the
+    units that are done. Reading the first kind as a count credits a seed that has
+    seconds still to run.
+    """
+    return progress.iteration is not None and progress.completed > 0
+
+
+def finished_units(progress: api.FitProgress) -> int:
+    return progress.completed - 1 if unit_running(progress) else progress.completed
+
+
+def stage_count_text(progress: api.FitProgress) -> str:
     """Render the stage-local count with its own percentage for a live feel.
 
     The global bar deliberately cannot rewind across stages, so a slow stage
     with many seeds can look stalled even while it advances. Showing the
     stage-local percent next to the raw count gives that motion a visible home.
+    A unit still running is named by its ordinal instead: it has no percent yet.
     """
+    completed, total = progress.completed, progress.total
+    if unit_running(progress):
+        return f"第 {completed}/{total} 个"
     if total <= 0:
         return f"{completed}/{total}"
     percent = min(100, max(0, round(100 * completed / total)))
     return f"{completed}/{total} ({percent}%)"
+
+
+def _detail_text(progress: api.FitProgress) -> str:
+    """The card's detail line: the stage-local count, the solver step, and J.
+
+    The worker's own ``message`` is an English log line ("DE generation (seed 2)")
+    and stays in the log; the stage name sits in the line above, and the count and
+    J here are the parts of it a reader can act on.
+    """
+    parts = [stage_count_text(progress)]
+    if progress.iteration is not None:
+        parts.append(f"迭代 {progress.iteration}")
+    parts.append(f"J = {progress.best_objective:.4g}")
+    return " · ".join(parts)
 
 
 def _format_duration(seconds: float) -> str:
@@ -184,6 +290,10 @@ HEARTBEAT_INTERVAL_MS = 1000
 # than being typed twice and drifting.
 CANCELLING_TEXT = "正在取消，等待当前种子结束…"
 PAUSE_REQUESTED_TEXT = "暂停已请求，等待所有计算到达安全点；可继续或停止"
+# The card's short form, in the remaining-time cell. The worker never reports
+# reaching its safe point, so the card says only that a pause was asked for, and
+# the elapsed clock keeps running: the current seed may still be computing.
+PAUSE_PENDING_TEXT = "暂停已请求"
 
 # Stands in for the remaining time before the run has produced enough progress to
 # extrapolate one honestly.
@@ -218,44 +328,49 @@ def progress_subtitle(ordinal: int, count: int) -> str:
     return f"阶段 {ordinal} / {count} · {PROGRESS_SCALE_TEXT}"
 
 
-class _RemainingEstimator:
-    """Project the remaining time from the recent completion rate.
+# Wall-clock span the remaining-time estimate averages over: long enough to span
+# one final seed, whose frames come 5-17 s apart, short enough that the sub-second
+# opening stage stops counting once the slow stages are under way. Replaying the
+# 1201-point benchmark, 20-60 s windows forecast within about a quarter of the true
+# remainder; an exponential average of per-frame rates was off by two thirds and
+# spent most of a run on 仍在计算.
+ETA_WINDOW_SECONDS = 30.0
 
-    The cumulative average rate lags badly when stages carry uneven real cost:
-    the fast opening stage makes a slow later stage look nearly done, so a naive
-    ``elapsed * (1 - frac) / frac`` estimate lurches at every stage boundary.
-    Smoothing the instantaneous rate with an exponential moving average tracks
-    the stage actually running, and freezing the projected finish in elapsed
-    terms lets the estimate count down honestly during the silent gaps between
-    frames instead of standing still.
+
+class _RemainingEstimator:
+    """Project the remaining time from the completion rate over a recent window.
+
+    The stage weights are measured, so the rate of one stage is a fair forecast
+    for the next one; the window keeps the fast opening stage from flattering the
+    forecast long after it has ended. Only frames that move the bar count as
+    readings: a frame that repeats the position is not new evidence, and taking it
+    as the anchor turned the next advance into an implausible burst. Freezing the
+    projected finish in elapsed terms lets the estimate count down honestly during
+    the silent gaps between frames instead of standing still.
     """
 
-    def __init__(self, *, smoothing: float = 0.35) -> None:
-        self._smoothing = smoothing
-        self._rate: float | None = None
-        self._previous: tuple[float, float] | None = None
+    def __init__(self, *, window_seconds: float = ETA_WINDOW_SECONDS) -> None:
+        self._window = window_seconds
+        self._points: list[tuple[float, float]] = []
         self._finish_elapsed: float | None = None
 
     def reset(self) -> None:
-        self._rate = None
-        self._previous = None
+        self._points.clear()
         self._finish_elapsed = None
 
     def update(self, elapsed: float, fraction: float) -> None:
-        previous = self._previous
-        self._previous = (elapsed, fraction)
-        if previous is None:
+        if self._points and fraction <= self._points[-1][1]:
             return
-        delta_elapsed = elapsed - previous[0]
-        delta_fraction = fraction - previous[1]
-        if delta_elapsed <= 0.0 or delta_fraction <= 0.0:
+        self._points.append((elapsed, fraction))
+        cutoff = elapsed - self._window
+        while len(self._points) > 1 and self._points[1][0] <= cutoff:
+            self._points.pop(0)
+        start = self._points[0]
+        span = elapsed - start[0]
+        if span <= 0.0:
             return
-        rate = delta_fraction / delta_elapsed
-        if self._rate is None:
-            self._rate = rate
-        else:
-            self._rate += self._smoothing * (rate - self._rate)
-        self._finish_elapsed = elapsed + (1.0 - fraction) / self._rate
+        rate = (fraction - start[1]) / span
+        self._finish_elapsed = elapsed + (1.0 - fraction) / rate
 
     def remaining(self, elapsed: float) -> float | None:
         if self._finish_elapsed is None:
@@ -287,6 +402,14 @@ class _StageRow:
 
 @dataclass
 class _StageClock:
+    """When each stage was first seen, and how long the ones already displaced ran.
+
+    A worker reports no stage-finished event, so the only observable end of a
+    stage is the arrival of a different stage's frame. Measuring across that
+    handover keeps the nine measures adding up to the elapsed time on screen, and
+    a duration fixed at the handover is never revised.
+    """
+
     stage: str | None = None
     started: dict[str, float] = field(default_factory=dict)
     seconds: dict[str, float] = field(default_factory=dict)
@@ -296,6 +419,47 @@ class _StageClock:
             self.seconds[self.stage] = max(0.0, now - self.started[self.stage])
         self.started.setdefault(stage, now)
         self.stage = stage
+
+    def done_text(self, stage: str) -> str:
+        """Say how long a finished stage ran, or only that it is finished.
+
+        A stage that never emitted a frame has no opening reading to measure from.
+        Printing 0.0s for it would report "too fast to measure" about a stage that
+        was never measured at all.
+        """
+        seconds = self.seconds.get(stage)
+        if seconds is None:
+            return STAGE_METRIC_DONE
+        return _format_stage_duration(seconds)
+
+
+@dataclass
+class _MemberTrack:
+    """What one run member has reported: its clock, curve, latest frame and preview.
+
+    Parallel datasets of an independent batch interleave their frames. Keeping each
+    member's readings apart is what lets the card tell one dataset's story instead
+    of wiping its trace and preview whenever another dataset's frame arrives.
+    """
+
+    frame: api.FitProgress
+    clock: _StageClock = field(default_factory=_StageClock)
+    position: int = 0
+    ordinal: int | None = None
+    trace: list[tuple[float, float]] = field(default_factory=list)
+    preview: tuple[object, object] | None = None
+
+    def observe(self, progress: api.FitProgress, now: float) -> None:
+        self.frame = progress
+        self.clock.observe(progress.stage, now)
+        self.ordinal = _ladder_ordinal(progress.stage) or self.ordinal
+        self.trace.append((self.position / PROGRESS_RESOLUTION, float(progress.best_objective)))
+        if progress.preview_qz_a_inv is not None and progress.preview_model_normalized is not None:
+            self.preview = (progress.preview_qz_a_inv, progress.preview_model_normalized)
+
+    def finished(self) -> bool:
+        """Reached the summary; a later frame of another stage reopens the member."""
+        return self.frame.stage == "finalizing"
 
 
 def _paint_row(row: _StageRow, state: str, glyph: str, metric: str) -> None:
@@ -405,18 +569,19 @@ class ProgressView(QWidget):
         self._started: float | None = None
         self._cancelling = False
         self._pause_requested = False
+        self._offsets = ROUTE_STAGE_OFFSETS["manual"]
         self._member_positions: dict[str, int] = {}
-        self._owner: object = None
-        self._stage: str | None = None
+        # One track per reporting member; a joint run's frames carry no dataset and
+        # share the ``None`` track. The card draws the focused track only.
+        self._tracks: dict[str | None, _MemberTrack] = {}
+        self._focus: _MemberTrack | None = None
+        # The dataset the reader selected in the left rail. It outlives a reset: it
+        # is where the reader is looking, not part of the run.
+        self._followed: str | None = None
         # The remaining-time text as the card last rendered it. The summary reads
         # this instead of re-deriving it, so the bar cannot show an estimate the
         # card has not shown -- and so a query never consumes a clock reading.
         self._eta_display = ETA_UNKNOWN_TEXT
-        # When each stage was first seen, and how long the ones already displaced
-        # ran for. A stage's end is only observable when a later stage's frame
-        # arrives, so a duration is fixed at that handover and never revised.
-        self._stage_clocks: dict[object, _StageClock] = {}
-        self._stage_clock = _StageClock()
         self._estimator = _RemainingEstimator()
         self._heartbeat = QTimer(self)
         self._heartbeat.setObjectName("fitProgressHeartbeat")
@@ -496,19 +661,6 @@ class ProgressView(QWidget):
         layout.addWidget(self.canvas_row)
         layout.addWidget(self.pages)
 
-    def _record_frame(self, progress: api.FitProgress) -> None:
-        """把这一帧摊到两张图上：预览曲线换一条，J 往轨迹后面接一个点。
-
-        轨迹的横轴用完成比例而不是帧序号：帧的疏密取决于轮询间隔，而完成比例是这次
-        运行自己的进度，两次运行摆在一起也能对读。
-        """
-        qz = progress.preview_qz_a_inv
-        model = progress.preview_model_normalized
-        if qz is not None and model is not None:
-            self.live_plot.set_preview(qz, model)
-        total = progress.total or 1
-        self.trace_plot.append(float(progress.completed) / float(total), float(progress.best_objective))
-
     def set_refresh_interval_ms(self, interval_ms: int) -> None:
         """徽标改写成轮询器此刻真正用的那个间隔。
 
@@ -543,38 +695,94 @@ class ProgressView(QWidget):
         if self._started is None:
             self._started = now
         elapsed = now - self._started
-        self._select_owner(progress)
-        if progress.stage != self._stage:
-            self._estimator.reset()
-            self.trace_plot.reset()
-        owner = progress.dataset_id or "联合拟合"
-        stage_index, stage_count = self._stage_ordinal(progress.stage)
-        self.stage_label.setText(f"{owner} · 阶段 {stage_index}/{stage_count} · {stage_text(progress.stage)}")
-        self._set_card_subtitle(progress_subtitle(stage_index, stage_count))
-        self._mark_stage_clock(progress.stage, now)
-        self._stage = progress.stage
-        self._advance(progress)
-        self._record_frame(progress)
-        self._paint_ladder(progress)
+        track = self._tracks.setdefault(progress.dataset_id, _MemberTrack(progress))
+        self._advance(progress, track)
+        track.observe(progress, now)
+        if self._refocus(track):
+            self._draw_focus()
+        elif track is self._focus:
+            self._draw_frame(track, progress)
         if not self._pause_requested:
             self._estimator.update(elapsed, self._floor / PROGRESS_RESOLUTION)
         self._render_meta(elapsed)
-        self.detail_label.setText(
-            f"{progress.stage} {_stage_percent_text(progress.completed, progress.total)}"
-            f" · {progress.message} · best={progress.best_objective:.4g}"
-        )
         if not self._heartbeat.isActive():
             self._heartbeat.start()
         self._publish_summary()
 
-    def _select_owner(self, progress: api.FitProgress) -> None:
-        members = tuple(name for name, _objective in progress.dataset_objectives or ())
-        owner = progress.dataset_id or members
-        if owner != self._owner:
-            self._owner = owner
-            self._stage_clock = self._stage_clocks.setdefault(owner, _StageClock())
-            self.trace_plot.reset()
+    def _refocus(self, reporter: _MemberTrack) -> bool:
+        """Choose whose story the card tells; report whether that changed.
+
+        The dataset the reader selected wins while it is still running. Otherwise
+        the card stays with the member it is already telling, and moves on only
+        once that member has reached its summary -- two parallel datasets would
+        otherwise swap the card on every frame.
+        """
+        followed = self._tracks.get(self._followed) if self._followed is not None else None
+        if followed is not None and not followed.finished():
+            target = followed
+        elif self._focus is not None and not self._focus.finished():
+            target = self._focus
+        else:
+            target = reporter
+        changed = target is not self._focus
+        self._focus = target
+        return changed
+
+    def follow_dataset(self, dataset_id: str | None) -> bool:
+        """Tell the card which dataset the reader is looking at; report a switch."""
+        self._followed = dataset_id
+        if self._focus is None or not self._refocus(self._focus):
+            return False
+        self._draw_focus()
+        self._publish_summary()
+        return True
+
+    def draws(self, progress: api.FitProgress) -> bool:
+        """Whether this frame belongs to the member the card is telling."""
+        return self._focus is not None and self._focus.frame is progress
+
+    def focused_frame(self) -> api.FitProgress | None:
+        return None if self._focus is None else self._focus.frame
+
+    def _draw_focus(self) -> None:
+        """Repaint every focus-bound part from the newly focused member's own record."""
+        track = self._focus
+        self._paint_identity(track)
+        self.trace_plot.reset()
+        for fraction, objective in track.trace:
+            self.trace_plot.append(fraction, objective)
+        if track.preview is None:
             self.live_plot.clear_preview()
+        else:
+            self.live_plot.set_preview(*track.preview)
+
+    def _draw_frame(self, track: _MemberTrack, progress: api.FitProgress) -> None:
+        """把这一帧摊到两张图上：预览曲线换一条，J 往轨迹后面接一个点。
+
+        轨迹的横轴用这条曲线自己的总完成比例，而不是帧序号或本阶段比例：帧的疏密取决于
+        轮询间隔，本阶段比例一换阶段就卷回 0；总完成比例只增不减，两次运行摆在一起也能对读。
+        """
+        self._paint_identity(track)
+        self.trace_plot.append(*track.trace[-1])
+        if progress.preview_qz_a_inv is not None and progress.preview_model_normalized is not None:
+            self.live_plot.set_preview(progress.preview_qz_a_inv, progress.preview_model_normalized)
+
+    def _paint_identity(self, track: _MemberTrack) -> None:
+        """Name the member, its stage and where that stage sits on the ladder."""
+        progress = track.frame
+        owner = progress.dataset_id or "联合拟合"
+        name = stage_text(progress.stage)
+        self.detail_label.setText(_detail_text(progress))
+        ordinal = _ladder_ordinal(progress.stage)
+        if ordinal is None:
+            # An extra step such as the Poisson calibration keeps the ladder where the
+            # member last stood: claiming the last rung would say the run is ending.
+            self.stage_label.setText(f"{owner} · {name}")
+            return
+        count = len(LADDER_KEYS)
+        self.stage_label.setText(f"{owner} · 阶段 {ordinal}/{count} · {name}")
+        self._set_card_subtitle(progress_subtitle(ordinal, count))
+        self._paint_ladder(progress, track.clock)
 
     def set_members(self, dataset_ids: tuple[str, ...]) -> None:
         """Fix the run denominator before its first member reports progress."""
@@ -584,9 +792,14 @@ class ProgressView(QWidget):
         """总进度的百分数，读的是进度条自己的值。
 
         另一处要显示同一个位置的是左栏「拟合」那一行（设计稿帧④「进行中 62%」）。它从这里取数
-        而不是自己按 ``STAGE_WEIGHTS`` 再算一遍，这样两处不可能报出不同的进度。
+        而不是自己按 ``STAGE_WEIGHTS`` 再算一遍，这样两处不可能报出不同的进度。向下取整：卡片
+        写 999 / 1000 时左栏若四舍五入成 100%，两处对"跑完没有"就给了不同的答案。
         """
-        return round(100 * self.bar.value() / PROGRESS_RESOLUTION)
+        return 100 * self.bar.value() // PROGRESS_RESOLUTION
+
+    def set_weighting(self, route: str) -> None:
+        """Weigh the stages the way the route that is starting spends its time."""
+        self._offsets = ROUTE_STAGE_OFFSETS[route]
 
     def _set_meta_text(self, text: str) -> None:
         """Set all three meta labels to the same text (for cancelling state)."""
@@ -617,7 +830,11 @@ class ProgressView(QWidget):
         self._heartbeat.stop()
 
     def mark_completed(self) -> None:
-        """Complete the display only after usable results have been published."""
+        """Complete the display only after usable results have been published.
+
+        No stage frame may claim the end: the automatic route re-analyses after its
+        first summary, so a frame-driven 100 % would be followed by more work.
+        """
         self._cancelling = False
         self._pause_requested = False
         self._floor = PROGRESS_RESOLUTION
@@ -661,19 +878,19 @@ class ProgressView(QWidget):
             return RunSummary(position=PAUSE_REQUESTED_TEXT)
         if self._floor == PROGRESS_RESOLUTION:
             return RunSummary(position=f"进度 {self._floor} / {PROGRESS_RESOLUTION}", remaining=self._eta_display)
-        if self._stage is None:
+        if self._focus is None:
             return RunSummary()
-        ordinal, count = self._stage_ordinal(self._stage)
+        ordinal = self._focus.ordinal
         return RunSummary(
-            f"{ordinal} / {count}",
+            "" if ordinal is None else f"{ordinal} / {len(LADDER_KEYS)}",
             f"进度 {self._floor} / {PROGRESS_RESOLUTION}",
             self._eta_display,
         )
 
     def _eta_text(self, elapsed: float) -> str:
         """Say how much longer, or admit the evidence is too thin to say."""
-        if self._floor == PROGRESS_RESOLUTION:
-            return "00:00"
+        if self._floor >= PROGRESS_RESOLUTION:
+            return _format_duration(0.0)
         remaining = self._estimator.remaining(elapsed)
         if self._floor / PROGRESS_RESOLUTION >= ETA_MIN_FRACTION and remaining is not None:
             if remaining < 1.0 and self._floor < PROGRESS_RESOLUTION:
@@ -685,46 +902,21 @@ class ProgressView(QWidget):
         if self._cancelling:
             self._set_meta_text(CANCELLING_TEXT)
             return
-        if self._pause_requested:
-            self._set_meta_text(PAUSE_REQUESTED_TEXT)
-            return
-        self._eta_display = self._eta_text(elapsed)
         self.meta_elapsed.setText(f"已用 {_format_duration(elapsed)}")
         self.meta_position.setText(f"进度 {self._floor} / {PROGRESS_RESOLUTION}")
+        if self._pause_requested:
+            self.meta_remaining.setText(PAUSE_PENDING_TEXT)
+            return
+        self._eta_display = self._eta_text(elapsed)
         self.meta_remaining.setText(f"预计剩余 {self._eta_display}")
 
-    def _mark_stage_clock(self, stage: str, now: float) -> None:
-        """Open this stage's clock, and close the one it just displaced.
-
-        A worker reports no stage-finished event, so the only observable end of a
-        stage is the arrival of a different stage's frame. Measuring across that
-        handover keeps the nine measures adding up to the elapsed time on screen.
-        """
-        self._stage_clock.observe(stage, now)
-
-    def _stage_metric_done(self, stage: str) -> str:
-        """Say how long a finished stage ran, or only that it is finished.
-
-        A stage that never emitted a frame has no opening reading to measure from.
-        Printing 0.0s for it would report "too fast to measure" about a stage that
-        was never measured at all.
-        """
-        seconds = self._stage_clock.seconds.get(stage)
-        if seconds is None:
-            return STAGE_METRIC_DONE
-        return _format_stage_duration(seconds)
-
-    def _stage_ordinal(self, stage: str) -> tuple[int, int]:
-        names = tuple(name for name, _weight in STAGE_WEIGHTS)
-        count = len(names)
-        if stage not in names:
-            return count, count
-        return names.index(stage) + 1, count
-
-    def _advance(self, progress: api.FitProgress) -> None:
-        position = stage_position(progress.stage, progress.completed, progress.total)
+    def _advance(self, progress: api.FitProgress, track: _MemberTrack) -> None:
+        position = stage_position(progress.stage, finished_units(progress), progress.total, self._offsets)
         if position is None:
             return
+        # The last unit is the published result's: ``mark_completed`` alone fills the bar.
+        position = min(position, PROGRESS_RESOLUTION - 1)
+        track.position = max(track.position, position)
         if self._member_positions:
             owners = (
                 (progress.dataset_id,)
@@ -741,22 +933,19 @@ class ProgressView(QWidget):
         self._floor = max(self._floor, min(position, PROGRESS_RESOLUTION * 99 // 100))
         self.bar.setValue(self._floor)
 
-    def _paint_ladder(self, progress: api.FitProgress) -> None:
+    def _paint_ladder(self, progress: api.FitProgress, clock: _StageClock) -> None:
         """Mark the stages before the live one done, it current, and the rest pending.
 
-        An unrecognised stage leaves the ladder as it stands instead of declaring every
-        row done, mirroring how ``_advance`` refuses to move the bar for one.
+        Only ladder stages reach here: an extra step leaves the ladder as it stands
+        instead of declaring every row done, as ``_advance`` refuses to move the bar
+        for an unknown stage.
         """
-        names = tuple(name for name, _weight in STAGE_WEIGHTS)
-        if progress.stage not in names:
-            return
-        live = names.index(progress.stage)
-        for index, key in enumerate(names):
+        live = LADDER_KEYS.index(progress.stage)
+        for index, key in enumerate(LADDER_KEYS):
             if index < live:
-                state, glyph, metric = "done", "✓", self._stage_metric_done(key)
+                state, glyph, metric = "done", "✓", clock.done_text(key)
             elif index == live:
-                metric = _stage_percent_text(progress.completed, progress.total)
-                state, glyph = "current", str(index + 1)
+                state, glyph, metric = "current", str(index + 1), stage_count_text(progress)
             else:
                 state, glyph, metric = "pending", str(index + 1), STAGE_METRIC_PENDING
             _paint_row(self._stage_rows[key], state, glyph, metric)
@@ -773,12 +962,11 @@ class ProgressView(QWidget):
         self._started = None
         self._cancelling = False
         self._pause_requested = False
+        self._offsets = ROUTE_STAGE_OFFSETS["manual"]
         self._member_positions.clear()
-        self._owner = None
-        self._stage = None
+        self._tracks.clear()
+        self._focus = None
         self._eta_display = ETA_UNKNOWN_TEXT
-        self._stage_clocks.clear()
-        self._stage_clock = _StageClock()
         self.trace_plot.reset()
         self.stage_label.setText("等待开始")
         self._set_card_subtitle(PROGRESS_SUBTITLE_IDLE)
