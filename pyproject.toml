@@ -95,6 +95,11 @@ show_missing = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-config --strict-markers -ra"
+# A test that blocks (an unanswered modal, a worker that never reports) would
+# otherwise sit silently until the CI job's 60-minute limit; dump every thread's
+# stack after five minutes so the log names the blocking call. Reporting only:
+# nothing fails because of it.
+faulthandler_timeout = 300
 markers = [
   "slow: long-running statistical or recovery verification",
   "approved_data: requires the approved, hash-bound approved-data manifest",
