@@ -113,6 +113,11 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(MINIMUM_SHELL_WIDTH, MINIMUM_SHELL_HEIGHT)
         if operation_controller is not None:
             self.set_operation_controller(operation_controller)
+        # 文档挂到窗口下，随窗口一起析构。不挂的话它是个无父对象，而菜单栏那几条接在
+        # ``project_changed`` 上的 lambda 都捕获着窗口：连接存在 C++ 侧，gc 看不见这个环，
+        # 窗口关掉以后 Python 那一侧连同 pyqtgraph 那些无父菜单就一直活着。放在最后挂：
+        # 子对象按挂上的先后析构，上面造出来的都读文档，文档该最后一个走。
+        self.document.setParent(self)
 
     def _connect_workflows(self) -> None:
         self.plot_panel.fit_range_requested.connect(self._plot_range_requested)
