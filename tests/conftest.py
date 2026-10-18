@@ -1,12 +1,38 @@
 from __future__ import annotations
 
+import faulthandler
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# 卡住的用例（没人应答的模态框、不再回报的 worker）原本要静默等到 CI 的 60 分钟上限，日志里
+# 什么也不说；超过这个秒数就把所有线程的栈打出来，让日志点名卡住的那一行。只报告，不判失败。
+# 不放进 pyproject 的 ``faulthandler_timeout``：包清单绑定了 pyproject.toml 的哈希。
+STALL_SECONDS = 300
+STALL_STREAM = pytest.StashKey()
+
+
+def pytest_configure(config):
+    # 配置阶段 stderr 还没被逐用例捕获；复制一份，栈才会落到终端，而不是落进某条用例的捕获里。
+    config.stash[STALL_STREAM] = os.fdopen(os.dup(sys.stderr.fileno()), "w")
+
+
+def pytest_unconfigure(config):
+    config.stash[STALL_STREAM].close()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    faulthandler.dump_traceback_later(STALL_SECONDS, file=item.config.stash[STALL_STREAM])
+    try:
+        yield
+    finally:
+        faulthandler.cancel_dump_traceback_later()
 
 
 @pytest.fixture(scope="session", autouse=True)
