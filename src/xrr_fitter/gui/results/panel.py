@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
@@ -36,6 +38,7 @@ from xrr_fitter.gui.results.inspector import (
     QuantilePanel,
     walkers_rule_summary,
 )
+from xrr_fitter.gui.results.mcmc_progress import McmcProgressView
 from xrr_fitter.gui.results.uncertainty import (
     McmcControls,
     UncertaintyView,
@@ -68,6 +71,15 @@ VALUES_EMPTY_SUBTITLE = "尚未拟合"
 VERDICT_EMPTY_SUBTITLE = "未选择数据集"
 
 
+def _same_sampling_inputs(source: api.XrrProject, current: api.XrrProject) -> bool:
+    """Allow view-only replacements while retaining the exact sampling inputs."""
+    return current.ui_state.selected_candidate_ids == source.ui_state.selected_candidate_ids and all(
+        getattr(current, field.name) is getattr(source, field.name)
+        for field in fields(source)
+        if field.name != "ui_state"
+    )
+
+
 class ResultsPanel(QWidget):
     """Project immutable result state through explicit public API mutations."""
 
@@ -85,6 +97,8 @@ class ResultsPanel(QWidget):
         self.setObjectName("resultsPanel")
         self.controller = FitController(self)
         self._mcmc_source_project: api.XrrProject | None = None
+        self._cancel_requested = False
+        self._force_requested = False
         # 起始态就是空态那句，所以第一次刷新不会白广播一次相同的措辞。
         self._candidate_summary = CANDIDATES_EMPTY_SUBTITLE
         self._build_widgets()
@@ -179,6 +193,7 @@ class ResultsPanel(QWidget):
         # Parented to the panel but deliberately left out of its layout, so
         # accessibility configuration and lookups still reach the controls while
         # they occupy no space until the dialog adopts them.
+        self.mcmc_progress = McmcProgressView(self)
         self.mcmc_group = McmcControls(self)
         self.mcmc_group.hide()
         self.uncertainty_button = QPushButton("不确定度分析…")
@@ -269,7 +284,10 @@ class ResultsPanel(QWidget):
             dialog.setObjectName("uncertaintyDialog")
             layout = QVBoxLayout(dialog)
             layout.addWidget(self.uncertainty, 1)
+            layout.addWidget(self.mcmc_progress)
             layout.addWidget(self.mcmc_group)
+            layout.addWidget(self.status_label)
+            self.status_label.show()
             self._uncertainty_dialog = dialog
         self._uncertainty_sampling_requested = sampling
         self.uncertainty.show()
@@ -293,11 +311,13 @@ class ResultsPanel(QWidget):
 
     def _connect_events(self) -> None:
         self.document.project_changed.connect(self._refresh)
+        self.document.document_replaced.connect(self._discard_completed_progress)
         self.candidates.candidate_requested.connect(self._candidate_requested)
         self.clear_button.clicked.connect(lambda: self.clear_results())
         self.mcmc_button.clicked.connect(self._start_mcmc_clicked)
-        self.cancel_button.clicked.connect(self.controller.cancel)
-        self.force_button.clicked.connect(self.controller.force_stop)
+        self.cancel_button.clicked.connect(self._request_cancel)
+        self.force_button.clicked.connect(self._request_force_stop)
+        self.controller.progress_changed.connect(self.mcmc_progress.set_progress)
         self.controller.running_changed.connect(self._running_changed)
         self.controller.mcmc_finished.connect(self._publish_mcmc)
         self.controller.cancelled.connect(self._show_cancelled)
@@ -401,6 +421,9 @@ class ResultsPanel(QWidget):
         config = self.mcmc_group.validated_config(len(candidate.unit_vector))
         source = self.document.project
         self._mcmc_source_project = source
+        self._cancel_requested = False
+        self._force_requested = False
+        self.mcmc_progress.begin(dataset_id, candidate.candidate_id, config)
         started = self.controller.start_mcmc(
             source,
             dataset_id,
@@ -414,6 +437,7 @@ class ResultsPanel(QWidget):
         return started
 
     def _start_mcmc_clicked(self) -> None:
+        self.open_uncertainty_dialog().show()
         try:
             self.start_mcmc()
         except (RuntimeError, ValueError) as error:
@@ -492,7 +516,8 @@ class ResultsPanel(QWidget):
         self._refresh_captions()
         # The candidate list directly above already shows how many there are, so
         # this line stays free for MCMC outcomes and failures.
-        self._show_status("", kind="")
+        if not self.controller.is_running:
+            self._show_status("", kind="")
 
     def _group_captions(self) -> dict[str, str]:
         dataset = active_dataset(self.document.project)
@@ -581,7 +606,8 @@ class ResultsPanel(QWidget):
         self._clear_sampling_evidence(message)
         self.uncertainty_button.setVisible(self.document.project.ui_state.expert_mode)
         self._configure_mcmc(None)
-        self._show_status("", kind="")
+        if not self.controller.is_running:
+            self._show_status("", kind="")
 
     def _show_status(self, text: str, *, kind: str) -> None:
         self.status_label.setText(text)
@@ -626,38 +652,71 @@ class ResultsPanel(QWidget):
             running=active,
             ready=self.document.project.ui_state.expert_mode and self._mcmc_ready(self._selected_candidate()),
         )
+        self.cancel_button.setEnabled(active and not self._cancel_requested)
+        self.force_button.setEnabled(active and not self._force_requested)
         self._project_uncertainty_dialog(running=active)
 
     def _mcmc_ready(self, candidate: object | None) -> bool:
         return candidate_is_mcmc_ready(candidate, self.candidates.result)
 
     def _running_changed(self, running: bool) -> None:
+        if not running:
+            self.mcmc_progress.freeze()
         self._refresh_mcmc_buttons(running)
+
+    def _request_cancel(self) -> None:
+        if not self.controller.is_running or self._cancel_requested:
+            return
+        self._cancel_requested = True
+        self.mcmc_progress.mark_stopping()
+        self._show_status("正在取消 MCMC，等待当前采样步结束…", kind="warn")
+        self._refresh_mcmc_buttons()
+        self.controller.cancel()
+
+    def _request_force_stop(self) -> None:
+        if not self.controller.is_running or self._force_requested:
+            return
+        self._cancel_requested = True
+        self._force_requested = True
+        self.mcmc_progress.mark_stopping()
+        self._show_status("正在强制停止 MCMC，等待 worker 退出…", kind="warn")
+        self._refresh_mcmc_buttons()
+        self.controller.force_stop()
 
     def _publish_mcmc(self, project: api.XrrProject) -> None:
         source = self._mcmc_source_project
+        current = self.document.project
         self._mcmc_source_project = None
-        if source is None or self.document.project is not source:
+        if source is None or not _same_sampling_inputs(source, current):
             self._show_failure(
                 api.OperationError(
                     "RuntimeError",
                     "stale MCMC result rejected because the project changed",
-                    "MCMC source project identity changed before completion",
+                    "MCMC sampling inputs changed before completion",
                 )
             )
             return
+        if current is not source:
+            project = api.set_workspace_state(project, current.ui_state)
         self.document.replace_project(project)
+        self.mcmc_progress.freeze()
         self._show_status("MCMC 完成", kind="ok")
         self.mcmc_completed.emit(project)
 
     def _show_cancelled(self, reason: str) -> None:
         self._mcmc_source_project = None
+        self.mcmc_progress.freeze()
         self._show_status(f"MCMC 已取消：{reason}", kind="warn")
 
     def _show_failure(self, error: api.OperationError) -> None:
         self._mcmc_source_project = None
+        self.mcmc_progress.freeze()
         self._show_status(messages.operation_error_text(error), kind="error")
         self.operation_failed.emit(error)
+
+    def _discard_completed_progress(self) -> None:
+        if not self.controller.is_running:
+            self.mcmc_progress.hide()
 
     def _operation_stopped(self) -> None:
         self._mcmc_source_project = None

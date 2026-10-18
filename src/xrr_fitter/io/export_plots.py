@@ -85,6 +85,7 @@ def _context(value: DatasetExportData) -> DatasetExportData:
 def _png(figure: Figure, *, cjk_text: bool = False) -> bytes:
     buffer = BytesIO()
     try:
+        figure.set_dpi(300)
         if cjk_text:
             _apply_cjk_font(figure)
         canvas = FigureCanvasAgg(figure)

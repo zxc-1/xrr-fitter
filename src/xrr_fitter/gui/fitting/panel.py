@@ -21,6 +21,7 @@ from xrr_fitter.gui import messages, theme
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.fitting.controller import FitController
 from xrr_fitter.gui.fitting.metrics import LiveMetricsView
+from xrr_fitter.gui.fitting.outcome import fit_result_feedback
 from xrr_fitter.gui.fitting.progress import ProgressView
 from xrr_fitter.gui.noise import NOISE_MODE_LABELS, NOISE_MODE_REQUIREMENTS
 from xrr_fitter.gui.wrapping import command_bar
@@ -93,8 +94,7 @@ class FitPanel(QWidget):
         # 所以它与「停止并保留最优」是两件事而不是强弱两档。
         self.pause_button = QPushButton(PAUSE_TEXT)
         self.pause_button.setObjectName("pauseFitButton")
-        self.pause_button.setAccessibleName("暂停拟合")
-        self.pause_button.setToolTip("在下一个阶段边界停住，保留已完成阶段与当前最优")
+        self._refresh_pause_label()
         # 设计稿帧④ 控制段的第二个命令。跳过作废的只有当前这一个阶段：停止之后没有
         # 的跑，跳过之后还有。
         self.skip_button = QPushButton("⏭ 跳过本阶段")
@@ -194,6 +194,8 @@ class FitPanel(QWidget):
 
     def _project_preview(self, progress: api.FitProgress) -> None:
         """Forward preview curves at a bounded rate to avoid canvas flicker."""
+        if progress.dataset_id is None or progress.dataset_id != self.document.active_dataset_id:
+            return
         qz = progress.preview_qz_a_inv
         model = progress.preview_model_normalized
         if qz is None or model is None:
@@ -219,24 +221,33 @@ class FitPanel(QWidget):
         if not readiness.ready:
             self._refresh_controls()
             return False
-        self._preview_last_emit = None
-        self._checkpoint_saved = False
-        self.progress_view.reset()
         layout = self._joint_layout()
-        self.progress_view.set_joint_layout(layout)
-        self._reset_metrics(layout)
+        self._prepare_run(tuple(dataset.dataset_id for dataset in self.document.project.datasets), layout)
         return self.controller.start_fit(self.document.project, checkpoint_path)
 
     def _toggle_pause(self) -> None:
-        """在下一个阶段边界停住/放行，并让按钮自己报出当前处在哪一边。"""
-        if not self.is_running:
+        """Report the request, not an unobserved acknowledgement from all workers."""
+        if not self.is_running or self._cancel_requested:
             return
         if self._paused:
             self.controller.resume()
         else:
             self.controller.pause()
         self._paused = not self._paused
-        self.pause_button.setText(RESUME_TEXT if self._paused else PAUSE_TEXT)
+        self.progress_view.set_pause_requested(self._paused)
+        self._refresh_pause_label()
+        self._refresh_controls()
+
+    def _refresh_pause_label(self) -> None:
+        """Keep the visible action, screen-reader name and help in agreement."""
+        text, name, help_text = (
+            (RESUME_TEXT, "继续拟合", "解除暂停请求，让已到达安全点的计算继续；保留已完成阶段与当前最优")
+            if self._paused
+            else (PAUSE_TEXT, "暂停拟合", "请求在下一个安全检查点停住，保留已完成阶段与当前最优")
+        )
+        self.pause_button.setText(text)
+        self.pause_button.setAccessibleName(name)
+        self.pause_button.setToolTip(help_text)
 
     def _request_cancel(self) -> None:
         """Give immediate feedback, then ask the worker to stop gracefully.
@@ -245,7 +256,7 @@ class FitPanel(QWidget):
         request has visible latency. Announcing it on the progress view keeps the
         button press from feeling ignored while the current seed winds down.
         """
-        if not self.is_running:
+        if not self.is_running or self._cancel_requested:
             return
         self.progress_view.mark_cancelling()
         # 「强制停止」是「停止」的升级而不是并列项：先按停止让 worker 自己收尾，收不住时
@@ -270,12 +281,29 @@ class FitPanel(QWidget):
         if not readiness.ready:
             self._refresh_controls()
             return False
-        self.progress_view.reset()
-        self._reset_metrics(self._joint_layout())
+        self._prepare_run(self._automatic_members(import_batch_id), None)
         return self.controller.start_automatic_fit(
             self.document.project,
             import_batch_id,
             checkpoint_path,
+        )
+
+    def _prepare_run(self, members: tuple[str, ...], layout: object | None) -> None:
+        self._preview_last_emit = None
+        self._checkpoint_saved = False
+        self.progress_view.reset()
+        self.progress_view.set_members(members)
+        self.progress_view.set_joint_layout(layout)
+        self._reset_metrics(layout)
+
+    def _automatic_members(self, import_batch_id: str | None) -> tuple[str, ...]:
+        runnable = {api.AutomaticStatus.PENDING, api.AutomaticStatus.REFINING, api.AutomaticStatus.REVIEW}
+        return tuple(
+            dataset.dataset_id
+            for dataset in self.document.project.datasets
+            if dataset.automation.role is not api.AutomaticRole.MANUAL
+            and dataset.automation.status in runnable
+            and (import_batch_id is None or dataset.automation.import_batch_id == import_batch_id)
         )
 
     def _reset_metrics(self, layout: object | None) -> None:
@@ -319,13 +347,16 @@ class FitPanel(QWidget):
         return any(dataset.checkpoint is not None for dataset in self.document.project.datasets)
 
     def _publish_checkpoint(self, project: api.XrrProject) -> None:
-        self._checkpoint_saved = True
+        self._checkpoint_saved = any(dataset.checkpoint is not None for dataset in project.datasets)
         self.document.replace_project(project)
         self.checkpoint_published.emit(project)
 
     def _publish_fit_result(self, result: api.ProjectFitResult) -> None:
         self.document.replace_project(result.updated_project)
-        self._show_status("拟合完成", kind="ok")
+        feedback = fit_result_feedback(result)
+        self._show_status(feedback.text, kind=feedback.kind)
+        if feedback.completed:
+            self.progress_view.mark_completed()
         self.result_published.emit(result)
 
     def _show_cancelled(self, reason: str) -> None:
@@ -344,6 +375,7 @@ class FitPanel(QWidget):
 
     def _show_status(self, text: str, *, kind: str) -> None:
         self.status_label.setText(text)
+        self.status_label.setVisible(bool(text))
         theme.set_status_kind(self.status_label, kind)
 
     def _show_readiness(self, readiness: api.FitReadiness | None = None) -> None:
@@ -368,25 +400,32 @@ class FitPanel(QWidget):
             self.progress_view.freeze()
             # 收工后暂停键回到未按下的样子，否则下一次开跑它还写着「▶ 继续」。
             self._paused = False
-            self.pause_button.setText(PAUSE_TEXT)
+            self._refresh_pause_label()
+            self._refresh_readiness(show_status=False)
         self.progress_view.setVisible(running)
         self.live_metrics.setVisible(running)
         self._refresh_controls(running)
         self.running_changed.emit(running)
 
-    def _refresh_readiness(self, *_args) -> None:
+    def _refresh_readiness(self, *_args, show_status: bool = True) -> None:
+        # A checkpoint changes evidence, not the running job's immutable inputs.
+        # Re-read sources and compile only when another start can be requested.
+        if not self.is_running:
+            self._check_readiness()
+        if not self.is_running and show_status:
+            readiness = self._readiness if self.document.project.ui_state.expert_mode else self._automatic_readiness
+            self._show_readiness(readiness)
+        self._sync_noise_selector()
+        self._sync_mode_visibility()
+        self._refresh_controls()
+
+    def _check_readiness(self) -> None:
         try:
             self._readiness = api.preflight_fit(self.document.project)
             self._automatic_readiness = api.preflight_automatic_fit(self.document.project)
         except (OSError, ValueError) as error:
             self._readiness = api.FitReadiness(False, str(error))
             self._automatic_readiness = api.FitReadiness(False, str(error))
-        if not self.is_running:
-            readiness = self._readiness if self.document.project.ui_state.expert_mode else self._automatic_readiness
-            self._show_readiness(readiness)
-        self._sync_noise_selector()
-        self._sync_mode_visibility()
-        self._refresh_controls()
 
     def _sync_mode_visibility(self, running: bool | None = None) -> None:
         # 跑起来之后两枚启动键都按不动，留在原位只是两块灰，还把真正要用的三个命令挤到一边。
@@ -402,9 +441,10 @@ class FitPanel(QWidget):
         self.force_button.setVisible(active and self._cancel_requested)
         self.start_button.setEnabled(self._readiness.ready and not active)
         self.automatic_button.setEnabled(self._automatic_readiness.ready and not active)
-        self.cancel_button.setEnabled(active)
-        self.pause_button.setEnabled(active)
-        self.skip_button.setEnabled(active and self._skip_available and not self._cancel_requested)
+        can_request = active and not self._cancel_requested
+        self.cancel_button.setEnabled(can_request)
+        self.pause_button.setEnabled(can_request)
+        self.skip_button.setEnabled(can_request and self._skip_available and not self._paused)
         self.force_button.setEnabled(active)
         self.noise_selector.setEnabled(not active)
         self._refresh_start_label()

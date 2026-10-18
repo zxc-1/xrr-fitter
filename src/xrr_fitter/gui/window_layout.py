@@ -410,6 +410,9 @@ def _canvas_column(window) -> QWidget:
     # 是滚出来看的一张卡，把它算进下限等于永久多占三百来像素，而那是 SLD 的地方。
     _refit_on_structure_change(canvas, stack_scroll, window.structure_panel)
     _follow_canvas_tabs(window, canvas, stack_scroll, overview)
+    # Keep the same operation-owned notice visible after the result step hides
+    # inspectorFit, including in guided mode where the entire inspector is off.
+    layout.addWidget(window.fit_panel.status_label)
     layout.addWidget(canvas, 1)
     return column
 
@@ -907,6 +910,8 @@ def install_workspace(window, document) -> None:
 
 
 def install_workflow_actions(window) -> None:
+    # The window action owns Escape here; the panel binding is for standalone use.
+    window.fit_panel.cancel_shortcut.setEnabled(False)
     window._workflow_actions = {}
     for object_name, text, shortcut, callback_name in WORKFLOW_ACTION_SPECS:
         action = QAction(text, window)

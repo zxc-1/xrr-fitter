@@ -322,9 +322,19 @@ def _install_running_commands(window: QWidget) -> QWidget:
         layout.addWidget(button)
     # 暂停键按下之后改口说「▶ 继续」；命令栏这一枚跟着源按钮改，否则两处措辞会打架。
     window.toolbar_pause_button = group.findChild(QToolButton, "toolbarPauseButton")
-    panel.pause_button.clicked.connect(lambda: window.toolbar_pause_button.setText(panel.pause_button.text()))
+    panel.pause_button.clicked.connect(lambda: _sync_pause_command(window))
     window.running_command_group = group
     return group
+
+
+def _sync_pause_command(window: QWidget) -> None:
+    """Mirror the complete pause/resume action, not just its visible text."""
+    pause = getattr(window, "toolbar_pause_button", None)
+    if pause is not None:
+        source = window.fit_panel.pause_button
+        pause.setText(source.text())
+        pause.setAccessibleName(source.accessibleName())
+        pause.setToolTip(source.toolTip())
 
 
 def _sync_command_bar(window: QWidget) -> None:
@@ -396,9 +406,7 @@ def set_command_bar_running(window: QWidget, running: bool) -> None:
     """运行态把 一键拟合/导出 那一组换成 ⏸ 暂停 / ⏹ 停止。"""
     window._command_bar_running = running
     _sync_command_bar(window)
-    pause = getattr(window, "toolbar_pause_button", None)
-    if pause is not None:
-        pause.setText(window.fit_panel.pause_button.text())
+    _sync_pause_command(window)
 
 
 def set_command_bar_guided(window: QWidget, guided: bool) -> None:

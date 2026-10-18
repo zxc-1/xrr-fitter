@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -183,6 +183,7 @@ HEARTBEAT_INTERVAL_MS = 1000
 # The card's meta row and the status bar both say it, so it lives here rather
 # than being typed twice and drifting.
 CANCELLING_TEXT = "正在取消，等待当前种子结束…"
+PAUSE_REQUESTED_TEXT = "暂停已请求，等待所有计算到达安全点；可继续或停止"
 
 # Stands in for the remaining time before the run has produced enough progress to
 # extrapolate one honestly.
@@ -282,6 +283,19 @@ class _StageRow:
     marker: QLabel
     name: QLabel
     metric: QLabel
+
+
+@dataclass
+class _StageClock:
+    stage: str | None = None
+    started: dict[str, float] = field(default_factory=dict)
+    seconds: dict[str, float] = field(default_factory=dict)
+
+    def observe(self, stage: str, now: float) -> None:
+        if self.stage is not None and self.stage != stage:
+            self.seconds[self.stage] = max(0.0, now - self.started[self.stage])
+        self.started.setdefault(stage, now)
+        self.stage = stage
 
 
 def _paint_row(row: _StageRow, state: str, glyph: str, metric: str) -> None:
@@ -390,6 +404,9 @@ class ProgressView(QWidget):
         self._floor = 0
         self._started: float | None = None
         self._cancelling = False
+        self._pause_requested = False
+        self._member_positions: dict[str, int] = {}
+        self._owner: object = None
         self._stage: str | None = None
         # The remaining-time text as the card last rendered it. The summary reads
         # this instead of re-deriving it, so the bar cannot show an estimate the
@@ -398,8 +415,8 @@ class ProgressView(QWidget):
         # When each stage was first seen, and how long the ones already displaced
         # ran for. A stage's end is only observable when a later stage's frame
         # arrives, so a duration is fixed at that handover and never revised.
-        self._stage_started: dict[str, float] = {}
-        self._stage_seconds: dict[str, float] = {}
+        self._stage_clocks: dict[object, _StageClock] = {}
+        self._stage_clock = _StageClock()
         self._estimator = _RemainingEstimator()
         self._heartbeat = QTimer(self)
         self._heartbeat.setObjectName("fitProgressHeartbeat")
@@ -526,6 +543,10 @@ class ProgressView(QWidget):
         if self._started is None:
             self._started = now
         elapsed = now - self._started
+        self._select_owner(progress)
+        if progress.stage != self._stage:
+            self._estimator.reset()
+            self.trace_plot.reset()
         owner = progress.dataset_id or "联合拟合"
         stage_index, stage_count = self._stage_ordinal(progress.stage)
         self.stage_label.setText(f"{owner} · 阶段 {stage_index}/{stage_count} · {stage_text(progress.stage)}")
@@ -535,7 +556,8 @@ class ProgressView(QWidget):
         self._advance(progress)
         self._record_frame(progress)
         self._paint_ladder(progress)
-        self._estimator.update(elapsed, self._floor / PROGRESS_RESOLUTION)
+        if not self._pause_requested:
+            self._estimator.update(elapsed, self._floor / PROGRESS_RESOLUTION)
         self._render_meta(elapsed)
         self.detail_label.setText(
             f"{progress.stage} {_stage_percent_text(progress.completed, progress.total)}"
@@ -544,6 +566,19 @@ class ProgressView(QWidget):
         if not self._heartbeat.isActive():
             self._heartbeat.start()
         self._publish_summary()
+
+    def _select_owner(self, progress: api.FitProgress) -> None:
+        members = tuple(name for name, _objective in progress.dataset_objectives or ())
+        owner = progress.dataset_id or members
+        if owner != self._owner:
+            self._owner = owner
+            self._stage_clock = self._stage_clocks.setdefault(owner, _StageClock())
+            self.trace_plot.reset()
+            self.live_plot.clear_preview()
+
+    def set_members(self, dataset_ids: tuple[str, ...]) -> None:
+        """Fix the run denominator before its first member reports progress."""
+        self._member_positions = dict.fromkeys(dataset_ids, 0)
 
     def overall_percent(self) -> int:
         """总进度的百分数，读的是进度条自己的值。
@@ -570,9 +605,29 @@ class ProgressView(QWidget):
         self._set_meta_text(CANCELLING_TEXT)
         self._publish_summary()
 
+    def set_pause_requested(self, requested: bool) -> None:
+        self._pause_requested = requested
+        self._estimator.reset()
+        elapsed = 0.0 if self._started is None else self._clock() - self._started
+        self._render_meta(elapsed)
+        self._publish_summary()
+
     def freeze(self) -> None:
         """Stop the live clock without clearing the last rendered values."""
         self._heartbeat.stop()
+
+    def mark_completed(self) -> None:
+        """Complete the display only after usable results have been published."""
+        self._cancelling = False
+        self._pause_requested = False
+        self._floor = PROGRESS_RESOLUTION
+        self.bar.setValue(self._floor)
+        self.stage_label.setText("结果已发布")
+        self._set_card_subtitle("结果已发布 · 100%")
+        elapsed = 0.0 if self._started is None else self._clock() - self._started
+        self._render_meta(elapsed)
+        self.freeze()
+        self._publish_summary()
 
     def _tick(self) -> None:
         """Advance the elapsed/remaining clock between silent progress frames."""
@@ -602,6 +657,10 @@ class ProgressView(QWidget):
         """
         if self._cancelling:
             return RunSummary(position=CANCELLING_TEXT)
+        if self._pause_requested:
+            return RunSummary(position=PAUSE_REQUESTED_TEXT)
+        if self._floor == PROGRESS_RESOLUTION:
+            return RunSummary(position=f"进度 {self._floor} / {PROGRESS_RESOLUTION}", remaining=self._eta_display)
         if self._stage is None:
             return RunSummary()
         ordinal, count = self._stage_ordinal(self._stage)
@@ -613,14 +672,21 @@ class ProgressView(QWidget):
 
     def _eta_text(self, elapsed: float) -> str:
         """Say how much longer, or admit the evidence is too thin to say."""
+        if self._floor == PROGRESS_RESOLUTION:
+            return "00:00"
         remaining = self._estimator.remaining(elapsed)
         if self._floor / PROGRESS_RESOLUTION >= ETA_MIN_FRACTION and remaining is not None:
+            if remaining < 1.0 and self._floor < PROGRESS_RESOLUTION:
+                return "仍在计算"
             return _format_duration(remaining)
         return ETA_UNKNOWN_TEXT
 
     def _render_meta(self, elapsed: float) -> None:
         if self._cancelling:
             self._set_meta_text(CANCELLING_TEXT)
+            return
+        if self._pause_requested:
+            self._set_meta_text(PAUSE_REQUESTED_TEXT)
             return
         self._eta_display = self._eta_text(elapsed)
         self.meta_elapsed.setText(f"已用 {_format_duration(elapsed)}")
@@ -634,12 +700,7 @@ class ProgressView(QWidget):
         stage is the arrival of a different stage's frame. Measuring across that
         handover keeps the nine measures adding up to the elapsed time on screen.
         """
-        previous = self._stage
-        if previous is not None and previous != stage:
-            started = self._stage_started.get(previous)
-            if started is not None:
-                self._stage_seconds[previous] = max(0.0, now - started)
-        self._stage_started.setdefault(stage, now)
+        self._stage_clock.observe(stage, now)
 
     def _stage_metric_done(self, stage: str) -> str:
         """Say how long a finished stage ran, or only that it is finished.
@@ -648,7 +709,7 @@ class ProgressView(QWidget):
         Printing 0.0s for it would report "too fast to measure" about a stage that
         was never measured at all.
         """
-        seconds = self._stage_seconds.get(stage)
+        seconds = self._stage_clock.seconds.get(stage)
         if seconds is None:
             return STAGE_METRIC_DONE
         return _format_stage_duration(seconds)
@@ -664,8 +725,20 @@ class ProgressView(QWidget):
         position = stage_position(progress.stage, progress.completed, progress.total)
         if position is None:
             return
-        # An unknown or out-of-order stage must never move the bar backwards.
-        self._floor = max(self._floor, position)
+        if self._member_positions:
+            owners = (
+                (progress.dataset_id,)
+                if progress.dataset_id
+                else tuple(name for name, _objective in progress.dataset_objectives or ())
+            )
+            for owner in owners or tuple(self._member_positions):
+                if owner in self._member_positions:
+                    self._member_positions[owner] = max(self._member_positions[owner], position)
+            position = round(sum(self._member_positions.values()) / len(self._member_positions))
+        # Automatic prefits can finalize before recovery or joint refinement.
+        # Reserve 100% for result publication; cap after aggregating members so
+        # one finished member of two still contributes exactly 500 / 1000.
+        self._floor = max(self._floor, min(position, PROGRESS_RESOLUTION * 99 // 100))
         self.bar.setValue(self._floor)
 
     def _paint_ladder(self, progress: api.FitProgress) -> None:
@@ -699,10 +772,13 @@ class ProgressView(QWidget):
         self._floor = 0
         self._started = None
         self._cancelling = False
+        self._pause_requested = False
+        self._member_positions.clear()
+        self._owner = None
         self._stage = None
         self._eta_display = ETA_UNKNOWN_TEXT
-        self._stage_started.clear()
-        self._stage_seconds.clear()
+        self._stage_clocks.clear()
+        self._stage_clock = _StageClock()
         self.trace_plot.reset()
         self.stage_label.setText("等待开始")
         self._set_card_subtitle(PROGRESS_SUBTITLE_IDLE)

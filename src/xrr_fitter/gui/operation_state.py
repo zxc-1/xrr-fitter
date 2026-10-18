@@ -42,8 +42,25 @@ def _window_button(window: object, object_name: str) -> QAbstractButton | None:
     return window.findChild(QAbstractButton, object_name)
 
 
+def _set_source_routes_enabled(window: object, *, enabled: bool) -> None:
+    active_dataset = window.document.active_dataset_id is not None
+    for object_name in ("reloadSourceAction", "relinkSourceAction"):
+        action = _window_action(window, object_name)
+        if action is not None:
+            action.setEnabled(enabled and active_dataset)
+
+
 def _set_mutating_routes_enabled(window: object, *, enabled: bool) -> None:
     """Gate every homepage entrance that can change the project or its sources."""
+    for widget in (
+        window.structure_panel,
+        window.parameters_panel,
+        window.parameter_disposition,
+        window.selected_layer_panel,
+        window.batch_mode_group,
+    ):
+        widget.setEnabled(enabled)
+    window.plot_panel.set_editing_enabled(enabled)
     project_buttons = (
         "newProjectButton",
         "openProjectButton",
@@ -81,11 +98,7 @@ def _set_mutating_routes_enabled(window: object, *, enabled: bool) -> None:
         if action is not None:
             action.setEnabled(enabled)
 
-    active_dataset = window.document.active_dataset_id is not None
-    for object_name in ("reloadSourceAction", "relinkSourceAction"):
-        action = _window_action(window, object_name)
-        if action is not None:
-            action.setEnabled(enabled and active_dataset)
+    _set_source_routes_enabled(window, enabled=enabled)
 
     data_panel.import_files_shortcut.setEnabled(enabled)
     data_panel.import_folder_shortcut.setEnabled(enabled)

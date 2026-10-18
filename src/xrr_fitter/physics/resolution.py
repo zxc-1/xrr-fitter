@@ -16,7 +16,9 @@ def _gauss_rules(orders: tuple[int, ...]) -> dict[int, tuple[np.ndarray, np.ndar
 
 ORDERS = (17, 33, 65)
 RULES = _gauss_rules(ORDERS)
-MAX_QUERY_VALUES = 4096
+# Bound temporary arrays while amortizing validation and tangent setup for
+# common 1200-point scans. The quadrature nodes and acceptance rule are unchanged.
+MAX_QUERY_VALUES = 8192
 
 
 class GaussHermiteConvergenceWarning(UserWarning):

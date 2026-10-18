@@ -463,7 +463,7 @@ class MainWindow(QMainWindow):
         return self.fit_panel.start_fit()
 
     def cancel_fit(self) -> None:
-        self.fit_panel.controller.cancel()
+        self.fit_panel.cancel_button.click()
 
     def export_results(self, directory: str | object):
         manifest = self.export_workflow.export_results(directory)
@@ -495,6 +495,8 @@ class MainWindow(QMainWindow):
         )
 
     def _fit_readiness(self) -> api.FitReadiness:
+        if self._operation_is_running():
+            return api.FitReadiness(False, "操作进行中")
         try:
             if self._uses_automatic_fit():
                 return api.preflight_automatic_fit(self.document.project)

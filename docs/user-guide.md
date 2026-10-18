@@ -283,22 +283,27 @@ dataset 的有效结果。
 
 ### 联合拟合
 
-`batch_mode="joint"` 使用显式 `SharingRule`。允许共享的业务 family 包括兼容
-的 material density/SLD，以及明确允许的 instrument resolution/footprint。
-共享 resolution 或 footprint 时，所有成员必须保存相同且非空的
-`instrument_id`，且 resolution domain、active footprint mode 等定义兼容。
+`batch_mode="joint"` 的手动路径使用显式 `SharingRule`。每条规则至少包含两个
+唯一的 `ParameterReference`，成员可以来自同一 dataset 的不同参数；同一 local
+parameter 不能进入两条规则。能否实际共享由 joint compile 检查：
 
-下列参数保持 dataset-local，禁止共享：
+- 每个成员必须存在，并且是自由坐标，不能是锁定参数或约束目标；
+- category、参数名末段、transform、integer、unit 以及上下界必须一致；
+- instrument 类成员还要求完整 `InstrumentSpec` 相同，包括仪器身份和测量语义，
+  仅 `instrument_id` 相同不足以通过检查。
 
-- thickness、period/repeats 和 roughness；
-- angle offset 与 scale；
-- constant/linear/power-law background 的全部参数。
+因此没有一条笼统禁止 thickness、roughness、scale 或 background 的 family
+黑名单；这些参数仍必须满足上述兼容性约束，而非任意两个自由参数都能共享。
 
-每条规则需要不同 dataset 的唯一成员；同一 local parameter 不能进入两条规则。
-调用 `api.validate_sharing_rules(project, rules)` 校验声明，再通过
-`api.set_sharing_rules(project, rules)` 持久化并使受影响结果失效。真实 joint compile
-仍由 `api.preflight_fit()` 在启动 solver 前完成；joint 不合法或 resume 失败时不得
-静默 fallback 到 independent。
+调用 `api.validate_sharing_rules(project, rules)` 只校验声明图，不读取源数据，
+也不保证成员仍然存在、自由或兼容。通过 `api.set_sharing_rules(project, rules)`
+持久化后会使受影响结果失效；启动前仍需由 `api.preflight_fit()` 完成真实 joint
+compile。joint 不合法或 resume 失败时不得静默 fallback 到 independent。
+
+自动联合路径的规则生成不同于手动显式共享：按材料名归组自由的 density/实部
+SLD；吸收项仅在每个出现位置都有显式释放证据时归组。粗糙度按相同结构路径
+可选共享，thickness 与 instrument 参数不会自动共享。因此手动与自动结果或
+耗时不能直接当作相同共享约束下的比较。
 
 ### 单 dataset 与 joint objective
 
@@ -340,9 +345,10 @@ fit_output = api.fit_project(
 ```
 
 `FitProgress` 记录 `dataset_id`、stage、completed/total、当前 best objective 和
-message。checkpoint callback 收到的是包含最新 checkpoint 的 immutable
-whole-project snapshot；服务先保存 snapshot 再调用用户 callback。因此 callback
-失败不会抹掉最新可恢复证据，而会产生显式 `checkpoint_failed` 不可信结果。
+message。checkpoint callback 收到 immutable whole-project snapshot；它也可用于
+同步事务回滚，因此是否可恢复取决于该项目中实际存在的 checkpoint，而不是是否收到过
+名为 `checkpoint` 的事件。保存检查点后再调用用户 callback 的路径中，callback 失败
+不会抹掉已保存的恢复证据，而会产生显式 `checkpoint_failed` 不可信结果。
 
 需要协作取消或独立进程隔离时，使用 `api.start_fit_job(project,
 checkpoint_path=None)`。调用方轮询 `OperationJob.poll()` 的有序 `OperationEvent`，
@@ -351,12 +357,18 @@ checkpoint_path=None)`。调用方轮询 `OperationJob.poll()` 的有序 `Operat
 
 取消或拟合失败：
 
-- 不覆盖 previous `last_valid_result`；
-- 保留已成功发布的最新 checkpoint；
+- 以返回的 `updated_project` 为准，不把失败事件当作有效结果发布；
+- 显式自动 joint 取消会回滚到事务开始的项目；显式自动 joint 失败会清除整组可发布结果与
+  checkpoint，不能用某个成员的旧结果冒充本次联合成功；
 - 返回显式 cancelled/untrusted/warnings，而不是 clean-fit 假成功；
 - independent 会在完成当前边界后停止准备后续 dataset；
 - joint checkpoint 必须在所有 datasets 间保持同一 stage、candidate graph、seed
   ledger 和 layout identity。
+
+GUI 的阶段事件最高显示 99%，因为一次预拟合的 `finalizing` 后仍可能继续恢复或联合
+精修。只有本次成员全部发布有效结果后才显示 100%；这表示计算与发布完成，不表示
+科学结果“可信”。全部失败、部分成功、需复核及原始原因显示在主画布提示区，切换到
+结果页或引导模式不会把这条提示藏进控制卡。仍在计算时不将过期 ETA 显示为剩余 0 秒。
 
 恢复会精确核对 data hash、structure、instrument、parameter settings、config、
 stage graph、candidate order、seed ledger 和 joint layout fingerprints。任何不匹配

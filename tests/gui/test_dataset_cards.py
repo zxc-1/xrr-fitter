@@ -313,14 +313,15 @@ def _joint_panel(qtbot, tmp_path: Path):
 
 
 def _progress(objective: float) -> api.FitProgress:
-    """一次联合运行的进度事件：``dataset_id`` 是 ``None``，J 是三条曲线共享的那一个。"""
+    """联合进度帧显式携带三条成员曲线各自的 J，不把汇总值当成成员读数。"""
     return api.FitProgress(
         dataset_id=None,
         stage="refine",
         completed=620,
         total=1000,
-        best_objective=objective,
+        best_objective=3 * objective,
         message="",
+        dataset_objectives=tuple((f"curve-{index}", objective) for index in range(3)),
     )
 
 

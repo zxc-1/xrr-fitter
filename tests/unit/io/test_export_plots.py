@@ -4,11 +4,13 @@ import logging
 import warnings
 from dataclasses import replace
 from hashlib import sha256
+from io import BytesIO
 
 import matplotlib
 import numpy as np
 import pytest
 from matplotlib._pylab_helpers import Gcf
+from PIL import Image
 from tests.support.model_cases import (
     dataset_project,
     final_fit_result,
@@ -203,6 +205,23 @@ def test_export_plots_are_deterministic_pngs_and_close_every_figure() -> None:
     assert tuple(Gcf.get_all_fig_managers()) == before
     assert context.dataset.structure is context.project.datasets[0].structure
     assert context.selected.diagnostics[0].code == "review-diagnostic"
+
+
+@pytest.mark.parametrize("render", (fit_overview_png, sld_profile_png, residuals_png))
+def test_exported_pngs_match_the_300_dpi_publication_contract(render) -> None:
+    payload = render(_context())
+
+    with Image.open(BytesIO(payload)) as image:
+        assert image.info["dpi"] == pytest.approx((300, 300), abs=0.05)
+        assert image.size == (1920, 1200)
+
+
+def test_parameter_trends_are_also_rendered_at_300_dpi() -> None:
+    payload = parameter_trends_png(_project_contexts("first", "second"))
+
+    with Image.open(BytesIO(payload)) as image:
+        assert image.info["dpi"] == pytest.approx((300, 300), abs=0.05)
+        assert image.size == (2160, 1260)
 
 
 def test_export_parameter_trends_are_deterministic_and_use_project_order() -> None:
@@ -486,14 +505,14 @@ def _mismatched_and_absent_band_contexts() -> tuple[DatasetExportData, DatasetEx
     return mismatched, absent
 
 
-# Overview and SLD references were frozen at ``bb5f253^`` before band drawing.
-# The residual reference includes V2 residual names and both axes' saved units.
-# In the locked Matplotlib environment, size and digest detect later drift
-# without the former same-function self-comparison.
+# Frozen 300 dpi renders, updated with the publication-resolution repair.
+# Curves, residual definitions and physical figure sizes are unchanged; the
+# independent DPI/pixel assertions above prevent blessing a lower-resolution
+# render just by refreshing these digests in the locked Matplotlib environment.
 BANDLESS_PNG_BASELINES = {
-    fit_overview_png: (24674, "901e5ee64154b0aa2e2664128d13d1af26c0609df3ee4ddd7be3db1e92eca1f5"),
-    sld_profile_png: (28382, "4d20b19995be2676ce0d7e341738e8745233d5288abcad1372a9d8be47cead86"),
-    residuals_png: (28515, "5fc26b6b3eda4375a995142dfab7027591c89db06babba195dd49ded50af7438"),
+    fit_overview_png: (92186, "e55baebd4df323f614cab10532d6b1381ab8ab2adab611910f64417984a317c2"),
+    sld_profile_png: (105851, "c8937a38ee1a4d7ecefadce5e6ebb6c0e9c8260aefcdb30ab5f37be6abf781fe"),
+    residuals_png: (102625, "ab43b10bf07c75ecff547282d418754ca00bead9fe2a110ca9e5328264af1e9e"),
 }
 
 

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import QAbstractItemView, QTreeWidgetItem, QWidget
 
 from xrr_fitter.gui.sizing import ContentSizedTree
@@ -57,10 +58,19 @@ class ReorderableTree(ContentSizedTree):
             self.component_moved.emit(source, destination)
 
     def startDrag(self, supported_actions) -> None:  # noqa: N802 - Qt override
-        """Only offer a drag for rows that are components.
-
-        空气和基底没有层序可言，能把它们拖起来只会给出一个必然被拒的落点。
-        """
-        if self._component_index(self.currentItem()) is None:
+        """Own the drag loop; the committed structure alone rebuilds the rows."""
+        item = self.currentItem()
+        if self._component_index(item) is None or not supported_actions & Qt.DropAction.MoveAction:
             return
-        super().startDrag(supported_actions)
+        # QAbstractItemView.startDrag removes the source row after MoveAction.
+        # Our drop handler has already committed and rebuilt the tree by then,
+        # so its cleanup would remove a different row from the new display.
+        drag = QDrag(self)
+        drag.setMimeData(self.mimeData([item]))
+        rectangle = self.visualItemRect(item)
+        drag.setPixmap(self.viewport().grab(rectangle))
+        drag.setHotSpot(rectangle.center() - rectangle.topLeft())
+        try:
+            drag.exec(Qt.DropAction.MoveAction, Qt.DropAction.MoveAction)
+        finally:
+            drag.deleteLater()

@@ -376,6 +376,7 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         super().__init__(panel)
         self._panel = panel
         self._toolbar = toolbar
+        self._editing_enabled = True
         self._reflectivity_tabs = panel.reflectivity_tabs
         self._analysis_tabs = panel.analysis_tabs
         # Backward-compat alias used by tests that reference self._tabs
@@ -509,19 +510,29 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         self._apply_tabs(expert_mode, tab_index, analysis_tab_index)
 
     def select_fit_range(self, first: float, second: float) -> bool:
-        if self._toolbar.mode() != "range":
+        if not self._editing_enabled or self._toolbar.mode() != "range":
             return False
         lower, upper = ordered_finite_range(first, second)
         self._panel.fit_range_requested.emit(lower, upper)
         return True
 
     def request_point_mask(self, index: int) -> bool:
-        if self._toolbar.mode() != "mask":
+        if not self._editing_enabled or self._toolbar.mode() != "mask":
             return False
         data = self._panel._active_data()
         value = prepared_point_index(index, data.two_theta_deg.size)
         self._panel.point_mask_requested.emit(value)
         return True
+
+    def set_editing_enabled(self, enabled: bool) -> None:
+        self._editing_enabled = enabled
+        for mode in ("range", "mask"):
+            self._toolbar.mode_actions()[mode].setEnabled(enabled)
+        if not enabled:
+            self._toolbar.set_mode("view")
+            if self._sld_drag is not None:
+                self._sld_restore_handle(*self._sld_drag)
+                self._sld_drag = None
 
     def cancel(self) -> None:
         self._panel._clear_visible_range()
@@ -644,6 +655,9 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         self._toolbar.show_navigation_mode("pan" if mode == PAN_MODE else "zoom" if mode else "")
 
     def _mode_changed(self, mode: str) -> None:
+        if not self._editing_enabled and mode != "view":
+            self._toolbar.set_mode("view")
+            return
         # Range and mask are angle-domain gestures, so they arm on the two
         # angle-domain reflectivity panes (raw and log); qz⁴R and residual live
         # in qz space and stay read-only.  The pyqtgraph region and mask click
@@ -730,7 +744,7 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         the app that a fit range was requested.
         """
         panel = self._panel
-        if panel is None:
+        if panel is None or not self._editing_enabled:
             return
         lower, upper = ordered_finite_range(low, high)
         panel.show_range(lower, upper)

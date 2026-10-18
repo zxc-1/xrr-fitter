@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 
 from xrr_fitter.io.source import dataset_index, resolve_source_path
-from xrr_fitter.io.xy import read_xy, read_xy_bytes, scan_angle_convention
+from xrr_fitter.io.xy import read_xy, read_xy_bytes, scan_angle_convention, scan_wavelength
 from xrr_fitter.model.automation import (
     AutomaticRole,
     AutomaticStatus,
@@ -141,6 +141,11 @@ def detect_angle_convention(path: str | Path) -> AngleConventionEvidence:
     问「该用哪个约定」，顺序是颠倒的；点数不足、甚至读不出曲线的文件同样应该答得出轴。
     """
     return scan_angle_convention(path)
+
+
+def detect_wavelength(path: str | Path) -> float | None:
+    """Read an explicit scalar header wavelength in Å without guessing a beam."""
+    return scan_wavelength(path)
 
 
 def _dataset_id(project: XrrProject, stem: str) -> str:
