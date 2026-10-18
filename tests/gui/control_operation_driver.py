@@ -64,6 +64,25 @@ def setup_project(tmp_path: Path, *, layers: int = 1, datasets: int = 1):
     return api.select_active_dataset(value, "curve")
 
 
+def _dialog_name(dialog) -> str:
+    return dialog.objectName() or dialog.windowTitle() or type(dialog).__name__
+
+
+def _close_modals() -> None:
+    """Reject every open modal, innermost first, so a failed sweep fails instead of hanging.
+
+    A dialog left open keeps its ``exec()`` loop, and with it the triggering call, blocked
+    for good; the assertion recorded in ``modals`` is only raised once that call returns.
+    """
+    closed = []
+    while (dialog := QApplication.activeModalWidget()) is not None and dialog not in closed:
+        closed.append(dialog)
+        if isinstance(dialog, QDialog):
+            dialog.reject()
+        else:
+            dialog.close()
+
+
 class ControlDriver:
     """Inputs stay at the Qt event boundary; assertions stay with each test."""
 
@@ -184,18 +203,26 @@ class ControlDriver:
         self.click(button)
 
     def file(self, dialog, path: Path | None):
+        """Choose ``path`` the way a reader types it: open its folder, type its name, press Open.
+
+        Typing the whole absolute path is not equivalent. When the name field does not hold
+        focus (the CI runner's dialog was not yet active), QFileDialog keeps every parent folder
+        it passed through selected, and Open then navigates into "/" instead of accepting.
+        """
         assert isinstance(dialog, QFileDialog)
         if path is None:
             self.buttons(dialog, QDialogButtonBox.StandardButton.Cancel)
             return
-        # A quoted path keeps completion from retaining the parent directory as another selection.
-        self.type(self.widget(dialog, "fileNameEdit", QLineEdit), f'"{path}"', commit=False)
+        dialog.setDirectory(str(path.parent))
+        self.type(self.widget(dialog, "fileNameEdit", QLineEdit), path.name, commit=False)
         box = dialog.findChild(QDialogButtonBox)
         accepted = [
             button for button in box.buttons() if box.buttonRole(button) == QDialogButtonBox.ButtonRole.AcceptRole
         ]
         assert len(accepted) == 1
         self.click(accepted[0])
+        selected = dialog.selectedFiles()
+        assert not dialog.isVisible(), f"file dialog stayed open choosing {path.name}: selected {selected[:3]}"
 
     def popup(self, trigger, handler):
         failures = []
@@ -276,24 +303,23 @@ class ControlDriver:
             if dialog is None or dialog in seen:
                 attempts[0] += 1
                 if attempts[0] > 300:
+                    message = "expected modal dialog did not appear"
+                    if dialog is not None:
+                        message = f"modal dialog did not close: {_dialog_name(dialog)}"
+                    failures.append(AssertionError(message))
                     timer.stop()
-                    if isinstance(dialog, QDialog):
-                        message = f"modal dialog did not close: {dialog.objectName() or dialog.windowTitle()}"
-                        failures.append(AssertionError(message))
-                        dialog.reject()
-                    else:
-                        failures.append(AssertionError("expected modal dialog did not appear"))
+                    _close_modals()
                 return
             seen.append(dialog)
             timer.stop()
             try:
                 assert isinstance(dialog, QDialog)
-                assert remaining, f"unexpected modal dialog: {dialog.objectName() or dialog.windowTitle()}"
+                assert remaining, f"unexpected modal dialog: {_dialog_name(dialog)}"
                 remaining.pop(0)(dialog)
             except BaseException as error:
                 failures.append(error)
-                dialog.reject()
                 remaining.clear()
+                _close_modals()
             if not failures:
                 timer.start()
 
