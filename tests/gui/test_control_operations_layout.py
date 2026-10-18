@@ -49,15 +49,24 @@ def test_inner_splitter_handle_moves_rendered_sections(controls, tmp_path, name,
     window = controls.window(project)
     controls.named_click(window, f"pipelineStep_{step}")
     splitter = controls.widget(window, name, QSplitter)
-    handles = [splitter.handle(i) for i in range(1, splitter.count()) if splitter.handle(i).isVisible()]
-    assert handles
-    handle = handles[-1]
+    indexes = [i for i in range(1, splitter.count()) if splitter.handle(i).isVisible()]
+    assert indexes
+    handle = splitter.handle(indexes[-1])
+    # The layer stack's floor follows its content, so the handle may already sit on its
+    # lower bound -- it does wherever the fonts make the stack exactly as tall as that
+    # floor.  Drag toward whichever side the splitter itself says has room.
+    low, high = splitter.getRange(indexes[-1])
+    room_up, room_down = handle.y() - low, high - handle.y()
+    assert max(room_up, room_down) > 0, f"{name} handle has no travel: {(low, high)} at {handle.y()}"
+    offset = -min(35, room_up) if room_up >= room_down else min(35, room_down)
     before = splitter.sizes()
-    drag(controls, handle, handle.rect().center(), handle.rect().center() + QPoint(0, -35))
+    drag(controls, handle, handle.rect().center(), handle.rect().center() + QPoint(0, offset))
     assert splitter.sizes() != before
     assert sum(splitter.sizes()) == sum(before)
     controls.record(
-        name, f"drag visible {name} handle upward", "section heights change without losing total available height"
+        name,
+        f"drag visible {name} handle {'upward' if offset < 0 else 'downward'} toward its free side",
+        "section heights change without losing total available height",
     )
 
 
