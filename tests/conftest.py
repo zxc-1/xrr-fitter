@@ -14,6 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # 什么也不说；超过这个秒数就把所有线程的栈打出来，让日志点名卡住的那一行。只报告，不判失败。
 # 不放进 pyproject 的 ``faulthandler_timeout``：包清单绑定了 pyproject.toml 的哈希。
 STALL_SECONDS = 300
+# 慢用例与失败当场写进同一条流：CI 的 job 一旦到点被取消，pytest 收尾时那份失败清单和
+# 耗时表就没机会印出来了。
+SLOW_SECONDS = 30
 STALL_STREAM = pytest.StashKey()
 
 
@@ -24,6 +27,19 @@ def pytest_configure(config):
 
 def pytest_unconfigure(config):
     config.stash[STALL_STREAM].close()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    stream = item.config.stash[STALL_STREAM]
+    if report.duration > SLOW_SECONDS:
+        stream.write(f"\n[slow {report.duration:.0f}s] {report.when} {report.nodeid}\n")
+    if report.failed:
+        detail = "\n".join(str(report.longrepr).splitlines()[-30:])
+        stream.write(f"\n[failed] {report.when} {report.nodeid}\n{detail}\n")
+    stream.flush()
 
 
 @pytest.hookimpl(hookwrapper=True)
