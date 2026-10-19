@@ -2,7 +2,7 @@
 
 import pytest
 from PySide6.QtCore import QPoint
-from PySide6.QtWidgets import QScrollArea, QSplitter
+from PySide6.QtWidgets import QApplication, QScrollArea, QSplitter
 from tests.gui.control_operation_driver import controls as controls
 from tests.gui.control_operation_driver import setup_project
 from tests.gui.control_readonly_helpers import scroll_roundtrip
@@ -16,6 +16,16 @@ def sized_window(driver, tmp_path, *, layers=1):
     window.resize(1272, 693)
     driver.qtbot.waitExposed(window)
     return window
+
+
+def legal_vertical_drag(splitter, index):
+    minimum, maximum = splitter.getRange(index)
+    position = splitter.handle(index).y()
+    assert minimum <= position <= maximum
+    target = minimum if position - minimum > maximum - position else maximum
+    delta = max(-35, min(35, target - position))
+    assert delta, "visible splitter handle has no legal movement"
+    return QPoint(0, delta)
 
 
 def test_fixed_rails_reject_drag_and_layout_menu_resets_saved_widths(controls, tmp_path):
@@ -45,20 +55,31 @@ def test_fixed_rails_reject_drag_and_layout_menu_resets_saved_widths(controls, t
 
 
 @pytest.mark.parametrize("name,step", (("canvasSplitter", "结构"), ("plotSplitter", "结果")))
-def test_inner_splitter_handle_moves_rendered_sections(controls, tmp_path, name, step):
+@pytest.mark.parametrize("boundary", ("initial", "minimum", "maximum"))
+def test_inner_splitter_handle_moves_rendered_sections(controls, tmp_path, name, step, boundary):
     project = result_fixture(tmp_path) if name == "plotSplitter" else setup_project(tmp_path)
     window = controls.window(project)
     controls.named_click(window, f"pipelineStep_{step}")
     splitter = controls.widget(window, name, QSplitter)
-    handles = [splitter.handle(i) for i in range(1, splitter.count()) if splitter.handle(i).isVisible()]
-    assert handles
-    handle = handles[-1]
+    indices = [i for i in range(1, splitter.count()) if splitter.handle(i).isVisible()]
+    assert indices
+    index = indices[-1]
+    handle = splitter.handle(index)
+    if boundary != "initial":
+        position = splitter.getRange(index)[boundary == "maximum"]
+        splitter.moveSplitter(position, index)
+        QApplication.processEvents()
+        assert handle.y() == position
     before = splitter.sizes()
-    drag(controls, handle, handle.rect().center(), handle.rect().center() + QPoint(0, -35))
+    offset = legal_vertical_drag(splitter, index)
+    drag(controls, handle, handle.rect().center(), handle.rect().center() + offset)
     assert splitter.sizes() != before
     assert sum(splitter.sizes()) == sum(before)
     controls.record(
-        name, f"drag visible {name} handle upward", "section heights change without losing total available height"
+        name,
+        f"drag visible {name} handle by {offset.y()}px within its legal range",
+        "section heights change without losing total available height",
+        setup=f"{boundary} legal position; programmatic boundary placement is fixture setup, not drag input",
     )
 
 
