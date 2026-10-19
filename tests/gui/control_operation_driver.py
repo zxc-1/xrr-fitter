@@ -188,7 +188,8 @@ class ControlDriver:
         if path is None:
             self.buttons(dialog, QDialogButtonBox.StandardButton.Cancel)
             return
-        self.type(self.widget(dialog, "fileNameEdit", QLineEdit), str(path), commit=False)
+        # A quoted path keeps completion from retaining the parent directory as another selection.
+        self.type(self.widget(dialog, "fileNameEdit", QLineEdit), f'"{path}"', commit=False)
         box = dialog.findChild(QDialogButtonBox)
         accepted = [
             button for button in box.buttons() if box.buttonRole(button) == QDialogButtonBox.ButtonRole.AcceptRole
@@ -275,8 +276,13 @@ class ControlDriver:
             if dialog is None or dialog in seen:
                 attempts[0] += 1
                 if attempts[0] > 300:
-                    failures.append(AssertionError("expected modal dialog did not appear"))
                     timer.stop()
+                    if isinstance(dialog, QDialog):
+                        message = f"modal dialog did not close: {dialog.objectName() or dialog.windowTitle()}"
+                        failures.append(AssertionError(message))
+                        dialog.reject()
+                    else:
+                        failures.append(AssertionError("expected modal dialog did not appear"))
                 return
             seen.append(dialog)
             timer.stop()
