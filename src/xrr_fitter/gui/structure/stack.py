@@ -268,7 +268,7 @@ class StackView(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         tokens = theme.palette_tokens(self.palette())
         font = QFont(self.font())
-        font.setPointSize(theme.FONT_PT_SM)
+        font.setPixelSize(theme.FONT_PX_SM)
         painter.setFont(font)
         w = self.width()
         margin = 2

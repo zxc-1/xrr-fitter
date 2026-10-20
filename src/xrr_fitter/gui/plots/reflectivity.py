@@ -10,7 +10,7 @@ from matplotlib.ticker import LogFormatter
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
-from xrr_fitter.gui.noise import residual_label
+from xrr_fitter.gui.noise import NOISE_MODE_SHORT_LABELS, objective_text, residual_label
 from xrr_fitter.gui.plots.diagnostics import (
     DiagnosticView,
     current_plot_palette,
@@ -234,7 +234,7 @@ def _quality_caption_text(candidate: object | None) -> str | None:
     """Caption the saved objective/mode/units on static exports, not live panes."""
     if candidate is None:
         return None
-    return f"J={candidate.objective:.4g} · {candidate.noise_model} · 残差单位 {candidate.residual_unit}"
+    return f"J={objective_text(candidate.objective)} · {NOISE_MODE_SHORT_LABELS[candidate.noise_model]}"
 
 
 def _quality_caption(axes: object, candidate: object | None) -> None:

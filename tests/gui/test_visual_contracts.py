@@ -653,16 +653,17 @@ def test_the_verdict_box_holds_its_text_off_the_border(qtbot) -> None:
 def test_the_verdict_glyph_is_typeset_at_the_display_size(qtbot) -> None:
     """设计稿 ``.confbadge .glyph`` 是 22px，比判定那行的 15px 又大一档。
 
-    字形是这块的图标：和判定同号时它读成句首的一个标点，大一档才读成一枚标记。字号在
-    Python 里设，因为 22px 折算成 16.5pt，而 Qt 的样式表解析器不接受带小数的 pt——写进
-    QSS 会整条规则失效，字形静默退回默认字号。
+    字形是这块的图标：和判定同号时它读成句首的一个标点，大一档才读成一枚标记。两档都按像素
+    比：点数在 Mac 上会缩 25%，比出来的大小关系就随桌面变。
     """
+    from PySide6.QtGui import QFontInfo
+
     from xrr_fitter.gui import theme
 
     panel = _confidence_panel(qtbot, "strong_correlation")
 
-    assert panel.confidence_marker.font().pointSizeF() == theme.VERDICT_GLYPH_PT
-    assert theme.VERDICT_GLYPH_PT > theme.FONT_PT_MD
+    assert QFontInfo(panel.confidence_marker.font()).pixelSize() == theme.VERDICT_GLYPH_PX
+    assert theme.VERDICT_GLYPH_PX > theme.FONT_PX_MD
 
 
 def test_confidence_glyphs_all_take_the_same_width(qtbot) -> None:

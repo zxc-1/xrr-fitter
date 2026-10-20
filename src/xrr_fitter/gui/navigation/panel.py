@@ -20,6 +20,7 @@ import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.navigation.methods import UncertaintyMethodNav
 from xrr_fitter.gui.navigation.steps import StepRow, build_step
+from xrr_fitter.gui.noise import objective_text
 from xrr_fitter.gui.structure.naming import NATIVE_OXIDE_SUFFIX
 
 PIPELINE_STEPS = (
@@ -236,7 +237,7 @@ def _result_state(project: api.XrrProject) -> str:
     best = result.best_candidate
     if best is None:
         return str(result.confidence.value)
-    return f"{result.confidence.value} · J={best.objective:.2f}"
+    return f"{result.confidence.value} · J={objective_text(best.objective)}"
 
 
 def _export_state(project: api.XrrProject) -> str:

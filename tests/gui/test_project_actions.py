@@ -7,6 +7,7 @@ from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
 
 import xrr_fitter.api as api
+from xrr_fitter.gui.project import dialogs
 
 
 def _action(window, object_name: str) -> QAction:
@@ -144,12 +145,9 @@ def test_dirty_project_declining_discard_blocks_new_and_open(qtbot, monkeypatch)
     questions: list[str] = []
     file_dialogs: list[bool] = []
     monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda _parent, title, *_args: (
-            questions.append(title),
-            QMessageBox.StandardButton.No,
-        )[1],
+        dialogs,
+        "ask_unsaved_changes",
+        lambda _parent: (questions.append("unsaved"), dialogs.UnsavedChoice.CANCEL)[1],
     )
     monkeypatch.setattr(
         QFileDialog,
@@ -160,9 +158,27 @@ def test_dirty_project_declining_discard_blocks_new_and_open(qtbot, monkeypatch)
     window.new_project_dialog()
     window.open_project_dialog()
 
-    assert questions == ["未保存的项目更改", "未保存的项目更改"]
+    assert questions == ["unsaved", "unsaved"]
     assert file_dialogs == []
     assert window.document.is_dirty is True
+
+
+def test_dirty_project_saved_first_then_replaced_by_new(qtbot, monkeypatch, tmp_path) -> None:
+    from xrr_fitter.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    path = tmp_path / "kept.xrrproj.json"
+    window.save_project(path)
+    window.document.replace_project(api.set_expert_mode(window.document.project, True))
+    monkeypatch.setattr(dialogs, "ask_unsaved_changes", lambda _parent: dialogs.UnsavedChoice.SAVE)
+
+    window.new_project_dialog()
+
+    # 「保存」先把改动写进原文件，然后才换成新项目。
+    assert api.load_project(path).ui_state.expert_mode is True
+    assert window.document.path is None
+    assert window.document.is_dirty is False
 
 
 def test_project_dialog_reports_a_known_open_error_once(qtbot, tmp_path, monkeypatch) -> None:

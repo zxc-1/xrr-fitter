@@ -67,8 +67,13 @@ DENSITY_SUFFIX = ".density_scale"
 QUANTITY_ORDER: tuple[str, ...] = (".thickness_a", ".roughness_a", DENSITY_SUFFIX)
 
 
+# 屏幕上按 nm 读的长度量。周期块的顶界面粗糙度也在内：漏了它，同一张表里只有它一行还是 Å，
+# 15 Å 与 1.5 nm 的两种粗糙度挨着读像差了十倍。
+NM_SUFFIXES = (".thickness_a", ".roughness_a", ".top_roughness_a")
+
+
 def uses_nm(definition: api.ParameterDefinition) -> bool:
-    return definition.name.endswith((".thickness_a", ".roughness_a"))
+    return definition.name.endswith(NM_SUFFIXES)
 
 
 def _is_density(definition: api.ParameterDefinition) -> bool:
@@ -247,8 +252,10 @@ def alias_quantity(text: str, bulk_density: float | None = None) -> str:
     整名匹配，见 ``ROW_ALIASES``。密度那一条另算：只有拿到体密度、行上的数确实是绝对密度时
     才去掉「相对」二字，否则「密度 2.19」和「密度 0.995」会读成同一个量的两次测量。
     """
-    if text == RELATIVE_DENSITY:
-        return ABSOLUTE_DENSITY if bulk_density is not None else text
+    if text.endswith(RELATIVE_DENSITY):
+        # 周期块的子层行带着子层名（「Mo 相对密度」），分组行写的是块名，前缀摘不掉，所以按词尾认。
+        owner = text.removesuffix(RELATIVE_DENSITY)
+        return f"{owner}{ABSOLUTE_DENSITY}" if bulk_density is not None else text
     for source, target in ROW_ALIASES:
         if text == source:
             return target

@@ -18,7 +18,10 @@ def stop_job(driver, window, job, *, closing):
         window.fit_panel.controller.poll_now()
 
     if closing and window.document.is_dirty:
-        driver.modals(stop, [lambda dialog: driver.click(dialog.button(QMessageBox.StandardButton.Yes))])
+        driver.modals(
+            stop,
+            [lambda dialog: driver.click(next(button for button in dialog.buttons() if button.text() == "不保存"))],
+        )
     else:
         stop()
     driver.qtbot.wait(1)

@@ -663,8 +663,8 @@ def test_fit_range_band_carries_its_window_caption_inside_the_plot(qtbot) -> Non
     assert plot.fit_range_caption() == "拟合窗口 0.5–5.4°"
     assert _range_label(plot).toPlainText() == "拟合窗口 0.5–5.4°"
     assert _range_label(plot).isVisible() is True
-    # 设计稿 font-size:10.5px；Qt 这边按 px*0.75 折成点值。
-    assert np.isclose(_range_label(plot).textItem.font().pointSizeF(), 7.875)
+    # 设计稿 font-size:10.5px；按像素给，取整到 11。
+    assert _range_label(plot).textItem.font().pixelSize() == 11
 
 
 def test_fit_range_caption_takes_its_unit_from_the_pane_axis(qtbot) -> None:
@@ -771,8 +771,8 @@ def test_residual_pane_names_its_sigma_band_in_the_plot(qtbot) -> None:
     label = plot.sigma_label_item
     assert label.toPlainText() == "±1σ"
     assert label.isVisible() is True
-    # 设计稿 font-size:9.5px。
-    assert np.isclose(label.textItem.font().pointSizeF(), 7.125)
+    # 设计稿 font-size:9.5px；按像素给，取整到 10。
+    assert label.textItem.font().pixelSize() == 10
     (x0, _x1), _y = plot.plot_item.vb.viewRange()
     px_x, _px_y = plot.plot_item.vb.viewPixelSize()
     # 设计稿 x=62 对画区左边 58，差 4px；基线压在带子顶边 y=1.0 之上。

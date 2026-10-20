@@ -19,6 +19,7 @@ from xrr_fitter.gui.accessibility import (
     configure_accessibility,
     configure_focus_navigation,
 )
+from xrr_fitter.gui.app_guards import install_app_guards, remove_app_guards
 from xrr_fitter.gui.chrome import install_chrome, refresh_run_summary, refresh_sampling_summary, set_command_bar_guided
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.export.dialog import ExportWorkflow, export_unavailable_reason, show_export_unavailable_reason
@@ -28,6 +29,7 @@ from xrr_fitter.gui.operation_state import (
     operation_is_running,
     refresh_operation_state,
 )
+from xrr_fitter.gui.project import dialogs
 from xrr_fitter.gui.project.autosave import AutosaveController
 from xrr_fitter.gui.window_layout import (
     MINIMUM_SHELL_HEIGHT,
@@ -47,6 +49,9 @@ from xrr_fitter.gui.workspace import (
 
 # 开跑时状态栏报出路线的时长：够读完一句，又不压住随后的进度摘要。
 ROUTE_MESSAGE_MS = 6000
+# 一次编辑清掉了已有结果时留在状态栏的那句。比路线那句留得久：读者要有时间注意到并去撤销。
+DROPPED_RESULTS_TEMPLATE = "{count} 个数据集的拟合结果已随这次修改清除，可在「编辑 ▸ 撤销」恢复。"
+DROPPED_RESULTS_MESSAGE_MS = 10000
 
 
 class MainWindow(QMainWindow):
@@ -66,6 +71,8 @@ class MainWindow(QMainWindow):
         self._resume_user_close = False
         self._force_close_prompt: QMessageBox | None = None
         self._workspace_released = False
+        # 先于任何子控件装上：滚轮守卫要赶在数值框被 polish 之前到场。
+        self._app_guards = install_app_guards(self, self.confirm_application_quit)
         self._columns_settled = False
         self._capture_scheduled = False
         # 帧③ 底栏第一段的判据：层堆叠被提交过一次编辑，而这次编辑还没存盘。只看
@@ -120,6 +127,7 @@ class MainWindow(QMainWindow):
         self.document.setParent(self)
 
     def _connect_workflows(self) -> None:
+        self.document.results_dropped.connect(self._announce_dropped_results)
         self.plot_panel.fit_range_requested.connect(self._plot_range_requested)
         self.plot_panel.point_mask_requested.connect(self._plot_point_requested)
         self.plot_panel.view_changed.connect(self._plot_tab_changed)
@@ -240,6 +248,13 @@ class MainWindow(QMainWindow):
         a typed edit take exactly the same validated, refit-triggering path.
         """
         self.structure_panel.set_structure(structure)
+
+    def _announce_dropped_results(self, dataset_ids: tuple[str, ...]) -> None:
+        """Say that an edit cleared fit results; a layer or range edit used to do it silently."""
+        self.statusBar().showMessage(
+            DROPPED_RESULTS_TEMPLATE.format(count=len(dataset_ids)),
+            DROPPED_RESULTS_MESSAGE_MS,
+        )
 
     def _discard_preview_when_idle(self, running: bool) -> None:
         if not running:
@@ -642,20 +657,20 @@ class MainWindow(QMainWindow):
         spontaneous = event.spontaneous
         return bool(spontaneous())
 
-    def _confirm_discard_changes(self) -> bool:
-        response = QMessageBox.question(
-            self,
-            "未保存的项目更改",
-            "当前项目有未保存的更改。是否放弃这些更改并继续？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        return response == QMessageBox.StandardButton.Yes
+    def confirm_application_quit(self) -> bool:
+        """Answer an application quit (⌘Q, Dock 退出, logout) before Qt closes this window.
 
-    def _accept_idle_close(self, event: object) -> None:
-        user_close = self._is_user_close(event)
-        self._resume_user_close = False
-        if user_close and self.document.is_dirty and not self._confirm_discard_changes():
+        The close events of the quit are programmatic and ask nothing, so both questions
+        a user close would ask are asked here. A pending close already has its answer.
+        """
+        if self._workspace_released or not self.isVisible() or self._close_pending:
+            return True
+        if self._operation_is_running():
+            return dialogs.confirm_stop_for_exit(self)
+        return self.project_actions.resolve_unsaved_changes()
+
+    def _accept_idle_close(self, event: object, *, user_close: bool) -> None:
+        if user_close and not self.project_actions.resolve_unsaved_changes():
             event.ignore()
             return
         event.accept()
@@ -665,6 +680,7 @@ class MainWindow(QMainWindow):
         if self._workspace_released:
             return
         self._workspace_released = True
+        remove_app_guards(self._app_guards)
         # A clean shutdown must not leave a recovery draft behind; only an
         # uncleanly terminated session (which never reaches here) should.
         self.autosave.stop()
@@ -674,11 +690,17 @@ class MainWindow(QMainWindow):
         self.plot_panel.release_resources()
 
     def closeEvent(self, event: object) -> None:
+        user_close = self._is_user_close(event)
+        self._resume_user_close = False
         if not self._operation_is_running():
-            self._accept_idle_close(event)
+            self._accept_idle_close(event, user_close=user_close)
             return
         event.ignore()
         if self._close_pending:
+            return
+        # 关窗等于按「停止」，跑了很久的拟合不该因为点错红灯就停下，所以先问。程序发起的
+        # 关闭（测试收尾、退出时 Qt 的 closeAllWindows）不问，退出那一问由 QuitGuard 先问过。
+        if user_close and not dialogs.confirm_stop_for_exit(self):
             return
         self._close_pending = True
         self._close_cancel_timer.start()

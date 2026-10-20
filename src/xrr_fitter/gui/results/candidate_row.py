@@ -115,6 +115,8 @@ class CandidateRow:
     objective: str
     ranking: str
     mark: str
+    # 「同候选 B」：这条种子收敛到了列表上方那一个解。空串时不画。
+    twin: str = ""
 
 
 def _number(value: float) -> str:
@@ -174,6 +176,7 @@ def candidate_row(
     graded: bool = False,
     confidence: str | None = None,
     ordinal: int = 0,
+    twin_of: int | None = None,
 ) -> CandidateRow:
     """把一个候选读成设计稿那一行的四段。
 
@@ -192,6 +195,7 @@ def candidate_row(
         # 一次单阶段求解里两者相等，写两遍等于让读者去比较两个一样的数。
         ranking="" if ranking is None or ranking == objective else f"排序 J={_number(ranking)}",
         mark=_mark(selected=selected, adopted=adopted),
+        twin="" if twin_of is None else f"同{candidate_title(twin_of)}",
     )
 
 
@@ -333,6 +337,7 @@ class CandidateRowDelegate(QStyledItemDelegate):
         segments = (
             (glyph_font(option.font), row.glyph),
             (title_font(option.font, selected=True), row.title),
+            (value_font(option.font), row.twin),
             (value_font(option.font), row.ranking),
             (value_font(option.font), row.objective),
             (_mark_font(option.font, row.mark), row.mark),
@@ -425,7 +430,7 @@ class CandidateRowDelegate(QStyledItemDelegate):
         metrics = QFontMetrics(font)
         painter.setFont(font)
         painter.setPen(value_colour(option.palette))
-        for text in (row.objective, row.ranking):
+        for text in (row.objective, row.ranking, row.twin):
             if not text:
                 continue
             cell = QRect(content)

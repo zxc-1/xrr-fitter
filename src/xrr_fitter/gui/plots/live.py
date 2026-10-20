@@ -34,10 +34,11 @@ FLOOR_MARKER_PX = 6.0
 # 其余单位隔一个空格——两种都照排版惯例，不是同一个规则的例外。
 FINAL_UNIT = re.compile(r"\(([^()]*)\)\s*$")
 TIGHT_UNITS = ("°",)
-# 图里那两段小字照设计稿的字号走。CSS 的 px 在 96 dpi 下换成 pt 是乘 0.75（10.5px→7.875pt，
-# 9.5px→7.125pt），都比 ``FONT_PT_SM`` 再小一档：它们贴着曲线画，用正文字号会盖住数据。
-FIT_RANGE_CAPTION_PT = 7.875
-SIGMA_LABEL_PT = 7.125
+# 图里那两段小字照设计稿的字号走（10.5px、9.5px），都比 ``FONT_PX_SM`` 再小一档：它们贴着曲线画，
+# 用正文字号会盖住数据。按像素给，取 96 dpi 下原先点数落到的整像素（11、10）：点数在 Mac 上会
+# 再缩 25%，``setPixelSize`` 又只收整数。
+FIT_RANGE_CAPTION_PX = 11
+SIGMA_LABEL_PX = 10
 # 反射率两张与残差那张共用的横轴。2θ 是散射角；入射角是 θ——叫它入射角，等于说轴上的数是实际值的
 # 两倍（导入那一步正是把入射角乘二归一到散射角）。
 ANGLE_AXIS_LABEL = "散射角 2θ (°)"
@@ -297,14 +298,14 @@ class LiveReflectivityPlot(pg.PlotWidget):
         # 设计稿把两段说明画在图里而不是图例或状态栏里：拟合窗口那行压在色带顶端居中，
         # ±1σ 贴在残差那条浅带的左上角。挨着自己说明的东西，读者不用再去别处找对应。
         window_font = self.font()
-        window_font.setPointSizeF(FIT_RANGE_CAPTION_PT)
+        window_font.setPixelSize(FIT_RANGE_CAPTION_PX)
         self.fit_range_label_item = pg.TextItem(anchor=(0.5, 0))
         self.fit_range_label_item.setZValue(20)
         self.fit_range_label_item.setFont(window_font)
         self.fit_range_label_item.hide()
         self.addItem(self.fit_range_label_item, ignoreBounds=True)
         sigma_font = self.font()
-        sigma_font.setPointSizeF(SIGMA_LABEL_PT)
+        sigma_font.setPixelSize(SIGMA_LABEL_PX)
         self.sigma_label_item = pg.TextItem("±1σ", anchor=(0, 1))
         self.sigma_label_item.setZValue(20)
         self.sigma_label_item.setFont(sigma_font)

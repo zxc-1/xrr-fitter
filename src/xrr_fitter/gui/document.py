@@ -55,6 +55,32 @@ def same_content(first: api.XrrProject, second: api.XrrProject) -> bool:
     )
 
 
+def _lost(before: api.XrrProject, after: api.XrrProject, attributes: tuple[str, ...]) -> tuple[str, ...]:
+    """Datasets in both snapshots that held one of ``attributes`` and no longer do.
+
+    A removed dataset is not counted: it went away, nothing was cleared from it.
+    """
+    remaining = {dataset.dataset_id: dataset for dataset in after.datasets}
+    return tuple(
+        dataset.dataset_id
+        for dataset in before.datasets
+        if dataset.dataset_id in remaining
+        and any(
+            getattr(dataset, name) is not None and getattr(remaining[dataset.dataset_id], name) is None
+            for name in attributes
+        )
+    )
+
+
+def dropped_results(before: api.XrrProject, after: api.XrrProject) -> tuple[str, ...]:
+    return _lost(before, after, ("last_valid_result",))
+
+
+def dropped_fit_work(before: api.XrrProject, after: api.XrrProject) -> tuple[str, ...]:
+    """Results and checkpoints both: a checkpoint can hold hours of search."""
+    return _lost(before, after, ("last_valid_result", "checkpoint"))
+
+
 def with_view(project: api.XrrProject, view: api.XrrProject, names: tuple[str, ...]) -> api.XrrProject:
     """Return ``project`` showing ``view``'s values for the named view fields."""
     state = project.ui_state
@@ -74,10 +100,14 @@ class ProjectDocument(QObject):
     dirty_changed = Signal(bool)
     source_validation_changed = Signal(object)
     undo_state_changed = Signal(bool, bool)
+    # An edit cleared these datasets' fit results. A run replacing its own result does not count.
+    results_dropped = Signal(tuple)
 
     def __init__(self, project: api.XrrProject | None = None) -> None:
         super().__init__()
         self._project = api.new_project() if project is None else project
+        # What is on disk (or what new/open started from): undo back to it reads clean again.
+        self._saved_project = self._project
         self._path: Path | None = None
         self._dirty = False
         self._source_validation = api.inspect_sources(self._project)
@@ -147,6 +177,19 @@ class ProjectDocument(QObject):
         stack instead of opening a new one: a fit writes several checkpoints and
         then its result, and the reader undoes that run as one action.
         """
+        dropped = dropped_results(self._project, project)
+        self._commit(project, dirty=dirty, source_validation=source_validation, amend=amend)
+        if dropped:
+            self.results_dropped.emit(dropped)
+
+    def _commit(
+        self,
+        project: api.XrrProject,
+        *,
+        dirty: bool,
+        source_validation: api.ProjectValidation | None,
+        amend: bool,
+    ) -> None:
         if not isinstance(project, api.XrrProject):
             raise TypeError("project must be an XrrProject")
         if source_validation is not None and not isinstance(
@@ -194,8 +237,11 @@ class ProjectDocument(QObject):
         one the run began on.  Pages and the active dataset moved on since then
         are carried over; mutating routes are locked while it runs, so the view is
         the only thing that can have changed underneath it.
+
+        Not announced as dropped results: a run that writes a checkpoint over the
+        result it is replacing is doing its job, not losing the reader's work.
         """
-        self.replace_project(with_view(project, self._project, VIEW_FIELDS), amend=amend)
+        self._commit(with_view(project, self._project, VIEW_FIELDS), dirty=True, source_validation=None, amend=amend)
 
     def _precommit_project(self, project: api.XrrProject) -> None:
         previous = self._project
@@ -244,7 +290,8 @@ class ProjectDocument(QObject):
         target.append(self._project)
         self._project = restored
         self.project_changed.emit(restored)
-        self._set_dirty(True)
+        # 撤销回存盘那一刻就不再算未保存：否则改一下再撤销，关窗时还要问一次存不存。
+        self._set_dirty(not same_content(restored, self._saved_project))
         self._emit_undo_state()
         return True
 
@@ -256,6 +303,7 @@ class ProjectDocument(QObject):
         validation = api.inspect_sources(project)
         self._precommit_project(project)
         self._project = project
+        self._saved_project = project
         self._source_validation = validation
         self._path = None
         self._undo_stack.clear()
@@ -273,6 +321,7 @@ class ProjectDocument(QObject):
         validation = api.inspect_sources(project)
         self._precommit_project(project)
         self._project = project
+        self._saved_project = project
         self._source_validation = validation
         self._path = target
         self._undo_stack.clear()
@@ -293,6 +342,7 @@ class ProjectDocument(QObject):
         validation = api.inspect_sources(project)
         self._precommit_project(project)
         self._project = project
+        self._saved_project = project
         self._source_validation = validation
         self.project_changed.emit(project)
         self.source_validation_changed.emit(validation)

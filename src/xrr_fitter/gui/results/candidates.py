@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from math import isclose
+
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import QFrame, QListWidget, QListWidgetItem, QWidget
@@ -23,6 +25,12 @@ from xrr_fitter.gui.results.candidate_row import (
 # 上限取消了：设计稿这一节是检视器那一栏的末段，整段展开，列表内再套一层滚动条会把
 # 末行藏在折叠线下，而这一栏本来就自己会滚。
 VISIBLE_ROW_FLOOR = 3
+
+# 两条种子算同一个解的界限：单位立方体里每一维差不到万分之一（在各自上下界的跨度里量），
+# 目标值相对差不到百万分之一。实测重复的那几组差在 1e-9 到 4e-6；而 J 一样、参数差到十分之一
+# 跨度的那几条不算——那是一个参数没被数据定住，正该让读者看见。
+TWIN_POSITION_TOLERANCE = 1e-4
+TWIN_OBJECTIVE_TOLERANCE = 1e-6
 
 
 def candidate_is_mcmc_ready(candidate: object | None, result: object | None) -> bool:
@@ -78,6 +86,29 @@ def _display_order(candidates: tuple[object, ...], recommended_id: str | None) -
         return (2 if candidate_is_archived(candidate) else 3), 0.0
 
     return tuple(sorted(candidates, key=key))
+
+
+def _same_solution(first: object, second: object) -> bool:
+    names = tuple(value.name for value in first.parameters)
+    if names != tuple(value.name for value in second.parameters):
+        return False
+    left, right = tuple(first.unit_vector), tuple(second.unit_vector)
+    if len(left) != len(right) or any(abs(a - b) > TWIN_POSITION_TOLERANCE for a, b in zip(left, right, strict=True)):
+        return False
+    return isclose(first.objective, second.objective, rel_tol=TWIN_OBJECTIVE_TOLERANCE)
+
+
+def twin_rows(ordered: tuple[object, ...]) -> tuple[int | None, ...]:
+    """For each row, the earlier row holding the same solution, or ``None``.
+
+    行都留着：每条种子仍可单独查看，悬停仍写它自己的 ID。只是后来者点名先到的那一个，
+    十一行读起来就不再像十一个互相竞争的答案。
+    """
+    twins: list[int | None] = []
+    for row, candidate in enumerate(ordered):
+        earlier = (index for index in range(row) if twins[index] is None and _same_solution(ordered[index], candidate))
+        twins.append(next(earlier, None))
+    return tuple(twins)
 
 
 def active_dataset(project: object) -> object | None:
@@ -265,8 +296,13 @@ class CandidateList(QListWidget):
         blocker = QSignalBlocker(self)
         self.clear()
         selected_row = -1
-        for row, candidate in enumerate(_display_order(tuple(candidates), recommended_id)):
-            self.addItem(self._item(candidate, row, selected_id, recommended_id, adopted_id, confidence))
+        ordered = _display_order(tuple(candidates), recommended_id)
+        twins = twin_rows(ordered)
+        for row, candidate in enumerate(ordered):
+            twin = None if twins[row] is None else ordered[twins[row]]
+            self.addItem(
+                self._item(candidate, row, selected_id, recommended_id, adopted_id, confidence, twin, twins[row])
+            )
             if candidate.candidate_id == selected_id:
                 selected_row = row
         self.setCurrentRow(selected_row)
@@ -282,6 +318,8 @@ class CandidateList(QListWidget):
         recommended_id: str | None,
         adopted_id: str | None,
         confidence: str | None,
+        twin: object | None = None,
+        twin_row: int | None = None,
     ) -> QListWidgetItem:
         candidate_id = candidate.candidate_id
         selected = candidate_id == selected_id
@@ -291,7 +329,7 @@ class CandidateList(QListWidget):
         item.setData(Qt.ItemDataRole.UserRole, candidate_id)
         # 名字换成序号之后，求解器 ID 只剩这里一处出口：跟日志或存档对照时要拿得到
         # ``E-13``，而序号是随这次结果的排序来的，换一次拟合就换一个含义。
-        item.setToolTip(line)
+        item.setToolTip(line if twin is None else f"{line}\n与 {twin.candidate_id} 收敛到同一个解")
         # 画面走分段自绘，可访问文本仍是上面那句散文：自绘接管的是排版，不是信息量。
         # 判定画在推荐那一行上：整份结果只有一个判定，它是对那个解算的——采用了别的解不会
         # 把判定一起搬过去。
@@ -304,6 +342,7 @@ class CandidateList(QListWidget):
                 graded=candidate_id == recommended_id,
                 confidence=confidence,
                 ordinal=row,
+                twin_of=twin_row,
             ),
         )
         return item
