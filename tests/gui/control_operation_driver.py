@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QLineEdit,
     QMenu,
+    QProgressDialog,
     QRadioButton,
     QScrollArea,
     QTabWidget,
@@ -300,7 +301,8 @@ class ControlDriver:
 
         def visit():
             dialog = QApplication.activeModalWidget()
-            if dialog is None or dialog in seen:
+            # 导出时那个没有按钮的忙碌提示框不是要回答的对话框：照「还没出现」算，等它自己关，不占 handler。
+            if dialog is None or dialog in seen or isinstance(dialog, QProgressDialog):
                 attempts[0] += 1
                 if attempts[0] > 300:
                     message = "expected modal dialog did not appear"
