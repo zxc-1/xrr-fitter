@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import numpy as np
+import pytest
 from tests.support.model_cases import fit_candidate
 
 
@@ -58,3 +59,25 @@ def test_equal_objectives_with_different_parameters_are_not_twins(qtbot) -> None
     )
 
     assert [row.twin for row, _tip in rows] == ["", ""]
+
+
+def _failed(candidate_id: str):
+    # 无效求值只用 +inf 作哨兵（``_validate_candidate_objective``），valid 与 J 得一起换。
+    return replace(_candidate(candidate_id, 1.0, 0.70), valid=False, objective=float("inf"), stop_reason="invalid")
+
+
+def _parameterless(candidate_id: str):
+    return replace(_failed(candidate_id), parameters=(), unit_vector=np.array([]))
+
+
+def _eliminated(candidate_id: str):
+    return replace(_candidate(candidate_id, 2.5, 0.70), stop_reason="early_eliminated")
+
+
+@pytest.mark.parametrize("unconverged", (_failed, _parameterless, _eliminated), ids=("inf", "empty", "eliminated"))
+def test_seeds_that_never_converged_are_not_twins(qtbot, unconverged) -> None:
+    # isclose(inf, inf) 为真、空参数逐维比较也全过：没收敛的种子凑在一起，不能读成「收敛到同一个解」。
+    rows = _rows(qtbot, (_candidate("E-2", 0.5, 0.30), unconverged("C-0-0"), unconverged("C-0-1")))
+
+    assert [row.twin for row, _tip in rows] == ["", "", ""]
+    assert all("收敛到同一个解" not in tip for _row, tip in rows)

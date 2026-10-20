@@ -89,6 +89,9 @@ def _display_order(candidates: tuple[object, ...], recommended_id: str | None) -
 
 
 def _same_solution(first: object, second: object) -> bool:
+    # 失败与早期淘汰的种子没收敛到任何解：isclose(inf, inf) 为真、空参数逐维比较也全过，不能当成同一个解。
+    if not (candidate_is_selectable(first) and candidate_is_selectable(second)):
+        return False
     names = tuple(value.name for value in first.parameters)
     if names != tuple(value.name for value in second.parameters):
         return False
