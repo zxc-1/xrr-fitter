@@ -36,7 +36,7 @@ later seed only after exceeding the configured material-gain threshold.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 
 import numpy as np
@@ -122,6 +122,7 @@ class _StageESetup:
     centers: tuple[np.ndarray, ...]
     full_incumbents: tuple[np.ndarray, ...]
     population_size: int
+    local_candidates: dict[bytes, FitCandidate] = field(default_factory=dict, compare=False)
 
 
 #
@@ -1062,6 +1063,14 @@ def _stage_e_local_candidate(
 #
 # Run stage e locals
 #
+def _reused_stage_e_candidate(
+    candidate: FitCandidate, candidate_id: str, seed_index: int, source_seed: int
+) -> FitCandidate:
+    reason = f"reused_exact_start:{candidate.candidate_id}"
+    evidence = SearchEvidence(f"E-{seed_index}", source_seed, (), (), reason)
+    return replace(candidate, candidate_id=candidate_id, seed_index=seed_index, nfev=0, search_evidence=(evidence,))
+
+
 def _run_stage_e_locals(
     problem: FitEvaluationContext,
     setup: _StageESetup,
@@ -1078,6 +1087,12 @@ def _run_stage_e_locals(
 ) -> list[FitCandidate]:
     # Result positions retain start order so winner selection and nfev totals
     # are independent of worker completion timing.
+    _poll(cancelled)
+    keys = tuple(start.tobytes() for start in starts)
+    missing: dict[bytes, int] = {}
+    for index, key in enumerate(keys):
+        if key not in setup.local_candidates:
+            missing.setdefault(key, index)
 
     def _make_e_local_cb(cid: str, sidx: int) -> Callable[[np.ndarray, int, int, float | None], None]:
         #
@@ -1114,7 +1129,7 @@ def _run_stage_e_locals(
             _stage_e_local_candidate,
             problem,
             setup,
-            start,
+            starts[index],
             f"E-{seed_index}-{kind}-{index}",
             seed_index,
             cancelled,
@@ -1122,9 +1137,21 @@ def _run_stage_e_locals(
             source_seed=source_seed,
             round_index=1 if kind == "local" else 2,
         )
-        for index, start in enumerate(starts)
+        for index in missing.values()
     )
-    return list(_run_tasks(tasks, task_runner))
+    solved = _run_tasks(tasks, task_runner) if tasks else ()
+    _poll(cancelled)
+    # Commit only a complete batch. The cache belongs to this immutable full
+    # problem and uses exact bytes, never approximate basin/parameter equality.
+    setup.local_candidates.update(zip(missing, solved, strict=True))
+    result: list[FitCandidate] = []
+    for index, key in enumerate(keys):
+        candidate = setup.local_candidates[key]
+        candidate_id = f"E-{seed_index}-{kind}-{index}"
+        if candidate.candidate_id != candidate_id:
+            candidate = _reused_stage_e_candidate(candidate, candidate_id, seed_index, source_seed)
+        result.append(candidate)
+    return result
 
 
 #

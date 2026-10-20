@@ -17,10 +17,20 @@ def _parser() -> argparse.ArgumentParser:
 
 def _launch(argv: Sequence[str]) -> int:
     from xrr_fitter.gui.application import create_application, show_splash
-    from xrr_fitter.gui.main_window import MainWindow
 
     application = create_application(list(argv))
     splash = show_splash(application)
+
+    def stage(message: str) -> None:
+        splash.showMessage(message)
+        application.processEvents()
+
+    # main_window 牵出 pyqtgraph / matplotlib / 拟合内核，是冷启动最长的一段；
+    # 放在启动画面之后导入，等待期间画面才看得见，并能逐段报告进度。
+    stage("正在载入绘图与拟合模块…")
+    from xrr_fitter.gui.main_window import MainWindow
+
+    stage("正在构建工作区…")
     window = MainWindow()
     window.show()
     splash.finish(window)

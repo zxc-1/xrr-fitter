@@ -349,6 +349,66 @@ def _problem_seeds(child_seed: int) -> tuple[int, int]:
     return tuple(int(item.generate_state(1, dtype=np.uint64)[0]) for item in spawned)
 
 
+def _coordinate_initial_scale(problem, center, index, center_logp, cancelled) -> float | None:
+    step = 0.01
+    observed_finite = False
+    for _attempt in range(64):
+        _poll(cancelled)
+        probes = []
+        for direction in (-1.0, 1.0):
+            point = center.copy()
+            point[index] = np.clip(center[index] + direction * step, 0.0, 1.0)
+            if point[index] != center[index]:
+                value = problem_log_probability(problem, point)
+                if isfinite(value):
+                    probes.append(value)
+        # Constraints may leave only one valid direction from the candidate.
+        if probes and min(probes) >= center_logp - 0.5:
+            return step * 0.5
+        observed_finite |= bool(probes)
+        step *= 0.5
+    if observed_finite:
+        raise RuntimeError("could not resolve a finite MCMC initialization neighborhood")
+    return None
+
+
+def _joint_scale_is_local(problem, center, scales, unresolved, center_logp, rng, cancelled) -> bool:
+    for _attempt in range(256):
+        _poll(cancelled)
+        point = rng.normal(center, scales, size=center.size)
+        if np.any((point < 0.0) | (point > 1.0)) or np.any(point[unresolved] == center[unresolved]):
+            continue
+        value = problem_log_probability(problem, point)
+        if isfinite(value) and value >= center_logp - 0.5:
+            return True
+    return False
+
+
+def _problem_initial_scales(problem, center, cancelled, seed) -> np.ndarray:
+    _poll(cancelled)
+    center_logp = problem_log_probability(problem, center)
+    if not isfinite(center_logp):
+        raise ValueError("MCMC initialization center must have finite log probability")
+    # Unit bounds can be millions of posterior widths apart (notably background).
+    # Probe the actual target, including priors, before jittering each coordinate.
+    # This affects only initialization; production moves and the target stay fixed.
+    coordinates = [
+        _coordinate_initial_scale(problem, center, index, center_logp, cancelled) for index in range(center.size)
+    ]
+    unresolved = np.asarray([value is None for value in coordinates])
+    scales = np.asarray([0.005 if value is None else value for value in coordinates])
+    if not np.any(unresolved):
+        return scales
+    # Coupled constraints can have no feasible coordinate direction at a vertex.
+    # Calibrate those coordinates together; keep the measured widths of others.
+    rng = np.random.default_rng(seed)
+    for _attempt in range(64):
+        if _joint_scale_is_local(problem, center, scales, unresolved, center_logp, rng, cancelled):
+            return scales
+        scales[unresolved] *= 0.5
+    raise RuntimeError("could not resolve a finite joint MCMC initialization neighborhood")
+
+
 def _problem_walkers(
     problem: object,
     center: np.ndarray,
@@ -357,12 +417,13 @@ def _problem_walkers(
     cancelled: Callable[[], bool] | None,
 ) -> np.ndarray:
     rng = np.random.default_rng(seed)
+    scales = _problem_initial_scales(problem, center, cancelled, seed)
     walkers: list[np.ndarray] = []
     attempts = 0
     maximum = max(1000, int(config.walkers) * 1000)
     while len(walkers) < config.walkers and attempts < maximum:
         _poll(cancelled)
-        proposal = rng.normal(center, 0.01, size=center.size)
+        proposal = rng.normal(center, scales, size=center.size)
         attempts += 1
         if np.any((proposal < 0.0) | (proposal > 1.0)):
             continue
@@ -370,7 +431,11 @@ def _problem_walkers(
             walkers.append(proposal)
     if len(walkers) != config.walkers:
         raise RuntimeError("could not initialize finite MCMC walkers")
-    return np.vstack(walkers)
+    matrix = np.vstack(walkers)
+    normalized = (matrix - center) / scales
+    if np.linalg.matrix_rank(normalized - normalized.mean(axis=0)) != center.size:
+        raise RuntimeError("could not initialize independent MCMC walkers at floating-point precision")
+    return matrix
 
 
 def map_problem_samples(

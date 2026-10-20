@@ -24,6 +24,8 @@ class ProjectDocument(QObject):
     """Own project identity, persistence path, and unsaved-change state."""
 
     project_changed = Signal(object)
+    # A successful new/open, rather than an edit or save of this document.
+    document_replaced = Signal()
     path_changed = Signal(object)
     dirty_changed = Signal(bool)
     source_validation_changed = Signal(object)
@@ -180,6 +182,7 @@ class ProjectDocument(QObject):
         self.path_changed.emit(None)
         self._set_dirty(False)
         self._emit_undo_state()
+        self.document_replaced.emit()
 
     def open(self, path: str | Path) -> None:
         target = Path(path)
@@ -196,6 +199,7 @@ class ProjectDocument(QObject):
         self.path_changed.emit(target)
         self._set_dirty(False)
         self._emit_undo_state()
+        self.document_replaced.emit()
 
     def save(self, path: str | Path | None = None) -> None:
         target = self._path if path is None else Path(path)

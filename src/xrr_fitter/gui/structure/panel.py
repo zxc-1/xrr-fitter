@@ -31,7 +31,8 @@ class StructurePanel(QWidget):
         self.initialize_button = QPushButton("初始化结构")
         self.initialize_button.setObjectName("initializeStructureButton")
         self.initialize_button.setAccessibleName("初始化结构")
-        self.initialize_button.setProperty("primary", True)
+        # 建议动作，不是本屏那枚实心 primary（名额归命令栏的一键拟合）：低饱和底 + 左强调条。
+        theme.mark_suggested(self.initialize_button)
         self.initialize_button.clicked.connect(self._initialize_default_structure)
         self.editor = StructureEditor(
             self.set_structure,

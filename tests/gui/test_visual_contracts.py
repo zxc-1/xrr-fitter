@@ -257,6 +257,37 @@ def test_sld_pane_reserves_plot_height_beneath_its_card_chrome(qtbot, tmp_path) 
     assert canvas.height() >= MIN_SLD_PLOT_H
 
 
+def test_unstructured_project_keeps_data_and_structure_canvas_scopes_distinct(qtbot, tmp_path) -> None:
+    """没有结构时也保留步骤约定：数据页看原始曲线，结构页保留 SLD 卡。"""
+    window = _window(qtbot, _project(tmp_path))
+    panel = window.plot_panel
+    original_project = window.document.project
+
+    assert window.pipeline_nav.current_step_index() == 1
+    assert panel.canvas_pane_keys() == ("sld",)
+    assert panel.sld_pane.isVisibleTo(panel) is True
+
+    window.pipeline_nav.select_step(0)
+    assert panel.canvas_pane_keys() == ("reflectivity",)
+    assert panel.reflectivity_group.isVisibleTo(panel) is True
+    assert panel.sld_pane.isVisibleTo(panel) is False
+
+    window.pipeline_nav.select_step(1)
+    assert panel.canvas_pane_keys() == ("sld",)
+    assert panel.sld_pane.isVisibleTo(panel) is True
+    assert window.document.project is original_project
+
+
+def test_the_structure_step_keeps_the_sld_canvas_when_a_structure_exists(qtbot, tmp_path) -> None:
+    """有结构可画时，结构和参数步骤继续显示实时 SLD 剖面。"""
+    window = _window(qtbot, _project(tmp_path, structured=True))
+    panel = window.plot_panel
+
+    assert window.pipeline_nav.current_step_index() in (1, 2)
+    assert panel.canvas_pane_keys() == ("sld",)
+    assert panel.sld_pane.isVisibleTo(panel) is True
+
+
 # -- M3: Pipeline navigator structural contract --
 
 

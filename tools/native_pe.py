@@ -115,3 +115,58 @@ def inspect_pe(data: bytes | memoryview) -> dict:
         {"name": name, "kind": "forwarder"} for name in sorted({_forwarded_library(value) for value in forwards})
     )
     return {"format": "pe", "machine": image.machine, "imports": requests, "forwarded_exports": forwards}
+
+
+def _coff_import_strings(reader: NativeBytes, size: int, name_type: int) -> tuple[str, str]:
+    if len(reader.data) != 20 + size:
+        raise ValueError("COFF import payload size differs from its header")
+    symbol = reader.string(20, size)
+    offset = 21 + len(symbol.encode("utf-8"))
+    library = reader.string(offset, 20 + size - offset)
+    offset += len(library.encode("utf-8")) + 1
+    if name_type == 4:
+        symbol = reader.string(offset, len(reader.data) - offset)
+        offset += len(symbol.encode("utf-8")) + 1
+    if offset != len(reader.data):
+        raise ValueError("COFF import has unclaimed trailing data")
+    return symbol, library
+
+
+def _coff_import_symbol(symbol: str, name_type: int, hint: int) -> dict:
+    if name_type == 0:
+        return {"ordinal": hint}
+    if name_type in {2, 3} and symbol.startswith(("?", "@", "_")):
+        symbol = symbol[1:]
+    if name_type == 3:
+        symbol = symbol.split("@", 1)[0]
+    if not symbol:
+        raise ValueError("COFF import symbol is empty after name mapping")
+    return {"symbol": symbol, "hint": hint}
+
+
+def inspect_coff_import(data: bytes | memoryview) -> dict:
+    """Read short import members; these describe linker inputs, not DLL loads.
+
+    Layout: Microsoft PE/COFF specification, Import Library Format.
+    Anonymous COFF objects share the signature but have a different version.
+    """
+    reader = NativeBytes(data)
+    _sig1, _sig2, version, machine, _timestamp, size, hint, flags = reader.unpack("<4H2I2H", 0)
+    if version != 0:
+        return {
+            "format": "coff-import",
+            "machine": machine,
+            "imports": [],
+            "unparsed_commands": [{"reason": "unsupported anonymous COFF object version", "version": version}],
+        }
+    kind, name_type = flags & 3, (flags >> 2) & 7
+    if flags >> 5 or kind > 2 or name_type > 4:
+        raise ValueError("unsupported COFF import flags")
+    symbol, library = _coff_import_strings(reader, size, name_type)
+    request = {
+        "name": library,
+        "kind": "static-import",
+        "import_type": kind,
+        **_coff_import_symbol(symbol, name_type, hint),
+    }
+    return {"format": "coff-import", "machine": machine, "imports": [request]}

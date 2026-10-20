@@ -283,3 +283,73 @@ def test_batch_import_reads_the_angle_column_the_way_the_preset_declares(
 
 def test_the_default_preset_convention_stays_two_theta() -> None:
     assert _preset().angle_convention == "two_theta"
+
+
+def test_parent_stack_applies_to_point_files_without_sample_prefix(tmp_path) -> None:
+    folder = tmp_path / "S300 CrSiC+SiCMo+TaN"
+    paths = (_curve(folder / "W2_exported.xy"), _curve(folder / "W02.xy"))
+    preview = preview_import_batch(paths, _preset())
+
+    assert [row.layers_backing_to_surface for row in preview.files] == [("CrSiC", "SiCMo", "TaN")] * 2
+    assert [row.dataset_id_stem for row in preview.files] == ["S300 W2", "S300 W02"]
+    result = import_dataset_batch(new_project(), preview)
+    assert not result.failures
+    assert [layer.name for layer in result.updated_project.datasets[0].structure.components[:3]] == [
+        "TaN",
+        "SiCMo",
+        "CrSiC",
+    ]
+
+
+def test_stack_only_folder_applies_to_exported_point_files(tmp_path) -> None:
+    path = _curve(tmp_path / "CrSiC+SiCMo+TaN" / "W02_exported.xy")
+
+    row = preview_import_batch((path,), _preset()).files[0]
+
+    assert row.dataset_id_stem == "W02"
+    assert row.layers_backing_to_surface == ("CrSiC", "SiCMo", "TaN")
+
+
+def test_nested_data_folder_inherits_nearest_declared_stack_folder(tmp_path) -> None:
+    paths = (
+        _curve(tmp_path / "S300 CrSiC+SiCMo+TaN" / "exports" / "W02_exported.xy"),
+        _curve(tmp_path / "Si3N4+Si+Zr" / "raw" / "S300-2.xy"),
+    )
+
+    preview = preview_import_batch(paths, _preset())
+
+    assert (
+        (preview.files[0].dataset_id_stem, preview.files[0].layers_backing_to_surface),
+        (preview.files[1].dataset_id_stem, preview.files[1].layers_backing_to_surface),
+    ) == (
+        ("S300 W02", ("CrSiC", "SiCMo", "TaN")),
+        ("S300-2", ("Si3N4", "Si", "Zr")),
+    )
+
+
+def test_explicit_file_stack_takes_priority_over_folder_default(tmp_path) -> None:
+    path = _curve(tmp_path / "P1 Si3N4+Si+Zr" / "P1 TaN+Zr.xy")
+    row = preview_import_batch((path,), _preset()).files[0]
+    assert row.dataset_id_stem == "P1"
+    assert row.layers_backing_to_surface == ("TaN", "Zr")
+
+
+def test_whitespace_around_stack_separators_does_not_discard_layers(tmp_path) -> None:
+    row = preview_import_batch((tmp_path / "sample Si3N4 + Si + Zr.xy",), _preset()).files[0]
+    assert row.layers_backing_to_surface == ("Si3N4", "Si", "Zr")
+    assert row.dataset_id_stem == "sample"
+
+
+def test_point_suffix_is_not_misidentified_as_a_material(tmp_path) -> None:
+    paths = (tmp_path / "sample W2_exported.xy", tmp_path / "scan 20260916.xy")
+    preview = preview_import_batch(paths, _preset())
+    assert all(not row.layers_backing_to_surface for row in preview.files)
+
+
+def test_scan_date_stem_inherits_folder_stack_without_becoming_a_material(tmp_path) -> None:
+    path = _curve(tmp_path / "CrSiC+SiCMo+TaN" / "scan 20260916.xy")
+
+    row = preview_import_batch((path,), _preset()).files[0]
+
+    assert row.dataset_id_stem == "scan 20260916"
+    assert row.layers_backing_to_surface == ("CrSiC", "SiCMo", "TaN")

@@ -10,14 +10,14 @@ parameter uncertainty.
 
 ## Features
 
-- Automatic structure construction and fitting from strict filename layer stacks.
+- Filename- and folder-driven initial structure construction, followed by
+  user-triggered automatic fitting.
 - Single-point fitting or same-import, same-physics joint refinement with
   point-local thickness and batch uniformity summaries.
-- Guided four-step workflow for routine fitting, plus a dockable expert
-  workspace whose panel layout is saved with the project.
+- Optional, read-only four-step onboarding and a three-column workspace whose
+  layout sizes and view selection are saved with the project.
 - Interactive expert structure editor for layers, periodic stacks, gradients,
-  and the substrate backing, with reflectivity and SLD-profile plots shown
-  side by side.
+  and the substrate backing, with reflectivity and SLD-profile views.
 - Global screening followed by local least-squares refinement with checkpointed,
   resumable fits.
 - Explicit robust-log, known-sigma Gaussian, and raw-count Poisson objectives.
@@ -88,17 +88,22 @@ prompts once per matching structure group for the actual substrate. A Si
 substrate receives a 10 A SiO2 native-oxide layer unless the adjacent layer is
 already exactly SiO2.
 
-Selecting files imports every valid row and starts automatic fitting. A singleton
-physical signature runs as a single fit; multiple datasets from the same import
-batch with the same signature are prefit and jointly refined. Unknown material
-codes use a direct effective-SLD model and report effective SLD/electron density,
-but do not invent a mass density in g/cm3.
+Select files or a folder (optionally recursively), review the import preview,
+and confirm the valid datasets. They remain pending until you check the initial
+structures and click **一键拟合** on the homepage (or **自动拟合** in its control panel).
+In the default independent, non-advanced mode, a singleton physical signature
+runs as a single fit; multiple datasets from the same import batch with the same
+signature are prefit and jointly refined. Unknown material codes use a direct
+effective-SLD model and report effective SLD/electron density, but do not invent
+a mass density in g/cm3.
 
 The standard result view reports per-point status and statistics membership as
-well as layer and uniformity values. Leave the guided flow via **View ▸ Guidance
-mode**, then enable **Expert mode** to use manual independent/joint fitting,
-profile diagnostics, MCMC, and explicit result export; automatic fitting itself
-does not export files.
+well as layer and uniformity values. The optional **View ▸ Guidance mode** only
+explains the four steps; finishing or skipping it returns to the homepage without
+importing or fitting. The separate **显示高级选项** switch exposes expert parameters
+and manual fitting controls; the header's guided/workspace switch does not enable
+them. Result export is explicit in either mode; automatic fitting itself does not
+export files.
 
 ### Fitting algorithm V2
 

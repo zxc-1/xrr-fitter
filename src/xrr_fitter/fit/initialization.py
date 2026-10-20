@@ -207,6 +207,12 @@ def estimate_initial_candidates(
         observed,
         data.r_floor,
     )
+    if thickness_warnings:
+        # Sparse or damped curves can have a significant spectral mode without
+        # two resolvable fringe spacings. Keep that evidence beside (not instead
+        # of) the wide grid; failure to corroborate it is not evidence of absence.
+        evidence = structure_evidence(data, structure)
+        thickness = _merge_candidates((thickness, evidence.peak_positions_a))
     angle_offsets, critical_angle, angle_warnings = _angle_offset_hypotheses(
         data,
         structure,

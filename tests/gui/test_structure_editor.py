@@ -115,6 +115,26 @@ def test_imported_dataset_can_initialize_default_structure_from_visible_button(
     assert add_layer.isEnabled() is True
 
 
+def test_the_initialize_button_is_a_suggestion_not_the_screens_one_primary(
+    qtbot,
+    tmp_path,
+) -> None:
+    """「初始化结构」是条建议，不是整屏那枚实心 primary。
+
+    它此前是通栏的 ``primary`` 实心按钮，铺满画布顶端、像一条染了饱和色的标题栏；可整个
+    界面每次只推荐一个下一步动作，那枚实心的名额留给命令栏的「⚡ 一键拟合」（见
+    ``test_shell_menus`` 的单 primary 判据）。这里降为一条建议动作：低饱和 accent 底 + 左侧
+    强调竖条，读起来是「不妨从这儿开始」，而不是「这是本屏的主操作」。降级只动装帧，点击照
+    旧建默认结构（上一条测试守着这条行为）。
+    """
+    panel = _panel(qtbot, tmp_path)
+    button = panel.findChild(QPushButton, "initializeStructureButton")
+
+    assert button is not None
+    assert button.property("primary") is not True, "初始化按钮仍是通栏实心 primary，和命令栏抢唯一名额"
+    assert button.property("suggested") is True, "初始化按钮没有降级成建议动作的装帧"
+
+
 def test_structure_edit_failure_rolls_back_project_editor_and_signal(
     qtbot,
     tmp_path,

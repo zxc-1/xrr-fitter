@@ -157,12 +157,18 @@ def _empty_state_widget(panel: PlotPanel) -> QWidget:
     button.setObjectName("emptyStateImportButton")
     button.setProperty("primary", True)
     button.clicked.connect(panel.import_requested.emit)
+    folder_button = QPushButton("导入文件夹…")
+    folder_button.setObjectName("emptyStateImportFolderButton")
+    folder_button.setAccessibleName("导入文件夹")
+    folder_button.setToolTip("选择文件夹并预览批量导入的数据")
+    folder_button.clicked.connect(panel.folder_import_requested.emit)
     hint = QLabel("也可以使用菜单「文件 ▸ 导入数据文件…」或快捷键 Ctrl+I")
     hint.setProperty("mutedText", True)
     hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
     row = QHBoxLayout()
     row.addStretch(1)
     row.addWidget(button)
+    row.addWidget(folder_button)
     row.addStretch(1)
     layout = QVBoxLayout(widget)
     layout.setSpacing(theme.SPACE_MD)
@@ -182,6 +188,7 @@ class PlotPanel(QWidget):
     point_mask_requested = Signal(int)
     view_changed = Signal(int)
     import_requested = Signal()
+    folder_import_requested = Signal()
     # Emitted when an interface handle on the SLD pane is dragged: the payload is
     # the edited StructureSpec, committed by the window through the structure
     # editor so a hand edit and a typed edit take exactly the same path.
@@ -603,6 +610,10 @@ class PlotPanel(QWidget):
     #
     def set_expert_mode(self, enabled: bool) -> None:
         self._interactions.set_expert_mode(enabled)
+
+    def set_editing_enabled(self, enabled: bool) -> None:
+        """Lock scientific inputs without disabling zoom, pan, or inspection."""
+        self._interactions.set_editing_enabled(enabled)
 
     #
     # Apply workspace

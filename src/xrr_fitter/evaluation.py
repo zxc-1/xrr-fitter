@@ -365,6 +365,7 @@ def expanded_structure_jacobian(*args, **kwargs):
 
 @wraps(_jacobian_impl._qz_and_jacobian)
 def _qz_and_jacobian(*args, **kwargs):
+    _sync_compatibility_hooks()
     return _jacobian_impl._qz_and_jacobian(*args, **kwargs)
 
 

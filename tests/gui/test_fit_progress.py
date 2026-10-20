@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtWidgets import QLabel, QProgressBar, QPushButton
+from tests.gui.fit_feedback_cases import with_checkpoint
 
 import xrr_fitter.api as api
 
@@ -124,7 +125,7 @@ def test_fit_panel_checkpoint_adopts_project_before_terminal_result(
     monkeypatch,
 ) -> None:
     panel = _panel(qtbot, tmp_path)
-    checkpoint = api.set_expert_mode(panel.document.project, True)
+    checkpoint = with_checkpoint(panel.document.project)
     job = _FakeJob(
         (
             api.OperationEvent(0, "checkpoint", checkpoint=checkpoint),
@@ -218,7 +219,9 @@ def test_progress_bar_never_moves_backwards_across_stage_changes(qtbot) -> None:
     assert observed == sorted(observed), f"bar moved backwards: {observed}"
     assert bar.maximum() == 1000
     assert observed[0] > 0
-    assert observed[-1] == 1000
+    assert observed[-1] == 990
+    view.mark_completed()
+    assert bar.value() == 1000
 
 
 def test_progress_view_reports_stage_ordinal_and_localized_stage_name(qtbot) -> None:
@@ -580,7 +583,7 @@ def _preview_progress(value):
     qz = np.array([0.1, 0.2, 0.3], dtype=float)
     model = np.array([value, value, value], dtype=float)
     return api.FitProgress(
-        "curve",
+        "curve-0",
         "B",
         5,
         10,

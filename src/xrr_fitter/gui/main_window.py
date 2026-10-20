@@ -115,6 +115,7 @@ class MainWindow(QMainWindow):
         self.plot_panel.point_mask_requested.connect(self._plot_point_requested)
         self.plot_panel.view_changed.connect(self._plot_tab_changed)
         self.plot_panel.import_requested.connect(self.data_panel.import_files_button.click)
+        self.plot_panel.folder_import_requested.connect(self.data_panel.import_folder_button.click)
         self.plot_panel.structure_edit_requested.connect(self._plot_structure_edited)
         # Geometry is only worth persisting when a handle moved, and
         # ``splitterMoved`` is emitted for that alone: ``setSizes``, which is how
@@ -457,10 +458,12 @@ class MainWindow(QMainWindow):
     def start_fit(self) -> bool:
         if self._operation_is_running():
             raise RuntimeError("cannot start fit while an operation is running")
+        if self._uses_automatic_fit():
+            return self.fit_panel.start_automatic_fit()
         return self.fit_panel.start_fit()
 
     def cancel_fit(self) -> None:
-        self.fit_panel.controller.cancel()
+        self.fit_panel.cancel_button.click()
 
     def export_results(self, directory: str | object):
         manifest = self.export_workflow.export_results(directory)
@@ -482,8 +485,21 @@ class MainWindow(QMainWindow):
         readiness = self._fit_readiness()
         return "已就绪" if readiness.ready else messages.readiness_text(readiness.message)
 
+    def _uses_automatic_fit(self) -> bool:
+        project = self.document.project
+        return (
+            project.batch_mode == "independent"
+            and not project.ui_state.expert_mode
+            and bool(project.datasets)
+            and all(dataset.automation.role is not api.AutomaticRole.MANUAL for dataset in project.datasets)
+        )
+
     def _fit_readiness(self) -> api.FitReadiness:
+        if self._operation_is_running():
+            return api.FitReadiness(False, "操作进行中")
         try:
+            if self._uses_automatic_fit():
+                return api.preflight_automatic_fit(self.document.project)
             return api.preflight_fit(self.document.project)
         except (OSError, ValueError) as error:
             return api.FitReadiness(False, str(error))

@@ -283,22 +283,27 @@ dataset 的有效结果。
 
 ### 联合拟合
 
-`batch_mode="joint"` 使用显式 `SharingRule`。允许共享的业务 family 包括兼容
-的 material density/SLD，以及明确允许的 instrument resolution/footprint。
-共享 resolution 或 footprint 时，所有成员必须保存相同且非空的
-`instrument_id`，且 resolution domain、active footprint mode 等定义兼容。
+`batch_mode="joint"` 的手动路径使用显式 `SharingRule`。每条规则至少包含两个
+唯一的 `ParameterReference`，成员可以来自同一 dataset 的不同参数；同一 local
+parameter 不能进入两条规则。能否实际共享由 joint compile 检查：
 
-下列参数保持 dataset-local，禁止共享：
+- 每个成员必须存在，并且是自由坐标，不能是锁定参数或约束目标；
+- category、参数名末段、transform、integer、unit 以及上下界必须一致；
+- instrument 类成员还要求完整 `InstrumentSpec` 相同，包括仪器身份和测量语义，
+  仅 `instrument_id` 相同不足以通过检查。
 
-- thickness、period/repeats 和 roughness；
-- angle offset 与 scale；
-- constant/linear/power-law background 的全部参数。
+因此没有一条笼统禁止 thickness、roughness、scale 或 background 的 family
+黑名单；这些参数仍必须满足上述兼容性约束，而非任意两个自由参数都能共享。
 
-每条规则需要不同 dataset 的唯一成员；同一 local parameter 不能进入两条规则。
-调用 `api.validate_sharing_rules(project, rules)` 校验声明，再通过
-`api.set_sharing_rules(project, rules)` 持久化并使受影响结果失效。真实 joint compile
-仍由 `api.preflight_fit()` 在启动 solver 前完成；joint 不合法或 resume 失败时不得
-静默 fallback 到 independent。
+调用 `api.validate_sharing_rules(project, rules)` 只校验声明图，不读取源数据，
+也不保证成员仍然存在、自由或兼容。通过 `api.set_sharing_rules(project, rules)`
+持久化后会使受影响结果失效；启动前仍需由 `api.preflight_fit()` 完成真实 joint
+compile。joint 不合法或 resume 失败时不得静默 fallback 到 independent。
+
+自动联合路径的规则生成不同于手动显式共享：按材料名归组自由的 density/实部
+SLD；吸收项仅在每个出现位置都有显式释放证据时归组。粗糙度按相同结构路径
+可选共享，thickness 与 instrument 参数不会自动共享。因此手动与自动结果或
+耗时不能直接当作相同共享约束下的比较。
 
 ### 单 dataset 与 joint objective
 
@@ -340,9 +345,10 @@ fit_output = api.fit_project(
 ```
 
 `FitProgress` 记录 `dataset_id`、stage、completed/total、当前 best objective 和
-message。checkpoint callback 收到的是包含最新 checkpoint 的 immutable
-whole-project snapshot；服务先保存 snapshot 再调用用户 callback。因此 callback
-失败不会抹掉最新可恢复证据，而会产生显式 `checkpoint_failed` 不可信结果。
+message。checkpoint callback 收到 immutable whole-project snapshot；它也可用于
+同步事务回滚，因此是否可恢复取决于该项目中实际存在的 checkpoint，而不是是否收到过
+名为 `checkpoint` 的事件。保存检查点后再调用用户 callback 的路径中，callback 失败
+不会抹掉已保存的恢复证据，而会产生显式 `checkpoint_failed` 不可信结果。
 
 需要协作取消或独立进程隔离时，使用 `api.start_fit_job(project,
 checkpoint_path=None)`。调用方轮询 `OperationJob.poll()` 的有序 `OperationEvent`，
@@ -351,12 +357,18 @@ checkpoint_path=None)`。调用方轮询 `OperationJob.poll()` 的有序 `Operat
 
 取消或拟合失败：
 
-- 不覆盖 previous `last_valid_result`；
-- 保留已成功发布的最新 checkpoint；
+- 以返回的 `updated_project` 为准，不把失败事件当作有效结果发布；
+- 显式自动 joint 取消会回滚到事务开始的项目；显式自动 joint 失败会清除整组可发布结果与
+  checkpoint，不能用某个成员的旧结果冒充本次联合成功；
 - 返回显式 cancelled/untrusted/warnings，而不是 clean-fit 假成功；
 - independent 会在完成当前边界后停止准备后续 dataset；
 - joint checkpoint 必须在所有 datasets 间保持同一 stage、candidate graph、seed
   ledger 和 layout identity。
+
+GUI 的阶段事件最高显示 99%，因为一次预拟合的 `finalizing` 后仍可能继续恢复或联合
+精修。只有本次成员全部发布有效结果后才显示 100%；这表示计算与发布完成，不表示
+科学结果“可信”。全部失败、部分成功、需复核及原始原因显示在主画布提示区，切换到
+结果页或引导模式不会把这条提示藏进控制卡。仍在计算时不将过期 ETA 显示为剩余 0 秒。
 
 恢复会精确核对 data hash、structure、instrument、parameter settings、config、
 stage graph、candidate order、seed ledger 和 joint layout fingerprints。任何不匹配
@@ -601,14 +613,15 @@ python -m xrr_fitter
 xrr-fitter
 ```
 
-主窗口最低尺寸为 `1280×760`。启动后先进入**引导模式**：四步（导入数据 → 确认样品
-结构 → 开始拟合 → 查看结果）依次进行，每步只显示该步所需的控件，未满足前置条件
-的步骤不可进入。通过「视图 ▸ 引导模式」或第 4 步的按钮切换到**专家界面**。
+主窗口设置的最小尺寸为 `1272×693`。启动后进入三栏主页：左侧为数据集与分析管线，
+中部为结构、曲线和诊断画布，右侧检查器随分析步骤显示相关控件。通过「视图 ▸ 引导模式」
+可打开**可选的只读引导**，四步分别说明导入、结构、拟合和结果；空项目也可浏览全部
+步骤。引导不会导入数据、修改结构或启动拟合；完成或跳过后返回主页。顶栏的
+「引导 / 专家」只切换界面；右侧参数区或「视图」菜单中的「显示高级选项」是独立的
+项目开关，不会因结束引导而自动开启。
 
-专家界面以反射率图为中央控件，数据集、样品结构、参数、拟合、结果各为一个可停靠
-面板：可拖拽重排、浮动、标签化堆叠或隐藏，布局随项目保存。「视图 ▸ 面板」逐项
-切换显隐，「视图 ▸ 重置面板布局」恢复默认排布。参数/拟合/结果默认以标签共享右侧
-区域，需要同屏对照时把其中一个拖出即可。
+主页三栏不是可浮动的停靠面板，不能逐项隐藏或重排。画布内的垂直分隔区域可调整；
+项目保存布局尺寸、图形视图和高级选项状态。「视图 ▸ 重置面板布局」恢复默认尺寸。
 
 项目命令、导入、结构、图形交互、参数、拟合、候选、保存和导出均可通过键盘
 聚焦；置信度同时使用文字和视觉标记，不以颜色作为唯一信息。诊断图的背景与文字
@@ -620,14 +633,15 @@ xrr-fitter
    `P1 Zr.xy`；仪器导出数据也可按“材料堆栈文件夹 / 样品标识 + 点位_exported.xy”
    组织。选择“导入文件”或“导入文件夹”；文件夹模式可显式启用递归。
 2. 项目首次自动导入时，导入框不预选光路，必须显式选择“单色”或“混合 Kα”并
-   保存测量预设。后续批次复用项目中的预设；只有在 Expert mode 中选择“更换测量
+   保存测量预设。后续批次复用项目中的预设；只有开启“显示高级选项”后选择“更换测量
    预设”才再次询问。额外列只有在“高级列映射”中声明后才解释。
 3. 解析失败只进入导入失败表，表中同时显示文件名、问题和恢复操作；其他有效文件
    仍会提交。只有最左侧有限膜层是 `Si` 的结构组会弹出一次实际基底输入框，且不
    预填猜测值。
 4. 有效 dataset 导入后保持 `PENDING`，工作台不会自动启动拟合。先检查或修改膜层、
-   基底、自动 SiO2 和参数，再点击“自动拟合”；该按钮统一运行项目中全部可运行的
-   自动数据集。路由仍以各自 `import_batch_id` 为边界：单条物理签名走单样品路径，
+   基底、自动 SiO2 和参数；在默认的「独立」批量模式且未开启高级选项时，点击顶栏
+   “一键拟合”或控制区“自动拟合”，运行项目中全部可运行的自动数据集。自动路由仍以
+   各自 `import_batch_id` 为边界：单条物理签名走单样品路径，
    同批同签名多点先并行预拟合，再联合精修。
 5. 进度显示 dataset、stage、完成数和 best objective。worker 的部分快照会立即更新
    曲线；GUI 线程不执行 optimizer。点击“取消”只请求协作取消，已发布 checkpoint
@@ -635,9 +649,9 @@ xrr-fitter
 6. 结果区按稳定 dataset 顺序显示逐点逐层结果和自动状态；合格多点组另显示厚度
    均值、总体标准差、CV 和相对极差。未知配比层显示有效 SLD/电子密度，但不显示
    虚假的质量密度。
-7. “保存”写入项目、active dataset、候选 ID、expert mode、面板布局和图形
-   tab。自动拟合不会导出；需要手动结构/拟合、profile、MCMC 或导出时进入下述
-   Expert 流程。
+7. “保存”写入项目、active dataset、候选 ID、expert mode、布局尺寸和图形
+   tab。自动拟合不会导出；高级参数、控制区手动“开始拟合”及 MCMC 入口由
+   “显示高级选项”开放，而结果导出在任一模式下均需显式执行。
 
 ### 13.2 自动路由、状态与 checkpoint
 
@@ -676,26 +690,30 @@ xrr-fitter
 - 新 source 不再兼容的 parameter settings 会被过滤，并在成功后列出具体名称，
   不会静默丢弃。
 
-### 13.4 Expert 模式与候选状态
+### 13.4 高级选项与候选状态
 
-在右侧参数区勾选“专家模式”，或使用“视图 -> 专家模式”。Expert mode 显示完整
+在右侧参数区勾选“显示高级选项”，或使用「视图 ▸ 显示高级选项」。这个项目级
+`expert_mode` 与顶栏「引导 / 专家」界面切换彼此独立。开启后显示完整
 bounds/lock/sharing、背景模型 `constant|linear|powerlaw`、分辨率域 `q|theta`、
-scale weak prior、批量模式选择器和手动“开始拟合”按钮。选择 `独立拟合` 或
-`联合拟合` 后，手动入口继续调用 expert `preflight_fit()` / `start_fit_job()`，不会
-改写自动路由规则；联合模式要求显式且可编译的 `SharingRule`。
+scale weak prior 和控制区手动“开始拟合”按钮。顶栏的「批量 独立 / 联合」选择器
+在反射率视图中可见，不由这个高级开关控制。顶栏“一键拟合”仅在「独立」、未开启
+高级选项且所有数据集都属于自动导入角色时使用自动路由；其余情况走项目级手动
+`preflight_fit()` / `start_fit_job()`，不会改写自动路由规则。联合模式要求显式且可
+编译的 `SharingRule`。若要按导入批次自动路由，应保持「独立」；此时可关闭高级选项
+使用顶栏“一键拟合”，或直接使用控制区“自动拟合”。
 
-profile likelihood 证据位于结果不确定度区，Expert mode 还显示中央下方常驻的
+profile likelihood 证据位于结果不确定度区；开启高级选项还会显示中央下方的
 SLD 深度剖面窗格（与反射率图上下并置，可用分隔条调整高度）。选择具有当前
 candidate-owned uncertainty evidence 的有效候选后，结果区显示“不确定度分析…”
 入口，点击后在独立窗口中配置并启动 MCMC。导出不属于自动完成条件；拟合结束并
 选择有效候选后，使用工具栏“导出结果”、文件菜单“导出结果”或 `Ctrl+Shift+E`
 显式创建新 run 目录。
 
-普通流程不要求打开 Expert mode。修改参数、仪器模型、共享或项目级 scale prior
+普通流程不要求开启高级选项。修改参数、仪器模型、共享或项目级 scale prior
 会按影响范围清除旧结果；不会以 fallback 继续使用不兼容状态。
 
-标准模式隐藏 expert-only optimizer rows、背景/分辨率、MCMC 入口和 SLD 深度剖面
-窗格，但不删除其持久状态；重新打开 Expert mode 会恢复相同控件、canvas 和可用
+未开启高级选项时隐藏 expert-only optimizer rows、背景/分辨率、MCMC 入口和 SLD 深度剖面
+窗格，但不删除其持久状态；重新开启后会恢复相同控件、canvas 和可用
 选择。诊断 tab 本身不再受模式影响，因此已保存的 tab 选择在两种模式下都能恢复。
 
 - `invalid` candidate 表示物理/数值校验失败，不可持久化、导出或运行 MCMC；仍保留

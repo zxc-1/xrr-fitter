@@ -201,3 +201,97 @@ def test_empty_state_message_uses_the_palette_rather_than_a_fixed_grey(qtbot) ->
     assert application is not None
     expected = theme.plot_palette(theme.palette_tokens(application.palette())).muted
     assert message.get_color() == expected
+
+
+def test_every_plot_canvas_class_defines_the_appearance_hook() -> None:
+    """Every canvas the plots package defines must resolve the repaint hook.
+
+    Qt stylesheets never reach a pyqtgraph PlotWidget or a matplotlib canvas, so
+    theme._refresh_plot_palettes repaints them after an appearance switch by
+    duck-typing a private ``_apply_theme_palette`` and calling whatever it finds
+    (theme.py). A canvas that resolves no such callable is skipped in silence: it
+    keeps its build-time background on a dark desktop, and because the regression
+    is a pixel and not a state, none of the state-based tests notice -- the exact
+    class of bug that once left eight white panels on a dark screen.
+
+    This enumerates the canvas subclasses the package actually defines rather
+    than naming them, so a plot module added later is covered the day it lands.
+    The membership assertion keeps the sweep honest: an enumeration that stopped
+    finding the known canvases would otherwise pass by finding nothing.
+    """
+    import importlib
+    import inspect
+    import pkgutil
+
+    import pyqtgraph as pg
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+
+    import xrr_fitter.gui.plots as plots_pkg
+
+    canvas_bases = (pg.PlotWidget, FigureCanvasQTAgg)
+    discovered: dict[str, type] = {}
+    for info in pkgutil.iter_modules(plots_pkg.__path__, plots_pkg.__name__ + "."):
+        module = importlib.import_module(info.name)
+        for _name, cls in inspect.getmembers(module, inspect.isclass):
+            # Only classes defined in this module, so the imported bases
+            # themselves (pg.PlotWidget, FigureCanvasQTAgg) are never flagged.
+            if cls.__module__ == module.__name__ and issubclass(cls, canvas_bases):
+                discovered[f"{cls.__module__}.{cls.__qualname__}"] = cls
+
+    found = {cls.__qualname__ for cls in discovered.values()}
+    assert {"DiagnosticCanvas", "ObjectiveTracePlot", "LiveReflectivityPlot"} <= found, found
+
+    # Mirror the production dispatch exactly: getattr then callable.
+    missing = [name for name, cls in discovered.items() if not callable(getattr(cls, "_apply_theme_palette", None))]
+    assert missing == [], f"plot canvases without a usable appearance hook: {missing}"
+
+
+def test_plot_surfaces_built_outside_build_tabs_follow_the_round_trip(qtbot) -> None:
+    """The round-trip guard reaches canvases build_tabs() never constructs.
+
+    test_existing_diagnostic_views_follow_an_appearance_round_trip covers the
+    reflectivity and analysis views build_tabs() returns. The uncertainty pages
+    and the live objective-trace plot are assembled by other panels and own their
+    own canvases; a hook broken on either would flip the rest of the app to dark
+    and leave these two glaring white, with nothing in build_tabs()'s coverage to
+    catch it. This drives the same live light->dark->light switch through them.
+    """
+    import numpy as np
+
+    from xrr_fitter.gui.plots.live import ObjectiveTracePlot
+    from xrr_fitter.gui.plots.posterior import UncertaintyPages
+
+    pages = UncertaintyPages()
+    trace = ObjectiveTracePlot()
+    qtbot.addWidget(pages)
+    qtbot.addWidget(trace)
+    application = QApplication.instance()
+    assert application is not None
+
+    def assert_pages(palette: theme.PlotPalette) -> None:
+        for figure in pages.figures():
+            assert figure.get_facecolor() == palette.background
+
+    def assert_trace(palette: theme.PlotPalette) -> None:
+        assert np.allclose(trace.backgroundBrush().color().getRgbF(), palette.background, atol=1e-6)
+
+    previous_palette = application.palette()
+    previous_stylesheet = application.styleSheet()
+    previous_light_palette = theme.LIGHT_PALETTE
+    try:
+        # Make this test independent of the palette left by another GUI test.
+        theme.LIGHT_PALETTE = None
+        application.setPalette(theme.light_palette())
+        theme.apply_theme(application)
+
+        theme.set_dark_appearance(application, True)
+        assert_pages(theme.DARK_PLOT_PALETTE)
+        assert_trace(theme.DARK_PLOT_PALETTE)
+
+        theme.set_dark_appearance(application, False)
+        assert_pages(theme.LIGHT_PLOT_PALETTE)
+        assert_trace(theme.LIGHT_PLOT_PALETTE)
+    finally:
+        theme.LIGHT_PALETTE = previous_light_palette
+        application.setPalette(previous_palette)
+        application.setStyleSheet(previous_stylesheet)

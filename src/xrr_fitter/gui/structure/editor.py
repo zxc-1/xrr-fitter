@@ -391,18 +391,30 @@ class StructureEditor(QWidget):
         只有调用方确认这是「同一份结构被自己的编辑刷新了」时才恢复：换数据集时第 1 行是
         另一层，落回去等于选错了层还不作声。
         """
-        previous = self._selected_index() if keep_selection else None
+        previous = self._selection_after_reload(structure) if keep_selection else None
         self._structure = structure
         self._decisions = tuple(decisions)
         self.error_label.hide()
         self._render()
         self.stack.load(structure)
-        if previous is not None and previous < len(structure.components):
+        if previous is not None:
             self._select_component(previous)
         self._refresh_oxide()
         # 树和示意图都摆好了才报高度：在 ``_render`` 里发会赶在示意图长高之前，报的是
         # 上一版的数。
         self.contents_resized.emit()
+
+    def _selection_after_reload(self, structure: api.StructureSpec) -> int | None:
+        index = self._selected_index()
+        if index is None or self._structure is None or not structure.components:
+            return None
+        selected = self._structure.components[index]
+        # 移动和插入保留组件对象，索引却会变；重名或值相等的层也不能当成同一层。
+        # 编辑替换或删除了旧对象时，留在该位置；删掉末层则回到前一层。
+        return next(
+            (position for position, component in enumerate(structure.components) if component is selected),
+            min(index, len(structure.components) - 1),
+        )
 
     def clear(self) -> None:
         self._structure = None

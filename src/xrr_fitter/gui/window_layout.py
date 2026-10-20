@@ -410,6 +410,9 @@ def _canvas_column(window) -> QWidget:
     # 是滚出来看的一张卡，把它算进下限等于永久多占三百来像素，而那是 SLD 的地方。
     _refit_on_structure_change(canvas, stack_scroll, window.structure_panel)
     _follow_canvas_tabs(window, canvas, stack_scroll, overview)
+    # Keep the same operation-owned notice visible after the result step hides
+    # inspectorFit, including in guided mode where the entire inspector is off.
+    layout.addWidget(window.fit_panel.status_label)
     layout.addWidget(canvas, 1)
     return column
 
@@ -786,19 +789,6 @@ def apply_default_columns(splitter: QSplitter) -> None:
     splitter.setSizes([LEFT_COLUMN_WIDTH, canvas, RIGHT_COLUMN_WIDTH])
 
 
-def _guidance_actions(window) -> dict:
-    """Bind each guided step's action to the panel that already performs it.
-
-    Guidance never reimplements a workflow; it routes to the same buttons and
-    methods the expert surface uses, so both paths share one code path.
-    """
-    return {
-        "import_files": window.data_panel.import_files_button.click,
-        "initialize_structure": window.structure_panel.initialize_button.click,
-        "start_fit": window.start_fit,
-    }
-
-
 def _layer_bounds_lookup(window):
     """选中层那张卡上的界限从哪儿来：参数声明，和参数表读的是同一份。
 
@@ -883,7 +873,7 @@ def _build_panels(window, document) -> None:
     window.export_button.clicked.connect(window.export_results_dialog)
     # Guidance and the plot share the canvas: they are two surfaces onto one
     # project, so a stack swaps them without either being rebuilt.
-    window.guidance = GuidancePanel(document, _guidance_actions(window))
+    window.guidance = GuidancePanel(document)
     window.central_stack = QStackedWidget()
     window.central_stack.setObjectName("centralStack")
     window.central_stack.addWidget(window.guidance)
@@ -920,6 +910,8 @@ def install_workspace(window, document) -> None:
 
 
 def install_workflow_actions(window) -> None:
+    # The window action owns Escape here; the panel binding is for standalone use.
+    window.fit_panel.cancel_shortcut.setEnabled(False)
     window._workflow_actions = {}
     for object_name, text, shortcut, callback_name in WORKFLOW_ACTION_SPECS:
         action = QAction(text, window)

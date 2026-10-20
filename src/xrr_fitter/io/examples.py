@@ -17,6 +17,7 @@ from xrr_fitter.model.automation import (
     MeasurementPreset,
 )
 from xrr_fitter.model.data import BeamSpec
+from xrr_fitter.model.fitting import FitConfig
 from xrr_fitter.model.instrument import InstrumentSpec
 from xrr_fitter.model.project import DatasetProject, XrrProject
 from xrr_fitter.model.structure import (
@@ -166,6 +167,7 @@ def _project(
     # the preset matching the beam and instrument its dataset already records.
     return replace(
         XrrProject.new((dataset,), master_seed=seed),
+        fit_config=FitConfig.fast(seed),
         measurement_preset=MeasurementPreset(
             INSTRUMENT.instrument_id,
             BEAM,

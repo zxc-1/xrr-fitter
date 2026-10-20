@@ -193,9 +193,9 @@ def test_each_rail_step_carries_the_subline_the_design_gives_it(qtbot, tmp_path)
 
     assert window.guidance.step_header_sublines() == (
         "2 个文件 · 已就绪",
-        "检查自动建议",
-        "全自动",
-        "置信度与参数",
+        "检查层序与材料",
+        "在主页启动",
+        "准备开始使用",
     )
 
 
@@ -203,7 +203,7 @@ def test_the_import_subline_admits_an_empty_project(qtbot) -> None:
     """没有文件时不能谎报「已就绪」。"""
     window = _window(qtbot)
 
-    assert window.guidance.step_header_sublines()[0] == "尚未导入"
+    assert window.guidance.step_header_sublines()[0] == "在主页操作"
 
 
 def test_the_status_bar_states_which_guided_step_is_open(qtbot, tmp_path) -> None:
@@ -471,7 +471,7 @@ def test_the_structure_step_offers_a_manual_way_out(qtbot, tmp_path) -> None:
     button = window.guidance.findChild(QPushButton, "structureStepManual")
 
     assert button is not None
-    assert button.text() == "＋ 我要手动加/删层"
+    assert button.text() == "跳过引导，进入主页"
 
     button.click()
 
@@ -555,7 +555,7 @@ def test_the_structure_action_confirms_a_stack_that_already_exists(qtbot, tmp_pa
     window.guidance.show_step("structureStep")
     action = window.guidance.findChild(QPushButton, "structureStepAction")
 
-    assert action.text() == "看起来没问题，开始拟合 →"
+    assert action.text() == "下一步 →"
 
     action.click()
 
@@ -567,7 +567,9 @@ def test_the_structure_action_builds_a_stack_that_is_missing(qtbot, tmp_path) ->
     window.set_guidance_visible(True)
     window.guidance.show_step("structureStep")
 
-    assert window.guidance.findChild(QPushButton, "structureStepAction").text() == "初始化样品结构"
+    assert window.guidance.findChild(QPushButton, "structureStepAction").text() == "下一步 →"
+    window.guidance.findChild(QPushButton, "structureStepAction").click()
+    assert window.document.project.datasets[0].structure is None
 
 
 def test_the_structure_step_body_confirms_instead_of_instructing(qtbot, tmp_path) -> None:
@@ -580,14 +582,14 @@ def test_the_structure_step_body_confirms_instead_of_instructing(qtbot, tmp_path
     body = window.guidance.findChild(QLabel, "structureStepBody")
 
     assert body.text() == (
-        "我们根据你的数据和常见薄膜体系，自动搭好了一个初始结构。看一眼是否合理——"
-        "不确定也没关系，拟合会在允许范围内自动修正每一层。"
+        "下方是当前数据集已有的结构，仅供核对。引导不会修改或重新初始化它；需要添加、删除或调整膜层时，请返回主页操作。"
     )
 
     empty = _window(qtbot, _project(tmp_path))
 
     assert empty.guidance.findChild(QLabel, "structureStepBody").text() == (
-        "初始化样品结构，必要时添加膜层。默认基底为 Si，可在结构面板调整。"
+        "主页会根据文件名或文件夹声明的材料栈建立初始结构。请核对层序、材料与基底；"
+        "没有明确材料声明时，需要在主页手动建层。"
     )
 
 

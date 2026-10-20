@@ -147,22 +147,29 @@ class FitController(QObject):
         change still publishes the stage it leaves behind, which keeps every
         stage visible instead of collapsing the whole batch into one frame.
         """
-        pending_progress: api.FitProgress | None = None
+        pending: dict[tuple[object, ...], api.FitProgress] = {}
         for event in events:
             self.event_received.emit(event)
             if event.kind == "progress":
-                if pending_progress is not None and event.progress.stage != pending_progress.stage:
-                    self._flush_progress(pending_progress)
-                pending_progress = event.progress
+                key = self._progress_key(event.progress)
+                previous = pending.get(key)
+                if previous is not None and event.progress.stage != previous.stage:
+                    self._flush_progress(pending)
+                pending[key] = event.progress
                 continue
-            self._flush_progress(pending_progress)
-            pending_progress = None
+            self._flush_progress(pending)
             self._dispatch_durable(event)
-        self._flush_progress(pending_progress)
+        self._flush_progress(pending)
 
-    def _flush_progress(self, progress: api.FitProgress | None) -> None:
-        if progress is not None:
+    @staticmethod
+    def _progress_key(progress: api.FitProgress) -> tuple[object, ...]:
+        members = tuple(name for name, _objective in progress.dataset_objectives or ())
+        return progress.dataset_id, members
+
+    def _flush_progress(self, pending: dict[tuple[object, ...], api.FitProgress]) -> None:
+        for progress in pending.values():
             self.progress_changed.emit(progress)
+        pending.clear()
 
     def _dispatch_durable(self, event: api.OperationEvent) -> None:
         if event.kind == "checkpoint":

@@ -110,6 +110,8 @@ FONT_PT_LG = 14
 # unset), which is what made neighbouring controls in one row look mismatched.
 # 设计稿 `.btn{height:30px}`（HTML line 90）——所有常规按钮、工具按钮和输入框的统一高度。
 CONTROL_MIN_H = 30
+# 导入表单的紧凑档：内容高 22px，加上下内边距和边框后为 28px；不影响主窗口控件。
+IMPORT_CONTROL_CONTENT_H_PX = 22
 
 # 设计稿把命令条里的按钮单列一档（``.btn.sm``，26px，比独立的 ``.btn`` 矮 4px）。矮下来
 # 不是为了省地方：这一档按钮总是跟 tab 或分段控件并排站在同一条 chrome 带里，一旦比旁边
@@ -534,6 +536,22 @@ QPushButton[primary="true"]:disabled {{
     color: {tokens.muted_text};
     font-weight: 400;
 }}
+/* 建议动作：一枚可点的按钮，但让出「整屏唯一实心 primary」的名额（那枚留给命令栏的
+   一键拟合）。底色压到几个百分点的 accent，四周一圈同色淡边，左缘一条取满 accent 的竖条
+   指着它——和 ``.hint`` 的提示框同一套语汇（见 ``mark_hint``），只是这枚会响应点击，所以
+   保留正文文字色与按下反馈，而不是提示框那种 muted 静态字。 */
+QPushButton[suggested="true"] {{
+    background: {_tinted(tokens.accent, HINT_FILL_ALPHA)};
+    border: 1px solid {_tinted(tokens.accent, HINT_BORDER_ALPHA)};
+    border-left: 3px solid {tokens.accent};
+    font-weight: 600;
+}}
+QPushButton[suggested="true"]:hover:enabled {{
+    background: {_tinted(tokens.accent, HINT_BORDER_ALPHA)};
+    border-color: {tokens.accent};
+    border-left-color: {tokens.accent};
+}}
+QPushButton[suggested="true"]:pressed {{ background: {tokens.selection_bg}; }}
 QPushButton[ghost="true"] {{
     border: none;
     background: transparent;
@@ -864,13 +882,14 @@ QLabel[stepDot="true"][stepState="pending"] {{
    near-invisible against the dock.  Keyed on a property rather than an
    objectName because every step builds its own rail. */
 *[pipelineRail="true"] {{
-    /* min-height 不能省：主窗口挂上 stylesheet 后 QStyleSheetStyle 接管裸 QWidget 的几何，
-       纵向 ``QSizePolicy.Expanding`` 对没有内容的分隔条失效——它会缩到 26px、不再贯通整格。
-       钉到与抬头行高同源的 STEP_DOT_PX + 2×SPACE_XS（圆点直径加上下内边距，正是四格行高），
-       竖线才和格子一样高；末格不画（见 panel._StepHeader）。 */
+    /* 只借底色，不设高度。高度归各自的出处：管线连接线（navigation/steps.py）在带拉伸因子
+       的 QVBoxLayout 里靠 ``Expanding`` 填掉圆点上方那截余量，取到多高由行高减圆点决定；引导
+       抬头的分隔条（panel._StepHeader）不进布局，由 ``resizeEvent`` 的 ``setGeometry`` 贴住抬头
+       满高。曾在这里钉一档 ``min-height: STEP_DOT_PX + 2×SPACE_XS`` = 38px，本为抬头分隔条当年
+       还靠布局撑高时算的行高，却也压在管线连接线上，把每步行从设计稿的 50px 顶到 72px。分隔条
+       改用几何摆放后不再需要它，撤掉这一档，管线行才落回 50px。 */
     background: {tokens.surface_border};
     border: none;
-    min-height: {STEP_DOT_PX + 2 * SPACE_XS}px;
 }}
 /* 设计稿 ``.confbadge``（HTML 181-188、421）：判定不是一行染了色的字，而是一只淡染的
    圆角框——字形一列，判定与理由叠成另一列。没有结果时落在下面这条基础规则上：中性边框
@@ -1036,6 +1055,15 @@ QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {{
     padding: 2px {SPACE_SM}px;
     min-height: {CONTROL_MIN_H}px;
     background: transparent;
+}}
+QDialog#importDialog QComboBox, QDialog#importDialog QSpinBox,
+QDialog#importDialog QDoubleSpinBox, QDialog#importDialog QLineEdit {{
+    padding: 2px {SPACE_XS}px;
+    min-height: {IMPORT_CONTROL_CONTENT_H_PX}px;
+}}
+QDialog#importDialog QPushButton {{
+    padding: 2px {SPACE_MD}px;
+    min-height: {IMPORT_CONTROL_CONTENT_H_PX}px;
 }}
 QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus {{
     border-color: {tokens.accent};
@@ -1215,9 +1243,12 @@ def build_stylesheet(palette: QPalette) -> str:
 APPEARANCE_DARK_GLYPH = "☾"
 APPEARANCE_LIGHT_GLYPH = "☀"
 
-# 深色外观的三块底色。窗口比基底稍亮一档，让卡片浮在背景上而不是与之齐平。
-DARK_WINDOW = "#1B1F24"
+# 深色外观的三块底色，由深到浅：画布（内容面）最深，窗口壳居中，机架浮在最上面。这是深色
+# 界面通行的那套明暗语序，也是「内容往里凹、机架往外浮」在 Qt 里唯一还剩的表达手段——QSS
+# 没有 ``box-shadow``，层次只能靠明暗差说。
 DARK_BASE = "#14181D"
+DARK_WINDOW = "#1B1F24"
+DARK_ALTERNATE = "#232830"
 DARK_TEXT = "#E6E9EE"
 
 # 设计稿亮色的三层底色：``--app-bg`` 是窗口壳那层灰、``--panel`` 是内容面板的白、
@@ -1264,10 +1295,11 @@ def dark_palette() -> QPalette:
     """Build the palette that ``palette_tokens`` resolves to ``DARK_TOKENS``."""
     return _appearance_palette(
         window=DARK_WINDOW,
-        # 深色只有两层：面板与机架同色，``shell_washes`` 于是回退到窗口色当机架，而深色的
-        # 窗口本来就比基底亮一档，机架该亮于画布这件事仍然成立。
         base=DARK_BASE,
-        alternate=DARK_BASE,
+        # 机架自带一层，不再与面板同色让 ``shell_washes`` 回退到窗口色：回退那一路机架、窗口
+        # 壳与状态栏共用一个值，深色下于是根本没有「机架」这一层，而唯一剩下的那道分界
+        # （``#1B1F24`` 对 ``#14181D``）对比只有 1.08，两栏几乎贴在一起。亮色有三层，深色也要有。
+        alternate=DARK_ALTERNATE,
         text=DARK_TEXT,
         tokens=DARK_TOKENS,
     )
@@ -1409,6 +1441,18 @@ def mark_hint(widget: QWidget) -> None:
     _mark_callout(widget, "hintBox", "hint box")
 
 
+def mark_suggested(widget: QWidget) -> None:
+    """Demote a button from the screen's one solid primary to a suggested action.
+
+    整个界面每次只推荐一个下一步动作，那枚实心 primary 的名额归命令栏的一键拟合。别处的
+    「不妨从这儿开始」——比如空结构上的初始化按钮——用建议装帧：低饱和 accent 底加左侧强调
+    竖条，和 ``mark_hint`` 的提示框同族，只是这枚仍是可点的按钮。不涉状态色，所以不走
+    ``_mark_callout`` 的 info/warn 校验。
+    """
+    widget.setProperty("suggested", True)
+    repolish(widget)
+
+
 def mark_banner(widget: QWidget) -> None:
     """Turn a run-wide precondition into a banner box.
 
@@ -1504,12 +1548,13 @@ def apply_step_eyebrow(label: QLabel) -> None:
     Qt 的样式表没有 ``letter-spacing``，字号与字距同出设计稿的一条规则，字重按
     ``set_step_state`` 的分工归各自的字体对象（那条规则只给颜色）。
     """
-    set_step_state(label, "current")
     font = label.font()
     font.setPixelSize(STEP_EYEBROW_FONT_PX)
     font.setWeight(QFont.Weight.Bold)
     font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, STEP_EYEBROW_TRACKING_PX)
     label.setFont(font)
+    # QSS 首次 polish 会保存原字体，必须先设字体，否则 show/换肤会恢复成旧字体。
+    set_step_state(label, "current")
 
 
 def titled_card(

@@ -4,7 +4,12 @@ name: audit-windows
   push:
     branches: [audit-improvements]
   pull_request: {}
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      gui_native:
+        description: Run opt-in native Windows GUI rendering and Qt event acceptance
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -95,6 +100,15 @@ jobs:
           & $env:PYTHON -c "from pathlib import Path; import sys,json,hashlib; paths=list(Path(sys.argv[1]).rglob('export_manifest.json')); assert len(paths)==1; p=paths[0]; rows=json.loads(p.read_text(encoding='utf-8'))['files']; assert rows; assert all((p.parent/r['path']).stat().st_size==r['size'] and hashlib.sha256((p.parent/r['path']).read_bytes()).hexdigest()==r['sha256'] for r in rows)" "$env:AUDIT_ROOT/executable-export"
           @{ schema = "xrr-headless-executable-evidence-v1"; source_commit = $env:GITHUB_SHA; sha256 = (Get-FileHash -Algorithm SHA256 $executable).Hash.ToLowerInvariant(); size = (Get-Item $executable).Length; help = "PASS"; validate = "PASS"; export = "PASS"; gui_tested = $false } | ConvertTo-Json | Set-Content -Path "$env:AUDIT_ROOT/reports/executable.json" -Encoding utf8
           if (git status --porcelain=v1 --untracked-files=all) { throw "verification changed the source checkout" }
+      - name: Verify native Windows GUI on explicit request
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.gui_native }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $env:QT_QPA_PLATFORM = "windows"
+          & $env:PYTHON tools/native_gui_acceptance.py --expected-platform windows --report-dir "$env:AUDIT_ROOT/reports/gui-native"
+          if (git status --porcelain=v1 --untracked-files=all) { throw "native GUI verification changed the source checkout" }
       - name: Bind installed and executable byte evidence
         shell: pwsh
         run: |

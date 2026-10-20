@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
@@ -36,6 +37,7 @@ from xrr_fitter.gui import theme
 from xrr_fitter.gui.data.dataset_card import DATASET_CARD_ROLE, DatasetCardDelegate, dataset_card
 from xrr_fitter.gui.data.import_dialog import ImportDialog
 from xrr_fitter.gui.data.mask_editor import MaskEditor
+from xrr_fitter.gui.data.sources import folder_data_paths
 from xrr_fitter.gui.data.substrate_dialog import SubstrateDialog
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.fitting.metrics import UNKNOWN
@@ -44,7 +46,6 @@ from xrr_fitter.gui.navigation.panel import STRUCTURE_STEP_INDEX
 from xrr_fitter.gui.sizing import ContentSizedTree
 
 DATA_FILTER = "XRR 数据 (*.xy *.dat *.txt);;所有文件 (*)"
-SUPPORTED_SUFFIXES = {".xy", ".dat", ".txt"}
 # 七列仍是模型的形状——详情标签和各列 tooltip 都从这里取值，所以列没有删。显示则
 # 收成一列自绘卡片（见 dataset_card）：设计稿的 ``.ds`` 没有表头也没有第二列。
 # 这里此前还有 ``COMPACT_COLUMNS = (0, 4, 6)`` 和 ``DETAIL_COLUMNS = (1, 2, 3, 5)``
@@ -136,8 +137,8 @@ class DataPanel(QWidget):
         # width without re-deriving them from the project.
         # 运行中卡片小字改报这一次运行，所以这三样跟着进度事件走。
         self._running = False
-        self._run_objective: float | None = None
-        self._run_trend = ""
+        self._run_objectives: dict[str, float] = {}
+        self._run_trends: dict[str, str] = {}
         # 项目走到哪一步。卡片小字与页脚在结构那一步换说法，而步骤不是项目字段——它由
         # ``window_layout.apply_step_scope`` 从外面递进来，所以在窗口接线之前它是 ``None``。
         self._step: int | None = None
@@ -150,6 +151,7 @@ class DataPanel(QWidget):
         self._mask_editor.mask_changed.connect(self.mask_changed.emit)
         document.project_changed.connect(self._render_project)
         document.source_validation_changed.connect(self._render_project)
+        document.document_replaced.connect(self._clear_import_feedback)
         self._render_project()
 
     def _build_controls(self) -> None:
@@ -173,6 +175,16 @@ class DataPanel(QWidget):
         self.import_files_button.clicked.connect(self._import_files)
         self.import_folder_button.clicked.connect(self._import_folder)
         self.change_preset_button.clicked.connect(self._change_measurement_preset)
+        self.import_folder_quick_button = QToolButton()
+        self.import_folder_quick_button.setObjectName("importFolderQuickButton")
+        self.import_folder_quick_button.setAccessibleName("导入文件夹")
+        self.import_folder_quick_button.setToolTip("从文件夹批量导入 XRR 数据")
+        self.import_folder_quick_button.setAutoRaise(True)
+        self.import_folder_quick_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.import_folder_quick_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        self.import_folder_quick_button.setIconSize(QSize(16, 16))
+        self.import_folder_quick_button.setFixedSize(QSize(24, 24))
+        self.import_folder_quick_button.clicked.connect(self._import_folder)
         self.import_files_shortcut = self._shortcut("importFilesShortcut", "Ctrl+I")
         self.import_folder_shortcut = self._shortcut(
             "importFolderShortcut",
@@ -191,6 +203,7 @@ class DataPanel(QWidget):
         top.setContentsMargins(theme.SPACE_MD, theme.SPACE_MD, theme.SPACE_MD, theme.SPACE_SM)
         top.addWidget(heading)
         top.addStretch(1)
+        top.addWidget(self.import_folder_quick_button)
         top.addWidget(self.dataset_add_button)
         self.summary_label = QLabel()
         self.summary_label.setObjectName("datasetSummary")
@@ -320,13 +333,7 @@ class DataPanel(QWidget):
         import_angle_offset_deg: float = 0.0,
     ) -> None:
         root = Path(folder)
-        entries = root.rglob("*") if recursive else root.glob("*")
-        paths = tuple(
-            sorted(
-                (path for path in entries if path.is_file() and path.suffix.casefold() in SUPPORTED_SUFFIXES),
-                key=lambda path: path.relative_to(root).as_posix().casefold(),
-            )
-        )
+        paths = folder_data_paths(root, recursive)
         self.add_paths(
             paths,
             beam=beam,
@@ -408,6 +415,12 @@ class DataPanel(QWidget):
             for column, value in enumerate(values):
                 self.batch_preview_table.setItem(row, column, QTableWidgetItem(value))
         self.batch_preview_table.setVisible(bool(preview.files))
+
+    def _clear_import_feedback(self) -> None:
+        """Retire transient import rows only after another document is adopted."""
+        for table in (self.batch_preview_table, self.failure_table):
+            table.setRowCount(0)
+            table.hide()
 
     def _render_failures(self, failures: tuple[api.ImportFailure, ...]) -> None:
         self.failure_table.setRowCount(len(failures))
@@ -607,28 +620,42 @@ class DataPanel(QWidget):
         一刻起就是上一轮的数了。
         """
         self._running = running
-        if not running:
-            self._run_objective = None
-            self._run_trend = ""
+        self._run_objectives.clear()
+        self._run_trends.clear()
         self._render_project()
 
     def set_run_progress(self, progress: api.FitProgress) -> None:
-        """一次进度事件。联合批量下它不带数据集——J 是几条曲线共享的那一个。"""
-        objective = float(progress.best_objective)
-        self._run_trend = metrics_trend(self._run_objective, objective)
-        self._run_objective = objective
-        self._render_project()
+        """Update only the owning cards; progress must not reset tree selection."""
+        values = self._progress_objectives(progress)
+        for dataset_id, objective in values.items():
+            self._run_trends[dataset_id] = metrics_trend(self._run_objectives.get(dataset_id), objective)
+            self._run_objectives[dataset_id] = objective
+        for row in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(row)
+            dataset_id = item.data(0, Qt.ItemDataRole.UserRole)
+            if dataset_id in values:
+                item.setData(0, DATASET_CARD_ROLE, dataset_card(self, dataset_id))
 
-    def run_subline(self, _dataset_id: str) -> str:
+    def _progress_objectives(self, progress: api.FitProgress) -> dict[str, float]:
+        if progress.dataset_id is not None:
+            return {progress.dataset_id: float(progress.best_objective)}
+        if progress.dataset_objectives:
+            return dict(progress.dataset_objectives)
+        # A joint summary is not a member reading; retain the last identified values.
+        return {}
+
+    def run_subline(self, dataset_id: str) -> str:
         """运行中那一行小字，不运行时是空串。
 
         趋势只留箭头：``≈ 平台``「下降」这些词在 264px 的卡片小字里挤掉文件名的宽度，
         而箭头本身已经说清是降是平。第一次读数没有可比对象，所以它没有箭头。
         """
-        if not self._running or self._run_objective is None:
+        objective = self._run_objectives.get(dataset_id)
+        if not self._running or objective is None:
             return ""
-        arrow = "" if self._run_trend in ("", UNKNOWN) else self._run_trend[0]
-        return f"拟合中 · J={self._run_objective:.2f}{arrow}"
+        trend = self._run_trends.get(dataset_id, "")
+        arrow = "" if trend in ("", UNKNOWN) else trend[0]
+        return f"拟合中 · J={objective:.2f}{arrow}"
 
     def set_step(self, step: int | None) -> None:
         """项目走到了哪一步。
@@ -785,34 +812,32 @@ class DataPanel(QWidget):
 
     def _confirm_import(self, paths: tuple[Path, ...], *, folder: bool) -> None:
         try:
-            preset = self.document.project.measurement_preset
+            preset = None if self._force_preset_dialog else self.document.project.measurement_preset
             mapping = None
-            recursive = False
-            if preset is None or self._force_preset_dialog:
+            sources = paths
+            if folder or preset is None:
                 dialog = ImportDialog(
-                    paths, folder_mode=folder, noise_model=self.document.project.fit_config.noise_model, parent=self
+                    paths,
+                    folder_mode=folder,
+                    preset=preset,
+                    noise_model=self.document.project.fit_config.noise_model,
+                    parent=self,
                 )
                 if dialog.exec() != QDialog.DialogCode.Accepted:
                     return
-                instrument = dialog.instrument_spec()
-                preset = api.MeasurementPreset(
-                    instrument.instrument_id or "default-measurement",
-                    dialog.beam_spec(),
-                    instrument,
-                    angle_convention=dialog.angle_convention(),
-                )
+                if preset is None:
+                    instrument = dialog.instrument_spec()
+                    preset = api.MeasurementPreset(
+                        instrument.instrument_id or "default-measurement",
+                        dialog.beam_spec(),
+                        instrument,
+                        angle_convention=dialog.angle_convention(),
+                    )
                 mapping = dialog.column_mapping()
-                recursive = dialog.recursive_folder_import()
-            sources = self._folder_paths(paths[0], recursive) if folder else paths
+                sources = dialog.source_paths()
             self.import_paths(sources, preset=preset, column_mapping=mapping)
         except (InterruptedError, OSError, ValueError, TypeError) as error:
             QMessageBox.critical(self, "导入数据失败", f"{type(error).__name__}: {error}")
 
     def _folder_paths(self, folder: Path, recursive: bool) -> tuple[Path, ...]:
-        entries = folder.rglob("*") if recursive else folder.glob("*")
-        return tuple(
-            sorted(
-                (path for path in entries if path.is_file() and path.suffix.casefold() in SUPPORTED_SUFFIXES),
-                key=lambda path: path.relative_to(folder).as_posix().casefold(),
-            )
-        )
+        return folder_data_paths(folder, recursive)

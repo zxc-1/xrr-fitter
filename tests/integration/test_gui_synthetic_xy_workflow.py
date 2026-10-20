@@ -373,7 +373,20 @@ def _run_gui_fit(window, qtbot) -> None:
         ),
         timeout=120_000,
     )
-    assert window.fit_panel.status_text() == "拟合完成"
+    _assert_fit_review_feedback(window)
+
+
+def _assert_fit_review_feedback(window) -> None:
+    # This reduced test budget publishes candidates, not trusted uncertainty.
+    # The GUI must retain their real review reasons rather than claim clean success.
+    panel = window.fit_panel
+    assert panel.status_text().startswith("拟合完成，需复核：")
+    assert panel.status_label.property("statusKind") == "warn"
+    assert panel.progress_view.overall_percent() == 100
+    assert panel.status_label.isVisibleTo(window)
+    for dataset in window.document.project.datasets:
+        for reason in dataset.last_valid_result.classification_evidence:
+            assert reason in panel.status_text()
 
 
 def _select_alternate_candidate(window) -> str:

@@ -27,7 +27,9 @@ from xrr_fitter.model.operations import DatasetFitResult, ProjectFitResult
 from xrr_fitter.model.parameters import SharingRule
 from xrr_fitter.model.project import DatasetProject, DatasetSourceValidation, ProjectValidation, XrrProject
 from xrr_fitter.services.batch_publication import (
+    _automatic_failure_dataset,
     _automatic_fit_parts,
+    _automatic_result_dataset,
     _checkpoint_with_result_diagnostics,
     _clear_all,
     _clear_dataset,
@@ -555,6 +557,8 @@ def _publish_automatic_preparation_failures(
     for row in rows:
         if row.error is None:
             continue
+        if working.batch_mode == "joint":
+            raise row.error
         working, published[row.index] = _commit_automatic_failure(
             working,
             row.index,
@@ -603,6 +607,12 @@ def _run_automatic_prefits(
     def publish_prefit(position: int, outcome: _BufferedFit[AutomaticPreparedResult]) -> None:
         nonlocal working, was_cancelled
         row = runnable[position]
+        if working.batch_mode == "joint" and row.group_size > 1:
+            if outcome.error is not None:
+                raise outcome.error
+            assert outcome.result is not None
+            prefit_results[row.index] = outcome.result
+            return
         working = _replay_checkpoints(
             working,
             row.index,
@@ -695,10 +705,24 @@ def _automatic_joint_checkpoint_project(
     checkpoints = tuple(values)
     if len(checkpoints) != len(member_rows):
         raise ValueError("automatic joint checkpoint batch size mismatch")
+    availability = {checkpoint is not None for checkpoint in checkpoints}
+    if working.batch_mode == "joint" and len(availability) > 1:
+        raise ValueError("automatic joint checkpoint must cover every dataset or clear every dataset")
     datasets = list(working.datasets)
     for row, checkpoint in zip(member_rows, checkpoints, strict=True):
         datasets[row.index] = replace(datasets[row.index], checkpoint=checkpoint)
     return replace(working, datasets=tuple(datasets))
+
+
+def _require_joint_automatic_projection(result: AutomaticPreparedResult) -> None:
+    """Reject isolated automatic output when the project requires a joint graph."""
+
+    prepared = _automatic_fit_parts(result)[0]
+    automation = prepared.updated_dataset.automation
+    if automation.role is AutomaticRole.JOINT:
+        return
+    reason = "; ".join(filter(None, (result.reason, automation.reason))) or automation.role.value
+    raise ValueError(f"joint automatic fit requires a joint projection for {prepared.dataset_id}: {reason}")
 
 
 def _commit_automatic_joint_success(
@@ -706,26 +730,22 @@ def _commit_automatic_joint_success(
     member_rows: tuple[_AutomaticPreparation, ...],
     joint_results: tuple[AutomaticPreparedResult, ...],
 ) -> tuple[XrrProject, dict[int, DatasetFitResult]]:
-    """Commit an aligned automatic joint result batch by original row index.
-
-    Returned prepared identities guard against accidental cross-row publication.
-    """
+    """Validate and publish all member projections in one project replacement."""
 
     if len(joint_results) != len(member_rows):
         raise ValueError("automatic joint result batch size mismatch")
+    datasets = list(working.datasets)
     published = {}
     for row, result in zip(member_rows, joint_results, strict=True):
         returned_prepared = _automatic_fit_parts(result)[0]
         if returned_prepared.dataset_id != row.original.dataset_id:
             raise ValueError("automatic joint result dataset order mismatch")
-        working, published[row.index] = _commit_automatic_result(
-            working,
-            row.index,
-            row.prepared,
-            result,
-            refining=False,
+        if working.batch_mode == "joint":
+            _require_joint_automatic_projection(result)
+        datasets[row.index], published[row.index] = _automatic_result_dataset(
+            datasets[row.index], row.prepared, result, refining=False
         )
-    return working, published
+    return replace(working, datasets=tuple(datasets)), published
 
 
 def _fit_automatic_joint_transaction_group(
@@ -786,6 +806,8 @@ def _fit_automatic_joint_transaction_group(
     except Exception as error:
         if _cancelled(error):
             return group_baseline, {}, True
+        if working.batch_mode == "joint":
+            raise
         published = {}
         for row in member_rows:
             working, published[row.index] = _commit_automatic_failure(
@@ -800,7 +822,48 @@ def _fit_automatic_joint_transaction_group(
     return working, published, was_cancelled
 
 
-def fit_automatic_transaction(
+def _validate_joint_automatic_routes(
+    project: XrrProject,
+    indices: tuple[int, ...],
+    routes: dict[int, tuple[str, int]],
+) -> None:
+    """Refuse partial or mixed automatic routes for an explicit joint graph."""
+
+    if project.batch_mode != "joint":
+        return
+    if len(indices) != len(project.datasets):
+        raise ValueError("joint automatic fit requires every dataset in the selected batch")
+    if any(size != len(project.datasets) for _group, size in routes.values()):
+        raise ValueError("joint automatic fit requires one matching automatic group")
+
+
+def _automatic_joint_failure(project: XrrProject, error: Exception) -> ProjectFitResult:
+    """Roll back cancellation or invalidate the complete failed automatic graph."""
+
+    if _cancelled(error):
+        return ProjectFitResult("automatic", (), (), project, True)
+    outcomes = tuple(_automatic_failure_dataset(dataset, dataset, error) for dataset in project.datasets)
+    working = replace(project, datasets=tuple(dataset for dataset, _result in outcomes))
+    results = tuple(result for _dataset, result in outcomes)
+    return ProjectFitResult("automatic", results, _warnings(results), working)
+
+
+def _automatic_transaction_result(
+    original: XrrProject,
+    working: XrrProject,
+    indices: tuple[int, ...],
+    published: dict[int, DatasetFitResult],
+    was_cancelled: bool,
+) -> ProjectFitResult:
+    """Assemble ordered outcomes, withholding prefits when a joint run cancels."""
+
+    if original.batch_mode == "joint" and was_cancelled:
+        return ProjectFitResult("automatic", (), (), original, True)
+    values = tuple(published[index] for index in indices)
+    return ProjectFitResult("automatic", values, _warnings(values), working, was_cancelled)
+
+
+def _execute_automatic_transaction(
     project: XrrProject,
     import_batch_id: str | None,
     progress_callback: Callable[[FitProgress], None] | None,
@@ -821,6 +884,7 @@ def fit_automatic_transaction(
     if not indices:
         raise ValueError("no runnable automatic datasets")
     working, routes, route_errors = _automatic_routes(project, indices)
+    _validate_joint_automatic_routes(project, indices, routes)
     validation = inspect_sources(working)
     records = _source_records(validation)
     seeds, _joint_seed, _mcmc_seed = seed_branches(working)
@@ -876,14 +940,49 @@ def fit_automatic_transaction(
         if checkpoint_callback is not None:
             checkpoint_callback(working)
 
-    values = tuple(published[index] for index in indices)
-    return ProjectFitResult(
-        "automatic",
-        values,
-        _warnings(values),
-        working,
-        was_cancelled,
-    )
+    return _automatic_transaction_result(project, working, indices, published, was_cancelled)
+
+
+def fit_automatic_transaction(
+    project: XrrProject,
+    import_batch_id: str | None,
+    progress_callback: Callable[[FitProgress], None] | None,
+    checkpoint_callback: Callable[[XrrProject], None] | None,
+    cancelled: Callable[[], bool] | None,
+    *,
+    seed_branches: _SeedBranches,
+    prepare_dataset: _PrepareDataset,
+    fit_dataset: _DatasetFit[AutomaticPreparedResult],
+    fit_joint: _AutomaticJointFit,
+) -> ProjectFitResult:
+    """Preserve explicit joint atomicity around the automatic transaction.
+
+    Independent automatic projects keep their incremental group publication.
+    Explicit joint projects never publish individual prefits or partial failures.
+    """
+
+    try:
+        result = _execute_automatic_transaction(
+            project,
+            import_batch_id,
+            progress_callback,
+            checkpoint_callback,
+            cancelled,
+            seed_branches=seed_branches,
+            prepare_dataset=prepare_dataset,
+            fit_dataset=fit_dataset,
+            fit_joint=fit_joint,
+        )
+    except Exception as error:
+        if project.batch_mode != "joint":
+            raise
+        result = _automatic_joint_failure(project, error)
+        if checkpoint_callback is not None:
+            checkpoint_callback(result.updated_project)
+        return result
+    if project.batch_mode == "joint" and result.cancelled and checkpoint_callback is not None:
+        checkpoint_callback(result.updated_project)
+    return result
 
 
 def fit_project_transaction(

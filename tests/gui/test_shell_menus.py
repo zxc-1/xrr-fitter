@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAccessible, QAccessibleActionInterface
 from PySide6.QtWidgets import QFrame, QPushButton, QToolBar, QToolButton, QWidget
 
 GUIDED_COMMAND_BAR = ("newProjectButton", "openProjectButton", "saveProjectButton")
@@ -143,6 +144,18 @@ def test_command_bar_segment_switches_the_visible_projection(qtbot) -> None:
     expert.click()
     assert window.guidance_is_visible() is False
     assert window.inspector_column.isVisibleTo(window) is True
+
+
+def test_accessible_segment_toggle_switches_the_visible_projection(qtbot) -> None:
+    window = _window(qtbot)
+    guided = window.findChild(QToolButton, "workspaceModeGuided")
+    interface = QAccessible.queryAccessibleInterface(guided).actionInterface()
+
+    interface.doAction(QAccessibleActionInterface.toggleAction())
+
+    assert guided.isChecked() is True
+    assert window.guidance_is_visible() is True
+    assert window.chrome_actions["guidanceModeAction"].isChecked() is True
 
 
 def test_command_bar_segment_and_the_view_menu_cannot_disagree(qtbot) -> None:

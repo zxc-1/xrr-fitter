@@ -138,6 +138,33 @@ def test_the_connector_hangs_inside_its_step_not_between_two(qtbot) -> None:
         assert below.y() == above.y() + above.height(), f"gap under {above.objectName()}"
 
 
+def test_a_step_costs_no_more_than_the_designs_pstep_once_styled(qtbot) -> None:
+    """挂上发货的样式表、真的摆出来之后，一步仍旧不高过设计稿的 ``.pstep``。
+
+    上面那条预算测试量的是裸控件的 ``sizeHint``：``_window`` 不上样式表、不 show，
+    量到的是 marker(20) + rail 最小高，44 上下，看着达标。可发货时窗口带着
+    ``build_stylesheet`` 的皮肤，其中 ``theme.py`` 的共享规则 ``*[pipelineRail="true"]``
+    压了一条 ``min-height`` —— 那一档本是给引导抬头的竖分隔条算的，却也落在管线的连接
+    线上，把连接行的 dots 列顶到 marker(20) + rail(38) = 58，加 7 上下内边距排成 72px。
+    屏幕上六个圆点因此拉开到设计稿 50px 的一倍半，而裸 ``sizeHint`` 对此视而不见。
+
+    所以这条量发货态：套样式表、show、resize，再读每一行真正占的 ``height()``。
+    """
+    from xrr_fitter.gui.theme import build_stylesheet, light_palette
+
+    window = _window(qtbot)
+    palette = light_palette()
+    window.setPalette(palette)
+    window.setStyleSheet(build_stylesheet(palette))
+    window.resize(1400, 900)
+    window.show()
+    qtbot.waitExposed(window)
+
+    nav = window.pipeline_nav
+    heights = {row.objectName(): row.height() for row in nav.step_rows()}
+    assert all(height <= PSTEP_MAX_PX for height in heights.values()), heights
+
+
 def test_every_step_is_the_same_height_whatever_its_caption_says(qtbot) -> None:
     """六行等距。``.pstep`` 的高度是 7px 内边距加两行字，和字写的是什么无关。
 

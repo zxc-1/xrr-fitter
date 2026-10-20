@@ -17,7 +17,9 @@ from collections.abc import Sequence
 
 import numpy as np
 from matplotlib.figure import Figure
-from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
+from matplotlib.ticker import MaxNLocator, ScalarFormatter
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtWidgets import QFrame, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.plots.diagnostics import (
@@ -73,6 +75,9 @@ PAGE_FIGURE_INCHES = (4.0, 2.6)
 # whatever the tab bar asks for, so it is derived rather than counted; see
 # ``UncertaintyPages.__init__``.
 MIN_PAGE_PLOT_H = 200
+
+# 每个边缘分布连同标题、刻度和分位读数的逻辑像素下限；多参数让画布滚动，不挤小字体。
+POSTERIOR_PANEL_MIN_H_PX = 180
 
 # 右栏分位段那条紧凑直方图的画布尺寸（英寸）。它不是页面版后验的等比缩小：那一版每格带标题、
 # 两轴刻度和一行分位读数，缩到右栏这点宽度上字会互相叠住。这一版只留形状，数字全部交给它下面
@@ -132,7 +137,10 @@ def _draw_marginal(axes: object, name: str, values: np.ndarray, palette: object)
             linestyle="-" if probability == 0.5 else "--",
         )
     axes.set_title(name, fontsize=theme.FONT_PT_SM)
-    axes.set_xlabel(_quantile_readout(values), fontsize=theme.FONT_PT_SM)
+    # 自动刻度精度保留窄分布差异；为科学计数倍率另留一行，避免与分位读数重叠。
+    axes.set_xlabel(_quantile_readout(values), fontsize=theme.FONT_PT_SM, labelpad=16)
+    axes.xaxis.set_major_locator(MaxNLocator(nbins=4))
+    axes.xaxis.set_major_formatter(ScalarFormatter())
     axes.tick_params(labelsize=theme.FONT_PT_SM)
 
 
@@ -150,9 +158,18 @@ class McmcHistogramPlot(QWidget):
         self.setObjectName("mcmcHistogramPlot")
         self.setAccessibleName("MCMC 边缘后验分布")
         self._view = _page_view()
+        scroll = QScrollArea(self)
+        scroll.setObjectName("mcmcHistogramScroll")
+        scroll.setAccessibleName("MCMC 后验图滚动区域")
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(self._view.canvas)
+        self._scroll = scroll
+        self._view.canvas.installEventFilter(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._view.canvas)
+        layout.addWidget(scroll)
         self._blank(POSTERIOR_UNAVAILABLE_TEXT)
 
     @property
@@ -163,6 +180,13 @@ class McmcHistogramPlot(QWidget):
     def canvas(self) -> object:
         return self._view.canvas
 
+    def eventFilter(self, watched: object, event: QEvent) -> bool:
+        if watched is self._view.canvas and event.type() == QEvent.Type.Wheel:
+            # QTAgg 会截获滚轮；此页只读，应交给 Qt 视口滚动而非绘图库处理。
+            QCoreApplication.sendEvent(self._scroll.viewport(), event)
+            return True
+        return super().eventFilter(watched, event)
+
     def _reset(self) -> object:
         for axes in tuple(self._view.figure.axes):
             if axes is not self._view.axes:
@@ -171,7 +195,8 @@ class McmcHistogramPlot(QWidget):
         return self._view.axes
 
     def _blank(self, message: str) -> None:
-        axes = self._reset()
+        self._reset()
+        axes = self._panel_axes(1)[0]
         axes.set_xticks(())
         axes.set_yticks(())
         palette = apply_figure_palette(self._view.figure)
@@ -193,6 +218,7 @@ class McmcHistogramPlot(QWidget):
         (each marginal has its own count scale) but the reader compares widths,
         and a single column gives every parameter the same horizontal extent.
         """
+        self._view.canvas.setMinimumHeight(max(MIN_PAGE_PLOT_H, count * POSTERIOR_PANEL_MIN_H_PX))
         grid = self._view.figure.add_gridspec(count, 1)
         self._view.axes.set_subplotspec(grid[0])
         rest = tuple(self._view.figure.add_subplot(grid[index]) for index in range(1, count))

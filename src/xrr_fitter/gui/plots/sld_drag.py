@@ -262,7 +262,7 @@ class SldHandleDragMixin:
         Failing that an interface handle wins over a level one, since it is the
         narrower target, and a press on none starts nothing.
         """
-        if self._panel is None:
+        if self._panel is None or not self._editing_enabled:
             return
         navigator = self._navigators.get("sld")
         if navigator is not None and navigator.mode:

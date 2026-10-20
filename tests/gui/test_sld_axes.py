@@ -183,6 +183,48 @@ def test_the_uncertainty_band_is_named_as_a_band(qtbot) -> None:
     assert BAND_PAIRS[1][2] == "2.5–97.5% 不确定带"
 
 
+def test_the_plot_does_not_repeat_the_card_heading(qtbot) -> None:
+    """「SLD 深度剖面」这五个字整屏只出现在标签页和卡片抬头上，轴里不写第三遍。
+
+    这一段图只有 ~120px 高，一行标题就吃掉一成高度，而它说的话卡片抬头
+    （``sldCard``）已经在正上方说过了——同一块屏幕上同一句话出现三次。
+    无候选那一路（``_draw_nominal_only``）早就是这个样子，有候选这一路跟上。
+    """
+    from xrr_fitter.gui.plots.sld import draw_sld
+
+    view = _view(qtbot)
+
+    draw_sld(view, _candidate())
+
+    assert "SLD 深度剖面" not in view.axes.get_title()
+
+
+def test_the_band_caption_is_the_whole_title_not_a_suffix(qtbot) -> None:
+    """可信带那句说明是抬头说不到的，所以它留在轴上——但只有它自己。
+
+    带上「SLD 深度剖面 — 」前缀的话，这一行既重复了抬头，又把真正的新信息
+    挤到了破折号后面。
+    """
+    from xrr_fitter.gui.plots.sld import draw_sld
+    from xrr_fitter.model.sld_bands import SldUncertaintyBands
+
+    view = _view(qtbot)
+    bands = SldUncertaintyBands(
+        depth_a=np.array([0.0, 200.0, 520.0]),
+        quantiles=(0.16, 0.84),
+        real=np.array([[0.0, 1.8e-5, 3.6e-6], [0.0, 2.2e-5, 4.4e-6]]),
+        imaginary=np.array([[0.0, 0.9e-7, 0.0], [0.0, 1.1e-7, 0.0]]),
+        align_label="厚度 d",
+        sample_count=64,
+        total_samples=64,
+        failure_rate=0.0,
+    )
+
+    draw_sld(view, _candidate(), bands=bands)
+
+    assert view.axes.get_title() == bands.caption()
+
+
 def test_the_band_is_drawn_in_the_same_unit_as_the_curve(qtbot) -> None:
     """带和曲线同乘一个换算：只换算曲线，带就会缩成轴底的一条线。"""
     from xrr_fitter.gui.plots.sld import draw_sld

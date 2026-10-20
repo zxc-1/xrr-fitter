@@ -94,6 +94,13 @@ class DecadeAxis(pg.AxisItem):
         return [f"10{str(exponent).translate(SUPERSCRIPT_DIGITS)}" for exponent in exponents]
 
 
+def _release_menus_on_destroy(plot: pg.PlotWidget) -> None:
+    # pyqtgraph 的弹出菜单没有 QWidget 父级，关闭 PlotItem 也只会解除引用。
+    # 绑定拥有者的销毁信号，确保父窗口销毁和单独关闭绘图两条路径都释放菜单。
+    for menu in (plot.plotItem.ctrlMenu, plot.plotItem.vb.menu):
+        plot.destroyed.connect(menu.deleteLater)
+
+
 class ObjectiveTracePlot(pg.PlotWidget):
     """设计稿帧④ 画布第三段：逐帧攒出来的目标值轨迹。
 
@@ -107,6 +114,7 @@ class ObjectiveTracePlot(pg.PlotWidget):
 
     def __init__(self, parent: object | None = None) -> None:
         super().__init__(parent)
+        _release_menus_on_destroy(self)
         self.setObjectName("fitObjectiveTrace")
         self.setLabel("left", self.Y_LABEL)
         self.setLabel("bottom", self.X_LABEL)
@@ -153,6 +161,7 @@ class LiveReflectivityPlot(pg.PlotWidget):
 
     def __init__(self, parent: object | None = None) -> None:
         super().__init__(parent)
+        _release_menus_on_destroy(self)
         self.plot_item = self.getPlotItem()
         # 换掉纵轴：对数刻度的写法要齐整（见 DecadeAxis）。趁面板还空着换，之后的
         # 网格、配色、量程设置才都落在这个轴上。
@@ -783,7 +792,11 @@ class LiveReflectivityPlot(pg.PlotWidget):
             if self.range_item is None:
                 brush = pg.mkColor(theme.DATA_RANGE)
                 brush.setAlpha(50)
-                region = pg.LinearRegionItem(brush=pg.mkBrush(brush), pen=pg.mkPen(theme.DATA_RANGE))
+                region = pg.LinearRegionItem(
+                    values=self._fit_range or tuple(self.plot_item.vb.viewRange()[0]),
+                    brush=pg.mkBrush(brush),
+                    pen=pg.mkPen(theme.DATA_RANGE),
+                )
                 region.sigRegionChangeFinished.connect(self._emit_range)
                 # The region handles must own the drag gesture.  Save the current
                 # ViewBox state so leaving range mode restores the user's pan/zoom
@@ -799,7 +812,9 @@ class LiveReflectivityPlot(pg.PlotWidget):
                 # duration of range mode and restore the exact button set later.
                 vb.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
                 region.setZValue(10)
-                self.addItem(region)
+                # A selector is an overlay: including it in autoRange moves the
+                # coordinate system while its handles are being dragged.
+                self.addItem(region, ignoreBounds=True)
                 self.range_item = region
             return
         if self.range_item is not None:

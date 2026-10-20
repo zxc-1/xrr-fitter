@@ -99,6 +99,27 @@ def test_qz_jacobian_avoids_intermediate_inverse_wavelength_overflow() -> None:
     assert not any(item.category is RuntimeWarning for item in caught)
 
 
+def test_qz_jacobian_restores_evaluation_after_temporary_background_hook(monkeypatch) -> None:
+    theta = np.array([1.0])
+    tangent = np.ones((1, 1))
+    expected_qz, expected_jacobian = evaluation._qz_and_jacobian(theta, tangent, 1.0)
+    values = {
+        "instrument.background": 0.0,
+        "instrument.linear_background_per_a_inv": 0.0,
+        "instrument.powerlaw_background_amplitude": 0.0,
+        "instrument.powerlaw_background_exponent": 3.0,
+    }
+    problem = SimpleNamespace(data=SimpleNamespace(beam=BeamSpec("monochromatic", wavelength_a=1.0)))
+    with monkeypatch.context() as patch:
+        patch.setattr(evaluation, "_qz_and_jacobian", lambda *_: (np.ones(1), np.zeros((1, 1))))
+        evaluation._background_jacobian(problem, theta, tangent, values, {name: np.zeros(1) for name in values})
+
+    qz, jacobian = evaluation._qz_and_jacobian(theta, tangent, 1.0)
+
+    np.testing.assert_array_equal(qz, expected_qz)
+    np.testing.assert_array_equal(jacobian, expected_jacobian)
+
+
 def test_angle_layout_rejects_qz_overflow_without_warning() -> None:
     problem = SimpleNamespace(
         data=SimpleNamespace(

@@ -12,7 +12,7 @@ a project field -- stays the single source of truth.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QToolButton, QWidget
 
 
@@ -55,7 +55,7 @@ class SegmentedControl(QWidget):
             self._group.addButton(button, index)
             self._buttons[value] = button
             layout.addWidget(button)
-            button.clicked.connect(self._segment_clicked)
+            button.toggled.connect(self._segment_toggled)
 
     def buttons(self) -> dict[str, QToolButton]:
         return dict(self._buttons)
@@ -74,7 +74,9 @@ class SegmentedControl(QWidget):
         elsewhere, and re-announcing it there would send the owner a change it
         just made.
         """
-        self._buttons[value].setChecked(True)
+        with QSignalBlocker(self._buttons[value]):
+            self._buttons[value].setChecked(True)
 
-    def _segment_clicked(self) -> None:
-        self.chosen.emit(str(self.sender().property("segmentValue")))
+    def _segment_toggled(self, checked: bool) -> None:
+        if checked:
+            self.chosen.emit(str(self.sender().property("segmentValue")))

@@ -134,5 +134,5 @@ def test_quadrature_jacobian_chunks_large_query_grids() -> None:
     )
     np.testing.assert_allclose(values, samples**2 + 0.002**2, rtol=2e-13, atol=2e-15)
     np.testing.assert_allclose(jacobian[:, 0], 2 * samples, rtol=2e-13, atol=2e-15)
-    assert len(calls) <= 8
-    assert max(np.prod(shape) for shape in calls) <= 4096
+    assert len(calls) <= 5
+    assert max(np.prod(shape) for shape in calls) <= 8192

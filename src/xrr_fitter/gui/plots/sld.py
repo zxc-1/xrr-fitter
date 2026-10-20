@@ -508,7 +508,9 @@ def draw_sld(
     # so index-addressed assertions keep reading the candidate curves.
     axes.plot(depth_nm, profile.real * SLD_DISPLAY_SCALE, label=CANDIDATE_REAL_LABEL)
     axes.plot(depth_nm, profile.imag * SLD_DISPLAY_SCALE, "--", label="SLD 虚部")
-    axes.set(title="SLD 深度剖面", xlabel=DEPTH_AXIS_LABEL, ylabel=SLD_AXIS_LABEL)
+    # 抬头交给卡片，同 ``_draw_nominal_only``：标签页、卡片抬头、轴标题三处都写
+    # 「SLD 深度剖面」的话，同一块屏幕上同一句话出现三次。
+    axes.set(xlabel=DEPTH_AXIS_LABEL, ylabel=SLD_AXIS_LABEL)
     if has_nominal:
         try:
             _draw_nominal_structure(axes, structure, wavelength_a)
@@ -516,7 +518,7 @@ def draw_sld(
             pass
     if bands is not None:
         _draw_bands(axes, bands)
-        axes.set_title(f"SLD 深度剖面 — {bands.caption()}", fontsize=theme.FONT_PT_SM)
+        axes.set_title(bands.caption(), fontsize=theme.FONT_PT_SM)
     _limit_depth_axis(axes, depth_nm)
     _draw_legend(axes, overlays)
     finish_view(view)

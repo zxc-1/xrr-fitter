@@ -324,7 +324,7 @@ def test_the_running_run_reaches_the_dataset_cards_in_the_left_rail(qtbot) -> No
 
     window.fit_panel.running_changed.emit(True)
     window.fit_panel.controller.progress_changed.emit(
-        api.FitProgress(dataset_id=None, stage="refine", completed=620, total=1000, best_objective=2.14, message="")
+        api.FitProgress(dataset_id="curve", stage="refine", completed=620, total=1000, best_objective=2.14, message="")
     )
 
     assert window.data_panel.run_subline("curve") == "拟合中 · J=2.14"
