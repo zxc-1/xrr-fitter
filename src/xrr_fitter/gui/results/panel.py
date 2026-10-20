@@ -135,7 +135,7 @@ class ResultsPanel(QWidget):
         self.confidence_marker.setAccessibleName("可信度状态标记")
         self.confidence_marker.setProperty("mono", True)
         glyph_font = self.confidence_marker.font()
-        glyph_font.setPointSizeF(theme.VERDICT_GLYPH_PT)
+        glyph_font.setPixelSize(theme.VERDICT_GLYPH_PX)
         self.confidence_marker.setFont(glyph_font)
         self.confidence_label = QLabel("不可用")
         self.confidence_label.setObjectName("confidenceBadge")

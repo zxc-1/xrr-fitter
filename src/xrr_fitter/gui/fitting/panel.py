@@ -18,11 +18,12 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import messages, theme
-from xrr_fitter.gui.document import ProjectDocument
+from xrr_fitter.gui.document import ProjectDocument, dropped_fit_work
 from xrr_fitter.gui.fitting.controller import FitController
 from xrr_fitter.gui.fitting.metrics import LiveMetricsView
 from xrr_fitter.gui.fitting.progress import ProgressView
 from xrr_fitter.gui.noise import NOISE_MODE_LABELS, NOISE_MODE_REQUIREMENTS
+from xrr_fitter.gui.project import dialogs
 from xrr_fitter.gui.wrapping import command_bar
 
 # 暂停键的两种面孔。按下之后必须改口，否则读者只能靠曲线动不动来猜它是否生效。
@@ -191,8 +192,17 @@ class FitPanel(QWidget):
         current = self.document.project
         config = replace(current.fit_config, noise_model=str(self.noise_selector.currentData()))
         updated = api.set_fit_config(current, config)
-        if updated is not current:
-            self.document.replace_project(updated)
+        if updated is current:
+            return
+        if not self._may_drop_fit_work("切换噪声模式", current, updated):
+            # 下拉框自己已经跳到了新选项；读回项目，让它停在没换的那一档。
+            self._sync_noise_selector()
+            return
+        self.document.replace_project(updated)
+
+    def _may_drop_fit_work(self, change: str, current: api.XrrProject, updated: api.XrrProject) -> bool:
+        lost = dropped_fit_work(current, updated)
+        return not lost or dialogs.confirm_dropping_results(self, change, len(lost))
 
     def _sync_noise_selector(self) -> None:
         mode = self.document.project.fit_config.noise_model
@@ -427,9 +437,10 @@ class FitPanel(QWidget):
         self._sync_mode_visibility()
 
     def set_batch_mode(self, mode: str) -> bool:
+        """Switch the batch mode; False when nothing changed or the reader kept their results."""
         current = self.document.project
         updated = api.set_batch_mode(current, mode)
-        if updated is current:
+        if updated is current or not self._may_drop_fit_work("切换批量模式", current, updated):
             return False
         self.document.replace_project(updated)
         return True

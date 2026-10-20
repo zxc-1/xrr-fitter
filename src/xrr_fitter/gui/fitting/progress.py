@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.canvas_top import canvas_top
+from xrr_fitter.gui.noise import objective_text
 from xrr_fitter.gui.plots.live import LiveReflectivityPlot, ObjectiveTracePlot
 
 LOG = logging.getLogger(__name__)
@@ -245,7 +246,7 @@ def _detail_text(progress: api.FitProgress) -> str:
     parts = [stage_count_text(progress)]
     if progress.iteration is not None:
         parts.append(f"迭代 {progress.iteration}")
-    parts.append(f"J = {progress.best_objective:.4g}")
+    parts.append(f"J = {objective_text(progress.best_objective)}")
     return " · ".join(parts)
 
 

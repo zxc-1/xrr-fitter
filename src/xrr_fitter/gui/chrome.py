@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from xrr_fitter.gui import messages, status_bar, theme
 from xrr_fitter.gui.command_icons import command_icon
 from xrr_fitter.gui.dialog_template import StyledDialog
+from xrr_fitter.gui.noise import NOISE_MODE_SHORT_LABELS, objective_text
 from xrr_fitter.gui.plots.diagnostics import TAB_SPECS
 from xrr_fitter.gui.results.uncertainty import sampling_readings
 from xrr_fitter.gui.results.verdict import free_parameter_count, reduced_chi_squared
@@ -848,7 +849,8 @@ def _choose_batch_mode(window: QWidget, mode: str) -> None:
         window.fit_panel.set_batch_mode(mode)
     except ValueError as error:
         window.statusBar().showMessage(str(error), REFUSAL_MESSAGE_MS)
-        _sync_batch_segment(window)
+    # 被拒、被读者取消时项目没变，没有 project_changed 来把按下的那一半熄掉，所以每次都读回。
+    _sync_batch_segment(window)
 
 
 def _sync_batch_segment(window: QWidget) -> None:
@@ -940,7 +942,7 @@ def _fit_metrics_text(window: QWidget) -> str:
     candidate = _reported_candidate(window, result)
     if candidate is None:
         return ""
-    parts = [f"J = {candidate.objective:g}", f"{candidate.noise_model} [{candidate.residual_unit}]"]
+    parts = [f"J = {objective_text(candidate.objective)}（{NOISE_MODE_SHORT_LABELS[candidate.noise_model]}）"]
     if candidate.noise_model == "gaussian":
         chi = reduced_chi_squared(candidate.weighted_residuals, free_parameter_count(result))
         if chi is not None:

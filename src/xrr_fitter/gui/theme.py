@@ -99,11 +99,20 @@ STATUS_DOT_RADIUS_PX = STATUS_DOT_PX // 2
 # actually installs, and keeps the generic last as a documented intent.
 MONO_FONT_STACK = '"SF Mono", "Cascadia Code", "Menlo", "Consolas", "DejaVu Sans Mono", monospace'
 
-# Point sizes for text drawn outside the stylesheet (Matplotlib artists) and for
-# the few labels that need to depart from the widget default.
+# Point sizes for Matplotlib artists only. A figure renders at its own dpi, so a
+# point there is the same size on every desktop.
 FONT_PT_SM = 9
 FONT_PT_MD = 11
 FONT_PT_LG = 14
+
+# The same three steps for Qt text, in pixels. Qt turns a point into pixels through
+# the logical DPI -- 96 on Windows, Linux and the offscreen tests, 72 on macOS -- so
+# every pt size drew 25% smaller on a Mac while the 13px system body text did not
+# move: the 11pt verdict that should outrank the body landed at 11px, below it.
+# These are the pixels the pt steps measured at 96 dpi, so nothing moves elsewhere.
+FONT_PX_SM = 12
+FONT_PX_MD = 15
+FONT_PX_LG = 19
 
 # One interactive-control height for buttons, tool buttons and single-line
 # inputs alike.  These used to carry three different minimums (22, 20, and
@@ -379,9 +388,8 @@ VERDICT_PAD_V_PX = 10
 VERDICT_PAD_H_PX = SPACE_MD
 VERDICT_FILL_ALPHAS: dict[str, float] = {"ok": 0.08, "info": 0.08, "warn": 0.09, "error": 0.08}
 VERDICT_BORDER_ALPHA = 0.35
-# 字形那 22px 折算成 16.5pt。字号在 Python 里落到控件上而不是写进 QSS：Qt 的样式表解析器
-# 遇到带小数的 pt 会丢掉整条规则，字形会静默退回默认字号。
-VERDICT_GLYPH_PT = 16.5
+# 设计稿 ``.confbadge .ic`` 字形的 22px，按像素直接给（见 ``FONT_PX_SM`` 那段）。
+VERDICT_GLYPH_PX = 22
 
 # 设计稿 ``.insp-sec .h`` 的字距（``letter-spacing:.6px``）。检视器那一栏的分节抬头是
 # 11px 的小字，字距把它读成一行标签而不是一句被缩小的标题；正文与图卡抬头都不加。
@@ -755,7 +763,7 @@ QLabel[sectionHeader="true"][faintText="true"] {{
 }}
 QLabel[mutedText="true"] {{ color: {tokens.muted_text}; }}
 QLabel[faintText="true"] {{ color: {tokens.faint_text}; }}
-QLabel[emptyTitle="true"] {{ font-size: {FONT_PT_LG}pt; font-weight: 700; }}
+QLabel[emptyTitle="true"] {{ font-size: {FONT_PX_LG}px; font-weight: 700; }}
 QLabel[statusKind="ok"] {{ color: {tokens.ok}; }}
 QLabel[statusKind="info"] {{ color: {tokens.info}; }}
 QLabel[statusKind="warn"] {{ color: {tokens.warn}; }}
@@ -776,7 +784,7 @@ QLabel[statusDot="true"][statusKind="error"] {{ background: {tokens.error}; }}
 QLabel[statusDot="true"][statusKind="accent"] {{ background: {tokens.accent}; }}
 QLabel[hintBox="true"], QLabel[bannerBox="true"] {{
     border-radius: 8px;
-    font-size: {FONT_PT_SM}pt;
+    font-size: {FONT_PX_SM}px;
 }}
 QLabel[hintBox="true"] {{ padding: 10px 12px; }}
 QLabel[bannerBox="true"] {{ padding: 10px 14px; }}
@@ -841,7 +849,7 @@ QLabel[badge="true"][statusKind="error"] {{
 QLabel[mono="true"] {{ font-family: {MONO_FONT_STACK}; }}
 QLabel[codeBlock="true"] {{
     font-family: {MONO_FONT_STACK};
-    font-size: {FONT_PT_SM}pt;
+    font-size: {FONT_PX_SM}px;
     color: {tokens.muted_text};
     background: {tokens.surface};
     border: 1px solid {tokens.surface_border};
@@ -868,7 +876,7 @@ QLabel[stageMarker="true"][stepState="current"] {{ background: {tokens.accent}; 
 QLabel[stageMarker="true"][stepState="pending"] {{ background: transparent; border-color: {tokens.muted_text}; }}
 QLabel[stepDot="true"] {{
     border-radius: 10px;
-    font-size: 9pt;
+    font-size: {FONT_PX_SM}px;
     font-weight: 600;
 }}
 /* 向导抬头那一格的记号大一档（``.wizhead .wh .n{{width:30px;height:30px}}``），圆角只能跟着
@@ -929,8 +937,8 @@ QFrame[verdictBox="true"][statusKind="error"] {{
 }}
 /* ``.confbadge .txt .l`` / ``.r``：判定 700/15px，理由 11.5px 静音。两行同号时框里读起来
    是两句并列的话，小一档理由才读成判定的注脚。 */
-QLabel#confidenceBadge {{ font-weight: 700; font-size: {FONT_PT_MD}pt; }}
-QLabel#confidenceReason {{ font-size: {FONT_PT_SM}pt; }}
+QLabel#confidenceBadge {{ font-weight: 700; font-size: {FONT_PX_MD}px; }}
+QLabel#confidenceReason {{ font-size: {FONT_PX_SM}px; }}
 QTabBar::tab {{ padding: {SPACE_XS}px {SPACE_MD}px; }}
 /* 帧①/⑤ 的画布列由 ``.canvas-top`` 那条线分上下两段，容器不再自己画框：两个
    ``QTabWidget`` 退成只放页面的壳（自己那条 tab 条由 ``canvas_tab_group`` 藏起来，露在
@@ -1034,11 +1042,11 @@ QWidget#structureLayerRow[semiInfinite="true"] {{ background: {tokens.surface}; 
 QWidget#structureLayerRow[rowSelected="true"] {{ border-left-color: {tokens.accent}; }}
 QLabel#structureLayerName {{ font-weight: 600; }}
 QLabel#structureLayerDetail {{
-    font-size: {FONT_PT_SM}pt;
+    font-size: {FONT_PX_SM}px;
     color: {tokens.muted_text};
 }}
 QLabel#structureLayerReading {{
-    font-size: {FONT_PT_SM}pt;
+    font-size: {FONT_PX_SM}px;
     color: {tokens.muted_text};
 }}
 QLabel#structureLayerDrag {{ color: {tokens.muted_text}; }}
@@ -1061,7 +1069,7 @@ QTableWidget#resultValueTable::item {{ padding: 3px {SPACE_SM}px; }}
 QTableWidget#resultValueTable QHeaderView::section {{
     background: transparent;
     color: {tokens.muted_text};
-    font-size: {FONT_PT_SM}pt;
+    font-size: {FONT_PX_SM}px;
     font-weight: 700;
     padding: {SPACE_XS}px {SPACE_SM}px;
 }}

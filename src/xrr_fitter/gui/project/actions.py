@@ -130,15 +130,26 @@ class ProjectActions(QWidget):
         # 这一段没有结论可报时整段该藏起来，而藏不藏是段自己的事——文字一变就让状态栏重算。
         status_bar.sync(self._owner)
 
-    def _may_replace_project(self) -> bool:
-        return not self._document.is_dirty or self._owner._confirm_discard_changes()
+    def resolve_unsaved_changes(self) -> bool:
+        """Settle unsaved changes before the open project goes away; False means stay.
+
+        新建、打开、关窗和退出都走这一问。「保存」走与菜单同一条保存路径，未命名项目会先
+        选文件；文件框被取消、或保存失败时项目仍是脏的，于是照「取消」处理，什么都不丢。
+        """
+        if not self._document.is_dirty:
+            return True
+        choice = dialogs.ask_unsaved_changes(self._owner)
+        if choice is dialogs.UnsavedChoice.SAVE:
+            self.save_project(save_as=False)
+            return not self._document.is_dirty
+        return choice is dialogs.UnsavedChoice.DISCARD
 
     def new_project(self) -> None:
-        if self._may_replace_project():
+        if self.resolve_unsaved_changes():
             self._owner.new_project(discard_unsaved=True)
 
     def open_project(self) -> None:
-        if not self._may_replace_project():
+        if not self.resolve_unsaved_changes():
             return
         target = dialogs.choose_project_to_open(self)
         if target is None:

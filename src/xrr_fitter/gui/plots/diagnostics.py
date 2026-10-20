@@ -25,7 +25,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QTabWidget, QVBoxLayout, QWidget
 
 from xrr_fitter.gui import theme
-from xrr_fitter.gui.noise import residual_label
+from xrr_fitter.gui.noise import NOISE_MODE_SHORT_LABELS, objective_text, residual_label
 from xrr_fitter.gui.plots.live import LiveReflectivityPlot
 from xrr_fitter.gui.plots.series_key import SERIES_KEY_CARDS, build_series_key
 from xrr_fitter.gui.results.candidate_row import candidate_title
@@ -556,7 +556,7 @@ def plot_card_subtitle(key: str, dataset_id: str | None) -> str:
 
 def _residual_metric_text(result: object, candidate: object) -> str:
     if candidate.noise_model != "gaussian":
-        return f"J={candidate.objective:.4g} · {candidate.noise_model} · {residual_label(candidate)}"
+        return f"J={objective_text(candidate.objective)} · {NOISE_MODE_SHORT_LABELS[candidate.noise_model]} · {residual_label(candidate)}"
     chi_squared = reduced_chi_squared(candidate.weighted_residuals, free_parameter_count(result))
     return RESIDUAL_CHI_UNAVAILABLE_TEXT if chi_squared is None else f"χ²ᵥ = {chi_squared:.3g}"
 

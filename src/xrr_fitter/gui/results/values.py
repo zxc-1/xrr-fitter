@@ -114,6 +114,13 @@ def _number(value: float, exponent: int | None) -> str:
     return f"{value / 10.0**exponent:.{MANTISSA_DECIMALS}f}e{exponent}"
 
 
+def _value_text(definition: api.ParameterDefinition, value: float, exponent: int | None) -> str:
+    """整数声明（周期块的重复次数）照整数写：``20.000`` 读起来像一个能取 20.5 的量。"""
+    if definition.integer:
+        return f"{round(value)}"
+    return _number(value, exponent)
+
+
 def _owned(report: object | None, candidate_id: str | None) -> bool:
     """报告是不是这个候选解的——未归属（``None``）的旧报告照判定卡的规矩算作它的。"""
     return report is not None and report.candidate_id in (None, candidate_id)
@@ -290,7 +297,7 @@ class ResultValueDelegate(QStyledItemDelegate):
         painter.setBrush(accent)
         painter.drawRoundedRect(box, LOCK_RADIUS_PX, LOCK_RADIUS_PX)
         glyph = QFont(option.font)
-        glyph.setPointSize(theme.FONT_PT_SM)
+        glyph.setPixelSize(theme.FONT_PX_SM)
         glyph.setBold(True)
         painter.setFont(glyph)
         painter.setPen(theme.token_colour(tokens.accent_text))
@@ -403,7 +410,7 @@ class ResultValueTable(QTableWidget):
             bulk = densities.get(owner_prefix(definition.name))
             value = values.get(definition.name)
             scaled = None if value is None else value * display_scale(definition, bulk)
-            text = UNAVAILABLE_TEXT if scaled is None else _number(scaled, _exponent(scaled))
+            text = UNAVAILABLE_TEXT if scaled is None else _value_text(definition, scaled, _exponent(scaled))
             unit = display_unit(definition, bulk)
             lines.append(f"{row_name(definition.display_name, None, bulk)} {text}{f' {unit}' if unit else ''}")
         return "\n".join(lines)
@@ -423,7 +430,7 @@ class ResultValueTable(QTableWidget):
         item = _read_only(text)
         font = item.font()
         font.setBold(True)
-        font.setPointSize(theme.FONT_PT_SM)
+        font.setPixelSize(theme.FONT_PX_SM)
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, GROUP_LETTER_SPACING_PX)
         item.setFont(font)
         item.setBackground(_shade(self.palette()))
@@ -449,7 +456,7 @@ class ResultValueTable(QTableWidget):
         value = values.get(definition.name)
         scaled = None if value is None else value * display_scale(definition, bulk_density)
         exponent = None if scaled is None else _exponent(scaled)
-        text = UNAVAILABLE_TEXT if scaled is None else _number(scaled, exponent)
+        text = UNAVAILABLE_TEXT if scaled is None else _value_text(definition, scaled, exponent)
         self.setItem(row, 1, _read_only(text, numeric=True))
         sigma_text = _sigma_text(definition, sigma, exponent, bulk_density)
         sigma_item = _read_only(sigma_text, numeric=True)

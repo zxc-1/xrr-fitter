@@ -43,6 +43,7 @@ from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.fitting.metrics import UNKNOWN
 from xrr_fitter.gui.fitting.metrics import _trend as metrics_trend
 from xrr_fitter.gui.navigation.panel import STRUCTURE_STEP_INDEX
+from xrr_fitter.gui.noise import objective_text
 from xrr_fitter.gui.sizing import ContentSizedTree
 
 DATA_FILTER = "XRR 数据 (*.xy *.dat *.txt);;所有文件 (*)"
@@ -574,7 +575,7 @@ class DataPanel(QWidget):
         best = result.best_candidate
         parts = [f"可信度：{result.confidence.value}", f"候选解 {len(result.candidates)} 个"]
         if best is not None:
-            parts.append(f"最优目标值 J={best.objective:g}")
+            parts.append(f"最优目标值 J={objective_text(best.objective)}")
         if result.warnings:
             parts.append(f"告警 {len(result.warnings)} 条")
         return " · ".join(parts)
@@ -661,7 +662,7 @@ class DataPanel(QWidget):
             return ""
         trend = self._run_trends.get(dataset_id, "")
         arrow = "" if trend in ("", UNKNOWN) else trend[0]
-        return f"拟合中 · J={objective:.2f}{arrow}"
+        return f"拟合中 · J={objective_text(objective)}{arrow}"
 
     def set_step(self, step: int | None) -> None:
         """项目走到了哪一步。
@@ -842,7 +843,10 @@ class DataPanel(QWidget):
                 mapping = dialog.column_mapping()
                 sources = dialog.source_paths()
             self.import_paths(sources, preset=preset, column_mapping=mapping)
-        except (InterruptedError, OSError, ValueError, TypeError) as error:
+        except InterruptedError:
+            # 读者在基底那一问上点了取消：这是放弃导入，不是导入失败，什么都没写进项目，也不必报错。
+            return
+        except (OSError, ValueError, TypeError) as error:
             QMessageBox.critical(self, "导入数据失败", f"{type(error).__name__}: {error}")
 
     def _folder_paths(self, folder: Path, recursive: bool) -> tuple[Path, ...]:

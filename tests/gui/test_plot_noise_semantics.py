@@ -11,6 +11,7 @@ from tests.gui.plot_support import _candidate, _panel, _result
 from tests.support.model_cases import final_fit_result, prepared_data
 
 import xrr_fitter.api as api
+from xrr_fitter.gui.noise import NOISE_MODE_SHORT_LABELS, objective_text
 from xrr_fitter.gui.plots.diagnostics import build_scratch_views, release_scratch_views
 from xrr_fitter.gui.plots.reflectivity import _prepared_dataset, draw_log, draw_residual
 from xrr_fitter.gui.plots.sld import draw_uncertainty
@@ -44,8 +45,8 @@ def test_quality_caption_reports_actual_mode_not_a_recomputed_log_statistic(qtbo
     try:
         draw_log(scratch["log"], data, candidate)
         caption = "\n".join(item.get_text() for item in scratch["log"].axes.texts)
-        assert mode in caption
-        assert f"J={candidate.objective:.4g}" in caption
+        assert NOISE_MODE_SHORT_LABELS[mode] in caption
+        assert f"J={objective_text(candidate.objective)}" in caption
         assert "平均残差" not in caption
         assert "decade" not in caption
     finally:
