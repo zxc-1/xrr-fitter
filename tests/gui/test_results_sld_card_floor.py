@@ -8,6 +8,7 @@ constrained_layout 为了给它让边距会把轴压成一条线，读者看到�
 from __future__ import annotations
 
 from PySide6.QtWidgets import QWidget
+from tests.gui.control_operation_driver import controls as controls
 from tests.gui.plot_cases_5 import _sld_project
 
 import xrr_fitter.api as api
