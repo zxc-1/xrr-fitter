@@ -4,6 +4,8 @@ import faulthandler
 import importlib.util
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -18,37 +20,113 @@ STALL_SECONDS = 300
 # 耗时表就没机会印出来了。
 SLOW_SECONDS = 30
 STALL_STREAM = pytest.StashKey()
+PROGRESS_LOG = pytest.StashKey()
+
+
+class ProgressLog:
+    """逐条记下开跑的用例；一条用例卡住超过 ``stall_seconds``，再追加所有线程的栈。
+
+    上面那条 stderr 流在覆盖率审计里留不下来：``tools/audit_reports.py`` 把 pytest 的输出整个收在
+    内存里，job 到点被取消，一个字也落不了盘。这份日志写在会话的 basetemp 下，审计的 basetemp 在
+    报告目录里，取消了也照样上传。每行直接 ``os.write``：进程挨了 SIGKILL 也不丢，守望线程也不必
+    去抢 Python 文件对象的缓冲锁。
+    """
+
+    def __init__(self, stall_seconds: float) -> None:
+        self.stall_seconds = stall_seconds
+        self.descriptor: int | None = None
+        # 第一条用例开跑时，会话夹具还没把 basetemp 告诉这里；先攒着，打开时补写。关了以后再写的丢掉。
+        self.backlog: list[str] | None = []
+        self.watcher: tuple[threading.Thread, threading.Event] | None = None
+
+    def open(self, path: Path) -> None:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        for line in self.backlog or ():
+            os.write(descriptor, line.encode("utf-8"))
+        self.backlog = None
+        self.descriptor = descriptor
+
+    def close(self) -> None:
+        descriptor, self.descriptor, self.backlog = self.descriptor, None, None
+        if descriptor is not None:
+            os.close(descriptor)
+
+    def write(self, text: str) -> None:
+        line = f"{time.strftime('%H:%M:%S')} {text}\n"
+        if self.descriptor is not None:
+            os.write(self.descriptor, line.encode("utf-8"))
+        elif self.backlog is not None:
+            self.backlog.append(line)
+
+    def start(self, nodeid: str) -> None:
+        self.write(f"[start] {nodeid}")
+        finished = threading.Event()
+        thread = threading.Thread(target=self._watch, args=(nodeid, finished), name="xrr-stall-watch", daemon=True)
+        thread.start()
+        self.watcher = thread, finished
+
+    def finish(self) -> None:
+        if self.watcher is not None:
+            thread, finished = self.watcher
+            self.watcher = None
+            finished.set()
+            thread.join()
+
+    def _watch(self, nodeid: str, finished: threading.Event) -> None:
+        began = time.monotonic()
+        while not finished.wait(self.stall_seconds):
+            descriptor = self.descriptor
+            if descriptor is None:
+                continue
+            elapsed = time.monotonic() - began
+            self.write(f"[stalled {elapsed:.0f}s, {threading.active_count()} threads] {nodeid}")
+            faulthandler.dump_traceback(descriptor, all_threads=True)
 
 
 def pytest_configure(config):
     # 配置阶段 stderr 还没被逐用例捕获；复制一份，栈才会落到终端，而不是落进某条用例的捕获里。
     config.stash[STALL_STREAM] = os.fdopen(os.dup(sys.stderr.fileno()), "w")
+    config.stash[PROGRESS_LOG] = ProgressLog(STALL_SECONDS)
 
 
 def pytest_unconfigure(config):
     config.stash[STALL_STREAM].close()
+    config.stash[PROGRESS_LOG].close()
 
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
-    stream = item.config.stash[STALL_STREAM]
+    notes = []
     if report.duration > SLOW_SECONDS:
-        stream.write(f"\n[slow {report.duration:.0f}s] {report.when} {report.nodeid}\n")
+        notes.append(f"[slow {report.duration:.0f}s] {report.when} {report.nodeid}")
     if report.failed:
         detail = "\n".join(str(report.longrepr).splitlines()[-30:])
-        stream.write(f"\n[failed] {report.when} {report.nodeid}\n{detail}\n")
+        notes.append(f"[failed] {report.when} {report.nodeid}\n{detail}")
+    stream = item.config.stash[STALL_STREAM]
+    for note in notes:
+        stream.write(f"\n{note}\n")
+        item.config.stash[PROGRESS_LOG].write(note)
     stream.flush()
 
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item, nextitem):
+    progress = item.config.stash[PROGRESS_LOG]
+    progress.start(item.nodeid)
     faulthandler.dump_traceback_later(STALL_SECONDS, file=item.config.stash[STALL_STREAM])
     try:
         yield
     finally:
         faulthandler.cancel_dump_traceback_later()
+        progress.finish()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _progress_log(request, tmp_path_factory):
+    """进度日志落在本次会话的 basetemp 下；审计与 verify 的 basetemp 都在报告目录里，随报告上传。"""
+    request.config.stash[PROGRESS_LOG].open(tmp_path_factory.getbasetemp() / "progress.log")
 
 
 @pytest.fixture(scope="session", autouse=True)
