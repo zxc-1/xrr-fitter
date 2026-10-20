@@ -12,7 +12,7 @@ if TOOL_DIRECTORY not in sys.path:
     sys.path.insert(0, TOOL_DIRECTORY)
 
 from native_bytes import NativeBytes  # noqa: E402
-from native_pe import inspect_pe  # noqa: E402
+from native_pe import inspect_coff_import, inspect_pe  # noqa: E402
 
 MACHO = {
     b"\xce\xfa\xed\xfe": ("<", False),
@@ -291,6 +291,11 @@ def _inspect_native(data: bytes | memoryview, depth: int) -> dict:
         return _fat(data, depth)
     if prefix.startswith(b"MZ"):
         return _native_image(data, inspect_pe(data))
+    if prefix[:4] == b"\0\0\xff\xff":
+        parsed = inspect_coff_import(data)
+        if parsed.get("unparsed_commands"):
+            return {"format": "unclassified", "images": [], "unparsed": parsed["unparsed_commands"]}
+        return _native_image(data, parsed)
     if prefix == b"!<arch>\n":
         return _archive(data, depth)
     return {"format": "unclassified", "images": [], "unparsed": [{"reason": "unrecognized native header"}]}

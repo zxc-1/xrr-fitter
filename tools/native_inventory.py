@@ -16,14 +16,15 @@ def _properties(values: dict) -> list[dict]:
 
 
 def _architecture(image: dict) -> tuple:
-    if image["format"] == "pe":
-        return "pe", image["machine"]
+    if image["format"] in {"pe", "coff-import"}:
+        return image["format"], image["machine"]
     return "mach-o", image["cpu_type"], image["cpu_subtype"]
 
 
 def _target_family(image: dict, target: str) -> str:
     expected = {"macos-arm64-py312": ("mach-o", 0x100000C), "windows-x64-py312": ("pe", 0x8664)}
-    return "target" if _architecture(image)[:2] == expected[target] else "foreign"
+    architecture = ("pe", image["machine"]) if image["format"] == "coff-import" else _architecture(image)[:2]
+    return "target" if architecture == expected[target] else "foreign"
 
 
 def _native_files(wheels: list[dict], inventories: list[dict]) -> dict[str, dict]:
@@ -56,6 +57,8 @@ def _image_records(files: dict[str, dict]) -> list[dict]:
 
 def _loadable(record: dict) -> bool:
     image = record["image"]
+    if image["format"] == "coff-import":
+        return False
     if "member_path" in image or record["path"].split("/", 1)[0].endswith(".data"):
         return False
     return image["format"] == "pe" or image["file_type"] in {6, 7}
@@ -99,6 +102,8 @@ def _rpath_paths(record: dict, name: str) -> tuple[list[str], str | None]:
 
 def _request_paths(record: dict, name: str) -> tuple[list[str], str | None]:
     image = record["image"]
+    if image["format"] == "coff-import":
+        return [], "static-archive-link-context"
     if image["format"] == "pe":
         return [], "windows-loader-context-not-inspected"
     if not _loadable(record) and ("member_path" in image or image["file_type"] == 1):
