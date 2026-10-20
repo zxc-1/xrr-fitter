@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # 卡住的用例（没人应答的模态框、不再回报的 worker）原本要静默等到 CI 的 60 分钟上限，日志里
 # 什么也不说；超过这个秒数就把所有线程的栈打出来，让日志点名卡住的那一行。只报告，不判失败。
-# 不放进 pyproject 的 ``faulthandler_timeout``：包清单绑定了 pyproject.toml 的哈希。
+# 栈由 ``ProgressLog`` 的守望线程持着 GIL 打，不用 ``faulthandler.dump_traceback_later``（pyproject 的
+# ``faulthandler_timeout`` 也是它）：那条 C 计时线程不拿 GIL 就读主线程的帧链。覆盖率审计里它撞上
+# 一条正算到 300 s 的用例，读坏了帧、攥着锁不放，用例收尾的 cancel 持着 GIL 等那把锁，整个进程冻到 job 上限。
 STALL_SECONDS = 300
 # 慢用例与失败当场写进同一条流：CI 的 job 一旦到点被取消，pytest 收尾时那份失败清单和
 # 耗时表就没机会印出来了。
@@ -31,11 +33,15 @@ class ProgressLog:
     报告目录里，取消了也照样上传。每行直接 ``os.write``：进程挨了 SIGKILL 也不丢，守望线程也不必
     去抢 Python 文件对象的缓冲锁。慢用例与卡住的表头都带上开跑以来的进程 CPU 时间：CPU 跟着墙钟涨
     是在算，墙钟涨 CPU 不涨是在等锁、等子进程，或者主机被限流。
+
+    ``echo`` 是那条 stderr 流的描述符，卡住的表头与栈也写一份过去：pr-verify 把 stderr 接进 job 日志，
+    却不上传 basetemp，那边只看得到这一份。
     """
 
-    def __init__(self, stall_seconds: float, slow_seconds: float) -> None:
+    def __init__(self, stall_seconds: float, slow_seconds: float, *, echo: int | None = None) -> None:
         self.stall_seconds = stall_seconds
         self.slow_seconds = slow_seconds
+        self.echo = echo
         self.descriptor: int | None = None
         # 第一条用例开跑时，会话夹具还没把 basetemp 告诉这里；先攒着，打开时补写。关了以后再写的丢掉。
         self.backlog: list[str] | None = []
@@ -82,11 +88,12 @@ class ProgressLog:
 
     def _watch(self, nodeid: str, began: tuple[float, float], finished: threading.Event) -> None:
         while not finished.wait(self.stall_seconds):
-            descriptor = self.descriptor
-            if descriptor is None:
-                continue
-            self.write(f"[stalled {self._elapsed(began)}] {nodeid}")
-            faulthandler.dump_traceback(descriptor, all_threads=True)
+            line = f"{time.strftime('%H:%M:%S')} [stalled {self._elapsed(began)}] {nodeid}\n".encode()
+            # 持着 GIL 打栈：主线程这时停在安全点上，帧链不会边读边变。
+            for descriptor in (self.descriptor, self.echo):
+                if descriptor is not None:
+                    os.write(descriptor, line)
+                    faulthandler.dump_traceback(descriptor, all_threads=True)
 
     @staticmethod
     def _elapsed(began: tuple[float, float]) -> str:
@@ -97,7 +104,7 @@ class ProgressLog:
 def pytest_configure(config):
     # 配置阶段 stderr 还没被逐用例捕获；复制一份，栈才会落到终端，而不是落进某条用例的捕获里。
     config.stash[STALL_STREAM] = os.fdopen(os.dup(sys.stderr.fileno()), "w")
-    config.stash[PROGRESS_LOG] = ProgressLog(STALL_SECONDS, SLOW_SECONDS)
+    config.stash[PROGRESS_LOG] = ProgressLog(STALL_SECONDS, SLOW_SECONDS, echo=config.stash[STALL_STREAM].fileno())
 
 
 def pytest_unconfigure(config):
@@ -124,11 +131,9 @@ def pytest_runtest_makereport(item, call):
 def pytest_runtest_protocol(item, nextitem):
     progress = item.config.stash[PROGRESS_LOG]
     progress.start(item.nodeid)
-    faulthandler.dump_traceback_later(STALL_SECONDS, file=item.config.stash[STALL_STREAM])
     try:
         yield
     finally:
-        faulthandler.cancel_dump_traceback_later()
         progress.finish()
 
 
