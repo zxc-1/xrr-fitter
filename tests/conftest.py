@@ -29,15 +29,17 @@ class ProgressLog:
     上面那条 stderr 流在覆盖率审计里留不下来：``tools/audit_reports.py`` 把 pytest 的输出整个收在
     内存里，job 到点被取消，一个字也落不了盘。这份日志写在会话的 basetemp 下，审计的 basetemp 在
     报告目录里，取消了也照样上传。每行直接 ``os.write``：进程挨了 SIGKILL 也不丢，守望线程也不必
-    去抢 Python 文件对象的缓冲锁。
+    去抢 Python 文件对象的缓冲锁。慢用例与卡住的表头都带上开跑以来的进程 CPU 时间：CPU 跟着墙钟涨
+    是在算，墙钟涨 CPU 不涨是在等锁、等子进程，或者主机被限流。
     """
 
-    def __init__(self, stall_seconds: float) -> None:
+    def __init__(self, stall_seconds: float, slow_seconds: float) -> None:
         self.stall_seconds = stall_seconds
+        self.slow_seconds = slow_seconds
         self.descriptor: int | None = None
         # 第一条用例开跑时，会话夹具还没把 basetemp 告诉这里；先攒着，打开时补写。关了以后再写的丢掉。
         self.backlog: list[str] | None = []
-        self.watcher: tuple[threading.Thread, threading.Event] | None = None
+        self.watcher: tuple[str, tuple[float, float], threading.Thread, threading.Event] | None = None
 
     def open(self, path: Path) -> None:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
@@ -60,33 +62,42 @@ class ProgressLog:
 
     def start(self, nodeid: str) -> None:
         self.write(f"[start] {nodeid}")
+        began = time.monotonic(), time.process_time()
         finished = threading.Event()
-        thread = threading.Thread(target=self._watch, args=(nodeid, finished), name="xrr-stall-watch", daemon=True)
+        thread = threading.Thread(
+            target=self._watch, args=(nodeid, began, finished), name="xrr-stall-watch", daemon=True
+        )
         thread.start()
-        self.watcher = thread, finished
+        self.watcher = nodeid, began, thread, finished
 
     def finish(self) -> None:
-        if self.watcher is not None:
-            thread, finished = self.watcher
-            self.watcher = None
-            finished.set()
-            thread.join()
+        if self.watcher is None:
+            return
+        nodeid, began, thread, finished = self.watcher
+        self.watcher = None
+        finished.set()
+        thread.join()
+        if time.monotonic() - began[0] > self.slow_seconds:
+            self.write(f"[slow {self._elapsed(began)}] {nodeid}")
 
-    def _watch(self, nodeid: str, finished: threading.Event) -> None:
-        began = time.monotonic()
+    def _watch(self, nodeid: str, began: tuple[float, float], finished: threading.Event) -> None:
         while not finished.wait(self.stall_seconds):
             descriptor = self.descriptor
             if descriptor is None:
                 continue
-            elapsed = time.monotonic() - began
-            self.write(f"[stalled {elapsed:.0f}s, {threading.active_count()} threads] {nodeid}")
+            self.write(f"[stalled {self._elapsed(began)}] {nodeid}")
             faulthandler.dump_traceback(descriptor, all_threads=True)
+
+    @staticmethod
+    def _elapsed(began: tuple[float, float]) -> str:
+        wall, cpu = time.monotonic() - began[0], time.process_time() - began[1]
+        return f"{wall:.0f}s, cpu {cpu:.0f}s, {threading.active_count()} threads"
 
 
 def pytest_configure(config):
     # 配置阶段 stderr 还没被逐用例捕获；复制一份，栈才会落到终端，而不是落进某条用例的捕获里。
     config.stash[STALL_STREAM] = os.fdopen(os.dup(sys.stderr.fileno()), "w")
-    config.stash[PROGRESS_LOG] = ProgressLog(STALL_SECONDS)
+    config.stash[PROGRESS_LOG] = ProgressLog(STALL_SECONDS, SLOW_SECONDS)
 
 
 def pytest_unconfigure(config):
@@ -98,14 +109,12 @@ def pytest_unconfigure(config):
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
-    notes = []
+    stream = item.config.stash[STALL_STREAM]
     if report.duration > SLOW_SECONDS:
-        notes.append(f"[slow {report.duration:.0f}s] {report.when} {report.nodeid}")
+        stream.write(f"\n[slow {report.duration:.0f}s] {report.when} {report.nodeid}\n")
     if report.failed:
         detail = "\n".join(str(report.longrepr).splitlines()[-30:])
-        notes.append(f"[failed] {report.when} {report.nodeid}\n{detail}")
-    stream = item.config.stash[STALL_STREAM]
-    for note in notes:
+        note = f"[failed] {report.when} {report.nodeid}\n{detail}"
         stream.write(f"\n{note}\n")
         item.config.stash[PROGRESS_LOG].write(note)
     stream.flush()

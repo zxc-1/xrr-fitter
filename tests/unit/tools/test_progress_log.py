@@ -7,6 +7,7 @@ time limit, so this file is the only record of which test was running at that po
 from __future__ import annotations
 
 import importlib.util
+import re
 import time
 from pathlib import Path
 
@@ -26,7 +27,7 @@ def _stall_in_the_test_body(seconds: float) -> None:
 
 
 def test_progress_log_names_each_test_and_dumps_the_stack_of_a_stalled_one(tmp_path: Path) -> None:
-    progress = _root_conftest().ProgressLog(stall_seconds=0.2)
+    progress = _root_conftest().ProgressLog(stall_seconds=0.2, slow_seconds=0.5)
     # The first test starts before the session fixture knows where basetemp is.
     progress.start("tests/probe.py::test_first")
     progress.finish()
@@ -42,6 +43,10 @@ def test_progress_log_names_each_test_and_dumps_the_stack_of_a_stalled_one(tmp_p
     stuck = text.index("[start] tests/probe.py::test_stuck")
     stalled = text.index("[stalled", stuck)
     assert first < stuck < stalled
-    assert "tests/probe.py::test_stuck" in text[stalled:].splitlines()[0]
+    # Wall clock against process CPU tells a test that computes from one that waits or is throttled.
+    timing = r"\d+s, cpu \d+s, \d+ threads"
+    assert re.match(rf"\[stalled {timing}\] tests/probe.py::test_stuck$", text[stalled:].splitlines()[0])
     assert "_stall_in_the_test_body" in text[stalled:]
+    slow = [line for line in text.splitlines() if "[slow" in line]
+    assert len(slow) == 1 and re.search(rf"\[slow {timing}\] tests/probe.py::test_stuck$", slow[0])
     assert "after close" not in text
