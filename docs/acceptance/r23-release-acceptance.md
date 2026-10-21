@@ -21,9 +21,12 @@ below. The source now prepares **0.2.5**; this document is not publication appro
 The baseline main run executed the ordinary engineering and distribution gates.
 Tag-only statistical, candidate-readiness, identity and release jobs were skipped
 by their configured conditions. A successful branch run does not satisfy those
-release jobs. The committed test manifest is bound to source
+release jobs. The baseline test manifest was bound to source
 `199b7ea58bee51380f52e9293e102f8050b56d3a`; the baseline has the same test tree and
-matching current lock digest. Final release preparation must recheck that binding.
+matching current lock digest. The current manifest is bound to
+`919ef67d0b9043bddb673048342c4c02c3773d96` after the candidate's online-help
+regression was updated; fresh collection still contains 7,263 nodes. Final
+release preparation must recheck this binding.
 
 The old 0.2.4 assets predate the GUI/MCMC follow-ups and Pillow update. Preserve
 their tag and identity. Build and verify the next version from one clean final
