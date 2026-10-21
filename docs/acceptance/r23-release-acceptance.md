@@ -1,6 +1,62 @@
 # R23 release acceptance
 
-## Verdict
+## Current release preparation — 2026-10-21
+
+This section supersedes the undated interpretation of the historical verdict
+below. The source now prepares **0.2.5**; this document is not publication approval.
+
+| Scope | Evidence and boundary |
+|---|---|
+| Integrated source baseline | `6be4d94fd65e254deffc4941901f7b3fe7a8b80f`; PRs #32, #34 and #35 merged |
+| Baseline branch verification | [verify 39535230978](https://github.com/zxc-1/xrr-fitter/actions/runs/39535230978) and [audit 39535231032](https://github.com/zxc-1/xrr-fitter/actions/runs/39535231032) completed successfully |
+| Published release | `v0.2.3`, published 2026-08-22 |
+| Existing draft | `v0.2.4`, tagged 2026-09-16 at `7c93d06119d38ab169a2e698c8b7612aea5810fb`; draft identity and assets retain that commit |
+| Next package | `0.2.5` preparation; no new tag or public release is claimed |
+| Real-data acceptance | `NOT_RUN`; owner-approved data is unavailable. Synthetic fixtures do not replace it |
+| macOS desktop input | Command-Q, application-menu quit/cancel, save/discard exit and unfocused-editor scrolling verified; see the [desktop record](macos-desktop-2026-10-21.md) |
+| Windows | Earlier native-platform Qt rendering/event/save-reopen acceptance passed at `a479cac3db86dbe6e93e6d51930546e9ac5c8686` in [run 39411965629](https://github.com/zxc-1/xrr-fitter/actions/runs/39411965629); current-candidate and frozen-GUI acceptance deferred without a Windows host |
+| Scientific identity | Project schema `5`, algorithm `xrr-fit-v2-poisson-5`, objective `2`; approved cases and limits are in [V2 acceptance](fitting-algorithm-v2.md) |
+| Native dependency coverage | Ordinary locked-pin advisory audit passed on the baseline; OS, bootstrap, VCS and full runtime-loader coverage remain incomplete |
+
+The baseline main run executed the ordinary engineering and distribution gates.
+Tag-only statistical, candidate-readiness, identity and release jobs were skipped
+by their configured conditions. A successful branch run does not satisfy those
+release jobs. The baseline test manifest was bound to source
+`199b7ea58bee51380f52e9293e102f8050b56d3a`; the baseline has the same test tree and
+matching current lock digest. The current manifest is bound to
+`919ef67d0b9043bddb673048342c4c02c3773d96` after the candidate's online-help
+regression was updated; fresh collection still contains 7,263 nodes. Final
+release preparation must recheck this binding.
+
+The old 0.2.4 assets predate the GUI/MCMC follow-ups and Pillow update. Preserve
+their tag and identity. Build and verify the next version from one clean final
+commit, then bind any compatible statistical evidence through the existing tools.
+New statistical computation remains an explicit operation. Publishing the release
+is separate from local package and identity verification.
+
+Two older GUI limitations have follow-up evidence: the MCMC initialization fix
+replayed the same 1,201-point case, seed and 128,000-by-8 sampling budget with
+split-Rhat 1.0275–1.0749, minimum ESS about 718.16 and no diagnostic warnings; the two
+recorded instrument boundary hits remain. The GUI menu lifetime fix also removed
+the observed widget accumulation. These bounded results supersede the older
+"Rhat 41.13" and menu-leak status; they do not certify every real-data case.
+
+The retained external evidence directory `gui-followups-20261020-s44_1cbt`
+contains `mcmc/full-replay.json`, `mcmc/final-initialization-equivalence.json`,
+the before/after `gui/widgets-{baseline,fixed}/widgets.json` records, and
+`windows/remote-39411965629/reports/gui-native/acceptance.json`. These are
+historical follow-up results, not new candidate-wide acceptance.
+
+Historical source snapshots and scientific experiment outputs remain recovery
+evidence. They are not pending branches to merge wholesale. Move them only after
+a separate backup destination and a successful restore check are available.
+
+## Historical verdict — 2026-08-22
+
+The following records the original R23 candidate. Its frozen R22 subsystem and
+migration ledger were subsequently removed from the active source and retained on
+`archive/r22-reference`. Its test counts and release wording describe that dated
+candidate, not the current checkout.
 
 | Scope | Verdict |
 |---|---|

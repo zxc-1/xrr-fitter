@@ -107,9 +107,9 @@ export files.
 
 ### Fitting algorithm V2
 
-Projects use algorithm `xrr-fit-v2`, objective version `2`, and project schema
-`3`. Older algorithm, project, and checkpoint versions are rejected rather
-than silently migrated. This is an algorithm change, not a release or tag.
+Projects use algorithm `xrr-fit-v2-poisson-5`, objective version `2`, and project
+schema `5`. Older algorithm, project, and checkpoint versions are rejected.
+These scientific format identities are independent of the package version.
 
 Choose the noise model in the fitting panel, through `api.set_fit_config`, or
 explicitly on the CLI:
@@ -134,10 +134,27 @@ CLI mode requirements are written to stderr, leaving JSON progress on stdout.
 Reports distinguish statistical covariance from search-start spread and retain
 unavailable reasons. Robust loss-support profiles and fast exploratory
 bootstrap samples are not labelled as 95% confidence intervals. Formal
-percentile bootstrap intervals require at least 200 successful samples;
-Gaussian/Poisson likelihood-ratio profiles additionally require the recorded
-regularity conditions. Exported CSV, workbooks, JSON, and ORSO use the saved
-evidence and residual units rather than recomputing uncertainty.
+bootstrap intervals require at least 200 successful samples. Joint Poisson
+intervals use the recorded finite-sample content-assurance rank rule; other
+bootstrap methods retain their declared percentile rule. Gaussian/Poisson
+likelihood-ratio profiles additionally require the recorded regularity conditions.
+Exported CSV, workbooks, JSON, and ORSO use the saved evidence and residual units
+rather than recomputing uncertainty. See the
+[V2 acceptance record](docs/acceptance/fitting-algorithm-v2.md) for the approved
+scientific cases and their limits.
+
+## Release and acceptance status
+
+The source tree prepares package `0.2.5`. As checked on 2026-10-21, the latest
+published release is `v0.2.3`; `v0.2.4` remains a draft bound to its 2026-09-16
+commit and does not contain the later fixes. Package builds and normal branch
+checks do not constitute a new published release.
+
+Owner-approved real-data acceptance has not been completed. macOS desktop and
+Windows native-platform Qt checks have different input coverage; neither claims
+unverified physical trackpad or desktop drag/drop behavior. The
+[release acceptance record](docs/acceptance/r23-release-acceptance.md) tracks these
+boundaries, the current release preparation, and the dated historical evidence.
 
 ## Public API
 
@@ -166,6 +183,8 @@ conventions.
 - `docs/algorithm.md` — fitting algorithm and physics
 - `docs/architecture/r23-clean-break.md` — architecture and dependency graph
 - `docs/acceptance/fitting-algorithm-v2.md` — V2 validation evidence and limits
+- `docs/acceptance/r23-release-acceptance.md` — release status and acceptance scope
+- `docs/acceptance/macos-desktop-2026-10-21.md` — macOS desktop input acceptance
 
 ## License
 

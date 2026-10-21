@@ -92,9 +92,9 @@ ABOUT_TEXT = (
     "需要批量处理时，同一套分析也可以在 Python 脚本里通过 xrr_fitter.api 调用。"
 )
 
-# wheel 与 exe 都不带 ``docs/``，手册只在公开仓库里。指向装的这一版的标签（发版即打
-# ``v<版本>``），读者看到的才是自己这一版的界面，而不是 main 上已经往前走了的那份。
-USER_GUIDE_URL = f"https://github.com/zxc-1/xrr-fitter/blob/v{__version__}/docs/user-guide.md"
+# 固定已公开且与当前手册相同的提交，让候选包不依赖尚未创建的版本标签；手册变更时
+# 在其提交公开后更新此引用。wheel 与 exe 不携带 docs，也不在打开帮助时探测网络。
+USER_GUIDE_URL = "https://github.com/zxc-1/xrr-fitter/blob/6be4d94fd65e254deffc4941901f7b3fe7a8b80f/docs/user-guide.md"
 
 
 def _window_action(window: QWidget, object_name: str) -> QAction:

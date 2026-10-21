@@ -1,5 +1,11 @@
 # GUI 验证与 PR 交付执行计划
 
+> 历史执行记录。2026-10-21 已核对：PR #32、#34、#35 均已合并；后续
+> MCMC 初始化和菜单生命周期修复、Windows 原生平台 Qt 检查已有结果。下文
+> 未勾选项及“未授权合并”等内容保留当时语境，不代表当前待办或权限。
+> 当前范围见 [发布验收记录](../../acceptance/r23-release-acceptance.md) 与
+> [macOS 桌面验收](../../acceptance/macos-desktop-2026-10-21.md)。
+
 > **For agentic workers:** 使用 `executing-plans` 按任务推进；新增行为修补先取得 RED，再作最小修改并验证 GREEN。
 
 **Goal:** 完成 GUI 控件操作、1201 点拟合矩阵和当前代码验证，提交、推送 PR 并确认其准确 head SHA 的全部既有检查通过。
