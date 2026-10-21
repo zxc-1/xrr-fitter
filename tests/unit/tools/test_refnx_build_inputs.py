@@ -32,7 +32,7 @@ def _wheel():
 def _report(content):
     return {
         "version": "1",
-        "pip_version": "26.1.2",
+        "pip_version": "26.2.2",
         "environment": {"python_version": "3.12", "sys_platform": "darwin", "platform_machine": "arm64"},
         "install": [
             {
@@ -95,7 +95,7 @@ def test_checked_builder_lock_is_separate_and_exact(load_tool_module):
         "pyproject-metadata",
         "wheel",
     }
-    assert {item["name"]: item["version"] for item in manifest["wheels"]}["pip"] == "26.1.2"
+    assert {item["name"]: item["version"] for item in manifest["wheels"]}["pip"] == "26.2.2"
     assert manifest["source_manifest_sha256"] == hashlib.sha256((ROOT / SOURCE).read_bytes()).hexdigest()
     assert "refnx-build" not in (ROOT / "pyproject.toml").read_text()
 

@@ -1,7 +1,7 @@
 {
   "lock_sha256": "2143ad3a485de2a66727d09d8be797bd5c9fecb0f1cd2f2514c6b0c2d035d735",
-  "pip_version": "26.1.2",
-  "pyproject_sha256": "1636118f165bd955d711b1303045dd657433a3310a362d140043027d8d7eb878",
+  "pip_version": "26.2.2",
+  "pyproject_sha256": "666a4d8fa842e60ab6e4389b77a1266c04ea8c676744f90d8a58baca504d2418",
   "python_version": "3.12",
   "schema": "xrr-package-manifest-v1",
   "target": "windows-x64-py312",

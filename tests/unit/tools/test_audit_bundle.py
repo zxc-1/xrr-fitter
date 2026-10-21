@@ -118,7 +118,7 @@ def test_audit_scope_requires_actual_ordinary_wheel_hashes_not_only_versions(loa
     inventory = {
         "packages": [
             {"wheel": wheel, "provenance": "ordinary-manifest"},
-            {"wheel": {"name": "pip", "version": "26.1.2", "sha256": "b" * 64}, "provenance": "bootstrap-lock"},
+            {"wheel": {"name": "pip", "version": "26.2.2", "sha256": "b" * 64}, "provenance": "bootstrap-lock"},
         ]
     }
     report = module.bind_ordinary_scope(inventory, {"wheels": [wheel]}, ("sample==1.0",))

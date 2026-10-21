@@ -8,8 +8,22 @@ import pytest
 from tests.support.installed_wheels import SCRIPT_TEMPLATE
 
 
-def _pip(source):
-    return types.SimpleNamespace(record={"name": "pip", "version": "26.1.2"}, read=lambda name: source.encode())
+def _pip(source, version="26.2.2"):
+    return types.SimpleNamespace(record={"name": "pip", "version": version}, read=lambda name: source.encode())
+
+
+def test_pip_template_accepts_the_reviewed_security_fixed_installer(load_tool_module):
+    module = load_tool_module("installed_transforms")
+    wheel = _pip(f"class PipScriptMaker:\n    script_template = textwrap.dedent({SCRIPT_TEMPLATE!r})\n")
+    assert module.pip_template(wheel) == SCRIPT_TEMPLATE
+
+
+@pytest.mark.parametrize("version", ["26.1.2", "99.0"])
+def test_pip_template_rejects_obsolete_or_unreviewed_installers(load_tool_module, version):
+    module = load_tool_module("installed_transforms")
+    wheel = _pip(f"class PipScriptMaker:\n    script_template = textwrap.dedent({SCRIPT_TEMPLATE!r})\n", version)
+    with pytest.raises(ValueError, match="pinned pip"):
+        module.pip_template(wheel)
 
 
 @pytest.mark.parametrize("call", ["unknown", "other.dedent", "textwrap.indent"])

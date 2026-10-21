@@ -91,7 +91,7 @@ def combined_key(root: Path, trust_domain: str) -> str:
     builder = input_cache_key(read_inputs(root), trust_domain)
     qt = qt_key(qt_inputs(root), trust_domain)
     digest = hashlib.sha256(f"{ordinary}\n{builder}\n{qt}\n".encode("ascii")).hexdigest()
-    return f"xrr-macos-inputs-v1-{trust_domain}-python-3.12-pip-26.1.2-{digest}"
+    return f"xrr-macos-inputs-v1-{trust_domain}-python-3.12-pip-26.2.2-{digest}"
 
 
 def prepare_cache(root: Path, cache: Path, report: Path) -> Path:

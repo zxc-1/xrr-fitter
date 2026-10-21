@@ -16,7 +16,7 @@ def _module(load_tool_module):
 def _report():
     return {
         "version": "1",
-        "pip_version": "26.1.2",
+        "pip_version": "26.2.2",
         "environment": {"python_version": "3.12", "sys_platform": "darwin", "platform_machine": "arm64"},
         "install": [
             {
