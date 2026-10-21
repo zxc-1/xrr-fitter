@@ -17,7 +17,7 @@ orsopy==1.2.3
 packaging==26.3
 pandas==2.3.3
 periodictable==2.1.0
-pillow==12.3.0
+pillow==13.0.0
 pluggy==1.6.0
 Pygments==2.20.0
 pyparsing==3.3.2
