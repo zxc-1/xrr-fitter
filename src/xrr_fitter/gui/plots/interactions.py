@@ -3,7 +3,9 @@
 One controller owns every Matplotlib callback and Qt event filter installed for
 a plot panel.  It caches the parent watched for teardown events so destruction
 never needs to dereference an already deleted panel wrapper, and its release
-path disconnects callback state before queued Qt events can observe it.
+path disconnects callback state before queued Qt events can observe it.  The
+bar the reader clicks lives in :mod:`xrr_fitter.gui.plots.toolbar`; this module
+owns what each mode and navigation request does to the plots.
 """
 
 from __future__ import annotations
@@ -12,39 +14,13 @@ from math import isfinite
 
 import numpy as np
 from matplotlib.backend_bases import NavigationToolbar2
-from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QActionGroup
-from PySide6.QtWidgets import QHBoxLayout, QToolButton, QWidget
+from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtWidgets import QWidget
 
-from xrr_fitter.gui import theme
 from xrr_fitter.gui.plots.diagnostics import ANALYSIS_KEYS, REFLECTIVITY_KEYS
 from xrr_fitter.gui.plots.live import LiveReflectivityPlot
-from xrr_fitter.gui.plots.plot_icons import plot_icon
-from xrr_fitter.gui.plots.sld_drag import SldHandleDragMixin
-
-MODE_SPECS = (
-    ("view", "plotModeView", "查看", "查看和缩放诊断图"),
-    ("range", "plotModeRange", "范围", "选择拟合角度范围"),
-    ("mask", "plotModeMask", "掩膜", "切换单个预处理点的掩膜"),
-)
-
-# 三档模式里只有「范围」在设计稿的条上留了字形（``▭``）；查看与掩膜从条的右键菜单进。
-# 决定谁上条的是这一行，不是 ``MODE_SPECS`` 的顺序。
-BAR_MODES = ("range",)
-
-# Deliberately not prefixed "plotMode": these are not members of the exclusive
-# mode group -- they answer "how do I move around this plot", not "what does
-# clicking it do" -- and the panel tests read the "plotMode" prefix as "the mode
-# glyph the design kept on the bar".
-NAVIGATION_SPECS = (
-    ("pan", "plotNavPan", "平移", "按住左键拖动图像，按住右键拖动缩放"),
-    ("zoom", "plotNavZoom", "框选放大", "拖出一个矩形，放大到该区域"),
-    ("home", "plotNavHome", "复位", "恢复当前图刚绘制时的坐标范围"),
-)
-
-# 设计稿 ``.modebar`` 容器的 title 把条上那四枚念了一遍，所以这一句既是条的说明，也是
-# 「这一条摆了哪四枚」的凭据。
-MODEBAR_TOOLTIP = "平移 / 缩放 / 复位 / 选择拟合范围"
+from xrr_fitter.gui.plots.sld_drag import SldDrag, SldHandleDragMixin
+from xrr_fitter.gui.plots.toolbar import PlotInteractionToolbar
 
 PAN_MODE = "pan/zoom"
 
@@ -52,35 +28,6 @@ PAN_MODE = "pan/zoom"
 # scroll-up as a positive step, which reads as "look closer", so scrolling up
 # divides the span (zooms in) and scrolling down multiplies it (zooms out).
 WHEEL_ZOOM_STEP = 1.2
-
-# The glyph painters lay their strokes out on a 16px grid, so drawing at 16
-# applies a scale of exactly 1 and every stroke lands on a whole pixel; any
-# other size resamples them and softens the edges.
-GLYPH_PX = 16
-
-
-def _wear_glyph(button: QToolButton, glyph: str) -> None:
-    """Wear the painted glyph alone, with the name kept for hover and screen readers.
-
-    These controls share the plot's tab row, the way every peer charting tool puts
-    its mode bar on the chart's own header, and that row has to hold four view
-    tabs beside them.  Labels are what made the bar wide, so the glyph carries the
-    meaning and the words move to the tooltip and the accessible name.
-    """
-    button.setIcon(plot_icon(glyph, size=GLYPH_PX))
-    _wear_bar_chrome(button)
-
-
-def _wear_bar_chrome(button: QToolButton) -> None:
-    """条上一枚字形的穿法，图标由谁给不管。
-
-    ``setDefaultAction`` 会替按钮抄来 action 的图标，但抄不走 iconSize、按钮样式、
-    autoRaise 和光标，所以这四样单独留在按钮上。
-    """
-    button.setIconSize(QSize(GLYPH_PX, GLYPH_PX))
-    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-    button.setAutoRaise(True)
-    button.setCursor(Qt.CursorShape.PointingHandCursor)
 
 
 class PlotNavigator(NavigationToolbar2):
@@ -156,205 +103,6 @@ class PlotNavigator(NavigationToolbar2):
         raise NotImplementedError("plot export is owned by the export workflow")
 
 
-class PlotInteractionToolbar(QWidget):
-    """Own one exclusive, programmatically validated plot mode.
-
-    设计稿的 ``.modebar`` 是四枚字形——``✥ ⤢ ⌂ ▭``，平移 / 框选放大 / 复位，加上
-    「框出拟合范围」。此前这里排了九枚，和四个 tab 抢同一行。收窄不是砍功能：查看 ·
-    掩膜 · 缩放到拟合范围 · 恢复完整视图 · 叠加对比 变成这一条自己的右键菜单（同一批
-    ``QAction`` 也挂进 视图 菜单），落点选在条上而不是图里，因为图 body 的右键归
-    pyqtgraph 的 ViewBox——那里有它自己的菜单和右键拖动缩放。
-    """
-
-    mode_changed = Signal(str)
-    zoom_to_range_requested = Signal()
-    reset_zoom_requested = Signal()
-    navigation_requested = Signal(str)
-    overlay_toggled = Signal(bool)
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("plotInteractionToolbar")
-        self.setAccessibleName("绘图交互模式")
-        self.setToolTip(MODEBAR_TOOLTIP)
-        # The theme gives this bar the design's grouping pill -- a background and a
-        # 1px border -- but Qt only auto-styles the background of a plain QWidget;
-        # measured on the built window, the border stroke was absent (row 0 and
-        # row 1 both alpha 12) until this attribute made the widget paint its own
-        # background, after which they read 50 against 23.  Without it the four
-        # glyphs sit loose on the tab row instead of inside one pill.
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        # 条自己就是那五条搬走的命令的落点。
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
-        # 先把模式记成 view，再去勾那条 QAction：勾选会走 ``_mode_triggered``，而它要读
-        # ``self._mode``——次序反了就会在构造中途发一次 mode_changed，那时谁都还没接线。
-        self._mode = "view"
-        self._mode_actions: dict[str, QAction] = {}
-        self._buttons: dict[str, QToolButton] = {}
-        self._group = QActionGroup(self)
-        self._group.setExclusive(True)
-        layout = QHBoxLayout(self)
-        # Padding of its own, because the bar sits in the tab row's corner slot
-        # rather than in a body row that already carries the panel's margins.
-        layout.setContentsMargins(theme.SPACE_XS, theme.SPACE_XS, theme.SPACE_XS, theme.SPACE_XS)
-        layout.setSpacing(2)
-        self._install_mode_actions()
-        # 设计稿里这四枚紧挨着，一个 pill 里不再分组——所以没有组间空隙。也没有尾部
-        # stretch：条与视图 tab 同处一行，stretch 会让它吃掉 tab 剩下的每一个像素。
-        self._install_navigation_buttons(layout)
-        self._install_mode_buttons(layout)
-        self._install_zoom_actions()
-        self._mode_actions["view"].setChecked(True)
-
-    def _install_mode_actions(self) -> None:
-        """三档交互模式做成一组互斥 ``QAction``，而不是一组按钮。
-
-        状态存在 action 上，条上的 ``▭`` 与菜单里的「范围」才不会各记一份勾选，出现
-        「条上亮着、菜单里没勾」这种自相矛盾的画面。
-        """
-        for mode, _name, text, description in MODE_SPECS:
-            action = QAction(text, self)
-            action.setObjectName(f"plotToolAction:{mode}")
-            action.setCheckable(True)
-            action.setToolTip(f"{text}：{description}")
-            action.setIcon(plot_icon(mode, size=GLYPH_PX))
-            action.triggered.connect(lambda _checked=False, key=mode: self._mode_triggered(key))
-            self._group.addAction(action)
-            self.addAction(action)
-            self._mode_actions[mode] = action
-
-    def _install_mode_buttons(self, layout: QHBoxLayout) -> None:
-        """把留在条上的那一档摆成一枚字形（设计稿里是 ``▭``）。
-
-        用 ``setDefaultAction`` 而不是另建一颗独立按钮：勾选、可用性、字形都由 action
-        一处决定，两个入口天然同步。``accessibleName`` 不在 Qt 的同步清单里，得在按钮
-        上单独说一遍。
-        """
-        for mode, name, text, _description in MODE_SPECS:
-            if mode not in BAR_MODES:
-                continue
-            button = QToolButton(self)
-            button.setObjectName(name)
-            button.setDefaultAction(self._mode_actions[mode])
-            button.setAccessibleName(text)
-            button.setProperty("plotMode", mode)
-            _wear_bar_chrome(button)
-            self._buttons[mode] = button
-            layout.addWidget(button)
-
-    def _install_navigation_buttons(self, layout: QHBoxLayout) -> None:
-        """Add the pan, box-zoom and reset controls onto the same row.
-
-        Pan and box zoom latch, so they are checkable, but they are not part of
-        the exclusive mode group: they answer "how do I move around this plot",
-        not "what does clicking it do", and the panel makes the two families
-        mutually exclusive through the canvas widget lock instead.
-        """
-        self._navigation: dict[str, QToolButton] = {}
-        for action, name, text, description in NAVIGATION_SPECS:
-            button = QToolButton(self)
-            button.setObjectName(name)
-            button.setCheckable(action != "home")
-            button.setAccessibleName(text)
-            button.setToolTip(f"{text}：{description}")
-            _wear_glyph(button, action)
-            button.setProperty("plotNavigation", action)
-            button.clicked.connect(self._navigation_clicked)
-            self._navigation[action] = button
-            layout.addWidget(button)
-
-    def _navigation_clicked(self) -> None:
-        self.navigation_requested.emit(str(self.sender().property("plotNavigation")))
-
-    def navigation_buttons(self) -> dict[str, QToolButton]:
-        return dict(self._navigation)
-
-    def show_navigation_mode(self, mode: str) -> None:
-        """Mirror the canvas's navigation state onto the latching buttons.
-
-        The state lives on the navigator, not on the buttons: pan also ends when
-        a range drag takes the widget lock, or when the user switches to a view
-        whose navigator is idle.  Reflecting it back keeps a button from staying
-        pressed over a canvas that is no longer panning.
-        """
-        for action, button in self._navigation.items():
-            if button.isCheckable():
-                button.setChecked(action == mode)
-
-    def _menu_action(self, key: str, text: str, tooltip: str, glyph: str) -> QAction:
-        """一条只在菜单里露面的命令：字形留着，因为 视图 菜单也认它。
-
-        ``plotToolAction:`` 这个前缀和 视图 菜单里视图项的 ``plotViewAction:`` 是同一套
-        约定——菜单栏那份「这一栏只该有这几条」的断言靠前缀把借来的命令认出来。
-        """
-        action = QAction(text, self)
-        action.setObjectName(f"plotToolAction:{key}")
-        action.setToolTip(tooltip)
-        action.setIcon(plot_icon(glyph, size=GLYPH_PX))
-        self.addAction(action)
-        return action
-
-    def _install_zoom_actions(self) -> None:
-        """Add non-exclusive zoom actions distinct from the mode action group.
-
-        Zooming to the fit range is a one-shot action, not a persistent mode,
-        so these stay outside the exclusive group; pressing one must not clear
-        the active view/range/mask mode the user is working in.  它们在菜单里排在
-        三档模式后面，用分隔线隔开——一次性动作和「点下去会一直是这样」的模式不是一类。
-        """
-        separator = QAction(self)
-        separator.setSeparator(True)
-        self.addAction(separator)
-        self.zoom_to_range_action = self._menu_action(
-            "zoom_to_range", "缩放到拟合范围", "缩放拟合区：将反射率视图缩放到当前拟合角度范围", "zoom_to_range"
-        )
-        self.zoom_to_range_action.triggered.connect(lambda _checked=False: self.zoom_to_range_requested.emit())
-        self.reset_zoom_action = self._menu_action(
-            "reset_zoom", "恢复完整视图", "全览：恢复到完整角度范围", "reset_zoom"
-        )
-        self.reset_zoom_action.triggered.connect(lambda _checked=False: self.reset_zoom_requested.emit())
-        trailing = QAction(self)
-        trailing.setSeparator(True)
-        self.addAction(trailing)
-        self.overlay_action = self._menu_action(
-            "overlay", "叠加对比", "叠加对比：显示所有数据集的反射率曲线", "overlay"
-        )
-        self.overlay_action.setCheckable(True)
-        self.overlay_action.toggled.connect(self.overlay_toggled.emit)
-
-    def tool_actions(self) -> tuple[QAction, ...]:
-        """条上这一份右键菜单，按菜单里的先后顺序。"""
-        return tuple(self.actions())
-
-    def mode_actions(self) -> dict[str, QAction]:
-        return dict(self._mode_actions)
-
-    def buttons(self) -> dict[str, QToolButton]:
-        """留在条上的模式字形——设计稿收窄之后只剩 ``▭``。"""
-        return dict(self._buttons)
-
-    def mode(self) -> str:
-        return self._mode
-
-    def set_mode(self, mode: str) -> None:
-        if mode not in self._mode_actions:
-            raise ValueError(f"unsupported plot interaction mode: {mode}")
-        if mode == self._mode:
-            return
-        # ``setChecked`` 不发 triggered，所以这里不会绕回 ``_mode_triggered`` 再发一次。
-        self._mode_actions[mode].setChecked(True)
-        self._mode = mode
-        self.mode_changed.emit(mode)
-
-    def _mode_triggered(self, mode: str) -> None:
-        # 互斥组里那条勾着的 action 点不掉（Qt6 直接拒绝取消勾选），所以点重复的一档就是
-        # 什么都没变——早退，别发一次空的 mode_changed。
-        if mode == self._mode:
-            return
-        self._mode = mode
-        self.mode_changed.emit(mode)
-
-
 def ordered_finite_range(first: float, second: float) -> tuple[float, float]:
     lower = float(first)
     upper = float(second)
@@ -377,6 +125,7 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         self._panel = panel
         self._toolbar = toolbar
         self._editing_enabled = True
+        self._data_available = True
         self._reflectivity_tabs = panel.reflectivity_tabs
         self._analysis_tabs = panel.analysis_tabs
         # Backward-compat alias used by tests that reference self._tabs
@@ -416,12 +165,12 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         # level line spanning a layer that raises or lowers its SLD.  The three
         # gesture callbacks connect once here for the same reason wheel zoom does:
         # a constant per-canvas callback count is what the teardown contract
-        # checks.  ``_sld_drag`` holds the grabbed ``(kind, index, handle, origin)``
-        # between press and release, and is ``None`` when no drag is in flight.
-        # ``origin`` is where the handle sat when it was grabbed, recorded then
-        # rather than read back on release: the motion moves the artist, so by
-        # release it no longer remembers where the gesture started.
-        self._sld_drag: tuple[str, int, object, float] | None = None
+        # checks.  ``_sld_drag`` holds the grab between press and release (see
+        # ``SldDrag``) and is ``None`` when no drag is in flight; ``_sld_hover`` is
+        # the handle the pointer rests on, with the line width and marker size it
+        # had before it was emphasised.
+        self._sld_drag: SldDrag | None = None
+        self._sld_hover: tuple[object, float, float] | None = None
         self._sld_drag_ids: tuple[int, ...] = ()
         sld_view = self._views.get("sld")
         if sld_view is not None and not isinstance(sld_view, LiveReflectivityPlot):
@@ -431,17 +180,8 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
                 sld_canvas.mpl_connect("motion_notify_event", self._sld_motion),
                 sld_canvas.mpl_connect("button_release_event", self._sld_release),
             )
-        for pane in self._live_panes():
-            pane.fit_range_selected.connect(self._pg_range_selected)
-            pane.point_mask_requested.connect(self._pg_mask_requested)
-            pane.cursor_moved.connect(self._pg_cursor_moved)
-            pane.cursor_left.connect(self._pg_cursor_left)
-        toolbar.mode_changed.connect(self._mode_changed)
-        toolbar.zoom_to_range_requested.connect(self._zoom_to_range)
-        toolbar.reset_zoom_requested.connect(self._reset_zoom)
-        toolbar.navigation_requested.connect(self._navigation_requested)
-        self._reflectivity_tabs.currentChanged.connect(self._reflectivity_tab_changed)
-        self._analysis_tabs.currentChanged.connect(self._analysis_tab_changed)
+        for signal, slot in self._signal_slots():
+            signal.connect(slot)
         panel.installEventFilter(self)
         for child in panel.findChildren(QWidget):
             child.installEventFilter(self)
@@ -453,6 +193,27 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
 
     def _live_panes(self) -> tuple[LiveReflectivityPlot, ...]:
         return tuple(view for view in self._views.values() if isinstance(view, LiveReflectivityPlot))
+
+    def _signal_slots(self) -> tuple[tuple[object, object], ...]:
+        """控制器挂上的每一条 Qt 信号。接线与 ``release`` 拆线读的是同一张表，两边才不会漏掉一条。"""
+        pairs: list[tuple[object, object]] = []
+        for pane in self._live_panes():
+            pairs += [
+                (pane.fit_range_selected, self._pg_range_selected),
+                (pane.point_mask_requested, self._pg_mask_requested),
+                (pane.cursor_moved, self._pg_cursor_moved),
+                (pane.cursor_left, self._pg_cursor_left),
+            ]
+        toolbar = self._toolbar
+        pairs += [
+            (toolbar.mode_changed, self._mode_changed),
+            (toolbar.zoom_to_range_requested, self._zoom_to_range),
+            (toolbar.reset_zoom_requested, self._reset_zoom),
+            (toolbar.navigation_requested, self._navigation_requested),
+            (self._reflectivity_tabs.currentChanged, self._reflectivity_tab_changed),
+            (self._analysis_tabs.currentChanged, self._analysis_tab_changed),
+        ]
+        return tuple(pairs)
 
     def _current_live_pane(self) -> LiveReflectivityPlot | None:
         """Return the pyqtgraph pane on screen, or None when a static view shows."""
@@ -472,6 +233,17 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         return REFLECTIVITY_KEYS[0]
 
     def select_view(self, key: str) -> None:
+        # 换页时 tab 的回调也会报一次 ``view_changed``，而页没换时不会——同一个动作报几次就取决于读者原先
+        # 停在哪一页，主窗口据此把工作区写两遍。所以换页期间让回调噤声，结尾这里只报一次。
+        self._projecting_tabs = True
+        try:
+            self._select_tab(key)
+        finally:
+            self._projecting_tabs = False
+        self._sync_navigation_after_tab_change()
+        self._emit_view_changed()
+
+    def _select_tab(self, key: str) -> None:
         if key in REFLECTIVITY_KEYS:
             index = REFLECTIVITY_KEYS.index(key)
             if not self._reflectivity_tabs.isTabVisible(index):
@@ -488,7 +260,6 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
             self._requested_analysis_index = index
         else:
             raise KeyError(f"unknown diagnostic view: {key}")
-        self._emit_view_changed()
 
     def set_expert_mode(self, enabled: bool) -> None:
         if not isinstance(enabled, bool):
@@ -510,14 +281,14 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         self._apply_tabs(expert_mode, tab_index, analysis_tab_index)
 
     def select_fit_range(self, first: float, second: float) -> bool:
-        if not self._editing_enabled or self._toolbar.mode() != "range":
+        if not self._click_modes_live() or self._toolbar.mode() != "range":
             return False
         lower, upper = ordered_finite_range(first, second)
         self._panel.fit_range_requested.emit(lower, upper)
         return True
 
     def request_point_mask(self, index: int) -> bool:
-        if not self._editing_enabled or self._toolbar.mode() != "mask":
+        if not self._click_modes_live() or self._toolbar.mode() != "mask":
             return False
         data = self._panel._active_data()
         value = prepared_point_index(index, data.two_theta_deg.size)
@@ -526,16 +297,30 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
 
     def set_editing_enabled(self, enabled: bool) -> None:
         self._editing_enabled = enabled
-        for mode in ("range", "mask"):
-            self._toolbar.mode_actions()[mode].setEnabled(enabled)
+        self._sync_click_modes()
         if not enabled:
+            self._sld_cancel_drag()
+
+    def set_data_available(self, available: bool) -> None:
+        """当前数据集读不出来时，范围与掩膜无从谈起：两档灰掉，模式退回查看。"""
+        self._data_available = bool(available)
+        self._sync_click_modes()
+
+    def _click_modes_live(self) -> bool:
+        return self._editing_enabled and self._data_available
+
+    def _sync_click_modes(self) -> None:
+        live = self._click_modes_live()
+        for mode in ("range", "mask"):
+            self._toolbar.mode_actions()[mode].setEnabled(live)
+        if not live:
             self._toolbar.set_mode("view")
-            if self._sld_drag is not None:
-                self._sld_restore_handle(*self._sld_drag)
-                self._sld_drag = None
 
     def cancel(self) -> None:
-        self._panel._clear_visible_range()
+        # Esc 先撤最里层那个手势：剖面上正拖着把手时，只把把手放回原处，模式与范围都不动。
+        if self._sld_cancel_drag():
+            return
+        self._panel._drop_pending_range()
         self._toolbar.set_mode("view")
 
     def callback_counts(self) -> tuple[tuple[str, tuple[tuple[str, int], ...]], ...]:
@@ -563,23 +348,19 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
     def release(self, *_args: object) -> None:
         if self._panel is None:
             return
-        # The pyqtgraph panes emit range, mask and cursor signals into this
-        # controller; drop those first so a pane torn down after this call cannot
-        # reach a half-released controller.  The pane's own ``release`` (driven by
-        # the panel) then silences its scene callbacks.
-        for pane in self._live_panes():
-            for signal, slot in (
-                (pane.fit_range_selected, self._pg_range_selected),
-                (pane.point_mask_requested, self._pg_mask_requested),
-                (pane.cursor_moved, self._pg_cursor_moved),
-                (pane.cursor_left, self._pg_cursor_left),
-            ):
-                try:
-                    signal.disconnect(slot)
-                except (RuntimeError, TypeError):
-                    # Idempotent teardown: a connection may already be gone if the
-                    # pane's C++ object was destroyed first.
-                    pass
+        # The pyqtgraph panes, the toolbar and both tab bars emit into this
+        # controller; drop every one of those first so a widget that outlives
+        # this call cannot reach a half-released controller -- a tab switched
+        # after release used to go looking for ``tab_keys`` on a panel that was
+        # already gone.  The pane's own ``release`` (driven by the panel) then
+        # silences its scene callbacks.
+        for signal, slot in self._signal_slots():
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                # Idempotent teardown: a connection may already be gone if the
+                # emitter's C++ object was destroyed first.
+                pass
         for key, identifier in self._scroll_ids.items():
             view = self._views.get(key)
             if view is not None:
@@ -591,6 +372,7 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
                 sld_view.canvas.mpl_disconnect(identifier)
         self._sld_drag_ids = ()
         self._sld_drag = None
+        self._sld_hover = None
         for navigator in self._navigators.values():
             navigator.disconnect_events()
         self._navigators = {}
@@ -655,13 +437,15 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         self._toolbar.show_navigation_mode("pan" if mode == PAN_MODE else "zoom" if mode else "")
 
     def _mode_changed(self, mode: str) -> None:
-        if not self._editing_enabled and mode != "view":
+        if not self._click_modes_live() and mode != "view":
             self._toolbar.set_mode("view")
             return
         # Range and mask are angle-domain gestures, so they arm on the two
-        # angle-domain reflectivity panes (raw and log); qz⁴R and residual live
-        # in qz space and stay read-only.  The pyqtgraph region and mask click
-        # coexist with pan, so arming them does not need to claim a lock.
+        # reflectivity panes that draw the measured points (raw and log); qz⁴R
+        # lives in qz space, and the residual -- on the same angle axis -- is a
+        # read-out of the fit, not the data a mask or window is chosen on.  The
+        # pyqtgraph region and mask click coexist with pan, so arming them does
+        # not need to claim a lock.
         for key in ("raw", "log"):
             pane = self._views.get(key)
             if isinstance(pane, LiveReflectivityPlot):
@@ -744,36 +528,32 @@ class PlotInteractionController(SldHandleDragMixin, QObject):
         the app that a fit range was requested.
         """
         panel = self._panel
-        if panel is None or not self._editing_enabled:
+        if panel is None or not self._click_modes_live():
             return
         lower, upper = ordered_finite_range(low, high)
         panel.show_range(lower, upper)
         panel.fit_range_requested.emit(lower, upper)
 
-    def _pg_mask_requested(self, x_view: float) -> None:
-        """Map a masking click's angle to the nearest displayed point.
+    def _pg_mask_requested(self, index: int) -> None:
+        """Forward the prepared point a masking click landed on.
 
-        The pane emits the view-x (a 2θ angle) only while masking is armed; the
-        controller owns the data, so it resolves the nearest prepared index and
-        asks the panel to toggle it.
+        The pane resolves the hit itself, by on-screen distance to the drawn
+        point, and emits only while masking is armed; the panel then applies the
+        mode and range guards before the window toggles it.
         """
         panel = self._panel
-        if panel is None:
-            return
-        indices = np.asarray(panel.displayed_prepared_indices(), dtype=int)
-        if not indices.size:
-            return
-        angles = np.asarray(panel._active_data().two_theta_deg, dtype=float)
-        nearest = int(indices[np.argmin(np.abs(angles[indices] - float(x_view)))])
-        panel.request_point_mask(nearest)
+        if panel is not None:
+            panel.request_point_mask(index)
 
     def _pg_cursor_moved(self, x_view: float, y_view: float) -> None:
-        """Read out the pointer over a pyqtgraph pane in that pane's own units."""
+        """Read out the pointer over a pyqtgraph pane in that pane's own units.
+
+        发信号的那张卡才是指针所在的卡：残差卡钉在反射率页下面，选中的 tab 可能是 qz⁴·R 页，也可能是
+        一张静态分析页——按当前 tab 取轴名，读数就会写错单位，或者干脆不写。
+        """
         panel = self._panel
-        if panel is None:
-            return
-        pane = self._current_live_pane()
-        if pane is None:
+        pane = self.sender()
+        if panel is None or not isinstance(pane, LiveReflectivityPlot):
             return
         xlabel, ylabel = pane.axis_labels()
         panel.set_cursor_readout(f"{xlabel} {x_view:.4g} · {ylabel} {y_view:.4g}")

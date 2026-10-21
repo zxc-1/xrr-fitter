@@ -21,7 +21,6 @@ from xrr_fitter.gui.plots.reflectivity import (
     draw_log,
     draw_qz4,
     draw_raw,
-    draw_residual,
     reflectivity_pane_arrays,
 )
 
@@ -91,16 +90,15 @@ def test_qz4_pane_arrays_match_draw_qz4():
     assert arrays.qz4_ylabel == views["qz4"].axes.get_ylabel()
 
 
-def test_residual_pane_arrays_match_draw_residual():
+def test_residual_pane_arrays_sit_on_the_reflectivity_angle_grid():
+    """残差卡压在反射率卡正下方，横轴跟它同为散射角——不再与 matplotlib 那张按 qz 画的 ``draw_residual`` 对齐。"""
     data = prepared_data(size=24)
     candidate = _candidate(data)
     arrays = reflectivity_pane_arrays(data, data.fit_mask, candidate)
     assert arrays.residual is not None
-    qz, weighted = arrays.residual
-    views = build_scratch_views()
-    draw_residual(views["residual"], candidate)
-    line = _line(views["residual"], "加权残差")
-    assert np.allclose(line.get_xdata(), qz) and np.allclose(line.get_ydata(), weighted)
+    angles, weighted = arrays.residual
+    assert np.allclose(angles, data.two_theta_deg)
+    assert np.allclose(weighted, candidate.weighted_residuals, equal_nan=True)
 
 
 def test_without_candidate_dependent_panes_are_empty():

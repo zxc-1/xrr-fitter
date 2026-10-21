@@ -20,6 +20,7 @@ import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.navigation.methods import UncertaintyMethodNav
 from xrr_fitter.gui.navigation.steps import StepRow, build_step
+from xrr_fitter.gui.noise import objective_text
 from xrr_fitter.gui.structure.naming import NATIVE_OXIDE_SUFFIX
 
 PIPELINE_STEPS = (
@@ -236,7 +237,7 @@ def _result_state(project: api.XrrProject) -> str:
     best = result.best_candidate
     if best is None:
         return str(result.confidence.value)
-    return f"{result.confidence.value} · J={best.objective:.2f}"
+    return f"{result.confidence.value} · J={objective_text(best.objective)}"
 
 
 def _export_state(project: api.XrrProject) -> str:
@@ -459,6 +460,17 @@ class PipelineNav(QWidget):
 
     def step_titles(self) -> tuple[str, ...]:
         return tuple(title for title, _ in PIPELINE_STEPS)
+
+    def map_height(self) -> int:
+        """六步地图本身要的高度，不含结果步才展开的方法段。
+
+        机架按它给管线这一带定下限：方法段随步骤进出、还能折起，算进下限就等于让它在结果步
+        把数据集列表挤到一两行（F19）。
+        """
+        height = self.minimumSizeHint().height()
+        if not self._methods.isHidden():
+            height -= self._methods.minimumSizeHint().height()
+        return height
 
     def method_captions(self) -> tuple[str, ...]:
         """方法段那四行小字此刻读什么。"""

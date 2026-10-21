@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAccessible, QAccessibleActionInterface
-from PySide6.QtWidgets import QFrame, QPushButton, QToolBar, QToolButton, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QToolBar, QToolButton, QWidget
 
 GUIDED_COMMAND_BAR = ("newProjectButton", "openProjectButton", "saveProjectButton")
 EXPERT_ONLY_COMMANDS = ("exportResultsButton",)
@@ -333,3 +333,19 @@ def test_the_edit_menu_still_undoes_and_redoes_a_project_change(qtbot) -> None:
 
     assert window.document.project.ui_state.expert_mode is (not before)
     assert (undo.isEnabled(), redo.isEnabled()) == (True, False)
+
+
+def test_the_about_box_speaks_to_the_person_using_the_app(qtbot, monkeypatch) -> None:
+    """F51：关于框原先写「支持的 Python 边界：xrr_fitter.api」——那是给开发者看的架构约定，读者
+    读不懂，也不是他们打开这一框要找的东西。关于框说这个程序做什么。"""
+    from xrr_fitter.gui.dialog_template import StyledDialog
+
+    shown: list[StyledDialog] = []
+    monkeypatch.setattr(StyledDialog, "exec", lambda dialog: shown.append(dialog) or 0)
+    window = _window(qtbot)
+
+    _menu_action(window, "aboutAction").trigger()
+
+    texts = " ".join(label.text() for label in shown[0].findChildren(QLabel))
+    assert "边界" not in texts, texts
+    assert "一键拟合" in texts, texts

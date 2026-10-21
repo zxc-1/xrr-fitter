@@ -8,6 +8,15 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox, QSplitter
 
 import xrr_fitter.api as api
+from xrr_fitter.gui.project import dialogs
+
+
+def _record_exit_prompts(monkeypatch, *, unsaved=dialogs.UnsavedChoice.CANCEL, stop=True) -> list[str]:
+    """Answer the window's two exit prompts and list the order they were asked in."""
+    asked: list[str] = []
+    monkeypatch.setattr(dialogs, "ask_unsaved_changes", lambda _parent: (asked.append("unsaved"), unsaved)[1])
+    monkeypatch.setattr(dialogs, "confirm_stop_for_exit", lambda _parent: (asked.append("stop"), stop)[1])
+    return asked
 
 
 class _UserCloseEvent:
@@ -225,22 +234,36 @@ def test_close_dirty_project_asks_before_discarding(qtbot, monkeypatch) -> None:
     qtbot.addWidget(window)
     window.show()
     window.document.mark_dirty()
-    questions: list[tuple[object, ...]] = []
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *args, **_kwargs: (
-            questions.append(args),
-            QMessageBox.StandardButton.No,
-        )[1],
-    )
+    asked = _record_exit_prompts(monkeypatch, unsaved=dialogs.UnsavedChoice.CANCEL)
     event = _UserCloseEvent()
 
     window.closeEvent(event)
 
-    assert len(questions) == 1
+    assert asked == ["unsaved"]
     assert event.accepted is False
     assert event.ignored is True
+
+
+def test_close_dirty_project_discard_accepts_and_save_failure_stays(qtbot, monkeypatch, tmp_path) -> None:
+    from xrr_fitter.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    window.document.mark_dirty()
+    # 「保存」选了，但文件框被取消：项目仍是脏的，所以窗口留下，什么都不丢。
+    asked = _record_exit_prompts(monkeypatch, unsaved=dialogs.UnsavedChoice.SAVE)
+    monkeypatch.setattr(dialogs, "choose_project_to_save", lambda *_args, **_kwargs: None)
+    kept = _UserCloseEvent()
+    window.closeEvent(kept)
+    asked_after_save = list(asked)
+    _record_exit_prompts(monkeypatch, unsaved=dialogs.UnsavedChoice.DISCARD)
+    discarded = _UserCloseEvent()
+    window.closeEvent(discarded)
+
+    assert asked_after_save == ["unsaved"]
+    assert (kept.ignored, kept.accepted) == (True, False)
+    assert (discarded.ignored, discarded.accepted) == (False, True)
 
 
 def test_close_hidden_dirty_project_does_not_open_discard_dialog(
@@ -252,17 +275,12 @@ def test_close_hidden_dirty_project_does_not_open_discard_dialog(
     window = MainWindow()
     qtbot.addWidget(window)
     window.document.mark_dirty()
-    questions: list[tuple[object, ...]] = []
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *args, **kwargs: questions.append((args, kwargs)),
-    )
+    asked = _record_exit_prompts(monkeypatch)
     event = _UserCloseEvent()
 
     window.closeEvent(event)
 
-    assert questions == []
+    assert asked == []
     assert event.accepted is True
     assert event.ignored is False
 
@@ -277,23 +295,19 @@ def test_programmatic_close_of_visible_dirty_window_does_not_open_dialog(
     qtbot.addWidget(window)
     window.show()
     window.document.mark_dirty()
-    questions: list[tuple[object, ...]] = []
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *args, **kwargs: questions.append((args, kwargs)),
-    )
+    asked = _record_exit_prompts(monkeypatch)
 
     assert window.close() is True
-    assert questions == []
+    assert asked == []
 
 
-def test_main_window_close_while_fitting_is_async_and_idempotent(qtbot) -> None:
+def test_main_window_close_while_fitting_is_async_and_idempotent(qtbot, monkeypatch) -> None:
     from xrr_fitter.gui.main_window import MainWindow
 
     controller = _OperationController(running=True)
     window = MainWindow(operation_controller=controller)
     qtbot.addWidget(window)
+    _record_exit_prompts(monkeypatch, stop=True)
     first = _UserCloseEvent()
     second = _UserCloseEvent()
 
@@ -319,36 +333,30 @@ def test_pending_close_natural_stop_reenters_idle_dirty_gate(qtbot, monkeypatch)
     qtbot.addWidget(window)
     window.show()
     window.document.mark_dirty()
-    questions: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda _parent, title, message, *_args: (
-            questions.append((title, message)),
-            QMessageBox.StandardButton.No,
-        )[1],
-    )
+    asked = _record_exit_prompts(monkeypatch, unsaved=dialogs.UnsavedChoice.CANCEL, stop=True)
     event = _UserCloseEvent()
 
     window.closeEvent(event)
     controller.set_running(False)
 
-    qtbot.waitUntil(lambda: bool(questions), timeout=1000)
+    qtbot.waitUntil(lambda: "unsaved" in asked, timeout=1000)
     assert event.ignored is True
     assert event.accepted is False
     assert window.close_pending is False
     assert window.close_cancel_timer.isActive() is False
-    assert questions[0][0] == "未保存的项目更改"
+    # 先问停不停，停下来以后再问存不存。
+    assert asked == ["stop", "unsaved"]
     assert window.isVisible()
 
 
-def test_main_window_close_timeout_decline_keeps_window_open(qtbot) -> None:
+def test_main_window_close_timeout_decline_keeps_window_open(qtbot, monkeypatch) -> None:
     from xrr_fitter.gui.main_window import MainWindow
 
     controller = _OperationController(running=True)
     window = MainWindow(operation_controller=controller)
     qtbot.addWidget(window)
     window.show()
+    _record_exit_prompts(monkeypatch, stop=True)
     event = _UserCloseEvent()
 
     window.closeEvent(event)

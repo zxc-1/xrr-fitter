@@ -155,6 +155,55 @@ def test_mask_change_failure_is_atomic_and_emits_no_success(
     assert events == []
 
 
+def test_undone_fit_range_does_not_return_with_the_next_point_mask(qtbot, tmp_path) -> None:
+    """撤销把范围退回去之后，下一次掩膜只能从项目里此刻的范围推出来。
+
+    掩膜编辑器此前把每次设下的范围记在自己的会话缓存里，而撤销只回滚项目：设 0.15–0.45 → 撤销
+    → 再掩一个点，缓存里那个 0.15–0.45 就被重新写回项目，读者撤掉的输入自己又回来了。
+    """
+    panel, _source = _panel(qtbot, tmp_path)
+    dataset_id = panel.active_dataset_id
+    full_range = panel.document.project.datasets[0].fit_range_two_theta_deg
+
+    panel.set_fit_range(dataset_id, 0.15, 0.45)
+    assert panel.document.undo() is True
+    panel.set_point_enabled(dataset_id, 20, False)
+
+    dataset = panel.document.project.datasets[0]
+    assert dataset.fit_range_two_theta_deg == pytest.approx(full_range)
+    assert dataset.fit_mask[20] is False
+    assert dataset.fit_mask[0] is True
+    assert dataset.fit_mask[31] is True
+
+
+def test_undone_point_mask_does_not_return_with_the_next_point_mask(qtbot, tmp_path) -> None:
+    """禁用点 5 → 撤销 → 再禁用点 10，点 5 必须保持启用：被撤销的点不该从缓存里复活。"""
+    panel, _source = _panel(qtbot, tmp_path)
+    dataset_id = panel.active_dataset_id
+
+    panel.set_point_enabled(dataset_id, 5, False)
+    assert panel.document.undo() is True
+    panel.set_point_enabled(dataset_id, 10, False)
+
+    mask = panel.document.project.datasets[0].fit_mask
+    assert mask[5] is True
+    assert mask[10] is False
+
+
+def test_fit_range_keeps_points_disabled_inside_the_saved_range(qtbot, tmp_path) -> None:
+    """改范围时，旧范围里读者亲手禁掉的点仍是禁的——这份记忆来自项目的 fit_mask，不来自缓存。"""
+    panel, _source = _panel(qtbot, tmp_path)
+    dataset_id = panel.active_dataset_id
+
+    panel.set_point_enabled(dataset_id, 12, False)
+    panel.set_fit_range(dataset_id, 0.15, 0.55)
+
+    mask = panel.document.project.datasets[0].fit_mask
+    assert mask[12] is False
+    assert mask[10] is True and mask[11] is True and mask[13] is True
+    assert mask[0] is False
+
+
 def test_initial_fit_range_uses_service_valid_points(qtbot, tmp_path) -> None:
     path = tmp_path / "invalid-first-point.xy"
     rows = ["0.05 -5.0"]

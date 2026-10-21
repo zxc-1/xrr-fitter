@@ -26,13 +26,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.data.dataset_card import RUNNING_GLYPH
 from xrr_fitter.gui.navigation.steps import build_step
 from xrr_fitter.gui.results.inference_text import correlation_unavailable_reason
+from xrr_fitter.gui.sizing import announce_hint_change
 
 METHOD_HEADING_TEXT = "不确定度方法"
 
@@ -43,6 +45,10 @@ UNCERTAINTY_METHODS = (
     ("参数剖面", "逐参数扫描；区间类型、置信水平与方法见「拟合 → 查看推断证据…」"),
     ("MCMC 后验", "采样后验，给非对称区间"),
 )
+
+# 没走到的那几行圆点里写什么。四种方法是第 6 步「结果」展开出来的子项，与六步地图同在一栏：
+# 再数一遍 1–4，读者分不清「3」是第三步还是第三种方法（F47）。序号只归六步，这里记 a–d。
+METHOD_ORDINALS = ("a", "b", "c", "d")
 
 NOT_RUN = "未运行"
 
@@ -55,7 +61,7 @@ SAMPLING_SUFFIX = "采样中"
 class MethodRow:
     """一行子步骤读出来的四样东西：标题、三态、小字、圆点里的字形。
 
-    字形跟着一起算而不是留给控件按 ``state`` 反推：「序号 / ✓ / ◐」三选一是同一个判定的三个
+    字形跟着一起算而不是留给控件按 ``state`` 反推：「子项字母 / ✓ / ◐」三选一是同一个判定的三个
     面，而 ``◐`` 那一档在 ``state`` 上与 ``current`` 重合——正在采的第四行与「轮到你了」的第
     四行都是 ``current``，只有这一层分得开它们。
     """
@@ -106,7 +112,7 @@ def _method_state(index: int, walked: int, sampling: int | None) -> tuple[str, s
         return "done", "✓"
     # 前面那一步没走，后面的就还没轮到自己被标成走过——这一列是一条路，不是四个复选框。
     state = "current" if index == walked and sampling is None else "pending"
-    return state, str(index + 1)
+    return state, METHOD_ORDINALS[index]
 
 
 def uncertainty_method_rows(
@@ -158,19 +164,42 @@ class UncertaintyMethodNav(QWidget):
         self.heading.setObjectName("uncertaintyMethodHeader")
         theme.apply_section_heading(self.heading, tracking_px=theme.RAIL_SECTION_TRACKING_PX)
         self.heading.setContentsMargins(theme.SPACE_MD, 0, theme.SPACE_MD, theme.SPACE_SM)
-        layout.addWidget(self.heading)
+        # 抬头这一行带一枚折叠开关（F19）：矮屏上四行方法会和数据集列表抢机架的高度，折起来只留
+        # 抬头。开关留在抬头里而不是跟着四行一起藏，否则折起来就再也展不开。
+        heading_row = QHBoxLayout()
+        heading_row.setContentsMargins(0, 0, theme.SPACE_MD, 0)
+        heading_row.addWidget(self.heading, 1)
+        self.toggle = QToolButton(self)
+        self.toggle.setObjectName("uncertaintyMethodToggle")
+        self.toggle.setCheckable(True)
+        self.toggle.setAutoRaise(True)
+        self.toggle.toggled.connect(self._set_collapsed)
+        heading_row.addWidget(self.toggle, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(heading_row)
 
         self.labels: list[QLabel] = []
+        self._rows: list[QWidget] = []
         self._dots: list[QLabel] = []
         self._captions: list[QLabel] = []
         last = len(UNCERTAINTY_METHODS) - 1
         for index, (title, purpose) in enumerate(UNCERTAINTY_METHODS):
             parts = build_step(self, title, purpose, connected=index < last)
             layout.addWidget(parts.row)
+            self._rows.append(parts.row)
             self.labels.append(parts.label)
             self._dots.append(parts.marker)
             self._captions.append(parts.description)
+        self._set_collapsed(False)
         self.set_report(None)
+
+    def _set_collapsed(self, collapsed: bool) -> None:
+        for row in self._rows:
+            row.setVisible(not collapsed)
+        self.toggle.setText("▸" if collapsed else "▾")
+        label = "展开不确定度方法" if collapsed else "折叠不确定度方法"
+        self.toggle.setAccessibleName(label)
+        self.toggle.setToolTip(label)
+        announce_hint_change(self)
 
     def set_report(
         self,
@@ -181,8 +210,9 @@ class UncertaintyMethodNav(QWidget):
         """Repaint the four rows for what this report carries."""
         for index, row in enumerate(uncertainty_method_rows(report, sampling_walkers=sampling_walkers)):
             marker = self._dots[index]
-            # 字形照读数给的那个：✓ 与序号与「分析管线」那六行同一套记号，同一栏里两段进度不该
-            # 用两套字母表；``◐`` 与帧④ 数据集行「在跑」那一枚同一个字形。
+            # 字形照读数给的那个：✓ 与圆点与「分析管线」那六行同一套记号，同一栏里两段进度不该
+            # 用两套字母表——只有没走到时写的是子项字母，不是第二套序号（``METHOD_ORDINALS``）；
+            # ``◐`` 与帧④ 数据集行「在跑」那一枚同一个字形。
             marker.setText(row.glyph)
             theme.set_step_state(marker, row.state)
             theme.set_step_state(self.labels[index], row.state)

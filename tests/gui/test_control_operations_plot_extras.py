@@ -16,6 +16,12 @@ def _angle_ranges(panel):
     return tuple(tuple(panel.view(key).plot_item.vb.viewRange()[0]) for key in ("raw", "log"))
 
 
+def _stored_range(window):
+    active = window.document.active_dataset_id
+    dataset = next(item for item in window.document.project.datasets if item.dataset_id == active)
+    return tuple(dataset.fit_range_two_theta_deg)
+
+
 def _assert_full_extent(plot):
     angles, _values = plot.observed_item.getData()
     low, high = plot.plot_item.vb.viewRange()[0]
@@ -33,8 +39,10 @@ def test_saved_sld_bands_toggle_and_alignment_use_real_inputs(controls, tmp_path
     saved = tmp_path / "saved-sld.xrrproj.json"
     api.save_project(project, saved)
     window = controls.window(api.load_project(saved))
-    controls.named_click(window, "pipelineStep_结构")
+    # 后验可信带画在结果步的拟合剖面上；结构步画的是标称剖面，不叠别人的带（F16）。
+    controls.named_click(window, "pipelineStep_结果")
     panel = window.plot_panel
+    controls.context_menu(panel.toolbar, panel.toolbar.rect().center(), "plotToolAction:sld_profile")
     before = window.document.project
     report = before.datasets[0].last_valid_result.uncertainty.mcmc
     samples = report.samples_physical.copy()
@@ -102,15 +110,15 @@ def test_range_navigation_actions_preserve_mode_and_project(controls, tmp_path, 
     # View-only fixture setup: this does not count as a range-drag operation.
     if visible_range is not None:
         panel.show_range(*visible_range)
-    assert panel.visible_range() == visible_range
+    # 每个数据集都存着拟合范围（导入时默认是全部数据）；不另画时，画着的就是存下的那个（F17）。
+    focused = visible_range or _stored_range(window)
+    assert panel.visible_range() == pytest.approx(focused)
     controls.named_click(window, "plotModeRange")
     controls.qtbot.wait(20)
     assert panel.interaction_mode() == "range"
-    before_ranges = _angle_ranges(panel)
     before_project = window.document.project
     controls.context_menu(panel.toolbar, panel.toolbar.rect().center(), "plotToolAction:zoom_to_range")
-    expected = before_ranges if visible_range is None else (visible_range, visible_range)
-    np.testing.assert_allclose(_angle_ranges(panel), expected)
+    np.testing.assert_allclose(_angle_ranges(panel), (focused, focused))
     _assert_readonly_range_mode(window, before_project)
     controls.context_menu(panel.toolbar, panel.toolbar.rect().center(), "plotToolAction:reset_zoom")
     for key in ("raw", "log"):

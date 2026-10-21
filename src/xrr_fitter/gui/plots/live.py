@@ -20,6 +20,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.plots.series_key import PEN_STYLES, overlay_style
 
 # 上标字符表。对数轴的刻度值本身就是指数，写成 10ⁿ 只差一次逐字符转写。
 SUPERSCRIPT_DIGITS = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
@@ -33,10 +34,23 @@ FLOOR_MARKER_PX = 6.0
 # 其余单位隔一个空格——两种都照排版惯例，不是同一个规则的例外。
 FINAL_UNIT = re.compile(r"\(([^()]*)\)\s*$")
 TIGHT_UNITS = ("°",)
-# 图里那两段小字照设计稿的字号走。CSS 的 px 在 96 dpi 下换成 pt 是乘 0.75（10.5px→7.875pt，
-# 9.5px→7.125pt），都比 ``FONT_PT_SM`` 再小一档：它们贴着曲线画，用正文字号会盖住数据。
-FIT_RANGE_CAPTION_PT = 7.875
-SIGMA_LABEL_PT = 7.125
+# 图里那两段小字照设计稿的字号走（10.5px、9.5px），都比 ``FONT_PX_SM`` 再小一档：它们贴着曲线画，
+# 用正文字号会盖住数据。按像素给，取 96 dpi 下原先点数落到的整像素（11、10）：点数在 Mac 上会
+# 再缩 25%，``setPixelSize`` 又只收整数。
+FIT_RANGE_CAPTION_PX = 11
+SIGMA_LABEL_PX = 10
+# 反射率两张与残差那张共用的横轴。2θ 是散射角；入射角是 θ——叫它入射角，等于说轴上的数是实际值的
+# 两倍（导入那一步正是把入射角乘二归一到散射角）。
+ANGLE_AXIS_LABEL = "散射角 2θ (°)"
+# 残差画到 ±5σ 为止，越界的点钉在边上、换成朝外的空心三角。一个 40σ 的离群点会让自动缩放把
+# ±1σ 带压成一条线，整张图就只剩「有个点很远」这一句；钉住之后带子仍占得住画面的一成多，越界
+# 也照样看得见。
+RESIDUAL_CLAMP_SIGMA = 5.0
+# 掩膜点按的是指针底下那个点：离它不到这么多像素才算点中。此前只比横坐标、挑最近的一列，曲线正上方
+# 很远处点一下也会排掉一个点。6px 比测量点的半径大一圈，手抖一点仍点得中，相邻两点又不会抢同一下。
+MASK_PICK_RADIUS_PX = 6.0
+# 悬停时套在那个点外的圈：比测量点大一号、空心、用前景色——深浅两种画布上都看得出。
+MASK_HOVER_RING_PX = 11.0
 
 
 def _without_decades(values: list[float], decades: list[float]) -> list[float]:
@@ -104,18 +118,23 @@ def _release_menus_on_destroy(plot: pg.PlotWidget) -> None:
 class ObjectiveTracePlot(pg.PlotWidget):
     """设计稿帧④ 画布第三段：逐帧攒出来的目标值轨迹。
 
-    横轴用本阶段的完成比例而不是帧序号——帧的疏密取决于轮询间隔，用序号画出来的
-    斜率会随着轮询退避而变形。住在这一层是因为架构门禁只允许绘图模块直接依赖
+    横轴用整次运行的完成比例而不是帧序号——帧的疏密取决于轮询间隔，用序号画出来的
+    斜率会随着轮询退避而变形；也不用本阶段的比例，那个每换一个阶段就回卷到 0。纵轴是
+    对数轴：一次运行里 J 跨好几个数量级（全局搜索的预览帧能冲到 10⁹），线性轴会把下降
+    压成贴底的一条。住在这一层是因为架构门禁只允许绘图模块直接依赖
     pyqtgraph；拟合面板拿到的是这个已配好的部件。
     """
 
     Y_LABEL = "目标值 J"
-    X_LABEL = "本阶段完成比例"
+    X_LABEL = "总完成比例"
 
     def __init__(self, parent: object | None = None) -> None:
         super().__init__(parent)
         _release_menus_on_destroy(self)
         self.setObjectName("fitObjectiveTrace")
+        # 先换纵轴再写轴名：标签记在轴对象上，换轴会把已写的那行一起换掉。刻度写法同反射率页（见 DecadeAxis）。
+        self.setAxisItems({"left": DecadeAxis(orientation="left")})
+        self.setLogMode(y=True)
         self.setLabel("left", self.Y_LABEL)
         self.setLabel("bottom", self.X_LABEL)
         self.trace_item = self.plot([], [], pen=pg.mkPen(theme.DATA_CANDIDATE, width=1.6))
@@ -123,6 +142,9 @@ class ObjectiveTracePlot(pg.PlotWidget):
         self._y: list[float] = []
 
     def append(self, fraction: float, objective: float) -> None:
+        # 对数轴放不下非有限或不为正的值：J 恒不为负，这里拦下的是还没有候选时那个 +inf。
+        if not math.isfinite(objective) or objective <= 0.0:
+            return
         self._x.append(float(fraction))
         self._y.append(float(objective))
         self.trace_item.setData(self._x, self._y)
@@ -155,7 +177,8 @@ class LiveReflectivityPlot(pg.PlotWidget):
     """
 
     fit_range_selected = Signal(float, float)
-    point_mask_requested = Signal(float)
+    # 报的是点中那个点在面板收到的数组里的下标；面板收到的是整份预处理数据，所以它就是预处理点的下标。
+    point_mask_requested = Signal(int)
     cursor_moved = Signal(float, float)
     cursor_left = Signal()
 
@@ -168,11 +191,18 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self.plot_item.setAxisItems({"left": DecadeAxis(orientation="left")})
         self._released = False
         self._masking = False
-        self._range_mouse_enabled: tuple[bool, bool] | None = None
         self._range_accepted_mouse_buttons: Qt.MouseButton | None = None
+        # 掩膜点按得中的那些点：（预处理下标, 横坐标, 画出来的纵坐标），只有原始与对数两页会填。
+        self._mask_targets: tuple[np.ndarray, np.ndarray, np.ndarray] = (
+            np.empty(0, dtype=int),
+            np.empty(0),
+            np.empty(0),
+        )
+        self._hover_target: int | None = None
         self.preview_item: pg.PlotDataItem | None = None
         self.range_item: pg.LinearRegionItem | None = None
         self._overlay_items: list[pg.PlotDataItem] = []
+        self._overlay_keys: tuple[tuple[str, str, str], ...] = ()
         self.observed_item = self.plot(
             [],
             [],
@@ -225,6 +255,30 @@ class LiveReflectivityPlot(pg.PlotWidget):
             symbolBrush=None,
             name="截断点",
         )
+        # 残差越过 ±RESIDUAL_CLAMP_SIGMA 的点：钉在边上，三角朝越界的那一侧。同截断点一样靠形状
+        # 而不是新颜色说话，颜色仍是它所属的观测色。
+        self.residual_edge_item = self.plot(
+            [],
+            [],
+            pen=None,
+            symbol="t1",
+            symbolSize=FLOOR_MARKER_PX,
+            symbolPen=pg.mkPen(theme.DATA_OBSERVED),
+            symbolBrush=None,
+            name="越界残差",
+        )
+        # 掩膜模式下指针停在一个点上时，那个点外面套一圈：点下去会切换的就是它。不参与自动量程。
+        self.mask_hover_item = pg.PlotDataItem(
+            [],
+            [],
+            pen=None,
+            symbol="o",
+            symbolSize=MASK_HOVER_RING_PX,
+            symbolBrush=None,
+        )
+        self.mask_hover_item.setZValue(15)
+        self.addItem(self.mask_hover_item, ignoreBounds=True)
+        self._x_peers: tuple[LiveReflectivityPlot, ...] = ()
         self.fit_range_item: pg.LinearRegionItem | None = None
         self.sigma_band_item: pg.LinearRegionItem | None = None
         self.sigma_guide_items: tuple[pg.InfiniteLine, ...] = ()
@@ -244,14 +298,14 @@ class LiveReflectivityPlot(pg.PlotWidget):
         # 设计稿把两段说明画在图里而不是图例或状态栏里：拟合窗口那行压在色带顶端居中，
         # ±1σ 贴在残差那条浅带的左上角。挨着自己说明的东西，读者不用再去别处找对应。
         window_font = self.font()
-        window_font.setPointSizeF(FIT_RANGE_CAPTION_PT)
+        window_font.setPixelSize(FIT_RANGE_CAPTION_PX)
         self.fit_range_label_item = pg.TextItem(anchor=(0.5, 0))
         self.fit_range_label_item.setZValue(20)
         self.fit_range_label_item.setFont(window_font)
         self.fit_range_label_item.hide()
         self.addItem(self.fit_range_label_item, ignoreBounds=True)
         sigma_font = self.font()
-        sigma_font.setPointSizeF(SIGMA_LABEL_PT)
+        sigma_font.setPixelSize(SIGMA_LABEL_PX)
         self.sigma_label_item = pg.TextItem("±1σ", anchor=(0, 1))
         self.sigma_label_item.setZValue(20)
         self.sigma_label_item.setFont(sigma_font)
@@ -289,6 +343,8 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self._set_crosshair_visible(False)
         self.apply_palette(theme.current_plot_palette())
         self.plot_item.vb.sigRangeChanged.connect(self._reposition_annotations)
+        self.plot_item.vb.sigResized.connect(self._reposition_annotations)
+        self.plot_item.vb.sigRangeChangedManually.connect(self._mirror_x_range)
         self.scene().sigMouseMoved.connect(self._on_scene_moved)
         self.scene().sigMouseClicked.connect(self._on_scene_clicked)
 
@@ -326,17 +382,6 @@ class LiveReflectivityPlot(pg.PlotWidget):
         """Return the drawn (x-label, y-label) for parity assertions."""
         return (self._xlabel, self._ylabel)
 
-    def _set_value_ticks(self, visible: bool) -> None:
-        """纵轴写不写刻度数字。
-
-        残差面板不写：判读残差看的是点落在 ±1σ 带里还是甩到 ±2σ 虚线外，看的是相对
-        位置，纵轴上那几个数字不参与这个判断，写上去只是又一列要读者过滤的字。反射率
-        面板要写——那里的量级本身就是结论。
-
-        宽度是钉死的，所以关掉数字只是让装订线空出来，绘图区左边界不动。
-        """
-        self.plot_item.getAxis("left").setStyle(showValues=bool(visible))
-
     def apply_palette(self, palette: theme.PlotPalette) -> None:
         """Paint the pane's structural colours from a resolved theme palette.
 
@@ -364,6 +409,7 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self.fit_range_label_item.setColor(theme.range_label_colour(QColor.fromRgbF(*palette.background).name()))
         self.sigma_label_item.setColor(muted)
         self._placeholder_item.setColor(muted)
+        self.mask_hover_item.setSymbolPen(pg.mkPen(foreground, width=1.6))
         self._apply_crosshair_pen()
         self.plot_item.showGrid(x=True, y=True, alpha=palette.grid[3])
 
@@ -391,6 +437,7 @@ class LiveReflectivityPlot(pg.PlotWidget):
         model: object | None,
         *,
         r_floor: float,
+        mask: object | None = None,
     ) -> None:
         """Project the reflectivity family onto the log axis with draw_log's floor.
 
@@ -400,12 +447,20 @@ class LiveReflectivityPlot(pg.PlotWidget):
         identically.  Every point the clamp moved is also marked, so the floor stays
         legible as a floor.  A missing candidate leaves the model curve empty rather
         than drawing a flat line at the floor.
+
+        ``mask`` 是拟合掩膜：掩掉的点改画成灰色 ✕（和原始页同一种记号），不再和拟合点混成同一种蓝点。
+        省略时视作全部参与拟合。
         """
         self.apply_palette(theme.current_plot_palette())
         floor = float(r_floor)
         x = np.asarray(angles, dtype=float)
         values = np.asarray(observed, dtype=float)
-        self.set_observed(x, np.maximum(values, floor))
+        shown = np.maximum(values, floor)
+        keep = np.ones(x.shape, dtype=bool) if mask is None else np.asarray(mask, dtype=bool)
+        excluded = ~keep & np.isfinite(x) & np.isfinite(shown)
+        self.set_observed(x[keep], shown[keep])
+        self.excluded_item.setData(x[excluded], shown[excluded])
+        self._set_mask_targets(x, shown, log_axis=True)
         clipped = np.isfinite(values) & (values < floor)
         self.clipped_item.setData(x[clipped], np.full_like(x[clipped], floor))
         if model is None:
@@ -414,9 +469,9 @@ class LiveReflectivityPlot(pg.PlotWidget):
             self.set_model(x, np.maximum(np.asarray(model, dtype=float), floor))
         # 显示下限不写进轴标题：被夹到下限的点已经由 ▽ 空心标记就地标出（clipped_item），
         # 轴标题只回答「这条轴是什么量」。
-        self._apply_labels("入射角 2θ (°)", "反射率 R（归一化 · 对数）")
+        self._apply_labels(ANGLE_AXIS_LABEL, "反射率 R（归一化 · 对数）")
         self._set_observed_style(diameter=REFLECTIVITY_MARKER_PX, connected=False)
-        self._set_value_ticks(True)
+        self._set_residual_edges([], [])
         self._set_sigma_reference(False)
         self._hide_placeholder()
         self.set_log_mode(True)
@@ -444,6 +499,7 @@ class LiveReflectivityPlot(pg.PlotWidget):
         excluded = finite & ~keep
         self.observed_item.setData(x[included], y[included])
         self.excluded_item.setData(x[excluded], y[excluded])
+        self._set_mask_targets(x, y, log_axis=False)
         # The clipped glyph belongs to the log floor alone; a linear axis shows a
         # small intensity as a small intensity, with nothing clamped to mark.
         self.clipped_item.setData([], [])
@@ -451,9 +507,9 @@ class LiveReflectivityPlot(pg.PlotWidget):
             self.set_model(None, None)
         else:
             self.set_model(x, np.asarray(model, dtype=float))
-        self._apply_labels("入射角 2θ (°)", "原始强度")
+        self._apply_labels(ANGLE_AXIS_LABEL, "原始强度")
         self._set_observed_style(diameter=REFLECTIVITY_MARKER_PX, connected=False)
-        self._set_value_ticks(True)
+        self._set_residual_edges([], [])
         self._set_sigma_reference(False)
         self._hide_placeholder()
         self.set_log_mode(False)
@@ -485,29 +541,43 @@ class LiveReflectivityPlot(pg.PlotWidget):
             self.set_model(np.asarray(model_qz, dtype=float), np.asarray(model_values, dtype=float))
         self._apply_labels("散射矢量 qz (Å⁻¹)", ylabel)
         self._set_observed_style(diameter=REFLECTIVITY_MARKER_PX, connected=False)
-        self._set_value_ticks(True)
+        self._set_residual_edges([], [])
         self._set_sigma_reference(False)
         self._hide_placeholder()
         self.set_log_mode(False)
 
     def show_residual(
-        self, qz: object, weighted: object, *, ylabel: str = "加权残差 (σ)", sigma_reference: bool = True
+        self, angles: object, weighted: object, *, ylabel: str = "加权残差 (σ)", sigma_reference: bool = True
     ) -> None:
-        """Render the weighted residual as a marked line above a zero baseline."""
+        """Render the weighted residual as a marked line above a zero baseline.
+
+        横轴与它上面那张反射率卡同为散射角，同一个点在两张卡上落在同一条竖线上。有 σ 带时点钉在
+        ±``RESIDUAL_CLAMP_SIGMA`` 以内，越界的换成朝外的空心三角；没有 σ 带（非高斯噪声）时不钉——
+        那时纵轴上没有一把「几个 σ」的尺子可保护。
+        """
         self.apply_palette(theme.current_plot_palette())
-        x = np.asarray(qz, dtype=float)
+        x = np.asarray(angles, dtype=float)
         y = np.asarray(weighted, dtype=float)
-        self.observed_item.setData(x, y)
+        limit = RESIDUAL_CLAMP_SIGMA if sigma_reference else np.inf
+        beyond = np.isfinite(y) & (np.abs(y) > limit)
+        self.observed_item.setData(x, np.clip(y, -limit, limit))
+        self._set_residual_edges(x[beyond], np.sign(y[beyond]) * limit)
         self.reference_item.setData(x, np.zeros_like(x))
         self.set_model(None, None)
         self.excluded_item.setData([], [])
         self.clipped_item.setData([], [])
-        self._apply_labels("散射矢量 qz (Å⁻¹)", ylabel)
+        self._apply_labels(ANGLE_AXIS_LABEL, ylabel)
         self._set_observed_style(diameter=RESIDUAL_MARKER_PX, connected=True)
-        self._set_value_ticks(False)
         self._set_sigma_reference(sigma_reference)
         self._hide_placeholder()
         self.set_log_mode(False)
+
+    def _set_residual_edges(self, angles: object, values: object) -> None:
+        # 每个点的三角朝向随正负变，所以记号是逐点给的一列；清空时也得把记号列一起换成空的，
+        # 否则 pyqtgraph 拿上一次的那列去配这一次的点。
+        y = np.asarray(values, dtype=float)
+        symbols = ["t1" if value > 0.0 else "t" for value in y]
+        self.residual_edge_item.setData(np.asarray(angles, dtype=float), y, symbol=symbols)
 
     def clear_series(self) -> None:
         """Empty every managed curve for the panel's no-data state."""
@@ -516,6 +586,8 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self.excluded_item.setData([], [])
         self.reference_item.setData([], [])
         self.clipped_item.setData([], [])
+        self._set_residual_edges([], [])
+        self._set_mask_targets([], [], log_axis=False)
 
     def _fit_range_caption_text(self, span: tuple[float, float]) -> str:
         """ "拟合窗口 <低>–<高><单位>"，单位取自当前横轴标题末尾的括号。"""
@@ -570,8 +642,14 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self._placeholder_item.hide()
 
     def _reposition_annotations(self, *_args: object) -> None:
-        (x0, x1), (y0, y1) = self.plot_item.vb.viewRange()
-        px_x, px_y = self.plot_item.vb.viewPixelSize()
+        view_box = self.plot_item.vb
+        # 藏在别的 tab 里的面板是零尺寸，那时的视图变换是奇异的：量出来的像素既没有意义，pyqtgraph
+        # 求逆时还会落进 NumPy 2.5 弃用的那条路。等它有了尺寸（``sigResized``）再落位。
+        size = view_box.size()
+        if size.width() <= 0.0 or size.height() <= 0.0:
+            return
+        (x0, x1), (y0, y1) = view_box.viewRange()
+        px_x, px_y = view_box.viewPixelSize()
         self._placeholder_item.setPos((x0 + x1) / 2.0, (y0 + y1) / 2.0)
         # 拟合窗口那行字跟着色带露在视野里的那一段居中。带子被平移出去一半时，说明仍压在
         # 看得见的那半段上；写死在区间中点的话，缩到一角就跟着飘出视野了。
@@ -606,6 +684,12 @@ class LiveReflectivityPlot(pg.PlotWidget):
         else:
             self.fit_range_item.setRegion((lo, hi))
         self._fit_range = (lo, hi)
+        # 选框开着时也跟上：另一页拖完、或项目刚提交了范围，这一页的选框得落在同一段上。屏蔽信号，
+        # 免得这次跟随被当成读者拖动、又提交一遍。
+        if self.range_item is not None:
+            self.range_item.blockSignals(True)
+            self.range_item.setRegion((lo, hi))
+            self.range_item.blockSignals(False)
         self._refresh_fit_range_caption()
 
     def clear_fit_range(self) -> None:
@@ -689,6 +773,26 @@ class LiveReflectivityPlot(pg.PlotWidget):
     def go_home(self) -> None:
         """Restore the latest draw's data bounds, the pg twin of the home button."""
         self.plot_item.vb.autoRange()
+        self._mirror_x_range([True, False])
+
+    def share_x_range(self, peers: tuple[LiveReflectivityPlot, ...]) -> None:
+        """读者在这张上缩放、平移横轴时，``peers`` 跟着落到同一段角度。
+
+        不用 ``setXLink``：它按两只 ViewBox 在屏上的像素位置对齐，而这几张卡有一张总在另一个 tab 里，
+        几何是陈旧的或者干脆是零，对出来的量程是错的；它还会让被联动的那张永远停掉自动量程，换数据集
+        时一直停在上一个数据集的窗口上。这里只转发读者的手势：程序画数据各自自动量程——横轴是同一组
+        角度，量出来本来就一样。
+        """
+        self._x_peers = tuple(peer for peer in peers if peer is not self)
+
+    def _mirror_x_range(self, mask: object) -> None:
+        if self._released or not mask[0]:
+            return
+        low, high = self.plot_item.vb.viewRange()[0]
+        for peer in self._x_peers:
+            # ``setXRange`` 是程序改量程，不会再发 ``sigRangeChangedManually``，所以转发不会来回弹。
+            if not peer._released:
+                peer.set_view_xrange(low, high)
 
     def _set_crosshair_visible(self, visible: bool) -> None:
         for item in (self._crosshair_v, self._crosshair_h, self._crosshair_label):
@@ -730,6 +834,7 @@ class LiveReflectivityPlot(pg.PlotWidget):
         else:
             self._set_crosshair_visible(False)
             self._emit_cursor_left()
+        self._set_mask_hover(self._target_at(scene_pos) if self._masking else None)
 
     def set_preview(self, angles: object, values: object) -> bool:
         """Publish the searching model into one owned curve; False once released."""
@@ -754,28 +859,34 @@ class LiveReflectivityPlot(pg.PlotWidget):
         self,
         datasets: tuple[tuple[str, object, object], ...],
     ) -> None:
-        """Draw additional dataset curves as an overlay comparison.
+        """Draw other datasets' curves as an overlay comparison.
 
-        Each entry is (label, angles_array, values_array).  Curves use colours
-        from DATA_SEQUENCE starting at index 3 (skipping the ones already
-        reserved for observed/candidate/preview), with a per-curve vertical
-        offset of one decade for readability.
+        Each entry is ``(label, angles, values)``.  The n-th curve is drawn at
+        ×10⁻ⁿ so the stack separates by decades on the log axis, and the factor
+        is written into its key caption -- an unlabelled offset would read as a
+        real intensity difference.  Colour and dash come from ``overlay_style``,
+        which keeps clear of the hues this pane already spends on its own marks.
         """
         self.clear_overlay()
-        if self._released or not datasets:
+        if self._released:
             return
-        colours = theme.DATA_SEQUENCE[3:]
+        keys: list[tuple[str, str, str]] = []
         for index, (label, angles, values) in enumerate(datasets):
-            colour = colours[index % len(colours)]
-            x = np.asarray(angles, dtype=float)
-            y = np.asarray(values, dtype=float)
+            colour, dash = overlay_style(index)
+            caption = label if index == 0 else f"{label} ×10{str(-index).translate(SUPERSCRIPT_DIGITS)}"
             item = self.plot(
-                x,
-                y,
-                pen=pg.mkPen(colour, width=1.2, style=Qt.PenStyle.DashDotLine),
-                name=label,
+                np.asarray(angles, dtype=float),
+                np.asarray(values, dtype=float) * 10.0**-index,
+                pen=pg.mkPen(colour, width=1.2, style=PEN_STYLES[dash]),
+                name=caption,
             )
             self._overlay_items.append(item)
+            keys.append((caption, colour, dash))
+        self._overlay_keys = tuple(keys)
+
+    def overlay_keys(self) -> tuple[tuple[str, str, str], ...]:
+        """叠加曲线在色标里的 ``(caption, colour, dash)``，与画的先后一致。"""
+        return self._overlay_keys
 
     def clear_overlay(self) -> None:
         """Remove all overlay curves."""
@@ -783,6 +894,7 @@ class LiveReflectivityPlot(pg.PlotWidget):
             if not self._released:
                 self.removeItem(item)
         self._overlay_items.clear()
+        self._overlay_keys = ()
 
     def set_log_mode(self, enabled: bool) -> None:
         self.plot_item.setLogMode(y=bool(enabled))
@@ -792,24 +904,22 @@ class LiveReflectivityPlot(pg.PlotWidget):
             if self.range_item is None:
                 brush = pg.mkColor(theme.DATA_RANGE)
                 brush.setAlpha(50)
+                # 选框从当前范围起手：此前每次都落在 0–1，读者得先把它从角落里拖回来。没有范围就取此刻的
+                # 视野，不缩不扩，坐标系不在指针底下变。构造时就给定区间，信号这时还没接，不会凭空提交一次。
                 region = pg.LinearRegionItem(
                     values=self._fit_range or tuple(self.plot_item.vb.viewRange()[0]),
                     brush=pg.mkBrush(brush),
                     pen=pg.mkPen(theme.DATA_RANGE),
                 )
                 region.sigRegionChangeFinished.connect(self._emit_range)
-                # The region handles must own the drag gesture.  Save the current
-                # ViewBox state so leaving range mode restores the user's pan/zoom
-                # configuration exactly, including one-axis-disabled views.
-                mouse_enabled = self.plot_item.vb.state["mouseEnabled"]
-                self._range_mouse_enabled = (bool(mouse_enabled[0]), bool(mouse_enabled[1]))
                 vb = self.plot_item.vb
                 self._range_accepted_mouse_buttons = vb.acceptedMouseButtons()
-                vb.setMouseEnabled(False, False)
-                # ViewBox accepts the press at the scene level even when both
-                # axes are disabled, so its mouseDragEvent can still swallow a
-                # range-handle drag.  Remove that competing target for the
+                # The region handles must own the drag gesture: ViewBox accepts the
+                # press at the scene level, so its mouseDragEvent would otherwise
+                # swallow a range-handle drag.  Remove that competing target for the
                 # duration of range mode and restore the exact button set later.
+                # ``mouseEnabled`` stays as the reader left it: the wheel reads only
+                # that flag, and zooming in to place a handle is what range mode is for.
                 vb.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
                 region.setZValue(10)
                 # A selector is an overlay: including it in autoRange moves the
@@ -820,10 +930,6 @@ class LiveReflectivityPlot(pg.PlotWidget):
         if self.range_item is not None:
             self.removeItem(self.range_item)
             self.range_item = None
-        mouse_enabled = self._range_mouse_enabled
-        self._range_mouse_enabled = None
-        if mouse_enabled is not None:
-            self.plot_item.vb.setMouseEnabled(*mouse_enabled)
         accepted_mouse_buttons = self._range_accepted_mouse_buttons
         self._range_accepted_mouse_buttons = None
         if accepted_mouse_buttons is not None:
@@ -836,14 +942,18 @@ class LiveReflectivityPlot(pg.PlotWidget):
 
     def enable_masking(self, enabled: bool) -> None:
         self._masking = bool(enabled)
+        if not self._masking:
+            self._set_mask_hover(None)
 
     def release(self) -> None:
         if self._released:
             return
         self._released = True
+        self._x_peers = ()
         for signal, slot in (
             (self.scene().sigMouseClicked, self._on_scene_clicked),
             (self.scene().sigMouseMoved, self._on_scene_moved),
+            (self.plot_item.vb.sigRangeChangedManually, self._mirror_x_range),
         ):
             try:
                 signal.disconnect(slot)
@@ -859,15 +969,56 @@ class LiveReflectivityPlot(pg.PlotWidget):
         low, high = sorted(float(value) for value in region.getRegion())
         self.fit_range_selected.emit(low, high)
 
-    def _mask_from_view_x(self, x_view: float) -> None:
-        if self._released or not self._masking:
+    def _set_mask_targets(self, angles: object, values: object, *, log_axis: bool) -> None:
+        """记下掩膜点按得中的点：画在屏上的那些（有限值；对数轴上还得是正值），下标对齐面板收到的数组。"""
+        x = np.asarray(angles, dtype=float)
+        y = np.asarray(values, dtype=float)
+        drawable = np.isfinite(x) & np.isfinite(y)
+        if log_axis:
+            drawable &= y > 0.0
+        self._mask_targets = (np.flatnonzero(drawable), x[drawable], y[drawable])
+        self._set_mask_hover(None)
+
+    def _target_at(self, scene_pos: object) -> int | None:
+        """指针底下那个点在 ``_mask_targets`` 里的位置；``MASK_PICK_RADIUS_PX`` 以内没有点时为 None。
+
+        按屏幕像素量距离而不是按数据单位：两条轴的单位不同，对数轴上更是一个频程一个样。
+        """
+        indices, x, y = self._mask_targets
+        view_box = self.plot_item.vb
+        size = view_box.size()
+        if not indices.size or size.width() <= 0.0 or size.height() <= 0.0:
+            return None
+        if not view_box.sceneBoundingRect().contains(scene_pos):
+            return None
+        point = view_box.mapSceneToView(scene_pos)
+        y_view = np.log10(y) if self.plot_item.ctrl.logYCheck.isChecked() else y
+        px_x, px_y = view_box.viewPixelSize()
+        distance = np.hypot((x - point.x()) / px_x, (y_view - point.y()) / px_y)
+        nearest = int(np.argmin(distance))
+        return nearest if distance[nearest] <= MASK_PICK_RADIUS_PX else None
+
+    def point_index_at(self, scene_pos: object) -> int | None:
+        """指针底下那个测量点的下标（对齐面板收到的数组）；没有点中任何点时为 None。"""
+        target = self._target_at(scene_pos)
+        return None if target is None else int(self._mask_targets[0][target])
+
+    def _set_mask_hover(self, target: int | None) -> None:
+        """掩膜模式下给指针底下那个点套圈、换成手形光标；离开所有点就撤掉。"""
+        if target == self._hover_target:
             return
-        self.point_mask_requested.emit(float(x_view))
+        self._hover_target = target
+        if target is None:
+            self.mask_hover_item.setData([], [])
+            self.unsetCursor()
+            return
+        _indices, x, y = self._mask_targets
+        self.mask_hover_item.setData(x[target : target + 1], y[target : target + 1])
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def _on_scene_clicked(self, event: object) -> None:
         if self._released or not self._masking or event.button() != Qt.MouseButton.LeftButton:
             return
-        scene_pos = event.scenePos()
-        if not self.plot_item.sceneBoundingRect().contains(scene_pos):
-            return
-        self._mask_from_view_x(self.plot_item.vb.mapSceneToView(scene_pos).x())
+        index = self.point_index_at(event.scenePos())
+        if index is not None:
+            self.point_mask_requested.emit(index)

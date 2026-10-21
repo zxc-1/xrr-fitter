@@ -264,6 +264,7 @@ def test_readiness_line_names_which_operation_holds_the_window(qtbot, tmp_path) 
 
 def test_status_bar_carries_the_running_stage_and_position(qtbot, tmp_path) -> None:
     """Frame ④ puts 阶段 4 / 9 and 进度 620 / 1000 in the bar, not only in the card."""
+    from xrr_fitter.gui.fitting.progress import ROUTE_STAGE_OFFSETS, stage_position
     from xrr_fitter.gui.operation_state import refresh_operation_state
     from xrr_fitter.gui.status_bar import StatusSpan
 
@@ -276,8 +277,10 @@ def test_status_bar_carries_the_running_stage_and_position(qtbot, tmp_path) -> N
 
     window.fit_panel.controller.progress_changed.emit(api.FitProgress("q", "B", 5, 10, 1.0, "search"))
 
+    # 进度那一格报的是卡片那条刻度上的位置：B 阶段过半，按默认（手动路线）的阶段权重落在哪就是哪。
+    expected = stage_position("B", 5, 10, ROUTE_STAGE_OFFSETS["manual"])
     assert _span_text(window, "statusStageSpan") == "阶段 2 / 9"
-    assert position.text() == "进度 230 / 1000"
+    assert position.text() == f"进度 {expected} / 1000"
 
     refresh_operation_state(window)
     assert position.text() == ""

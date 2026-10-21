@@ -41,43 +41,52 @@ def _candidate_click(controls, window, candidate_id):
     controls.qtbot.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=view.visualItemRect(item).center())
 
 
+def _adopt(controls, window):
+    controls.named_click(window, "adoptCandidateButton")
+
+
+def _adopted(window):
+    return dict(window.document.project.ui_state.selected_candidate_ids).get("curve")
+
+
 def test_result_candidate_rows_and_archived_confirmation(controls, tmp_path):
     window = controls.window(result_fixture(tmp_path, multiple=True))
+    original = window.document.project
     _candidate_click(controls, window, "second")
-    assert dict(window.document.project.ui_state.selected_candidate_ids)["curve"] == "second"
     assert window.plot_panel.selected_candidate_id() == "second"
-    _candidate_click(controls, window, "selected")
-    assert dict(window.document.project.ui_state.selected_candidate_ids)["curve"] == "selected"
+    assert window.document.project is original and not window.document.is_dirty
     controls.record(
-        "candidateList:rowSelection", "click second and selected rows", "persisted selection and plot projection agree"
+        "candidateList:rowSelection",
+        "click second row",
+        "plot follows the viewed row; project and dirty flag unchanged",
     )
-    controls.modals(
-        lambda: _candidate_click(controls, window, "archived"),
-        [lambda dialog: controls.click(dialog.button(QMessageBox.StandardButton.No))],
-    )
-    assert dict(window.document.project.ui_state.selected_candidate_ids)["curve"] == "selected"
+    _adopt(controls, window)
+    assert _adopted(window) == "second"
+    controls.record("adoptCandidateButton", "click Adopt on the viewed row", "only adoption persists the candidate")
+    _candidate_click(controls, window, "archived")
+    no = [lambda dialog: controls.click(dialog.button(QMessageBox.StandardButton.No))]
+    controls.modals(lambda: _adopt(controls, window), no)
+    assert _adopted(window) == "second"
     assert window.plot_panel.selected_candidate_id() == "archived"
     controls.record(
         "archivedCandidateConfirm:No",
-        "click archived row; confirm No",
+        "view archived row; Adopt; confirm No",
         "inspection is allowed but persistent candidate remains unchanged",
     )
-    _candidate_click(controls, window, "selected")
-    controls.modals(
-        lambda: _candidate_click(controls, window, "archived"),
-        [lambda dialog: controls.click(dialog.button(QMessageBox.StandardButton.Yes))],
-    )
-    assert dict(window.document.project.ui_state.selected_candidate_ids)["curve"] == "archived"
+    yes = [lambda dialog: controls.click(dialog.button(QMessageBox.StandardButton.Yes))]
+    controls.modals(lambda: _adopt(controls, window), yes)
+    assert _adopted(window) == "archived"
     controls.record(
         "archivedCandidateConfirm:Yes",
-        "click archived row; confirm Yes",
+        "Adopt archived row; confirm Yes",
         "explicit confirmation persists archived candidate",
     )
 
 
 def test_result_clear_menu_removes_result_and_export_readiness(controls, tmp_path):
     window = controls.window(result_fixture(tmp_path))
-    controls.menu(window, "clearResultsAction")
+    yes = [lambda dialog: controls.click(dialog.button(QMessageBox.StandardButton.Yes))]
+    controls.modals(lambda: controls.menu(window, "clearResultsAction"), yes)
     assert window.document.project.datasets[0].last_valid_result is None
     assert window.result_panel.candidates.count() == 0
     assert not window.findChild(QAction, "exportResultsAction").isEnabled()

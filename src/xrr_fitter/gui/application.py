@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Sequence
 
-from PySide6.QtCore import QCoreApplication, QRectF, Qt
+from PySide6.QtCore import QCoreApplication, QLibraryInfo, QLocale, QRectF, Qt, QTranslator
 from PySide6.QtGui import (
     QColor,
     QIcon,
@@ -17,7 +18,13 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QApplication, QSplashScreen
 
-from xrr_fitter.gui.theme import apply_theme, light_palette
+from xrr_fitter.gui.theme import FONT_PX_MD, apply_theme, light_palette
+
+LOG = logging.getLogger(__name__)
+
+# 启动画面标题的字号。原先写 18pt，在 96 dpi 落 24px、在 Mac 上只剩 18px；按像素给两边一样大。
+SPLASH_TITLE_FONT_PX = 24
+QT_TRANSLATION_LOCALE = QLocale(QLocale.Language.Chinese, QLocale.Country.China)
 
 
 def _build_app_icon() -> QIcon:
@@ -71,7 +78,7 @@ class _StagedSplash(QSplashScreen):
         super().__init__(pixmap)
         self._color = color
         font = self.font()
-        font.setPointSize(11)
+        font.setPixelSize(FONT_PX_MD)
         self.setFont(font)
 
     def showMessage(self, message: str, *_args: object) -> None:  # noqa: N802 - Qt override
@@ -100,7 +107,7 @@ def show_splash(application: QApplication) -> QSplashScreen:
 
     # Title
     title_font = p.font()
-    title_font.setPointSize(18)
+    title_font.setPixelSize(SPLASH_TITLE_FONT_PX)
     title_font.setBold(True)
     p.setFont(title_font)
     p.setPen(fg)
@@ -116,15 +123,47 @@ def show_splash(application: QApplication) -> QSplashScreen:
     return splash
 
 
+def _name_settings_scope(application: QApplication) -> None:
+    """给 ``QSettings()`` 一个落脚处：明暗偏好（F52）存在这个组织 / 应用名下。
+
+    只在还没有名字时才给——复用别人建好的应用（测试、嵌入）时不改它的身份。
+    """
+    if not application.organizationName():
+        application.setOrganizationName("XRR Fitter")
+    if not application.applicationName():
+        application.setApplicationName("XRR Fitter")
+
+
+def install_qt_translations(application: QApplication) -> QTranslator | None:
+    """Give Qt's own strings the application's language.
+
+    Standard buttons (是/否/确定), the editing menu of every text field and the macOS
+    application menu are written by Qt, not by this package; without its catalogue
+    they read in English inside a Chinese window. The catalogue ships with PySide6.
+    The interface is Chinese whatever the desktop's locale, so the locale is fixed.
+    """
+    directory = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    translator = QTranslator(application)
+    if not translator.load(QT_TRANSLATION_LOCALE, "qtbase", "_", directory):
+        # 装不上只是 Qt 那几处字退回英文，界面照常可用；但要留下痕迹，好查打包是否漏了 .qm。
+        LOG.warning("Qt translation qtbase_%s not found in %s", QT_TRANSLATION_LOCALE.name(), directory)
+        return None
+    application.installTranslator(translator)
+    return translator
+
+
 def create_application(argv: Sequence[str] | None = None) -> QApplication:
     """Reuse the QApplication or create one from an owned argument copy."""
     existing = QCoreApplication.instance()
     if isinstance(existing, QApplication):
+        _name_settings_scope(existing)
         apply_theme(existing)
         return existing
     if existing is not None:
         raise RuntimeError("existing QCoreApplication is not a QApplication")
     application = QApplication(list(argv or ()))
+    _name_settings_scope(application)
+    install_qt_translations(application)
     # 壳、面板、机架三层洗色得先装进调色板，样式表才有得可读：``build_stylesheet`` 是从
     # Window / Base / AlternateBase 三个角色里取这三层的，而平台默认的亮色板把它们给成同一
     # 个白，机架那一层于是一个像素也画不出来。复用已有应用时不动它的板——那多半是深色外观，

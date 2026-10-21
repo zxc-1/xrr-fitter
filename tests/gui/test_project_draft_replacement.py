@@ -6,6 +6,7 @@ import pytest
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 import xrr_fitter.api as api
+from xrr_fitter.gui.project import dialogs
 
 
 @pytest.fixture
@@ -30,6 +31,12 @@ def _open_dialog(monkeypatch, target):
         QFileDialog,
         "getOpenFileName",
         lambda *_args, **_kwargs: (str(target) if target is not None else "", ""),
+    )
+    # 换项目前那一问答「不保存」；之后打开的项目若带着草稿，恢复那一问答「是」。
+    monkeypatch.setattr(
+        dialogs,
+        "ask_unsaved_changes",
+        lambda _parent: (questions.append("unsaved"), dialogs.UnsavedChoice.DISCARD)[1],
     )
     monkeypatch.setattr(
         QMessageBox,
@@ -57,7 +64,7 @@ def test_reopen_does_not_offer_the_draft_just_explicitly_discarded(dirty_window,
 
     window.open_project_dialog()
 
-    assert questions == ["未保存的项目更改"]
+    assert questions == ["unsaved"]
     assert not draft.exists()
     assert window.document.is_dirty is False
     assert window.document.project.ui_state.expert_mode is False
@@ -70,7 +77,7 @@ def test_new_project_retires_the_explicitly_discarded_draft(dirty_window, monkey
 
     window.new_project_dialog()
 
-    assert questions == ["未保存的项目更改"]
+    assert questions == ["unsaved"]
     assert not draft.exists()
     assert window.document.path is None
     assert window.document.is_dirty is False
@@ -90,7 +97,7 @@ def test_replacement_keeps_a_different_targets_recoverable_draft(dirty_window, m
 
     window.open_project_dialog()
 
-    assert questions == ["未保存的项目更改", "恢复自动保存草稿"]
+    assert questions == ["unsaved", "恢复自动保存草稿"]
     assert not draft.exists()
     assert target_draft.read_bytes() == target_draft_original
     assert window.document.path == target
@@ -108,7 +115,7 @@ def test_cancelled_file_selection_keeps_the_current_draft(dirty_window, monkeypa
 
     window.open_project_dialog()
 
-    assert questions == ["未保存的项目更改"]
+    assert questions == ["unsaved"]
     _assert_current_draft_preserved(dirty_window, project, draft_original)
 
 

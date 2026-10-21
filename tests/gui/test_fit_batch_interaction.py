@@ -68,6 +68,8 @@ def test_first_finished_dataset_does_not_complete_the_whole_batch(qtbot, tmp_pat
         assert "curve-1" in panel.progress_view.stage_label.text()
 
         panel.controller._dispatch_batch((_event(2, "curve-1", stage="finalizing", total=1),))
+        # 汇总帧不是终点，结果发布才是：自动路线在汇总之后还会再跑一轮。发布后补满到 100% 的那一步
+        # 只给真有可用结果的发布（见 test_fit_terminal_feedback / test_fit_terminal_progress）。
         assert panel.progress_view.overall_percent() == 99
     finally:
         _stop(panel.controller)
@@ -95,7 +97,7 @@ def test_independent_live_objectives_do_not_leak_into_other_dataset_rows(qtbot, 
 
     panel.set_run_progress(_frame("curve-1", objective=4.5))
     assert panel.run_subline("curve-0") == "拟合中 · J=1.25"
-    assert panel.run_subline("curve-1") == "拟合中 · J=4.50"
+    assert panel.run_subline("curve-1") == "拟合中 · J=4.5"
 
 
 def test_joint_rows_use_reported_member_objectives_when_available(qtbot, tmp_path):
@@ -106,8 +108,8 @@ def test_joint_rows_use_reported_member_objectives_when_available(qtbot, tmp_pat
 
     panel.set_run_progress(_frame(None, objective=5.0, dataset_objectives=(("curve-0", 1.0), ("curve-1", 4.0))))
 
-    assert panel.run_subline("curve-0") == "拟合中 · J=1.00"
-    assert panel.run_subline("curve-1") == "拟合中 · J=4.00"
+    assert panel.run_subline("curve-0") == "拟合中 · J=1"
+    assert panel.run_subline("curve-1") == "拟合中 · J=4"
 
 
 def test_progress_updates_existing_rows_without_rebuilding_or_losing_selection(qtbot, tmp_path):

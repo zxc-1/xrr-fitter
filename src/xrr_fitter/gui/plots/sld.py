@@ -19,8 +19,9 @@ from xrr_fitter.gui.plots.diagnostics import (
     candidate_is_inspection_only,
     draw_empty,
     finish_view,
+    series_style,
 )
-from xrr_fitter.gui.plots.parameter_labels import quantity_names, short_labels
+from xrr_fitter.gui.plots.parameter_labels import result_definitions, titled_labels
 from xrr_fitter.gui.structure import naming, stack
 
 # A layer thinner than this reads as roughness, not a film; dragging an interface
@@ -113,6 +114,13 @@ SLD_TICK_STEPS = (1, 2, 2.5, 5, 10)
 
 # 只留横向网格，线宽跟着设计稿那五条走。
 GRID_LINEWIDTH = 0.6
+
+# 结构步那条「正在编辑的剖面」的线宽。
+NOMINAL_PROFILE_LINEWIDTH = 2.2
+# 选中组件的那一段：剖面线加粗到这么多倍，底下再垫一条强调色的浅带，和层堆叠里选中那一层同一种强调。
+HIGHLIGHT_GID = "sldComponentHighlight"
+HIGHLIGHT_WIDTH_FACTOR = 1.8
+HIGHLIGHT_BAND_ALPHA = 0.14
 
 
 def _plain_layers(structure: object | None) -> tuple[object, ...]:
@@ -326,6 +334,50 @@ def _draw_interface_handle(axes: object, depth_nm: float, level: float, label: s
     )
 
 
+def component_span_nm(structure: object | None, index: int) -> tuple[float, float] | None:
+    """结构里第 ``index`` 个组件在深度轴上占的那一段（nm）；没有这个组件时为 ``None``。
+
+    周期块按重复展开后的总厚度算，和层堆叠示意图那一格同一个口径。
+    """
+    components = () if structure is None else tuple(structure.components)
+    if not 0 <= index < len(components):
+        return None
+    front_a = sum(stack._component_thickness(component) for component in components[:index])
+    return front_a / 10.0, (front_a + stack._component_thickness(components[index])) / 10.0
+
+
+def _draw_component_highlight(
+    axes: object,
+    structure: object | None,
+    index: int | None,
+    depth_nm: np.ndarray,
+    real_display: np.ndarray,
+    linewidth: float,
+) -> None:
+    """把选中组件那一段剖面加粗，底下垫一条强调色浅带。
+
+    浅带说「这一段是它」，加粗的那一笔落在曲线自己身上：深浅两种画布上都看得出，也不会被读成另一条曲线。
+    """
+    span = None if index is None else component_span_nm(structure, index)
+    if span is None:
+        return
+    start_nm, end_nm = span
+    accent = theme.current_accent()
+    axes.axvspan(
+        start_nm, end_nm, facecolor=accent, alpha=HIGHLIGHT_BAND_ALPHA, linewidth=0.0, zorder=0.5, gid=HIGHLIGHT_GID
+    )
+    inside = (depth_nm >= start_nm) & (depth_nm <= end_nm)
+    axes.plot(
+        depth_nm[inside],
+        real_display[inside],
+        color=theme.DATA_CANDIDATE,
+        linewidth=linewidth * HIGHLIGHT_WIDTH_FACTOR,
+        label="_highlight",
+        gid=HIGHLIGHT_GID,
+        zorder=2.5,
+    )
+
+
 def _draw_nominal_structure(
     axes: object,
     structure: object,
@@ -388,8 +440,8 @@ def _draw_nominal_structure(
     for index, interface_nm, sigma_nm in draggable_roughness(structure):
         # The whisker runs from the interface outward by its current roughness, so
         # its visible length is the width the reader is editing.  末端不再单独画点：这套
-        # 读数下 σ 折成 1.6…2.4px，那个点整个压在界面那个点底下，看上去就是重影；界面那个
-        # 点本身仍然落在 ``_roughness_tip_hit`` 的容差里，按下它照样抓到粗糙度。
+        # 读数下 σ 折成 1.6…2.4px，那个点整个压在界面那个点底下，看上去就是重影。按在界面
+        # 点上抓的是界面；圆点外缘之外那一截才归粗糙度（见 ``sld_drag.pick_sld_handle``）。
         level = _nominal_level_at(depth_nm, real_display, interface_nm)
         axes.plot(
             [interface_nm, interface_nm + sigma_nm],
@@ -408,6 +460,7 @@ def _draw_nominal_only(
     structure: object,
     wavelength_a: float,
     bands: object | None = None,
+    highlight: int | None = None,
 ) -> None:
     """Draw the structure's nominal profile as the profile under edit.
 
@@ -428,12 +481,13 @@ def _draw_nominal_only(
             label=CANDIDATE_REAL_LABEL,
             color=theme.DATA_CANDIDATE,
             linestyle="-",
-            linewidth=2.2,
+            linewidth=NOMINAL_PROFILE_LINEWIDTH,
             regions=True,
         )
     except np.linalg.LinAlgError:
         finish_view(view)
         return
+    _draw_component_highlight(axes, structure, highlight, depth_nm, real_display, NOMINAL_PROFILE_LINEWIDTH)
     # 抬头交给卡片（``sldCard`` 写着「SLD 深度剖面」），轴里不再写第二遍——设计稿帧③ 的图区
     # 没有标题，而这一段只有 ~120px 高，一行标题就是一成高度。可信带那句说明是抬头说不到的，
     # 所以只有它留在轴上。
@@ -461,6 +515,7 @@ def draw_sld(
     *,
     structure: object | None = None,
     wavelength_a: float | None = None,
+    highlight: int | None = None,
 ) -> None:
     """Draw the selected candidate's SLD with comparison overlays from others.
 
@@ -474,11 +529,12 @@ def draw_sld(
     When a structure is supplied its nominal real profile and draggable interface
     handles are overlaid too, so the depth axis doubles as a hand-editing surface.
     With no fitted candidate the nominal profile stands in for the empty pane.
+    ``highlight`` 是结构里被选中的组件序号：那一段加粗、垫一条强调色带。
     """
     has_nominal = structure is not None and wavelength_a is not None
     if candidate is None:
         if has_nominal:
-            _draw_nominal_only(view, structure, wavelength_a, bands)
+            _draw_nominal_only(view, structure, wavelength_a, bands, highlight)
             return
         draw_empty(view, "SLD 深度剖面", "暂无当前候选")
         return
@@ -494,10 +550,13 @@ def draw_sld(
             continue
         other_depth = np.asarray(other.sld_depth_a, dtype=float) / 10.0
         other_profile = np.asarray(other.sld_profile_a2, dtype=complex)
+        # 对比候选一律中性灰：图例把它们折成一项「其他候选 ×N」，各发一种颜色说的是一件图例不认的事；
+        # 不传颜色的话还会吃掉默认轮转的前几格，把下面那条「当前 SLD 剖面」挤成别的颜色。
         overlays.extend(
             axes.plot(
                 other_depth,
                 other_profile.real * SLD_DISPLAY_SCALE,
+                color=theme.DATA_NEUTRAL,
                 linewidth=0.8,
                 alpha=0.35,
                 label=f"{other.candidate_id} 实部",
@@ -505,9 +564,12 @@ def draw_sld(
         )
     # Draw the selected candidate's real/imag at full opacity on top. These stay
     # the first two entries in axes.lines; the nominal overlay is appended after
-    # so index-addressed assertions keep reading the candidate curves.
-    axes.plot(depth_nm, profile.real * SLD_DISPLAY_SCALE, label=CANDIDATE_REAL_LABEL)
-    axes.plot(depth_nm, profile.imag * SLD_DISPLAY_SCALE, "--", label="SLD 虚部")
+    # so index-addressed assertions keep reading the candidate curves.  Both wear
+    # the candidate hue the card's key names, the imaginary part told apart by its
+    # dash, like the credible bands drawn around them.
+    real_display = profile.real * SLD_DISPLAY_SCALE
+    (real_line,) = axes.plot(depth_nm, real_display, color=theme.DATA_CANDIDATE, label=CANDIDATE_REAL_LABEL)
+    axes.plot(depth_nm, profile.imag * SLD_DISPLAY_SCALE, "--", color=theme.DATA_CANDIDATE, label="SLD 虚部")
     # 抬头交给卡片，同 ``_draw_nominal_only``：标签页、卡片抬头、轴标题三处都写
     # 「SLD 深度剖面」的话，同一块屏幕上同一句话出现三次。
     axes.set(xlabel=DEPTH_AXIS_LABEL, ylabel=SLD_AXIS_LABEL)
@@ -519,6 +581,8 @@ def draw_sld(
     if bands is not None:
         _draw_bands(axes, bands)
         axes.set_title(bands.caption(), fontsize=theme.FONT_PT_SM)
+    # 高亮排在最后：前面几条按下标读的断言（实部、虚部、标称）不受它挪位。
+    _draw_component_highlight(axes, structure, highlight, depth_nm, real_display, real_line.get_linewidth())
     _limit_depth_axis(axes, depth_nm)
     _draw_legend(axes, overlays)
     finish_view(view)
@@ -605,6 +669,10 @@ def _draw_legend(axes: object, overlays: list[object]) -> None:
     设计稿帧③ 的图区里没有图例框，卡片抬头下面那排色标就是这张图的图例；四条 pyqtgraph
     面板同样只有色标、不画内嵌图例。所以色标已经说过的记号在这里一律不重复，剩下的什么
     都不剩时就干脆不画框——那正是帧③ 的样子。
+
+    剩下的图例挂在轴外右上角。结果步的拟合剖面卡会被压到 ``MIN_SLD_PLOT_H`` 那条地板，
+    这时四行图例比轴还高；放在轴里的话，constrained_layout 只能压扁剖面来给它让边距。
+    挂在轴外，它只占宽度。
     """
     handles, labels = axes.get_legend_handles_labels()
     entries = [
@@ -623,7 +691,9 @@ def _draw_legend(axes: object, overlays: list[object]) -> None:
         [handle for handle, _ in entries],
         [label for _, label in entries],
         fontsize=theme.FONT_PT_SM,
-        loc="best",
+        loc="upper left",
+        bbox_to_anchor=(1.01, 1.0),
+        borderaxespad=0.0,
         framealpha=0.75,
     )
 
@@ -738,11 +808,6 @@ def _page_placeholder(view: DiagnosticView, message: str) -> None:
     finish_view(view)
 
 
-def _definitions(result: object | None) -> tuple[object, ...]:
-    """结果自己带的参数声明——短名的素材，缺席时轴上退回机器路径。"""
-    return tuple(getattr(result, "parameter_definitions", ()) or ())
-
-
 # Profile 卡的抬头。设计稿的卡抬头是「Profile 似然」、副题「逐参数扫描 · Δχ²=1 对应 ±1σ」；
 # 前半段并进抬头，后半段不采用——本项目的目标函数是 ``robust_log_cost``，它不是 χ²，所以
 # 「Δ=1 对应 ±1σ」这个推论在这里不成立（见 ``_draw_profiles``）。写成常量是因为空态那一支
@@ -782,7 +847,7 @@ def draw_correlation_page(
         _page_placeholder(view, message)
         return
     axes = _reset_page(view)
-    _draw_correlation(view.figure, axes, report, _definitions(result), wide_layout=False)
+    _draw_correlation(view.figure, axes, report, result_definitions(result), wide_layout=False)
     finish_view(view)
 
 
@@ -797,7 +862,7 @@ def draw_profile_page(
         _page_placeholder(view, message)
         return
     axes = _reset_page(view)
-    _draw_profiles(axes, report, _definitions(result))
+    _draw_profiles(axes, report, result_definitions(result))
     finish_view(view)
 
 
@@ -983,7 +1048,7 @@ def _legend_columns(axes: object, entry_count: int) -> int:
 
 
 def _draw_profile_curve(
-    axes: object, profile: object, label: str, quantity: str, sigma: float | None
+    axes: object, profile: object, entry: str, sigma: float | None, style: dict[str, object]
 ) -> tuple[float, float | None]:
     """一条扫描及其形状标注；返回同一目标增量标度上的峰值与闭合阈值。"""
     values = np.asarray(profile.values, dtype=float)
@@ -994,8 +1059,7 @@ def _draw_profile_curve(
     published = profile.objective_threshold
     threshold = None if published is None else float(published) - best
     shape = _profile_shape(profile, offsets, increments, threshold)
-    entry = " ".join(part for part in (quantity, label) if part)
-    axes.plot(offsets, increments, "-o", label=f"{entry}（{shape}）" if shape else entry)
+    axes.plot(offsets, increments, **style, label=f"{entry}（{shape}）" if shape else entry)
     return float(np.max(increments)), threshold
 
 
@@ -1038,8 +1102,7 @@ def _draw_profiles(axes: object, report: object, definitions: Iterable[object] =
     profiles = tuple(report.profiles)
     palette = theme.current_plot_palette()
     names = tuple(profile.name for profile in profiles)
-    labels = short_labels(names, definitions)
-    quantities = quantity_names(names, definitions)
+    entries = titled_labels(names, definitions)
     sigma = _sigma_by_name(report)
     # 整张图一起换或一起不换：一条曲线以 σ 为单位、另一条留在自己的量程里时，横轴上的同一个数
     # 在两条曲线上不是同一件事，而这张图要读的正是三条摆在同一把尺子上的比较。
@@ -1048,9 +1111,9 @@ def _draw_profiles(axes: object, report: object, definitions: Iterable[object] =
     # 几句重复的图例。画的是组内第一个真值，标的是它印出来的那个数。
     levels: dict[str, float] = {}
     tallest = 0.0
-    for profile, label, quantity in zip(profiles, labels, quantities, strict=True):
+    for index, (profile, entry) in enumerate(zip(profiles, entries, strict=True)):
         height, threshold = _draw_profile_curve(
-            axes, profile, label, quantity, sigma[profile.name] if by_sigma else None
+            axes, profile, entry, sigma[profile.name] if by_sigma else None, series_style(index)
         )
         tallest = max(tallest, height)
         if threshold is not None:
@@ -1066,7 +1129,15 @@ def _draw_profiles(axes: object, report: object, definitions: Iterable[object] =
         # 按可用高度自适应列数：每列最多 n 项，n 行高 ≤ 绘图区高 × 0.9（留 10% 呼吸）。
         axes.legend(fontsize=theme.FONT_PT_SM, ncols=_legend_columns(axes, len(profiles) + len(levels)))
     else:
-        axes.text(0.5, 0.5, "剖面与区间证据未执行/不可用", ha="center", va="center", transform=axes.transAxes)
+        axes.text(
+            0.5,
+            0.5,
+            "剖面与区间证据未执行/不可用",
+            ha="center",
+            va="center",
+            transform=axes.transAxes,
+            color=palette.muted,
+        )
     # 取景按阈值而不是按曲线远端，见 ``PROFILE_HEADROOM``。裁的是视野不是数据：远端那些点仍留在
     # 线上（悬停读得到、导出用得着），只是不出现在这一屏里。阈值是上限而非固定值——三条都抬不到
     # 阈值时（全是弱约束）按曲线收回来，否则那一屏会变成三条压在底部的平线加一大片空白；但阈值线
@@ -1105,11 +1176,11 @@ def draw_uncertainty(
     # fixed [-1, 1] scale -- the one thing that makes a cell readable as a number.
     # The key is rebuilt each draw because the reset above removes it along with
     # every other companion axes.
-    _draw_correlation(view.figure, correlation, report, _definitions(result))
+    _draw_correlation(view.figure, correlation, report, result_definitions(result))
     # The fixed scale rides on the colour key, which is the thing it describes.
     # In the title it made that title 222px wide inside an 835px pane and it ran
     # into 「参数剖面似然与区间」; as a secondary line above the axes -- the way
     # the residual heatmap states its own range -- it overran the narrow matrix
     # subplot sideways and printed over 「相关矩阵」 instead.
-    _draw_profiles(profile, report, _definitions(result))
+    _draw_profiles(profile, report, result_definitions(result))
     finish_view(view)

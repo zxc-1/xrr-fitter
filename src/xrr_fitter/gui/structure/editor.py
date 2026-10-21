@@ -21,7 +21,9 @@ import xrr_fitter.api as api
 from xrr_fitter.gui import theme
 from xrr_fitter.gui.canvas_top import canvas_top
 from xrr_fitter.gui.structure import naming, rows
-from xrr_fitter.gui.structure.dialogs import BackingDialog, LayerDialog, PeriodicDialog
+from xrr_fitter.gui.structure.dialogs import BackingDialog, GradientDialog, LayerDialog
+from xrr_fitter.gui.structure.errors import structure_error_text
+from xrr_fitter.gui.structure.periodic_dialog import PeriodicDialog
 from xrr_fitter.gui.structure.reorder import ReorderableTree
 from xrr_fitter.gui.structure.stack import StackView, component_fill
 
@@ -72,6 +74,12 @@ CANVAS_VIEWS = (
 ADD_LAYER_TEXT = "＋ 添加层"
 OXIDE_TEXT = "建议氧化层"
 PERIODIC_TEXT = "周期结构…"
+
+# 右栏那张卡只改普通层；这两类要整块改，入口在行的右键菜单与双击上。
+EDITABLE_COMPONENTS = (api.PeriodicBlock, api.GradientLayerSpec)
+EDIT_COMPONENT_TEXT = "编辑周期块 / 梯度层…"
+COPY_SUFFIX = " 副本"
+DELETED_TEMPLATE = "已删除「{name}」。可在「编辑 ▸ 撤销」恢复。"
 
 
 def _material_text(material: api.MaterialSpec) -> str:
@@ -154,6 +162,27 @@ def _drift_tooltip(drift: api.DriftSpec) -> str:
     return f"漂移：{kind} · 作用于{target}"
 
 
+def _describe(item: QTreeWidgetItem, label: str, detail: str) -> None:
+    """让行在读屏与悬停里也报出厚度 / 粗糙 / 密度。
+
+    副行是 ``LayerRow`` 画出来的，行控件对鼠标和无障碍都透明，读屏只念得到项的文字——也就
+    是层名。原有的 tooltip（过渡、漂移）接在后面，不被替换。
+    """
+    summary = f"{label} · {detail}" if detail else label
+    extra = item.toolTip(0)
+    text = f"{summary}\n{extra}" if extra else summary
+    item.setToolTip(0, text)
+    item.setData(0, Qt.ItemDataRole.AccessibleTextRole, text)
+
+
+def _first_plain_layer(structure: api.StructureSpec) -> int | None:
+    """载入后默认选中的那一层：第一层普通膜，没有就是第一个组件。"""
+    for index, component in enumerate(structure.components):
+        if isinstance(component, api.LayerSpec):
+            return index
+    return 0 if structure.components else None
+
+
 def _oxide_identity(value: object) -> tuple[object, ...]:
     material = value.oxide_material
     formula = material.formula if isinstance(material, api.MaterialSpec) else material
@@ -226,8 +255,8 @@ class StructureEditor(QWidget):
         self.tree.currentItemChanged.connect(self._refresh_action_state)
         self.tree.currentItemChanged.connect(self._sync_stack_selection)
         self.tree.currentItemChanged.connect(self._sync_row_selection)
-        # 拖放和上移/下移走同一条提交路径，所以拖出来的层序受同一套校验。
-        self.tree.component_moved.connect(self.move_component)
+        # 拖放和上移/下移走同一条提交路径，所以拖出来的层序受同一套校验，被拒时也说同一句话。
+        self.tree.component_moved.connect(self._drop_component)
         self.stack.component_selected.connect(self._select_component)
         self.add_layer_button = self._button(ADD_LAYER_TEXT, "addLayerButton")
         self.oxide_button = self._button(OXIDE_TEXT, "oxideSuggestionButton")
@@ -238,6 +267,12 @@ class StructureEditor(QWidget):
         self.error_label.setProperty("statusKind", "error")
         self.error_label.setWordWrap(True)
         self.error_label.hide()
+        # 删除不弹确认框（Delete 本来就该快），但要说一声删了什么、去哪儿撤销。
+        self.status_label = QLabel()
+        self.status_label.setObjectName("structureEditStatus")
+        self.status_label.setProperty("mutedText", True)
+        self.status_label.setWordWrap(True)
+        self.status_label.hide()
         self._connect_actions()
         # 设计稿 ``.canvas-top``：三个 tab，紧跟着这一页的三个动作，留白落在行尾。此前是
         # 六个按钮排成两行、外加一条随建议进出的氧化层条——三行行头压在层列表上面，而画布
@@ -272,6 +307,7 @@ class StructureEditor(QWidget):
         layout.addWidget(self.canvas_row)
         layout.addWidget(self.stack_card, 1)
         layout.addWidget(self.error_label)
+        layout.addWidget(self.status_label)
 
     def _build_row_menu(self) -> None:
         """设计稿行头只画三个按钮，其余命令回到它们作用的那一行上。
@@ -316,14 +352,38 @@ class StructureEditor(QWidget):
             "记录并隐藏当前氧化层建议",
             self._refuse_oxide,
         )
+        # 周期块与梯度层没有右栏那张卡可改，以前加进去之后只能删了重加——层序和设定一起丢。
+        self.edit_component_action = self._action(
+            EDIT_COMPONENT_TEXT,
+            "editComponentAction",
+            "打开预填的对话框编辑当前周期块或梯度层（也可双击该行）",
+            self._edit_selected,
+        )
+        self.duplicate_action = self._action(
+            "复制",
+            "duplicateComponentAction",
+            "在当前组件下方插入一份副本",
+            self._duplicate_selected,
+            QKeySequence("Ctrl+D"),
+        )
+        self.add_gradient_action = self._action(
+            "添加梯度层…",
+            "addGradientLayerAction",
+            "在选中行下方插入一层 SLD 线性渐变的梯度层",
+            self._choose_gradient,
+        )
         for action in (
             self.edit_backing_action,
             self.remove_action,
             self.up_action,
             self.down_action,
             self.refuse_action,
+            self.edit_component_action,
+            self.duplicate_action,
+            self.add_gradient_action,
         ):
             self.row_menu.addAction(action)
+        self.tree.itemDoubleClicked.connect(self._edit_double_clicked)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_row_menu)
 
@@ -395,17 +455,36 @@ class StructureEditor(QWidget):
         self._structure = structure
         self._decisions = tuple(decisions)
         self.error_label.hide()
+        self.status_label.hide()
         self._render()
         self.stack.load(structure)
         if previous is not None:
             self._select_component(previous)
+        elif self.isVisible():
+            self._select_default()
         self._refresh_oxide()
         # 树和示意图都摆好了才报高度：在 ``_render`` 里发会赶在示意图长高之前，报的是
         # 上一版的数。
         self.contents_resized.emit()
 
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().showEvent(event)
+        self._select_default()
+
+    def _select_default(self) -> None:
+        """没有选中时停在第一层普通膜上：右栏那张卡空着，读者得先猜到要回堆叠里点一层。
+
+        只在层堆叠上屏时做（``showEvent``，或上屏期间的重载）。构造期间右栏的卡片还没接上线，
+        那时选中没人听得见；而读者再点那一行也不会重发选中——高亮着、卡片却空着。
+        """
+        if self._structure is None or self.tree.currentItem() is not None:
+            return
+        target = _first_plain_layer(self._structure)
+        if target is not None:
+            self._select_component(target)
+
     def _selection_after_reload(self, structure: api.StructureSpec) -> int | None:
-        index = self._selected_index()
+        index = self._owning_index()
         if index is None or self._structure is None or not structure.components:
             return None
         selected = self._structure.components[index]
@@ -428,22 +507,44 @@ class StructureEditor(QWidget):
         ):
             button.setEnabled(False)
         self.edit_backing_action.setEnabled(False)
+        self.add_gradient_action.setEnabled(False)
         self.oxide_button.setEnabled(False)
         self.refuse_action.setEnabled(False)
         self._refresh_action_state()
         self.error_label.hide()
+        self.status_label.hide()
         self.contents_resized.emit()
 
     def current_oxide_suggestion(self) -> api.OxideSuggestion | None:
         return self._suggestion
 
     def add_layer(self, layer: api.LayerSpec) -> None:
-        structure = self._require_structure()
-        self._commit_structure(replace(structure, components=(*structure.components, layer)))
+        self._insert(layer)
 
     def add_periodic_block(self, block: api.PeriodicBlock) -> None:
+        self._insert(block)
+
+    def add_gradient_layer(self, gradient: api.GradientLayerSpec) -> None:
+        self._insert(gradient)
+
+    def _insert(self, component: object) -> None:
+        """Insert below the selected row and select the new component.
+
+        以前新组件只能追加到基底上面，五层的结构里在第二层下面加一层，得先加到底再拖四次。
+        选中空气行插到最上面，选中基底或没有选中时追加到底。
+        """
         structure = self._require_structure()
-        self._commit_structure(replace(structure, components=(*structure.components, block)))
+        position = self._insertion_index()
+        components = (*structure.components[:position], component, *structure.components[position:])
+        self._commit_structure(replace(structure, components=components))
+        self._select_component(position)
+
+    def _insertion_index(self) -> int:
+        count = 0 if self._structure is None else len(self._structure.components)
+        if self.tree.currentItem() is self.tree.topLevelItem(0):
+            return 0
+        index = self._owning_index()
+        return count if index is None else index + 1
 
     def set_backing(self, backing: api.MaterialSpec, roughness_a: float) -> None:
         structure = self._require_structure()
@@ -470,22 +571,47 @@ class StructureEditor(QWidget):
         self._commit_structure(replace(structure, components=tuple(components)))
 
     def remove_component(self, index: int) -> None:
+        self._commit_structure(self._without(index))
+
+    def move_component(self, source: int, destination: int) -> bool:
+        candidate = self._moved(source, destination)
+        if candidate is None:
+            return False
+        self._commit_structure(candidate)
+        return True
+
+    def _without(self, index: int) -> api.StructureSpec:
         structure = self._require_structure()
         self._require_index(index, len(structure.components))
         components = (*structure.components[:index], *structure.components[index + 1 :])
-        self._commit_structure(replace(structure, components=components))
+        return replace(structure, components=components)
 
-    def move_component(self, source: int, destination: int) -> bool:
+    def _moved(self, source: int, destination: int) -> api.StructureSpec | None:
         structure = self._require_structure()
         count = len(structure.components)
         self._require_index(source, count)
         self._require_index(destination, count)
         if source == destination:
-            return False
+            return None
         components = list(structure.components)
-        component = components.pop(source)
-        components.insert(destination, component)
-        self._commit_structure(replace(structure, components=tuple(components)))
+        components.insert(destination, components.pop(source))
+        return replace(structure, components=tuple(components))
+
+    def _attempt(self, action: str, candidate: api.StructureSpec | None) -> bool:
+        """Commit a row command, or say on screen why the stack did not change.
+
+        删除、移动、拖放都可能让某一层的粗糙度超出相邻层厚度给的上限；被拒时层堆叠一动
+        不动，不写一句话的话读者只会以为点击没生效。提交成功会重载结构，``load`` 自己收起
+        这句话。
+        """
+        if candidate is None:
+            return False
+        try:
+            self._commit_structure(candidate)
+        except (TypeError, ValueError) as error:
+            self.error_label.setText(f"{action}失败：{structure_error_text(error, candidate)}项目未改动。")
+            self.error_label.show()
+            return False
         return True
 
     def _require_structure(self) -> api.StructureSpec:
@@ -510,6 +636,7 @@ class StructureEditor(QWidget):
         self.add_layer_button.setEnabled(True)
         self.add_periodic_button.setEnabled(True)
         self.edit_backing_action.setEnabled(True)
+        self.add_gradient_action.setEnabled(True)
         self._refresh_action_state()
 
     def _dress_rows(self) -> None:
@@ -574,7 +701,9 @@ class StructureEditor(QWidget):
         reading = "半无限" if roughness_a is not None else "SLD 0 · 半无限"
         item = QTreeWidgetItem((name,))
         item.setData(0, Qt.ItemDataRole.UserRole, None)
-        item.setData(0, ROW_SPEC, (theme.DATA_NEUTRAL, name, _medium_detail(material, roughness_a), reading))
+        detail = _medium_detail(material, roughness_a)
+        item.setData(0, ROW_SPEC, (theme.DATA_NEUTRAL, name, detail, reading))
+        _describe(item, name, detail)
         return item
 
     def _component_item(self, component: object, index: int) -> QTreeWidgetItem:
@@ -585,7 +714,9 @@ class StructureEditor(QWidget):
             if component.drift is not None:
                 item.setToolTip(0, _drift_tooltip(component.drift))
             for layer in component.layers:
-                item.addChild(self._layer_item(layer))
+                child = self._layer_item(layer)
+                _describe(child, naming.expert_name(layer.name), _layer_detail(layer))
+                item.addChild(child)
         elif isinstance(component, api.GradientLayerSpec):
             item = QTreeWidgetItem((label,))
             detail = f"厚度 {_nm2(component.thickness_a)} · 粗糙 {_nm2(component.roughness_a)} · SLD 梯度"
@@ -598,6 +729,7 @@ class StructureEditor(QWidget):
             ROW_SPEC,
             (component_fill(index), label, detail, f"{_parameter_count(component)} 参数"),
         )
+        _describe(item, label, detail)
         return item
 
     def _layer_item(self, layer: api.LayerSpec) -> QTreeWidgetItem:
@@ -631,9 +763,28 @@ class StructureEditor(QWidget):
         value = item.data(0, Qt.ItemDataRole.UserRole)
         return value if isinstance(value, int) else None
 
+    def _owning_index(self) -> int | None:
+        """当前行所属的那个顶层组件；周期块的子层报它所在的块。"""
+        item = self.tree.currentItem()
+        if item is not None and item.parent() is not None:
+            item = item.parent()
+        value = None if item is None else item.data(0, Qt.ItemDataRole.UserRole)
+        return value if isinstance(value, int) else None
+
+    def _editable_component(self) -> tuple[int, object] | None:
+        index = self._owning_index()
+        if index is None or self._structure is None:
+            return None
+        component = self._structure.components[index]
+        return (index, component) if isinstance(component, EDITABLE_COMPONENTS) else None
+
     def _sync_stack_selection(self, *_args) -> None:
-        """Mirror the tree's current row into the diagram and the inspector."""
-        index = self._selected_index()
+        """Mirror the tree's current row into the diagram and the inspector.
+
+        点到周期块的子层时报的是那个块：子层没有独立的层序和参数，右栏应该说「这一层属于
+        哪个块、去哪儿改」，而不是当作什么都没选中。
+        """
+        index = self._owning_index()
         self.stack.set_selected_index(index)
         component = None
         if index is not None and self._structure is not None:
@@ -659,27 +810,72 @@ class StructureEditor(QWidget):
         self.remove_action.setEnabled(index is not None)
         self.up_action.setEnabled(index is not None and index > 0)
         self.down_action.setEnabled(index is not None and index + 1 < count)
+        self.duplicate_action.setEnabled(index is not None)
+        self.edit_component_action.setEnabled(self._editable_component() is not None)
 
     def _remove_selected(self) -> None:
         index = self._selected_index()
-        if index is not None:
-            self.remove_component(index)
+        if index is None or self._structure is None:
+            return
+        name = naming.inline_name(self._structure.components[index].name)
+        if self._attempt("删除", self._without(index)):
+            # 提交会重载，重载会把这一行收起来；所以在提交之后再写。
+            self.status_label.setText(DELETED_TEMPLATE.format(name=name))
+            self.status_label.show()
+
+    def _duplicate_selected(self) -> None:
+        index = self._selected_index()
+        if index is None or self._structure is None:
+            return
+        components = self._structure.components
+        copy = replace(components[index], name=f"{components[index].name}{COPY_SUFFIX}")
+        candidate = replace(self._structure, components=(*components[: index + 1], copy, *components[index + 1 :]))
+        if self._attempt("复制", candidate):
+            self._select_component(index + 1)
+
+    def _edit_double_clicked(self, *_args) -> None:
+        if self._editable_component() is not None:
+            self._edit_selected()
+
+    def _edit_selected(self) -> None:
+        editable = self._editable_component()
+        if editable is None:
+            return
+        index, component = editable
+
+        def commit(edited: object) -> None:
+            self.replace_component(index, edited)
+
+        if isinstance(component, api.PeriodicBlock):
+            dialog = PeriodicDialog(
+                self, commit_block=commit, master_seed=self._master_seed(), block_offset=index, block=component
+            )
+        else:
+            dialog = GradientDialog(self, commit_gradient=commit, gradient=component)
+        dialog.exec()
+
+    def _choose_gradient(self) -> None:
+        GradientDialog(self, commit_gradient=self.add_gradient_layer).exec()
 
     def _move_selected(self, offset: int) -> None:
         index = self._selected_index()
         if index is not None:
-            self.move_component(index, index + offset)
+            self._attempt("移动", self._moved(index, index + offset))
+
+    def _drop_component(self, source: int, destination: int) -> None:
+        self._attempt("移动", self._moved(source, destination))
 
     def _choose_layer(self) -> None:
         LayerDialog(self, commit_layer=self.add_layer).exec()
 
     def _choose_periodic(self) -> None:
-        structure = self._require_structure()
+        self._require_structure()
         PeriodicDialog(
             self,
             commit_block=self.add_periodic_block,
             master_seed=self._master_seed(),
-            block_offset=len(structure.components),
+            # 块偏移是它在堆叠里的位置；插到选中行下面时，那个位置就不是末尾。
+            block_offset=self._insertion_index(),
         ).exec()
 
     def _master_seed(self) -> int:

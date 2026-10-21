@@ -653,16 +653,17 @@ def test_the_verdict_box_holds_its_text_off_the_border(qtbot) -> None:
 def test_the_verdict_glyph_is_typeset_at_the_display_size(qtbot) -> None:
     """设计稿 ``.confbadge .glyph`` 是 22px，比判定那行的 15px 又大一档。
 
-    字形是这块的图标：和判定同号时它读成句首的一个标点，大一档才读成一枚标记。字号在
-    Python 里设，因为 22px 折算成 16.5pt，而 Qt 的样式表解析器不接受带小数的 pt——写进
-    QSS 会整条规则失效，字形静默退回默认字号。
+    字形是这块的图标：和判定同号时它读成句首的一个标点，大一档才读成一枚标记。两档都按像素
+    比：点数在 Mac 上会缩 25%，比出来的大小关系就随桌面变。
     """
+    from PySide6.QtGui import QFontInfo
+
     from xrr_fitter.gui import theme
 
     panel = _confidence_panel(qtbot, "strong_correlation")
 
-    assert panel.confidence_marker.font().pointSizeF() == theme.VERDICT_GLYPH_PT
-    assert theme.VERDICT_GLYPH_PT > theme.FONT_PT_MD
+    assert QFontInfo(panel.confidence_marker.font()).pixelSize() == theme.VERDICT_GLYPH_PX
+    assert theme.VERDICT_GLYPH_PX > theme.FONT_PX_MD
 
 
 def test_confidence_glyphs_all_take_the_same_width(qtbot) -> None:
@@ -718,7 +719,9 @@ def test_uncertainty_evidence_sits_in_a_titled_card(qtbot) -> None:
     """
     from xrr_fitter.gui.results.uncertainty import UncertaintyView
 
-    view = _confidence_panel(qtbot, "strong_correlation").uncertainty
+    # 留住面板：qtbot 只弱引用它，链式取属性会让面板连同这张卡一起被回收。
+    panel = _confidence_panel(qtbot, "strong_correlation")
+    view = panel.uncertainty
 
     assert isinstance(view, UncertaintyView)
     assert view.accessibleName() == "不确定度诊断"
@@ -738,7 +741,9 @@ def test_uncertainty_height_covers_the_card_header_as_well_as_the_evidence(qtbot
     """
     from xrr_fitter.gui.results.uncertainty import EVIDENCE_LINE_FLOOR
 
-    view = _confidence_panel(qtbot, "strong_correlation").uncertainty
+    # 留住面板：qtbot 只弱引用它，链式取属性会让面板连同这张卡一起被回收。
+    panel = _confidence_panel(qtbot, "strong_correlation")
+    view = panel.uncertainty
     title = view.findChild(QLabel, "uncertaintyCardTitle")
     subtitle = view.findChild(QLabel, "uncertaintyCardSubtitle")
     header = title.sizeHint().height() + subtitle.sizeHint().height()
@@ -868,13 +873,14 @@ def test_no_two_modebar_controls_wear_the_same_glyph(qtbot, tmp_path) -> None:
 
 
 PLOT_CARD_COPY = {
-    "log": ("反射率 R vs 入射角 2θ", "curve · 归一化"),
+    # 2θ 是散射角；入射角是 θ。
+    "log": ("反射率 R vs 散射角 2θ", "curve · 归一化"),
     "raw": ("原始强度 vs 存储角度", "curve · 拟合点与排除点"),
     "qz4": ("qz⁴·R vs 散射矢量 qz", "curve · 抑制菲涅尔衰减 · 非拟合数据"),
     # 残差卡的第二句写这次拟合的判读，不冠数据集名，也就没有 ``curve · ``；还没拟合时
     # 那句判读无从写起，于是这张卡先说「尚未拟合」。见
-    # ``test_the_residual_card_reads_out_its_own_verdict``。
-    "residual": ("加权残差 vs 散射矢量 qz", "尚未拟合"),
+    # ``test_the_residual_card_reads_out_its_own_verdict``。横轴与压在它上面的反射率卡同为散射角。
+    "residual": ("加权残差 vs 散射角 2θ", "尚未拟合"),
 }
 
 
@@ -951,8 +957,8 @@ def test_reflectivity_card_subtitle_follows_the_active_dataset(qtbot, tmp_path) 
 def test_reflectivity_card_carries_the_designs_legend(qtbot, tmp_path) -> None:
     """The mockup keys every mark drawn on the reflectivity card.
 
-    Four marks share one pair of axes -- points, a line, a shaded window and the
-    clipped-point glyph -- and only the first two are conventional enough to read
+    Five marks share one pair of axes -- points, a line, a shaded window and the
+    clipped- and masked-point glyphs -- and only the first two are conventional enough to read
     unlabelled.  Swatch labels carry a pixmap and no text, so dropping the empty
     ones leaves the captions.
     """
@@ -961,7 +967,7 @@ def test_reflectivity_card_carries_the_designs_legend(qtbot, tmp_path) -> None:
 
     assert legend is not None, "the reflectivity card has no legend row"
     captions = tuple(text for label in legend.findChildren(QLabel) if (text := label.text()))
-    assert captions == ("观测数据", "当前拟合模型", "拟合窗口", "▽ 截断点（低于本底）")
+    assert captions == ("观测数据", "当前拟合模型", "拟合窗口", "▽ 截断点（低于本底）", "✕ 掩膜排除点")
 
 
 def _uncertainty(*, systematic: bool = False, candidate_id: str | None = None) -> api.UncertaintyReport:

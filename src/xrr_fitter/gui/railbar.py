@@ -152,7 +152,7 @@ class RailBar(QWidget):
         assert self._span is not None
         low, value, high = self._span
         font = painter.font()
-        font.setPointSize(theme.FONT_PT_SM)
+        font.setPixelSize(theme.FONT_PX_SM)
         painter.setFont(font)
         metrics = painter.fontMetrics()
         segments = (

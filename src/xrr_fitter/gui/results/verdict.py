@@ -18,6 +18,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QLabel, QVBoxLayout, QWidget
 
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.messages import reason_text
+from xrr_fitter.gui.plots.parameter_labels import label_map, short_label
 from xrr_fitter.gui.results.inference_text import correlation_unavailable_reason
 from xrr_fitter.gui.wrapping import wrapping_row
 
@@ -25,9 +27,14 @@ OBJECTIVE_LABEL = "目标值 J"
 REDUCED_CHI_SQUARED_LABEL = "约化 χ²ᵥ"
 FAILURE_RATE_LABEL = "自助失败率"
 UNAVAILABLE_TEXT = "不可用"
-# 失败率超过这条线就不再打勾。与分类器的阈值同源：分类已经因为它把结论降级，
-# 徽章跟着降级，两处才不会一个说「收敛」一个说「不可信」。
+# 失败率超过这条线就不再打勾。它比分类器的降级线（失败率 > 0.20 判「不可信」）低一档，是预警：
+# 失败率爬到这里时判定也许还没降级，徽章先提醒读者别把自助区间当成干净的。
 FAILURE_RATE_WARN = 0.1
+# 服务层判「样本不足以给区间」用的原因码（``model.bootstrap.bootstrap_calibration_reason``）。
+# 徽章照这一判读，不另立一个次数门槛：那条线归服务层定。
+INSUFFICIENT_SAMPLES_REASON = "insufficient_successful_samples"
+# 边界徽章最多点几个名；再多就「等」，全名单留在悬停提示里。
+BOUNDARY_NAMES_SHOWN = 2
 
 
 def reduced_chi_squared(weighted_residuals: object | None, free_parameters: int) -> float | None:
@@ -65,42 +72,58 @@ def _percent(value: float) -> str:
     return f"{round(value * 100)}%"
 
 
-def _convergence(report: object) -> tuple[str, str]:
+def _convergence(report: object) -> tuple[str, str, str]:
     """自助收敛率与它的状态。
 
     报告存的是失败率，设计稿写的是收敛率，所以这里取补。没跑自助时失败率同样是
     0，直接取补会打出「收敛 100%」——一次没做的检查会读成一次通过的检查，所以
     未运行是独立的第三种说法，并且不带状态色——"没做"不是四种状态里的任何一种。
+
+    失败率为 0 也不等于收敛：8 次重采样一次没失败，服务层照样判它不够给区间。所以证据自己的
+    不可用原因排在打勾之前——一次只跑了 8 次的检查不能读成一次通过的检查。
     """
     if not report.bootstrap_performed:
-        return "— 未运行自助", ""
+        return "— 未运行自助", "", ""
     rate = float(report.bootstrap_failure_rate)
     converged = _percent(1.0 - rate)
     if rate > FAILURE_RATE_WARN:
-        return f"⚠ 自助收敛 {converged}", "warn"
-    return f"✓ 自助收敛 {converged}", "ok"
+        return f"⚠ 自助收敛 {converged}", "warn", ""
+    evidence = report.bootstrap_evidence
+    reason = None if evidence is None else evidence.unavailable_reason
+    if reason == INSUFFICIENT_SAMPLES_REASON:
+        return f"⚠ 自助仅 {evidence.attempted_count:,} 次", "warn", reason_text(reason)
+    if reason is not None:
+        return "⚠ 自助区间不可用", "warn", reason_text(reason)
+    return f"✓ 自助收敛 {converged}", "ok", ""
 
 
-def _boundary(report: object) -> tuple[str, str]:
-    count = len(tuple(report.boundary_hits))
-    if count == 0:
-        return "✓ 无边界命中", "ok"
-    return f"⚠ {count} 处边界命中", "warn"
+def _boundary(report: object, definitions: tuple[object, ...]) -> tuple[str, str, str]:
+    """边界命中的个数，连同是哪几个参数——只报个数的话，读者还得去证据散文里翻名单。"""
+    hits = tuple(report.boundary_hits)
+    if not hits:
+        return "✓ 无边界命中", "ok", ""
+    labels = label_map(definitions)
+    names = [labels.get(name, short_label(name)) for name in hits]
+    shown = "、".join(names[:BOUNDARY_NAMES_SHOWN]) + ("等" if len(names) > BOUNDARY_NAMES_SHOWN else "")
+    displays = {definition.name: definition.display_name for definition in definitions}
+    tooltip = "触及边界：" + "、".join(displays.get(name, name) for name in hits)
+    return f"⚠ {len(hits)} 处边界命中：{shown}", "warn", tooltip
 
 
-def _correlation(report: object) -> tuple[str, str]:
+def _correlation(report: object) -> tuple[str, str, str]:
     """强相关的对数，加上其中最强的系数。
 
     按绝对值取最强：负相关一样是纠缠，按带符号取最大会把 -0.93 让给 0.71，报出
     一个偏乐观的数。
     """
-    if correlation_unavailable_reason(report) is not None:
-        return "— 相关不可用", ""
+    reason = correlation_unavailable_reason(report)
+    if reason is not None:
+        return "— 相关不可用", "", reason
     pairs = tuple(report.strong_correlations)
     if not pairs:
-        return "✓ 无强相关", "ok"
+        return "✓ 无强相关", "ok", ""
     strongest = max(abs(float(value)) for _left, _right, value in pairs)
-    return f"ℹ {len(pairs)} 处相关 ρ={strongest:.2f}", "info"
+    return f"ℹ {len(pairs)} 处相关 ρ={strongest:.2f}", "info", ""
 
 
 class VerdictEvidence(QWidget):
@@ -136,6 +159,7 @@ class VerdictEvidence(QWidget):
         self._objective: float | None = None
         self._reduced_chi_squared: float | None = None
         self._report: object | None = None
+        self._definitions: tuple[object, ...] = ()
         self._project()
 
     def _build_badge(self) -> QLabel:
@@ -167,8 +191,10 @@ class VerdictEvidence(QWidget):
             return ()
         return tuple((key.text(), value.text()) for key, value in self._metric_rows)
 
-    def set_report(self, report: object | None) -> None:
+    def set_report(self, report: object | None, definitions: tuple[object, ...] = ()) -> None:
+        """``definitions`` 是结果自带的参数声明，边界徽章靠它把路径念成短名。"""
         self._report = report
+        self._definitions = tuple(definitions)
         self._project()
 
     def set_objective(self, objective: float | None) -> None:
@@ -181,6 +207,7 @@ class VerdictEvidence(QWidget):
 
     def clear_report(self) -> None:
         self._report = None
+        self._definitions = ()
         self._objective = None
         self._reduced_chi_squared = None
         self._project()
@@ -190,14 +217,13 @@ class VerdictEvidence(QWidget):
         if report is None:
             self._hide_all()
             return
-        readings = (_convergence(report), _boundary(report), _correlation(report))
-        for badge, (text, kind) in zip(self._badges, readings, strict=True):
+        readings = (_convergence(report), _boundary(report, self._definitions), _correlation(report))
+        for badge, (text, kind, tooltip) in zip(self._badges, readings, strict=True):
             badge.setText(text)
             theme.set_status_kind(badge, kind)
+            badge.setToolTip(tooltip)
+            badge.setAccessibleDescription(tooltip)
             badge.setVisible(True)
-        correlation_reason = correlation_unavailable_reason(report) or ""
-        self._badges[2].setToolTip(correlation_reason)
-        self._badges[2].setAccessibleDescription(correlation_reason)
         objective = self._objective
         self._metric_rows[0][1].setText(UNAVAILABLE_TEXT if objective is None else f"{objective:.6g}")
         chi_squared = self._reduced_chi_squared

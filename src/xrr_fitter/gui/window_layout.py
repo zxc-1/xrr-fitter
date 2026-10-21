@@ -10,7 +10,7 @@ whose side widths are budgets and whose middle absorbs the rest.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QFrame,
@@ -35,13 +35,15 @@ from xrr_fitter.gui.parameters.panel import ParametersPanel
 from xrr_fitter.gui.plots.panel import PlotPanel
 from xrr_fitter.gui.project.actions import ProjectActions
 from xrr_fitter.gui.results.panel import ResultsPanel
-from xrr_fitter.gui.sizing import AnchorSizedScroll, ContentSizedScroll, ContentSizedSplitter
+from xrr_fitter.gui.sizing import VISIBLE_ROW_CEILING, AnchorSizedScroll, ContentSizedScroll, ContentSizedSplitter
 from xrr_fitter.gui.structure import naming
 from xrr_fitter.gui.structure.panel import StructurePanel
 from xrr_fitter.gui.structure.selection import SelectedLayerCard, layer_bounds, layer_locks
 
 WORKFLOW_ACTION_SPECS = (
     ("startFitAction", "一键拟合", "Ctrl+Return", "start_fit"),
+    # Esc 归窗口这一条命令（``install_workflow_actions`` 关掉拟合卡的局部 Esc，免得两处同时绑定）；
+    # 它只在有拟合在跑时可用，经 ``cancel_fit`` 走拟合卡的 ``request_cancel``，重复按不重复请求。
     ("cancelFitAction", "取消拟合", "Esc", "cancel_fit"),
     ("exportResultsAction", "导出结果", "Ctrl+Shift+E", "export_results_dialog"),
 )
@@ -203,14 +205,65 @@ STRUCTURE_CORRELATION_HINT_TEXT = (
 )
 
 
-def _structure_diagnostics_hint() -> QLabel:
-    """The inspector's 结构诊断 body: one wrapped advisory line."""
-    hint = QLabel(STRUCTURE_CORRELATION_HINT_TEXT)
+# 一层膜都没有时，上面那句说的是一个还不存在的东西。
+STRUCTURE_EMPTY_HINT_TEXT = "尚无膜层可诊断：在层堆叠里添加膜层后，这里会提示厚度与密度这类常见相关。"
+
+
+def _structure_diagnostics_hint(document) -> QLabel:
+    """The inspector's 结构诊断 body: one wrapped advisory line about the active stack."""
+    hint = QLabel()
     hint.setObjectName("structureCorrelationHint")
     theme.set_status_kind(hint, "info")
     theme.mark_hint(hint)
     hint.setWordWrap(True)
+
+    def restate(project) -> None:
+        dataset = next(
+            (item for item in project.datasets if item.dataset_id == project.ui_state.active_dataset_id),
+            None,
+        )
+        layered = dataset is not None and dataset.structure is not None and bool(dataset.structure.components)
+        hint.setText(STRUCTURE_CORRELATION_HINT_TEXT if layered else STRUCTURE_EMPTY_HINT_TEXT)
+
+    restate(document.project)
+    document.project_changed.connect(restate)
     return hint
+
+
+def _follow_layer_picks(editor, *followers) -> None:
+    """Point the parameter table and the SLD profile at the layer the reader picked in the stack.
+
+    只听读者亲手点的那两处（示意图的带、树的行），不听 ``component_selected``：那一声在每次
+    重建树、换数据集时也会发，接上去的话改一个数就会把正在编辑的那一格拽走。周期块的子层报
+    它所在的块，和右栏那张卡同一个口径；环境与基底那两行报 ``None``，剖面上的高亮随之撤掉。
+    """
+
+    def owning_index(item) -> int | None:
+        owner = item.parent() or item
+        value = owner.data(0, Qt.ItemDataRole.UserRole)
+        return value if isinstance(value, int) else None
+
+    def follow(index: int | None) -> None:
+        for follower in followers:
+            follower(index)
+
+    editor.stack.component_selected.connect(follow)
+    editor.tree.itemClicked.connect(lambda item, _column: follow(owning_index(item)))
+
+
+#: 机架上数据集列表至少露出的行数（F19）。少于这几行时，读者看不出列表还能滚。
+DATASET_BAND_ROW_FLOOR = 3
+
+
+def _dataset_band_floor(panel: QWidget) -> int:
+    """数据集面板露出 ``DATASET_BAND_ROW_FLOOR`` 行时的高度；行少于此就是面板本身的高度。"""
+    tree = panel.tree
+    rows = tree.model().rowCount()
+    row = tree.sizeHintForRow(0)
+    if rows <= DATASET_BAND_ROW_FLOOR or row <= 0:
+        return panel.sizeHint().height()
+    shown = min(rows, VISIBLE_ROW_CEILING)
+    return panel.sizeHint().height() - (shown - DATASET_BAND_ROW_FLOOR) * row
 
 
 def _scrolled(name: str, inner: QWidget, *, content_height: bool = False, anchor: QWidget | None = None) -> QScrollArea:
@@ -233,6 +286,10 @@ def _scrolled(name: str, inner: QWidget, *, content_height: bool = False, anchor
         scroll: QScrollArea = AnchorSizedScroll(anchor)
     else:
         scroll = ContentSizedScroll() if content_height else QScrollArea()
+    return _configured_scroll(scroll, name, inner)
+
+
+def _configured_scroll(scroll: QScrollArea, name: str, inner: QWidget) -> QScrollArea:
     scroll.setObjectName(name)
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -294,19 +351,22 @@ def _navigation_column(window) -> QWidget:
     continuous ``--panel-2`` surface, and a default 4px handle cuts a
     window-coloured band across it.  The split itself stays -- it is what keeps
     the pipeline visible when the dataset list grows -- and its sizes still
-    round-trip through the project.
+    round-trip through the project.  The reader gets no drag on the rail; a short
+    screen is served by the dataset band's floor and the foldable method block (F19).
     """
     column, layout = _column("navigationColumn", "导航栏")
     lists = ContentSizedSplitter(Qt.Orientation.Vertical, column)
     lists.setObjectName("leftSplitter")
     lists.setHandleWidth(0)
-    lists.addWidget(_scrolled("dataPanelScroll", window.data_panel, content_height=True))
+    data_scroll = ContentSizedScroll(floor=_dataset_band_floor)
+    lists.addWidget(_configured_scroll(data_scroll, "dataPanelScroll", window.data_panel))
     pipeline_scroll = _scrolled("pipelineNavScroll", window.pipeline_nav, content_height=True)
     # 管线是六步定长的地图，不是随高度伸缩的列表。滚动区按设计不把被滚控件的最小高度报给
     # 外面，于是分割器按 1:1 只分给它一半：六步里最后一步被裁在视口外，页脚也被顶到管线
-    # 下边缘之上。这里把地图的自然高度显式报成下限——它跟样式表无关（量过：有无 QSS 都是
-    # 同一个数），所以在建栏时定下来是稳的。
-    pipeline_scroll.setMinimumHeight(window.pipeline_nav.minimumSizeHint().height())
+    # 下边缘之上。这里把六步地图的高度显式报成下限——只算地图，不算结果步展开的方法段：
+    # 方法段算进来时下限涨到 582px，1280×800 的机架剩给数据集列表的不到两行（F19）。
+    # 方法段在这一带里靠滚动去够，也可以折起来。
+    pipeline_scroll.setMinimumHeight(window.pipeline_nav.map_height())
     lists.addWidget(pipeline_scroll)
     layout.addWidget(lists, 1)
     layout.addStretch(0)
@@ -775,6 +835,40 @@ def _pin_columns(splitter: QSplitter) -> None:
             handle.setCursor(Qt.CursorShape.ArrowCursor)
 
 
+class PinnedColumnSplitter(QSplitter):
+    """The three columns, whose restored geometry never squeezes the canvas below its floor.
+
+    两侧栏是钉死的（``_pin_columns``），可旧项目里存着更宽的侧栏——那是还能拖的版本留下的。
+    照单恢复时 ``QSplitter`` 先满足两侧，最小窗口下画布被压到 520px，低于它自己的下限（F29）。
+    缺的宽度从两侧还回来，各自最多退回到自己的预算；窗口还没宽到放得下三栏预算时不插手。
+    """
+
+    def setSizes(self, sizes) -> None:  # noqa: N802 - Qt override
+        super().setSizes(self._clamped(list(sizes)))
+
+    def event(self, event: QEvent) -> bool:
+        # 不只在 resize 时收：子栏的最小宽度一变，``QSplitter`` 在 LayoutRequest 里按自己的算法
+        # 重分一次，刚还回画布的那几像素又会被分回侧栏。
+        handled = super().event(event)
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.LayoutRequest, QEvent.Type.Show):
+            sizes = self.sizes()
+            clamped = self._clamped(sizes)
+            if clamped != sizes:
+                super().setSizes(clamped)
+        return handled
+
+    def _clamped(self, sizes: list[int]) -> list[int]:
+        # 画布该有的那一份按分割器此刻的宽度算：两侧都退回预算之后剩给它的就是这么多。
+        floor = min(CANVAS_COLUMN_FLOOR, self.width() - 2 * self.handleWidth() - LEFT_COLUMN_WIDTH - RIGHT_COLUMN_WIDTH)
+        if len(sizes) != 3 or floor <= 0 or sizes[1] >= floor:
+            return sizes
+        left, canvas, right = sizes
+        short = floor - canvas
+        from_left = min(short, max(left - LEFT_COLUMN_WIDTH, 0))
+        from_right = min(short - from_left, max(right - RIGHT_COLUMN_WIDTH, 0))
+        return [left - from_left, canvas + from_left + from_right, right - from_right]
+
+
 def apply_default_columns(splitter: QSplitter) -> None:
     """Give the side columns their budgets and the canvas whatever is left.
 
@@ -853,6 +947,7 @@ def _build_panels(window, document) -> None:
         _layer_locks_lookup(window),
     )
     editor.component_selected.connect(window.selected_layer_panel.show_component)
+    _follow_layer_picks(editor, window.parameters_panel.focus_component, window.plot_panel.highlight_component)
     # 状态栏那一段读的是同一次选中：设计稿帧③ 屏幕最下面写「选中：a-Si」。
     from xrr_fitter.gui import chrome
 
@@ -860,7 +955,7 @@ def _build_panels(window, document) -> None:
     # 换数据集、换结构都会重发一批声明。重发和「堆叠重新选中这一层」谁先谁后没有保证，
     # 所以两条路都通到卡片：后到的那一次刷新用的一定是新声明。
     window.parameters_panel.parameter_table.rows_reloaded.connect(window.selected_layer_panel.refresh_bounds)
-    window.structure_diagnostics_panel = _structure_diagnostics_hint()
+    window.structure_diagnostics_panel = _structure_diagnostics_hint(document)
     window.pipeline_nav = PipelineNav(document)
     window.dataset_summary = _detached_summary(window.data_panel)
     # 设计稿栏上写的是「导出…」：省略号表示按下去先开对话框问导出什么、导到哪，不是当场
@@ -893,7 +988,7 @@ def install_workspace(window, document) -> None:
     colour, which reads as a pale gap between the columns rather than as a line.
     """
     _build_panels(window, document)
-    splitter = QSplitter(Qt.Orientation.Horizontal)
+    splitter = PinnedColumnSplitter(Qt.Orientation.Horizontal)
     splitter.setObjectName("workspaceSplitter")
     splitter.setHandleWidth(1)
     window.nav_column = _navigation_column(window)

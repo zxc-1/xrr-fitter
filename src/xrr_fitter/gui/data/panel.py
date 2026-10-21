@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
-    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
@@ -34,6 +33,7 @@ from PySide6.QtWidgets import (
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.command_icons import command_icon
 from xrr_fitter.gui.data.dataset_card import DATASET_CARD_ROLE, DatasetCardDelegate, dataset_card
 from xrr_fitter.gui.data.import_dialog import ImportDialog
 from xrr_fitter.gui.data.mask_editor import MaskEditor
@@ -43,6 +43,7 @@ from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.fitting.metrics import UNKNOWN
 from xrr_fitter.gui.fitting.metrics import _trend as metrics_trend
 from xrr_fitter.gui.navigation.panel import STRUCTURE_STEP_INDEX
+from xrr_fitter.gui.noise import objective_text
 from xrr_fitter.gui.sizing import ContentSizedTree
 
 DATA_FILTER = "XRR 数据 (*.xy *.dat *.txt);;所有文件 (*)"
@@ -181,17 +182,19 @@ class DataPanel(QWidget):
         self.import_folder_quick_button.setToolTip("从文件夹批量导入 XRR 数据")
         self.import_folder_quick_button.setAutoRaise(True)
         self.import_folder_quick_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self.import_folder_quick_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        # 和 文件 ▸ 导入数据文件夹… 同一条命令，就戴同一枚字形（F45）。平台的「打开文件夹」图标在
+        # 各平台长得各不一样、也不跟深色换墨，读者在菜单里认得的那枚到这里就认不出来了。
+        self.import_folder_quick_button.setIcon(command_icon("import_folder"))
         self.import_folder_quick_button.setIconSize(QSize(16, 16))
-        self.import_folder_quick_button.setFixedSize(QSize(24, 24))
+        self.import_folder_quick_button.setFixedSize(QSize(theme.RAIL_QUICK_BUTTON_PX, theme.RAIL_QUICK_BUTTON_PX))
         self.import_folder_quick_button.clicked.connect(self._import_folder)
-        self.import_files_shortcut = self._shortcut("importFilesShortcut", "Ctrl+I")
-        self.import_folder_shortcut = self._shortcut(
-            "importFolderShortcut",
-            "Ctrl+Shift+I",
-        )
-        self.import_files_shortcut.activated.connect(self._import_files)
-        self.import_folder_shortcut.activated.connect(self._import_folder)
+        # 两条导入命令连着快捷键做成 ``QAction``：主窗口的文件菜单收的就是这两枚，所以菜单项
+        # 自己写出按键，按键也在整个窗口可用——此前它们是面板自己的 ``QShortcut``，焦点不在
+        # 左栏就按不出来，菜单里也看不到。
+        self.import_files_action = self._import_action("importFilesMenuAction", "导入数据文件…", "Ctrl+I")
+        self.import_folder_action = self._import_action("importFolderMenuAction", "导入数据文件夹…", "Ctrl+Shift+I")
+        self.import_files_action.triggered.connect(self._import_files)
+        self.import_folder_action.triggered.connect(self._import_folder)
         self.dataset_add_button = self._build_add_button()
         self._build_tree()
         self.failure_table = _readonly_table("importFailureTable", ("文件", "问题", "恢复操作"))
@@ -277,11 +280,15 @@ class DataPanel(QWidget):
         self.tree.setItemDelegateForColumn(0, DatasetCardDelegate(self.tree))
         self.tree.currentItemChanged.connect(self._select_tree_item)
 
-    def _shortcut(self, name: str, keys: str) -> QShortcut:
-        shortcut = QShortcut(QKeySequence(keys), self)
-        shortcut.setObjectName(name)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        return shortcut
+    def _import_action(self, name: str, text: str, keys: str) -> QAction:
+        action = QAction(text, self)
+        action.setObjectName(name)
+        action.setToolTip(text)
+        action.setStatusTip(text)
+        action.setShortcut(QKeySequence(keys))
+        action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.addAction(action)
+        return action
 
     @property
     def dataset_ids(self) -> tuple[str, ...]:
@@ -568,7 +575,7 @@ class DataPanel(QWidget):
         best = result.best_candidate
         parts = [f"可信度：{result.confidence.value}", f"候选解 {len(result.candidates)} 个"]
         if best is not None:
-            parts.append(f"最优目标值 J={best.objective:g}")
+            parts.append(f"最优目标值 J={objective_text(best.objective)}")
         if result.warnings:
             parts.append(f"告警 {len(result.warnings)} 条")
         return " · ".join(parts)
@@ -655,7 +662,7 @@ class DataPanel(QWidget):
             return ""
         trend = self._run_trends.get(dataset_id, "")
         arrow = "" if trend in ("", UNKNOWN) else trend[0]
-        return f"拟合中 · J={objective:.2f}{arrow}"
+        return f"拟合中 · J={objective_text(objective)}{arrow}"
 
     def set_step(self, step: int | None) -> None:
         """项目走到了哪一步。
@@ -836,7 +843,10 @@ class DataPanel(QWidget):
                 mapping = dialog.column_mapping()
                 sources = dialog.source_paths()
             self.import_paths(sources, preset=preset, column_mapping=mapping)
-        except (InterruptedError, OSError, ValueError, TypeError) as error:
+        except InterruptedError:
+            # 读者在基底那一问上点了取消：这是放弃导入，不是导入失败，什么都没写进项目，也不必报错。
+            return
+        except (OSError, ValueError, TypeError) as error:
             QMessageBox.critical(self, "导入数据失败", f"{type(error).__name__}: {error}")
 
     def _folder_paths(self, folder: Path, recursive: bool) -> tuple[Path, ...]:

@@ -14,6 +14,7 @@ from xrr_fitter.gui.data.import_dialog import ImportDialog
 from xrr_fitter.gui.data.panel import DataPanel
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.fitting.panel import FitPanel
+from xrr_fitter.gui.project import dialogs
 
 MODE_LABELS = (
     ("稳健对数（探索）", "robust_log"),
@@ -123,7 +124,7 @@ def test_poisson_selection_is_an_explicit_raw_counts_declaration(qtbot):
 
 
 @pytest.mark.parametrize("mode", ("gaussian", "poisson"))
-def test_gui_selection_reaches_a_real_fit_operation(qtbot, tmp_path, mode):
+def test_gui_selection_reaches_a_real_fit_operation(qtbot, tmp_path, monkeypatch, mode):
     value = _project(tmp_path)
     budget = replace(
         value.fit_config.budget,
@@ -151,12 +152,18 @@ def test_gui_selection_reaches_a_real_fit_operation(qtbot, tmp_path, mode):
     assert candidates
     assert {candidate.noise_model for candidate in candidates} == {mode}
     assert _selector(panel).isEnabled() is True
-    _assert_mode_change_invalidates_result(panel)
+    _assert_mode_change_invalidates_result(panel, monkeypatch)
 
 
-def _assert_mode_change_invalidates_result(panel):
+def _assert_mode_change_invalidates_result(panel, monkeypatch):
     assert panel.document.project.datasets[0].last_valid_result is not None
+    asked = []
+    # 换噪声模式会清掉这条刚拟合出的结果，所以先问；这里答「清除并切换」。
+    monkeypatch.setattr(
+        dialogs, "confirm_dropping_results", lambda _parent, change, count: asked.append((change, count)) or True
+    )
     _select(panel, "robust_log")
+    assert asked == [("切换噪声模式", 1)]
     dataset = panel.document.project.datasets[0]
     assert dataset.last_valid_result is None
     assert dataset.checkpoint is None

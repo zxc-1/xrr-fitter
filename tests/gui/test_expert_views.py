@@ -116,8 +116,8 @@ def test_expert_toggle_control_has_visible_name_and_reflects_document(qtbot, tmp
     toggle = window.findChild(QCheckBox, "expertModeToggle")
 
     assert toggle is not None
-    assert toggle.text() == "显示高级选项"
-    assert toggle.accessibleName() == "切换高级选项"
+    assert toggle.text() == "高级模式"
+    assert toggle.accessibleName() == "切换高级模式"
     # The word stays with the segment that owns it in the design.
     assert "专家" in [label for _key, _name, label, _tip in WORKSPACE_MODE_SPECS]
     assert "专家" not in toggle.text()
@@ -126,6 +126,21 @@ def test_expert_toggle_control_has_visible_name_and_reflects_document(qtbot, tmp
     toggle.setChecked(True)
 
     assert window.document.project.ui_state.expert_mode is True
+
+
+def test_the_depth_toggle_says_it_also_picks_the_fit_route(qtbot, tmp_path) -> None:
+    """这枚开关还决定一键拟合走哪条路线（F18）；不说出来，勾一下就悄悄换了一套做法。"""
+    from xrr_fitter.gui.document import ProjectDocument
+    from xrr_fitter.gui.main_window import MainWindow
+
+    window = MainWindow(ProjectDocument(_project(tmp_path)))
+    qtbot.addWidget(window)
+    tip = window.findChild(QCheckBox, "expertModeToggle").toolTip()
+
+    assert "诊断视图" in tip and "MCMC" in tip
+    assert "开启后" in tip and "手动拟合" in tip
+    assert "关闭时" in tip and "自动拟合" in tip
+    assert "步骤与耗时不同" in tip
 
 
 def test_every_surface_that_drives_the_depth_toggle_calls_it_by_its_own_name(

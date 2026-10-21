@@ -59,7 +59,7 @@ def _bare(backing=SI) -> api.StructureSpec:
 
 
 def test_add_periodic_dialog_commits_ordered_children_through_direct_method(qtbot) -> None:
-    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+    from xrr_fitter.gui.structure.periodic_dialog import PeriodicDialog
 
     dialog = PeriodicDialog()
     qtbot.addWidget(dialog)
@@ -84,7 +84,7 @@ def test_add_periodic_dialog_keeps_full_stack_error_open_then_commits_correction
     qtbot,
     tmp_path,
 ) -> None:
-    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+    from xrr_fitter.gui.structure.periodic_dialog import PeriodicDialog
 
     panel = _panel(qtbot, tmp_path)
     panel.set_structure(_bare())
@@ -108,7 +108,8 @@ def test_add_periodic_dialog_keeps_full_stack_error_open_then_commits_correction
     assert dialog.result() != QDialog.DialogCode.Accepted
     assert dialog.isVisible()
     assert error is not None and error.isVisible()
-    assert "roughness_a must be below 4.9 A" in error.text()
+    # 4.9 Å 的上限按 nm 说，并且说清是哪一道界面（原先直接露出 ``roughness_a must be below 4.9 A``）。
+    assert "第 1 道界面的粗糙度须小于 0.49 nm" in error.text()
     assert panel.structure.components == ()
 
     table.item(0, 4).setText("0.1")
@@ -129,7 +130,7 @@ def _fill_periodic_layers(dialog) -> None:
 
 def test_periodic_dialog_without_drift_emits_no_constraint_rules(qtbot) -> None:
     from xrr_fitter.fit.drift import drift_constraint_rules
-    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+    from xrr_fitter.gui.structure.periodic_dialog import PeriodicDialog
 
     dialog = PeriodicDialog()
     qtbot.addWidget(dialog)
@@ -149,7 +150,7 @@ def test_periodic_dialog_without_drift_emits_no_constraint_rules(qtbot) -> None:
 
 
 def test_periodic_dialog_drift_warning_tracks_repeats(qtbot) -> None:
-    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+    from xrr_fitter.gui.structure.periodic_dialog import PeriodicDialog
 
     dialog = PeriodicDialog()
     qtbot.addWidget(dialog)
@@ -173,7 +174,7 @@ def test_periodic_dialog_drift_warning_tracks_repeats(qtbot) -> None:
 
 
 def test_periodic_dialog_random_drift_shows_seed_source_without_randomize_button(qtbot) -> None:
-    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+    from xrr_fitter.gui.structure.periodic_dialog import PeriodicDialog
 
     dialog = PeriodicDialog()
     qtbot.addWidget(dialog)
@@ -192,7 +193,7 @@ def test_periodic_dialog_random_drift_shows_seed_source_without_randomize_button
 
 def test_periodic_dialog_feeds_selected_drift_into_committed_block(qtbot) -> None:
     from xrr_fitter.fit.drift import drift_constraint_rules
-    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+    from xrr_fitter.gui.structure.periodic_dialog import PeriodicDialog
 
     dialog = PeriodicDialog()
     qtbot.addWidget(dialog)
@@ -236,7 +237,7 @@ def test_periodic_block_row_tooltip_annotates_drift(qtbot, tmp_path) -> None:
 
 def test_periodic_dialog_accepts_64bit_master_seed_without_overflow(qtbot) -> None:
     """真实工程 master_seed 为 64 位；对话框须折叠到 32 位而非溢出崩溃（终审 Finding #1）。"""
-    from xrr_fitter.gui.structure.dialogs import DRIFT_SEED_MODULUS, PeriodicDialog
+    from xrr_fitter.gui.structure.periodic_dialog import DRIFT_SEED_MODULUS, PeriodicDialog
 
     master_seed = 2**63 + 12345
     block_offset = 3
@@ -258,7 +259,7 @@ def test_periodic_dialog_accepts_64bit_master_seed_without_overflow(qtbot) -> No
 
 
 def test_periodic_dialog_seed_source_tracks_manual_seed_edits(qtbot) -> None:
-    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+    from xrr_fitter.gui.structure.periodic_dialog import PeriodicDialog
 
     dialog = PeriodicDialog(master_seed=123, block_offset=2)
     qtbot.addWidget(dialog)
@@ -295,7 +296,7 @@ def test_panel_set_structure_accepts_drifted_block_end_to_end(qtbot, tmp_path) -
 
 def test_periodic_dialog_field_visibility_tracks_drift_kind(qtbot) -> None:
     """按漂移类型精确显隐字段并切换增量标签：无→周期/相位隐藏；正弦→显现（终审 Finding #3）。"""
-    from xrr_fitter.gui.structure.dialogs import DRIFT_AMOUNT_LABELS, PeriodicDialog
+    from xrr_fitter.gui.structure.periodic_dialog import DRIFT_AMOUNT_LABELS, PeriodicDialog
 
     dialog = PeriodicDialog()
     qtbot.addWidget(dialog)

@@ -11,6 +11,7 @@ from tests.support.model_cases import dataset_project, final_fit_result, prepare
 
 import xrr_fitter.api as api
 from xrr_fitter.gui.data.import_dialog import ImportDialog
+from xrr_fitter.gui.noise import NOISE_MODE_SHORT_LABELS
 from xrr_fitter.gui.plots.diagnostics import residual_card_subtitle
 from xrr_fitter.gui.plots.reflectivity import _prepared_dataset
 
@@ -65,7 +66,7 @@ def test_non_gaussian_residual_card_does_not_claim_reduced_chi_square(mode):
     text = residual_card_subtitle(result, candidate)
 
     assert "χ²" not in text
-    assert mode in text
+    assert NOISE_MODE_SHORT_LABELS[mode] in text
     assert candidate.residual_unit in text
 
 
@@ -143,8 +144,8 @@ def test_status_bar_retains_noise_units_without_inventing_chi_square(mode):
     text = _fit_metrics_text(window)
 
     assert f"J = {candidate.objective:g}" in text
-    assert mode in text
-    assert f"[{candidate.residual_unit}]" in text
+    assert f"（{NOISE_MODE_SHORT_LABELS[mode]}）" in text
+    assert mode not in text and "[" not in text
     assert ("χ²" in text) is (mode == "gaussian")
 
 

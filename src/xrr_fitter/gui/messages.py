@@ -23,6 +23,45 @@ LOG = logging.getLogger(__name__)
 # / MCMC 采样中）。
 READY_TEXT = "就绪"
 
+# 「一键拟合」这一次走哪条路线：名字 + 一句它做什么。路线由项目决定（数据集是否带自动角色、
+# 批量模式、高级开关），按钮本身不变，所以这几句是读者知道「点下去会发生什么」的唯一来源。
+FIT_ROUTES = {
+    "automatic": ("自动拟合", "按导入时的测量预设逐个数据集搜索有界结构，并做质量检查"),
+    "manual": ("手动拟合", "按参数表里的固定、边界与共享设置逐个数据集拟合"),
+    "joint": ("联合拟合", "按参数表与共享规则把全部数据集放在一起拟合"),
+}
+
+# 不确定度证据「为什么不可用」的原因码。服务层只报码，这里给读者一句能据以行动的解释。
+REASON_TEXTS = {
+    "rank_deficient": "信息矩阵不满秩，部分参数无法由数据单独确定",
+    "boundary_solution": "最优解贴在参数边界上，局部近似不成立",
+    "boundary_optimum": "最优解贴在参数边界上，局部近似不成立",
+    "residual_diagnostics_not_executed": "残差诊断未执行，无法确认误差模型",
+    "residual_diagnostics_failed": "残差诊断失败，无法确认误差模型",
+    "residual_autocorrelation_requires_block_bootstrap": "残差自相关，需要块 Bootstrap 才能给出区间",
+    "zero_score_variation": "得分在样本间没有变化，协方差退化",
+    "insufficient_successful_samples": "成功样本不足，区间不可靠",
+    "insufficient_finite_residuals": "有限残差点太少",
+    "insufficient_points": "点数太少",
+    "nonfinite_residuals": "残差含非有限值",
+    "robust_objective_is_not_a_likelihood": "稳健对数目标不是似然，不能给出似然比区间",
+    "prior_present": "存在先验，似然比区间不适用",
+    "local_objective_increased": "局部重拟合后目标函数反而上升",
+    "poisson_diagnostic_calibration_required": "Poisson 模式需要先做诊断校准",
+    "diagnostic_calibration_pending": "诊断校准尚未完成",
+    "diagnostic_refit_failed": "诊断重拟合失败",
+    "diagnostic_refit_mismatch": "诊断重拟合与原拟合不一致",
+    "diagnostic_null_refit_failed": "零假设下的诊断重拟合失败",
+    "joint_numerical_evidence_missing": "联合拟合缺少数值证据，未估计协方差",
+    "excessive_fit_failures": "重采样拟合失败过多",
+}
+
+# 一次运行为什么停下来。``requested`` 是读者按了停止，``force_stop`` 是 worker 被强制结束。
+CANCELLATION_TEXTS = {
+    "requested": "按请求停止",
+    "force_stop": "已强制结束后台进程",
+}
+
 READINESS_TEXTS = {
     "ready": READY_TEXT,
     "project has no datasets": "项目中还没有数据集，请先导入 XRR 数据",
@@ -111,6 +150,21 @@ def _has_han(text: str) -> bool:
 def running_text(kind: str) -> str:
     """Name the live operation that makes the readiness line moot."""
     return RUNNING_TEXTS.get(kind, "操作进行中")
+
+
+def reason_text(code: str) -> str:
+    """Explain one service reason code, keeping the code itself for log matching.
+
+    同一个写法已经用在分类证据上：「中文（码）」。未登记的码原样返回——那是服务层新加的码，
+    把它换成一句含糊的中文反而让人没法去日志里对。
+    """
+    label = REASON_TEXTS.get(code)
+    return code if label is None else f"{label}（{code}）"
+
+
+def cancellation_text(reason: str) -> str:
+    """Say why a run stopped: the reader asked, or the worker had to be killed."""
+    return CANCELLATION_TEXTS.get(reason, reason)
 
 
 def operation_error_text(error: object) -> str:

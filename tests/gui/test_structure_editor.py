@@ -338,7 +338,8 @@ def test_add_layer_dialog_keeps_full_stack_error_open_then_commits_correction(
     assert dialog.result() != QDialog.DialogCode.Accepted
     assert dialog.isVisible()
     assert error is not None and error.isVisible()
-    assert "roughness_a must be below 4.9 A" in error.text()
+    # 4.9 Å 的上限按 nm 说，并且说清是哪一道界面（原先直接露出 ``roughness_a must be below 4.9 A``）。
+    assert "第 1 道界面的粗糙度须小于 0.49 nm" in error.text()
     assert panel.structure.components == ()
 
     roughness.setValue(0.1)

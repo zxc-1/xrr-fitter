@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QDialog,
     QLabel,
@@ -19,11 +22,12 @@ from xrr_fitter.gui import theme
 from xrr_fitter.gui.document import ProjectDocument
 from xrr_fitter.gui.parameters.constraints import ConstraintEditor
 from xrr_fitter.gui.parameters.disposition import ParameterDisposition
-from xrr_fitter.gui.parameters.grouping import component_captions
+from xrr_fitter.gui.parameters.grouping import bulk_densities, component_captions, group_key
 from xrr_fitter.gui.parameters.sharing import SharingEditor
 from xrr_fitter.gui.parameters.table import (
     FREEDOM_BY_CHECK_STATE,
     FREEDOM_CHECK_STATES,
+    GROUP_KEY_ROLE,
     VALUE_COLUMNS,
     ParameterTable,
 )
@@ -31,6 +35,26 @@ from xrr_fitter.gui.parameters.table import (
 # Wash of the error color behind a cell whose entered bound is self-inconsistent.
 INVALID_CELL_BRUSH = QBrush(QColor(179, 38, 30, 48))
 CONSTRAINT_CONTEXT_TOOLTIP = "该参数由表达式约束驱动，请先删除约束再修改"
+
+
+FIX_GROUP_TEXT = "固定本组全部参数"
+FREE_GROUP_TEXT = "放开本组全部参数"
+
+
+def _group_setting(
+    definition: api.ParameterDefinition,
+    setting: api.ParameterSetting | None,
+    freedom: api.ParameterFreedom,
+) -> api.ParameterSetting | None:
+    """整组改档时这一个量的新 setting；不该动或已经在这一档时是 ``None``。"""
+    if setting is None:
+        # 没有 setting 的量按声明走：声明锁住的不归「整组放开」管，声明自由的才固定它。
+        if definition.locked or freedom is not api.ParameterFreedom.FIXED:
+            return None
+        return api.ParameterSetting(definition.name, definition.initial, definition.lower, definition.upper, freedom)
+    if setting.freedom is freedom:
+        return None
+    return replace(setting, freedom=freedom)
 
 
 def bounds_problem(initial: float, lower: float, upper: float) -> str | None:
@@ -73,10 +97,16 @@ class ParametersPanel(QWidget):
         # surface is on screen rather than how deep this one goes.  Both carrying the
         # one word meant the guided surface's 「切换到专家模式」 hint landed on a
         # workspace where a control of the same name was still unchecked.
-        self.expert_toggle = QCheckBox("显示高级选项")
+        # 它还决定一键拟合走哪条路线（``MainWindow._uses_automatic_fit``），提示里必须说出来。
+        # 「关闭」只对按测量预设导入、逐个拟合的项目意味着自动路线，联合拟合与手动导入不受它影响。
+        self.expert_toggle = QCheckBox("高级模式")
         self.expert_toggle.setObjectName("expertModeToggle")
-        self.expert_toggle.setAccessibleName("切换高级选项")
-        self.expert_toggle.setToolTip("显示高级参数、SLD 与诊断图、不确定度与预设入口；与顶栏的引导↔专家不是同一个开关")
+        self.expert_toggle.setAccessibleName("切换高级模式")
+        self.expert_toggle.setToolTip(
+            "开启后显示高级参数、诊断视图与 MCMC 采样，并且「一键拟合」改用手动拟合路线；"
+            "关闭时，按测量预设导入、逐个拟合的项目使用自动拟合路线。两条路线的分析步骤与耗时不同。"
+            "与顶栏的引导↔专家不是同一个开关。"
+        )
         self.parameter_table = ParameterTable()
         self.disposition = ParameterDisposition()
         self.disposition.freedom_requested.connect(self._set_freedom)
@@ -93,6 +123,7 @@ class ParametersPanel(QWidget):
         tabs.addTab(self.parameter_table, "参数")
         tabs.addTab(self.sharing_editor, "共享")
         tabs.addTab(self.constraint_editor, "约束")
+        self.tabs = tabs
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(theme.SPACE_SM)
@@ -266,6 +297,7 @@ class ParametersPanel(QWidget):
             # 条来源等于给同一件事开第二个真相。
             freedom=None if name is None else self.parameter_table.freedom_of(name),
             sharing_rules=self.sharing_rules,
+            dataset_id=self.document.active_dataset_id,
         )
 
     def _visible_definition(self, name: str) -> api.ParameterDefinition | None:
@@ -300,19 +332,33 @@ class ParametersPanel(QWidget):
         name_item = self.parameter_table.item(item.row(), 0)
         if name_item is None:
             return
-        name = str(name_item.data(Qt.ItemDataRole.UserRole))
-        menu = self._row_context_menu(name)
-        actions = {action.objectName(): action for action in menu.actions()}
-        reset = actions["resetParameterAction"]
-        edit_prior = actions["editPriorAction"]
-        clear_prior = actions["clearPriorAction"]
+        name = name_item.data(Qt.ItemDataRole.UserRole)
+        # 分组标题行不带参数名，只有整组那两条；以前它也走参数菜单，名字读成 "None" 当场抛错。
+        key = name_item.data(GROUP_KEY_ROLE) if name is None else group_key(self._definition(str(name)))
+        menu = self._group_context_menu(key) if name is None else self._row_context_menu(str(name))
         chosen = menu.exec(self.parameter_table.viewport().mapToGlobal(position))
-        if chosen is reset:
-            self._reset_parameter_row(name)
-        elif chosen is edit_prior:
-            self._edit_prior_row(name)
-        elif chosen is clear_prior:
-            self._clear_prior_row(name)
+        handler = (
+            None
+            if chosen is None
+            else self._menu_handlers(key, None if name is None else str(name)).get(chosen.objectName())
+        )
+        if handler is not None:
+            handler()
+
+    def _menu_handlers(self, key: str, name: str | None) -> dict[str, object]:
+        handlers = {
+            "fixGroupAction": lambda: self.set_group_freedom(key, api.ParameterFreedom.FIXED),
+            "freeGroupAction": lambda: self.set_group_freedom(key, api.ParameterFreedom.FREE),
+        }
+        if name is not None:
+            handlers.update(
+                {
+                    "resetParameterAction": lambda: self._reset_parameter_row(name),
+                    "editPriorAction": lambda: self._edit_prior_row(name),
+                    "clearPriorAction": lambda: self._clear_prior_row(name),
+                }
+            )
+        return handlers
 
     def _row_context_menu(self, name: str) -> QMenu:
         definition = self._definition(name)
@@ -327,7 +373,76 @@ class ParametersPanel(QWidget):
             for action in (reset, edit_prior, clear_prior):
                 action.setEnabled(False)
                 action.setToolTip(CONSTRAINT_CONTEXT_TOOLTIP)
+        menu.addSeparator()
+        self._add_group_actions(menu)
         return menu
+
+    def _group_context_menu(self, key: str) -> QMenu:
+        menu = QMenu(self.parameter_table)
+        self._add_group_actions(menu)
+        return menu
+
+    def _add_group_actions(self, menu: QMenu) -> None:
+        fix = menu.addAction(FIX_GROUP_TEXT)
+        fix.setObjectName("fixGroupAction")
+        fix.setToolTip("把这一组里此刻在拟合的量都钉在当前初值上；被约束驱动的量不受影响")
+        free = menu.addAction(FREE_GROUP_TEXT)
+        free.setObjectName("freeGroupAction")
+        free.setToolTip("撤掉这一组里你设过的「固定」；声明本身锁定的量（例如未启用的背景项）仍保持锁定")
+
+    def set_group_freedom(self, key: str, freedom: api.ParameterFreedom) -> bool:
+        """一次把 ``key`` 那一组（一层、基底或仪器）的量都设成 ``freedom``。
+
+        只动用户能动的那些：被约束驱动的不碰；「放开」只撤掉 setting 里的固定，声明自己锁住
+        的量（未启用的背景、拓扑整数）不会因为整组放开就被解锁——那会让整批设定被拒。
+        """
+        dataset_id = self._require_active_dataset_id()
+        settings = {setting.name: setting for setting in self._dataset(dataset_id).parameter_settings}
+        changed = self._group_changes(key, settings, freedom)
+        if not changed:
+            self.status_label.setText("这一组没有可以改档的参数")
+            return False
+        merged = dict(settings)
+        merged.update((setting.name, setting) for setting in changed)
+        current = self.document.project
+        updated = api.set_parameter_settings(current, dataset_id, tuple(merged.values()))
+        if updated is current:
+            return False
+        self.document.replace_project(updated)
+        verb = "固定" if freedom is api.ParameterFreedom.FIXED else "放开"
+        self.status_label.setText(f"已{verb}这一组的 {len(changed)} 个参数")
+        self.settings_changed.emit(dataset_id, self._dataset(dataset_id).parameter_settings)
+        return True
+
+    def _group_changes(
+        self,
+        key: str,
+        settings: dict[str, api.ParameterSetting],
+        freedom: api.ParameterFreedom,
+    ) -> list[api.ParameterSetting]:
+        proposed = (
+            _group_setting(definition, settings.get(definition.name), freedom)
+            for definition in self.visible_definitions
+            if group_key(definition) == key and not definition.constrained
+        )
+        return [setting for setting in proposed if setting is not None]
+
+    def focus_component(self, index: int | None) -> None:
+        """把参数表滚到第 ``index`` 个组件那一组，并停在组里第一个参数上。
+
+        给结构编辑器选层时调：读者在层堆叠里点了 a-Si，要调的是 a-Si 的参数，不该再去十几
+        行里找。表在别的标签页时先切回来，否则滚动发生在看不见的地方。
+        """
+        if index is None:
+            return
+        table = self.parameter_table
+        rows = table.group_rows(f"component.{index}")
+        if not rows:
+            return
+        self.tabs.setCurrentWidget(table)
+        parameter = next((row for row in rows if table.row_names[row]), rows[0])
+        table.setCurrentCell(parameter, 0)
+        table.scrollToItem(table.item(rows[0], 0), QAbstractItemView.ScrollHint.PositionAtTop)
 
     def _reset_parameter_row(self, name: str) -> None:
         try:
@@ -452,6 +567,8 @@ class ParametersPanel(QWidget):
             expert_mode=self.expert_mode,
             captions=self._component_captions(dataset_id),
             freedom=self._freedom_map(dataset_id),
+            intervals=self._range_intervals(dataset_id),
+            densities=bulk_densities(self._dataset(dataset_id).structure),
         )
         # The row count is legible from the table itself, so the status line
         # stays empty here and is reserved for validation problems and the
@@ -466,6 +583,18 @@ class ParametersPanel(QWidget):
         setting 的按 setting 报，没 setting 的不进这份映射，交给表按声明回落。
         """
         return {setting.name: setting.freedom for setting in self._dataset(dataset_id).parameter_settings}
+
+    def _range_intervals(self, dataset_id: str) -> dict[str, tuple[float, float]]:
+        """「仅范围」各参数自己的区间（存储单位）。
+
+        这一档编译出来的声明保留的是硬边界，区间只在 setting 里；表照声明画会把硬边界当成
+        区间显示，切档时整行读回就把它写进 setting。
+        """
+        return {
+            setting.name: (setting.lower, setting.upper)
+            for setting in self._dataset(dataset_id).parameter_settings
+            if setting.freedom is api.ParameterFreedom.RANGE_ONLY
+        }
 
     def _component_captions(self, dataset_id: str) -> dict[str, str]:
         return component_captions(self._dataset(dataset_id).structure)

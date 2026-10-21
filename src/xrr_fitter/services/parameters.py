@@ -24,7 +24,7 @@ from xrr_fitter.model.parameters import (
     validate_constraint_stage_split,
 )
 from xrr_fitter.model.project import DatasetProject, SourceUpdatePreview, XrrProject
-from xrr_fitter.model.structure import StructureSpec
+from xrr_fitter.model.structure import LayerSpec, PeriodicBlock, StructureComponent, StructureSpec
 from xrr_fitter.services import fitting
 from xrr_fitter.services.datasets import (
     _accepted_source_dataset,
@@ -186,18 +186,58 @@ def _role_signature(definition: ParameterDefinition) -> tuple[object, ...]:
     return tuple(getattr(definition, field) for field in ROLE_FIELDS)
 
 
-def _topology_changed(
+def _material_shape(material) -> tuple[object, ...]:
+    # 体密度与 SLD 数值是这一层的取值，不是它的身份：卡片改密度只该挪数，不该把这层的设定连根拔掉。
+    return (material.formula, material.sld_override_a2 is None)
+
+
+def _layer_shape(layer: LayerSpec) -> tuple[object, ...]:
+    # 名字在形状里：同材质两层对调时，「固定」属于的是那一层，不是那个下标。
+    transition = None if layer.transition is None else type(layer.transition).__name__
+    return ("layer", layer.name, _material_shape(layer.material), transition)
+
+
+def _component_shape(component: StructureComponent) -> tuple[object, ...]:
+    """What a component *is*, leaving out every value a parameter of it can take."""
+    if isinstance(component, LayerSpec):
+        return _layer_shape(component)
+    if isinstance(component, PeriodicBlock):
+        return ("periodic", component.name, tuple(_layer_shape(layer) for layer in component.layers))
+    return ("gradient", component.name)
+
+
+def _reshaped_components(
     previous: StructureSpec | None,
     updated: StructureSpec,
-) -> bool:
-    return previous is None or previous.components != updated.components
+) -> frozenset[int] | None:
+    """Indices whose identity changed, or ``None`` when indices no longer line up.
+
+    Parameter names carry the component index (``component.<i>.…``).  When the
+    component count changes every index after the edit points at a different
+    layer, so nothing index-bound may survive; when it stays the same, only the
+    components that became something else lose their sidecars.
+    """
+    if previous is None or len(previous.components) != len(updated.components):
+        return None
+    return frozenset(
+        index
+        for index, (before, after) in enumerate(zip(previous.components, updated.components, strict=True))
+        if _component_shape(before) != _component_shape(after)
+    )
+
+
+def _component_index(name: str) -> int | None:
+    parts = name.split(".")
+    if len(parts) < 2 or parts[0] != "component" or not parts[1].isdigit():
+        return None
+    return int(parts[1])
 
 
 def _compatible_definition_names(
     old_definitions: Sequence[ParameterDefinition],
     new_definitions: Sequence[ParameterDefinition],
     *,
-    topology_changed: bool,
+    reshaped: frozenset[int] | None,
 ) -> frozenset[str]:
     new_by_name = {definition.name: definition for definition in new_definitions}
     return frozenset(
@@ -206,7 +246,7 @@ def _compatible_definition_names(
         if _definition_is_compatible(
             old,
             new_by_name,
-            topology_changed=topology_changed,
+            reshaped=reshaped,
         )
     )
 
@@ -215,18 +255,21 @@ def _definition_is_compatible(
     old: ParameterDefinition,
     new_by_name: Mapping[str, ParameterDefinition],
     *,
-    topology_changed: bool,
+    reshaped: frozenset[int] | None,
 ) -> bool:
     updated = new_by_name.get(old.name)
     return (
         updated is not None
-        and _topology_allows_parameter(old.name, topology_changed)
+        and _topology_allows_parameter(old.name, reshaped)
         and _role_signature(old) == _role_signature(updated)
     )
 
 
-def _topology_allows_parameter(name: str, topology_changed: bool) -> bool:
-    return not topology_changed or not name.startswith("component.")
+def _topology_allows_parameter(name: str, reshaped: frozenset[int] | None) -> bool:
+    index = _component_index(name)
+    if index is None:
+        return True
+    return reshaped is not None and index not in reshaped
 
 
 def _retained_named(values, compatible: frozenset[str]) -> tuple:
@@ -241,6 +284,40 @@ def _default_definitions_for_existing_structure(
     if dataset.structure is None:
         return ()
     return _default_definitions(project, dataset, data, dataset.structure)
+
+
+def _followed_setting(
+    setting: ParameterSetting,
+    before: ParameterDefinition | None,
+    after: ParameterDefinition | None,
+) -> ParameterSetting | None:
+    """Carry a retained setting onto the value the structure edit just wrote.
+
+    The structure edit is the newer statement of where this value starts, so a
+    setting that kept the old start would silently undo it.  「固定」 keeps its
+    gear at the new value (its interval is not searched); an interval that no
+    longer contains the new value is the reader's old choice for a different
+    value and is dropped instead of being stretched behind their back.
+    """
+    if before is None or after is None or before.initial == after.initial:
+        return setting
+    initial = after.initial
+    if setting.freedom is ParameterFreedom.FIXED:
+        return replace(setting, initial=initial, lower=min(setting.lower, initial), upper=max(setting.upper, initial))
+    if setting.lower <= initial <= setting.upper:
+        return replace(setting, initial=initial)
+    return None
+
+
+def _followed_settings(
+    settings: Sequence[ParameterSetting],
+    old_definitions: Sequence[ParameterDefinition],
+    new_definitions: Sequence[ParameterDefinition],
+) -> tuple[ParameterSetting, ...]:
+    before = {definition.name: definition for definition in old_definitions}
+    after = {definition.name: definition for definition in new_definitions}
+    followed = (_followed_setting(setting, before.get(setting.name), after.get(setting.name)) for setting in settings)
+    return tuple(setting for setting in followed if setting is not None)
 
 
 def _reconciled_parameter_settings(
@@ -260,13 +337,19 @@ def _reconciled_parameter_settings(
     compatible = _compatible_definition_names(
         old_definitions,
         new_definitions,
-        topology_changed=_topology_changed(dataset.structure, structure),
+        reshaped=_reshaped_components(dataset.structure, structure),
     )
-    settings, priors = _reconciled_parameter_sidecars(
+    retained = _retained_named(dataset.parameter_settings, compatible)
+    followed = _followed_settings(retained, old_definitions, new_definitions)
+    # A 「仅范围」 interval that was dropped takes its derived prior with it; one that
+    # survived keeps exactly the prior it already had (same interval, same prior).
+    priors = _with_range_only_priors(
         new_definitions,
-        _retained_named(dataset.parameter_settings, compatible),
+        retained,
+        followed,
         _retained_named(dataset.parameter_priors, compatible),
     )
+    settings, priors = _reconciled_parameter_sidecars(new_definitions, followed, priors)
     return settings, priors, compatible
 
 

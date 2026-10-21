@@ -269,7 +269,10 @@ def _plot_commands(panel) -> dict[str, object]:
 
 def _control_glyph(control) -> bytes:
     """The rendered 16px glyph, so two controls compare by what the eye sees."""
-    return bytes(control.icon().pixmap(16, 16).toImage().constBits())
+    # 先把 QImage 留在局部变量里：``constBits()`` 指向这张图自己的缓冲区，链式写法里那个临时
+    # QImage 在 ``bytes()`` 读它之前就可能被回收，读到的是已经释放的内存。
+    image = control.icon().pixmap(16, 16).toImage()
+    return bytes(image.constBits())
 
 
 def test_plot_controls_each_wear_an_icon(qtbot) -> None:

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
 
 import xrr_fitter.api as api
+from xrr_fitter.gui.project import dialogs
 
 
 def _action(window, object_name: str) -> QAction:
@@ -143,12 +145,9 @@ def test_dirty_project_declining_discard_blocks_new_and_open(qtbot, monkeypatch)
     questions: list[str] = []
     file_dialogs: list[bool] = []
     monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda _parent, title, *_args: (
-            questions.append(title),
-            QMessageBox.StandardButton.No,
-        )[1],
+        dialogs,
+        "ask_unsaved_changes",
+        lambda _parent: (questions.append("unsaved"), dialogs.UnsavedChoice.CANCEL)[1],
     )
     monkeypatch.setattr(
         QFileDialog,
@@ -159,9 +158,27 @@ def test_dirty_project_declining_discard_blocks_new_and_open(qtbot, monkeypatch)
     window.new_project_dialog()
     window.open_project_dialog()
 
-    assert questions == ["未保存的项目更改", "未保存的项目更改"]
+    assert questions == ["unsaved", "unsaved"]
     assert file_dialogs == []
     assert window.document.is_dirty is True
+
+
+def test_dirty_project_saved_first_then_replaced_by_new(qtbot, monkeypatch, tmp_path) -> None:
+    from xrr_fitter.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    path = tmp_path / "kept.xrrproj.json"
+    window.save_project(path)
+    window.document.replace_project(api.set_expert_mode(window.document.project, True))
+    monkeypatch.setattr(dialogs, "ask_unsaved_changes", lambda _parent: dialogs.UnsavedChoice.SAVE)
+
+    window.new_project_dialog()
+
+    # 「保存」先把改动写进原文件，然后才换成新项目。
+    assert api.load_project(path).ui_state.expert_mode is True
+    assert window.document.path is None
+    assert window.document.is_dirty is False
 
 
 def test_project_dialog_reports_a_known_open_error_once(qtbot, tmp_path, monkeypatch) -> None:
@@ -196,26 +213,28 @@ def test_project_dialog_reports_a_known_open_error_once(qtbot, tmp_path, monkeyp
 
 
 def test_active_dataset_selection_updates_project_ui_state(monkeypatch) -> None:
+    """Selection routes through the API but is a view change, not an edit."""
+    from tests.support.model_cases import dataset_project
+
     from xrr_fitter.gui.document import ProjectDocument
 
-    original = api.new_project()
-    updated = api.set_expert_mode(api.new_project(), True)
+    original = api.XrrProject.new((dataset_project("curve"), dataset_project("sample")), master_seed=1201)
+    original = replace(original, base_directory="/private/tmp")
+    select = api.select_active_dataset
     calls: list[tuple[object, ...]] = []
     monkeypatch.setattr(
         api,
         "select_active_dataset",
-        lambda project, dataset_id: (
-            calls.append((project, dataset_id)),
-            updated,
-        )[1],
+        lambda project, dataset_id: (calls.append((project, dataset_id)), select(project, dataset_id))[1],
     )
     document = ProjectDocument(original)
 
     document.select_active_dataset("sample")
 
     assert calls == [(original, "sample")]
-    assert document.project is updated
-    assert document.is_dirty is True
+    assert document.active_dataset_id == "sample"
+    assert document.is_dirty is False
+    assert document.can_undo is False
 
 
 def test_manual_save_discards_the_autosave_draft(qtbot, tmp_path, monkeypatch) -> None:

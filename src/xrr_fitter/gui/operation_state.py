@@ -42,66 +42,57 @@ def _window_button(window: object, object_name: str) -> QAbstractButton | None:
     return window.findChild(QAbstractButton, object_name)
 
 
-def _set_source_routes_enabled(window: object, *, enabled: bool) -> None:
-    active_dataset = window.document.active_dataset_id is not None
-    for object_name in ("reloadSourceAction", "relinkSourceAction"):
-        action = _window_action(window, object_name)
-        if action is not None:
-            action.setEnabled(enabled and active_dataset)
+# 运行中关掉的入口：凡是能改项目或数据源的都在这里。按「怎么找到它」分组，因为按钮可能还没
+# 装上（空状态页）、动作分别由项目面板与外壳装，找不到的一律跳过。
+MUTATING_BUTTONS = (
+    "newProjectButton",
+    "openProjectButton",
+    "saveProjectButton",
+    "emptyStateImportButton",
+    "emptyStateImportFolderButton",
+)
+MUTATING_ACTIONS = (
+    "newProjectAction",
+    "openProjectAction",
+    "saveProjectAction",
+    "saveAsProjectAction",
+    "importFilesMenuAction",
+    "importFolderMenuAction",
+    "undoAction",
+    "redoAction",
+)
+SOURCE_ACTIONS = ("reloadSourceAction", "relinkSourceAction")
+
+
+def _set_all_enabled(items: object, enabled: bool) -> None:
+    for item in items:
+        if item is not None:
+            item.setEnabled(enabled)
 
 
 def _set_mutating_routes_enabled(window: object, *, enabled: bool) -> None:
     """Gate every homepage entrance that can change the project or its sources."""
-    for widget in (
-        window.structure_panel,
-        window.parameters_panel,
-        window.parameter_disposition,
-        window.selected_layer_panel,
-        window.batch_mode_group,
-    ):
-        widget.setEnabled(enabled)
-    window.plot_panel.set_editing_enabled(enabled)
-    project_buttons = (
-        "newProjectButton",
-        "openProjectButton",
-        "saveProjectButton",
-    )
-    for object_name in project_buttons:
-        button = _window_button(window, object_name)
-        if button is not None:
-            button.setEnabled(enabled)
-
     data_panel = window.data_panel
-    for button in (
-        data_panel.dataset_add_button,
-        data_panel.import_folder_quick_button,
-        data_panel.import_files_button,
-        data_panel.import_folder_button,
-        data_panel.change_preset_button,
-        _window_button(window, "emptyStateImportButton"),
-        _window_button(window, "emptyStateImportFolderButton"),
-    ):
-        if button is not None:
-            button.setEnabled(enabled)
-
-    for object_name in (
-        "newProjectAction",
-        "openProjectAction",
-        "saveProjectAction",
-        "saveAsProjectAction",
-        "importFilesMenuAction",
-        "importFolderMenuAction",
-        "undoAction",
-        "redoAction",
-    ):
-        action = _window_action(window, object_name)
-        if action is not None:
-            action.setEnabled(enabled)
-
-    _set_source_routes_enabled(window, enabled=enabled)
-
-    data_panel.import_files_shortcut.setEnabled(enabled)
-    data_panel.import_folder_shortcut.setEnabled(enabled)
+    _set_all_enabled(
+        (
+            window.structure_panel,
+            window.parameters_panel,
+            window.parameter_disposition,
+            window.selected_layer_panel,
+            window.batch_mode_group,
+            data_panel.dataset_add_button,
+            data_panel.import_folder_quick_button,
+            data_panel.import_files_button,
+            data_panel.import_folder_button,
+            data_panel.change_preset_button,
+        ),
+        enabled,
+    )
+    window.plot_panel.set_editing_enabled(enabled)
+    _set_all_enabled((_window_button(window, name) for name in MUTATING_BUTTONS), enabled)
+    _set_all_enabled((_window_action(window, name) for name in MUTATING_ACTIONS), enabled)
+    active_dataset = window.document.active_dataset_id is not None
+    _set_all_enabled((_window_action(window, name) for name in SOURCE_ACTIONS), enabled and active_dataset)
 
 
 def _restore_idle_projection(window: object, *, running: bool, fit_enabled: bool) -> None:
@@ -143,7 +134,7 @@ def refresh_operation_state(window: object) -> None:
     readiness = window._fit_readiness()
     fit_enabled = readiness.ready and not window.guidance_is_visible()
     window._workflow_actions["startFitAction"].setEnabled(fit_enabled and not running)
-    window._workflow_actions["cancelFitAction"].setEnabled(fit_running)
+    window._workflow_actions["cancelFitAction"].setEnabled(window.fit_panel.can_request_stop())
     export_enabled = has_exportable_results(window) and not running
     window._workflow_actions["exportResultsAction"].setEnabled(export_enabled)
     window.export_button.setEnabled(export_enabled)

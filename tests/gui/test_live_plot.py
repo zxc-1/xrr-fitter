@@ -9,6 +9,8 @@ window, so they never depend on the desktop focus the offscreen platform withhol
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pyqtgraph as pg
 import pytest
@@ -132,7 +134,12 @@ def test_range_selection_emits_sorted_bounds(qtbot) -> None:
 
 
 def test_range_drag_claims_the_viewbox_and_restores_navigation(qtbot) -> None:
-    """Dragging a range handle must not translate the plot underneath it."""
+    """Dragging a range handle must not translate the plot underneath it.
+
+    The drag is claimed through the accepted buttons alone: the wheel reads only
+    ``mouseEnabled``, and zooming in to place a handle is what range mode is for
+    (审计：进了范围模式滚轮缩放就失灵), so that flag stays as the reader set it.
+    """
     plot = LiveReflectivityPlot()
     qtbot.addWidget(plot)
     plot.resize(800, 400)
@@ -147,7 +154,7 @@ def test_range_drag_claims_the_viewbox_and_restores_navigation(qtbot) -> None:
     region = plot.range_item
     assert region is not None
     region.setRegion((0.2, 0.4))
-    assert plot.plot_item.vb.state["mouseEnabled"] == [False, False]
+    assert plot.plot_item.vb.state["mouseEnabled"] == [True, True]
     assert plot.plot_item.vb.acceptedMouseButtons() == Qt.MouseButton.NoButton
 
     received = _collect(plot.fit_range_selected)
@@ -185,15 +192,30 @@ def test_range_item_is_hidden_until_selection_is_enabled(qtbot) -> None:
     assert plot.range_item is None
 
 
-def test_masking_emits_the_clicked_position_only_when_enabled(qtbot) -> None:
+def test_masking_emits_the_clicked_point_only_when_enabled(qtbot) -> None:
+    """A masking click reports the index of the point under the pointer, never a bare angle.
+
+    审计：掩膜点击只看横坐标、挑最近的一列，曲线正上方很远处点一下也会排掉一个点。所以面板报的
+    是点中的那个点的下标，没点中就不报。
+    """
     plot = LiveReflectivityPlot()
     qtbot.addWidget(plot)
+    plot.resize(600, 400)
+    plot.show()
+    qtbot.waitExposed(plot)
+    plot.show_raw_reflectivity(np.array([0.1, 0.2, 0.3]), np.array([30.0, 20.0, 10.0]), np.ones(3, dtype=bool), None)
+    plot.plot_item.vb.setRange(xRange=(0.0, 0.4), yRange=(0.0, 40.0), padding=0)
     received = _collect(plot.point_mask_requested)
-    plot._mask_from_view_x(0.137)
+    on_point = plot.plot_item.vb.mapViewToScene(QPointF(0.2, 20.0))
+    above = plot.plot_item.vb.mapViewToScene(QPointF(0.2, 35.0))
+    click = SimpleNamespace(button=lambda: Qt.MouseButton.LeftButton, scenePos=lambda: on_point)
+
+    plot._on_scene_clicked(click)
     assert received == []
     plot.enable_masking(True)
-    plot._mask_from_view_x(0.137)
-    assert received and np.isclose(received[-1], 0.137)
+    plot._on_scene_clicked(click)
+    plot._on_scene_clicked(SimpleNamespace(button=lambda: Qt.MouseButton.LeftButton, scenePos=lambda: above))
+    assert received == [1]
 
 
 def test_observed_and_model_use_the_shared_palette_colours(qtbot) -> None:
@@ -393,10 +415,11 @@ def test_log_pane_annotates_axes_the_way_the_design_names_them(qtbot) -> None:
     plot = LiveReflectivityPlot()
     qtbot.addWidget(plot)
     plot.show_log_reflectivity(np.array([0.1, 0.2]), np.array([1.0, 0.5]), None, r_floor=1e-6)
-    # 设计稿把两条轴写成整句中文：横轴是入射角，不是裸的 2θ；纵轴点明这是归一化之后
-    # 的对数刻度。显示下限不再写进轴标题——被夹到下限的点由 ▽ 空心标记就地标出，
+    # 设计稿把两条轴写成整句中文：横轴不是裸的 2θ；纵轴点明这是归一化之后的对数刻度。
+    # 2θ 是散射角——入射角是 θ，叫它入射角等于告诉读者轴上的数是实际值的两倍（导入那一步正是把
+    # 入射角乘二归一到散射角）。显示下限不再写进轴标题——被夹到下限的点由 ▽ 空心标记就地标出，
     # 轴标题只回答「这条轴是什么量」。
-    assert plot.axis_labels() == ("入射角 2θ (°)", "反射率 R（归一化 · 对数）")
+    assert plot.axis_labels() == ("散射角 2θ (°)", "反射率 R（归一化 · 对数）")
     ylabel = plot.axis_labels()[1]
     assert "display floor" not in ylabel and "显示下限" not in ylabel
 
@@ -405,8 +428,8 @@ def test_raw_pane_annotates_its_axes(qtbot) -> None:
     plot = LiveReflectivityPlot()
     qtbot.addWidget(plot)
     plot.show_raw_reflectivity(np.array([0.1, 0.2]), np.array([9.0, 8.0]), np.array([True, True]), None)
-    # 同一个物理量在设计稿里只有一种写法，原始视图跟着对数视图叫入射角。
-    assert plot.axis_labels() == ("入射角 2θ (°)", "原始强度")
+    # 同一个物理量在设计稿里只有一种写法，原始视图跟着对数视图叫散射角。
+    assert plot.axis_labels() == ("散射角 2θ (°)", "原始强度")
 
 
 def test_qz4_pane_uses_the_supplied_dynamic_ylabel(qtbot) -> None:
@@ -426,8 +449,9 @@ def test_residual_pane_annotates_its_axes(qtbot) -> None:
     qtbot.addWidget(plot)
     plot.show_residual(np.array([0.1, 0.2]), np.array([0.3, -0.3]))
     # 残差以 σ 为单位，设计稿把单位写进轴标题：没有它，纵轴上的 2 是两倍误差棒还是
-    # 两个反射率单位就只能靠猜。
-    assert plot.axis_labels() == ("散射矢量 qz (Å⁻¹)", "加权残差 (σ)")
+    # 两个反射率单位就只能靠猜。横轴与压在它上面的反射率卡是同一根散射角轴，同一个点在两张卡上
+    # 落在同一条竖线上。
+    assert plot.axis_labels() == ("散射角 2θ (°)", "加权残差 (σ)")
 
 
 def test_log_pane_labels_whole_decades_as_powers_of_ten(qtbot) -> None:
@@ -463,7 +487,7 @@ def test_log_pane_still_labels_decades_when_the_curve_spans_barely_two(qtbot) ->
     assert "10⁰" in texts and "10⁻¹" in texts, texts
 
 
-def test_residual_pane_leaves_its_value_axis_bare_and_left_aligned(qtbot) -> None:
+def test_residual_pane_reads_its_value_axis_and_stays_left_aligned(qtbot) -> None:
     residual = LiveReflectivityPlot()
     residual.show_residual(np.linspace(0.01, 0.44, 120), np.linspace(-2.4, 2.4, 120))
     _laid_out(qtbot, residual, 140)
@@ -471,9 +495,10 @@ def test_residual_pane_leaves_its_value_axis_bare_and_left_aligned(qtbot) -> Non
     reflectivity.show_log_reflectivity(np.linspace(0.15, 6.0, 120), np.logspace(0.0, -6.0, 120), None, r_floor=1e-7)
     _laid_out(qtbot, reflectivity, 300)
 
-    # 设计稿的残差面板左侧只有旋转的「加权残差 (σ)」，一个刻度数字都没有：判读残差看的
-    # 是 ±1σ 带、±2σ 虚线和零线的相对位置，纵轴上的数字不参与这个判断。
-    assert _axis_texts(residual, "left") == [], _axis_texts(residual, "left")
+    # 此前照设计稿只留旋转的「加权残差 (σ)」、不写刻度数字，理由是判读看的是 ±1σ 带与 ±2σ 虚线的
+    # 相对位置。可残差一大，带子和虚线都被自动缩放压扁或推出框外，那时纵轴上的数字是唯一读得出
+    # 「偏了几个 σ」的地方——审计把这一条记成了缺陷，所以纵轴改为照常写数字。
+    assert _axis_texts(residual, "left"), "残差纵轴没有刻度数字"
 
     # 两块面板在画布里上下叠放，绘图区左边界必须落在同一条线上。pyqtgraph 按刻度文字
     # 宽度自动伸缩轴宽，一块写着 10⁻⁶、一块什么都不写，自动宽度会差出近 30px，叠起来
@@ -638,18 +663,18 @@ def test_fit_range_band_carries_its_window_caption_inside_the_plot(qtbot) -> Non
     assert plot.fit_range_caption() == "拟合窗口 0.5–5.4°"
     assert _range_label(plot).toPlainText() == "拟合窗口 0.5–5.4°"
     assert _range_label(plot).isVisible() is True
-    # 设计稿 font-size:10.5px；Qt 这边按 px*0.75 折成点值。
-    assert np.isclose(_range_label(plot).textItem.font().pointSizeF(), 7.875)
+    # 设计稿 font-size:10.5px；按像素给，取整到 11。
+    assert _range_label(plot).textItem.font().pixelSize() == 11
 
 
 def test_fit_range_caption_takes_its_unit_from_the_pane_axis(qtbot) -> None:
     """同一个数字在角度面板和 qz 面板不是一回事，单位必须跟着当前横轴走。"""
     plot = LiveReflectivityPlot()
     qtbot.addWidget(plot)
-    plot.show_residual(np.array([0.12, 0.2, 0.28]), np.array([0.4, -0.2, 0.1]))
+    plot.show_qz4(np.array([0.12, 0.2, 0.28]), np.array([1e-4, 2e-4, 3e-4]), None, None)
     plot.show_fit_range(0.28, 0.12)
 
-    # 散射矢量轴的单位是 Å⁻¹，不像度号那样贴着数字写。
+    # 散射矢量轴的单位是 Å⁻¹，不像度号那样贴着数字写。（残差卡改到散射角轴之后，qz 轴只剩 qz⁴·R 那张。）
     assert plot.fit_range_caption() == "拟合窗口 0.12–0.28 Å⁻¹"
 
 
@@ -663,7 +688,7 @@ def test_fit_range_caption_follows_a_relabelled_axis(qtbot) -> None:
     qtbot.addWidget(plot)
     plot.show_log_reflectivity(np.array([0.5, 3.0, 5.4]), np.array([1.0, 0.1, 0.01]), None, r_floor=1e-6)
     plot.show_fit_range(0.5, 5.4)
-    plot.show_residual(np.array([0.5, 3.0, 5.4]), np.array([0.4, -0.2, 0.1]))
+    plot.show_qz4(np.array([0.5, 3.0, 5.4]), np.array([1e-4, 2e-4, 3e-4]), None, None)
 
     assert plot.fit_range_caption() == "拟合窗口 0.5–5.4 Å⁻¹"
 
@@ -746,13 +771,26 @@ def test_residual_pane_names_its_sigma_band_in_the_plot(qtbot) -> None:
     label = plot.sigma_label_item
     assert label.toPlainText() == "±1σ"
     assert label.isVisible() is True
-    # 设计稿 font-size:9.5px。
-    assert np.isclose(label.textItem.font().pointSizeF(), 7.125)
+    # 设计稿 font-size:9.5px；按像素给，取整到 10。
+    assert label.textItem.font().pixelSize() == 10
     (x0, _x1), _y = plot.plot_item.vb.viewRange()
     px_x, _px_y = plot.plot_item.vb.viewPixelSize()
     # 设计稿 x=62 对画区左边 58，差 4px；基线压在带子顶边 y=1.0 之上。
     assert np.isclose(label.pos().x(), x0 + theme.SPACE_XS * px_x, atol=abs(px_x))
     assert np.isclose(label.pos().y(), 1.0)
+
+
+def test_annotations_placed_while_the_pane_is_hidden_land_once_it_is_laid_out(qtbot) -> None:
+    """藏在别的 tab 里的面板是零尺寸：那时量不出像素（奇异变换会落进 NumPy 2.5 弃用的那条路），
+    注解等面板有了尺寸再落位——两轴量程都已锁死时，露出来那一下不会再有量程变化替它重排。"""
+    plot = LiveReflectivityPlot()
+    plot.show_residual(np.array([0.1, 0.2, 0.3]), np.array([0.4, -0.2, 0.1]))
+    plot.plot_item.vb.setRange(xRange=(0.1, 0.3), yRange=(-2.0, 2.0), padding=0)
+    _laid_out(qtbot, plot, 200)
+
+    (x0, _x1), _y = plot.plot_item.vb.viewRange()
+    px_x, _px_y = plot.plot_item.vb.viewPixelSize()
+    assert np.isclose(plot.sigma_label_item.pos().x(), x0 + theme.SPACE_XS * px_x, atol=abs(px_x) / 2)
 
 
 def test_sigma_label_leaves_with_the_band_on_a_reflectivity_pane(qtbot) -> None:

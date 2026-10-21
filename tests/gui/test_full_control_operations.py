@@ -1,7 +1,7 @@
 """Shell and project controls exercised through real Qt input and dialogs."""
 
 import pytest
-from PySide6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialogButtonBox
 from tests.gui.control_operation_driver import controls as controls
 from tests.gui.control_operation_driver import setup_project
 
@@ -10,10 +10,10 @@ def _choose_project_file(controls, trigger, path):
     controls.modals(trigger, [lambda dialog: controls.file(dialog, path)])
 
 
-def _answer_discard(controls, window, answer):
+def _answer_unsaved(controls, window, text):
     controls.modals(
         lambda: controls.named_click(window, "newProjectButton"),
-        [lambda dialog: controls.click(dialog.button(answer))],
+        [lambda dialog: controls.click(next(button for button in dialog.buttons() if button.text() == text))],
     )
 
 
@@ -121,11 +121,11 @@ def test_discard_confirmation_and_history_menu(controls, tmp_path):
     assert window.document.project.ui_state.expert_mode
     controls.record(("undoAction", "redoAction"), "Edit menu Undo/Redo", "expert setting reverses and reapplies")
     original = window.document.project
-    _answer_discard(controls, window, QMessageBox.StandardButton.No)
+    _answer_unsaved(controls, window, "取消")
     assert window.document.project is original
-    controls.record("discardChanges:No", "click New and confirmation No", "dirty project remains unchanged")
-    _answer_discard(controls, window, QMessageBox.StandardButton.Yes)
+    controls.record("unsavedChanges:Cancel", "click New and answer 取消", "dirty project remains unchanged")
+    _answer_unsaved(controls, window, "不保存")
     assert not window.document.project.datasets and not window.document.is_dirty
     controls.record(
-        "discardChanges:Yes", "click New and confirmation Yes", "dirty project is replaced only after confirmation"
+        "unsavedChanges:Discard", "click New and answer 不保存", "dirty project is replaced only after confirmation"
     )

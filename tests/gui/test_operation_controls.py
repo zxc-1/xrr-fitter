@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtGui import QAction, QShortcut
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QAbstractButton
 
 import xrr_fitter.api as api
@@ -34,7 +34,6 @@ PROJECT_ACTION_NAMES = (
     "relinkSourceAction",
 )
 HISTORY_ACTION_NAMES = ("undoAction", "redoAction")
-IMPORT_SHORTCUT_NAMES = ("importFilesShortcut", "importFolderShortcut")
 FIT_STOP_BUTTON_NAMES = (
     "pauseFitButton",
     "cancelFitButton",
@@ -95,12 +94,6 @@ def _button(window, object_name: str) -> QAbstractButton:
     return button
 
 
-def _shortcut(window, object_name: str) -> QShortcut:
-    shortcut = window.findChild(QShortcut, object_name)
-    assert shortcut is not None, object_name
-    return shortcut
-
-
 def _assert_objects(window, names, getter, enabled: bool) -> None:
     for name in names:
         assert getter(window, name).isEnabled() is enabled, name
@@ -114,20 +107,18 @@ def _assert_actions(window, names, enabled: bool) -> None:
     _assert_objects(window, names, _action, enabled)
 
 
-def _assert_shortcuts(window, enabled: bool) -> None:
-    _assert_objects(window, IMPORT_SHORTCUT_NAMES, _shortcut, enabled)
+# 导入快捷键就挂在 ``importFilesMenuAction`` / ``importFolderMenuAction`` 上，禁用这两条命令
+# 就禁用了按键，所以 PROJECT_ACTION_NAMES 那一组已经覆盖它们。
 
 
 def _assert_running_mutating_routes(window) -> None:
     _assert_buttons(window, enabled=False)
     _assert_actions(window, PROJECT_ACTION_NAMES + HISTORY_ACTION_NAMES, enabled=False)
-    _assert_shortcuts(window, enabled=False)
 
 
 def _assert_idle_mutating_routes(window) -> None:
     _assert_buttons(window, enabled=True)
     _assert_actions(window, PROJECT_ACTION_NAMES, enabled=True)
-    _assert_shortcuts(window, enabled=True)
 
 
 def _start_fit(window):

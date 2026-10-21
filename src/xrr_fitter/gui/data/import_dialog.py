@@ -86,7 +86,7 @@ HEADER_SKIP_CAPTION = "跳过表头行"
 HEADER_SKIP_TEXT = "自动"
 HEADER_SKIP_TIP = "读取器从第一处连续两行都是数字的位置开始取数，表头有几行都不用数。"
 LOG_INTENSITY_CAPTION = "强度列取对数"
-LOG_INTENSITY_TEXT = "是（若为线性计数）"
+LOG_INTENSITY_TEXT = "否（按线性强度读入）"
 LOG_INTENSITY_TIP = "读取器只收线性强度，取对数发生在拟合的目标函数里（残差按量级算），导入这一步没有这个开关。"
 RESOLUTION_KINDS = (
     ("σ(q) / Å⁻¹", "sigma_q_a_inv"),
@@ -505,15 +505,19 @@ class ImportDialog(QDialog):
         self.delimiter_select.setToolTip(DELIMITER_TIP)
 
     def _build_advanced_controls(self) -> None:
-        """帧⑥「高级」里的「跳过表头行」与「强度列取对数」。"""
+        """帧⑥ 的「跳过表头行」与「强度列取对数」：读取器定死的两件事，写成两句只读陈述。
+
+        取对数原先是一枚永远灰着的复选框（F50h）。灰着的开关读起来是「暂时按不动」，读者会去找
+        让它亮起来的条件；而这件事没有条件——导入只收线性强度，取对数在拟合的目标函数里。
+        """
         self.header_skip_field = QLineEdit(HEADER_SKIP_TEXT)
         self.header_skip_field.setObjectName("headerSkipEditor")
         self.header_skip_field.setReadOnly(True)
         self.header_skip_field.setToolTip(HEADER_SKIP_TIP)
-        self.log_intensity_check = QCheckBox(LOG_INTENSITY_TEXT)
-        self.log_intensity_check.setObjectName("logIntensityCheck")
-        self.log_intensity_check.setEnabled(False)
-        self.log_intensity_check.setToolTip(LOG_INTENSITY_TIP)
+        self.log_intensity_field = QLineEdit(LOG_INTENSITY_TEXT)
+        self.log_intensity_field.setObjectName("logIntensityEditor")
+        self.log_intensity_field.setReadOnly(True)
+        self.log_intensity_field.setToolTip(LOG_INTENSITY_TIP)
 
     def _preview_beam(self) -> api.BeamSpec:
         """The beam to parse previews with before and after a choice is made.
@@ -702,17 +706,22 @@ class ImportDialog(QDialog):
         # 角度约定与列分隔符各占一行（0 与 2 都落在左半边），而不是并排在同一行：角度那格是
         # 一对单选钮，「2θ（衍射角）」与「θ（掠射角）」加上 132px 的标签，一行摆开要 699px，
         # 那已经超过整个对话框允许的最小宽度。竖着排把这一格的下限降到一半出头。
+        # 右半边空着的两格放读取器另外两件定死的事（取对数、跳过表头行），它们和分隔符同属「这个
+        # 文件怎么读」；在「高级」里单独占一行时，发货外观下对话框的最小高度超出笔记本的可用高度。
+        _wrap2_field(convention_grid, 1, LOG_INTENSITY_CAPTION, self.log_intensity_field)
         _wrap2_field(convention_grid, 2, DELIMITER_CAPTION, self.delimiter_select)
+        _wrap2_field(convention_grid, 3, HEADER_SKIP_CAPTION, self.header_skip_field)
         layout.addLayout(convention_grid)
         # 判定依据是一整行表头原文，独占整宽才不至于把那一栏挤成两个字一行。
         layout.addWidget(self.convention_status)
         layout.addWidget(self.wavelength_status)
         layout.addWidget(self._advanced_section(beam_box, instrument_box))
-        layout.addWidget(self.validation_label)
-        layout.addWidget(self.button_box)
+        layout.addLayout(self._footer())
 
     def _advanced_section(self, beam_box: QGroupBox, instrument_box: QGroupBox) -> QGroupBox:
-        """帧⑥a 的 ``高级`` 组：设计稿的两个字段，加上本版真要人选的光路与仪器。
+        """帧⑥a 的 ``高级`` 组：本版真要人选的光路与仪器。
+
+        设计稿放在这里的两格（跳过表头行、取对数）挪到了表格下面，理由见 ``_arrange``。
 
         光路是导入的必填项（未选中时「导入」按钮就是灰的），设计稿这张卡上没有它——那是
         因为设计稿默认数据从仪器文件里自带波长。摘掉它导入根本走不通，所以它跟仪器一起
@@ -722,14 +731,6 @@ class ImportDialog(QDialog):
         self.advanced_box.setObjectName("importAdvancedGroup")
         advanced = QVBoxLayout(self.advanced_box)
         advanced.setSpacing(theme.SPACE_SM)
-        advanced_grid = _wrap2()
-        _wrap2_field(advanced_grid, 0, HEADER_SKIP_CAPTION, self.header_skip_field)
-        _wrap2_field(advanced_grid, 1, LOG_INTENSITY_CAPTION, self.log_intensity_check)
-        # 列映射是同组的入口，放在说明字段旁，避免额外按钮行把确认区挤出短屏。
-        advanced_header = QHBoxLayout()
-        advanced_header.addLayout(advanced_grid, 1)
-        advanced_header.addWidget(self.mapping_button)
-        advanced.addLayout(advanced_header)
         # 帧⑥ 的 ``.wrap2`` 把成对的字段并排放，正是这一点让对话框收得住：这两组表单
         # 竖着摞是 408px 的刚性下限，未按下的「导入」按钮会被 1440×900 的窗管裁掉。
         settings_row = QHBoxLayout()
@@ -738,12 +739,36 @@ class ImportDialog(QDialog):
         advanced.addLayout(settings_row)
         return self.advanced_box
 
+    def _footer(self) -> QHBoxLayout:
+        """列映射与「请选择光路类型」并进按钮那一行。
+
+        两者各占一整行时，发货外观下对话框的最小高度是 723px，超出 1280×800 的可用高度，窗管会
+        连着「导入」一起裁掉。列映射是和导入同一层的动作（打开一个子对话框），放在按钮行左端是
+        对话框的惯例；那句提示说的正是「导入」为什么是灰的，紧挨着它读起来最顺。
+        """
+        footer = QHBoxLayout()
+        footer.addWidget(self.mapping_button)
+        footer.addWidget(self.validation_label, 1)
+        footer.addWidget(self.button_box)
+        return footer
+
     def _refresh_geometry_controls(self, _index: int = -1) -> None:
         enabled = self.footprint.currentData() == "geometry"
         self.sample_length.setEnabled(enabled)
         self.beam_width.setEnabled(enabled)
 
+    def _refresh_beam_fields(self) -> None:
+        """只让选中的那条光路的波长可填（F50h）。
+
+        还没选时两组都开着：校验行正在请读者去选，先灰掉哪一组都等于替他选了。
+        """
+        kind = self.beam_kind()
+        self.mono_wavelength.setEnabled(kind != "mixed_kalpha")
+        for editor in (self.wavelength_1, self.wavelength_2, self.intensity_ratio):
+            editor.setEnabled(kind != "monochromatic")
+
     def _refresh_validation(self, _button: object, _checked: bool) -> None:
+        self._refresh_beam_fields()
         selected = self.beam_kind() is not None
         self._import_button.setEnabled(selected)
         self.validation_label.setText("" if selected else VALIDATION_TEXT)

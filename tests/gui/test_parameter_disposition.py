@@ -173,7 +173,8 @@ def test_a_shared_parameter_counts_the_datasets_it_is_tied_across(qtbot) -> None
         ),
     )
 
-    widget.show_definition(_definition(sharing_key="thickness"), quantity="厚度 d", sharing_rules=(rule,))
+    # 按成员认：编译出来的声明从不带 ``sharing_key``，按它判断的徽标在真实项目里永远不亮。
+    widget.show_definition(_definition(), quantity="厚度 d", sharing_rules=(rule,), dataset_id="a")
 
     assert widget.sharing_badge.text() == "共享：跨 3 集共享厚度 d"
     assert widget.sharing_badge.kind() == "info"

@@ -1,20 +1,18 @@
 """帧① 候选解一节的一行。
 
 设计稿的每个候选是一只带边框的圆角盒子，里面四段：左边一枚可信度形状，中间加粗的
-名字，右边贴着右缘的 ``J=…``，末尾一枚标记——打开着的那行写「当前」，其余每行写
-「切换」。实测是一行散文，六个字段用点号串成一句，要读者自己在里面找目标值。
+名字，右边贴着右缘的 ``J=…``，末尾一枚标记——导出与图用的那行写「已采用」，正在看但没
+采用的那行写「查看中」，其余每行写「查看」。
 
 形状画的是可信度（``●◆▲■○``）。可信度是整份结果的判定，``FitCandidate`` 上没有这个
-字段，也不能加：这个类要进 checkpoint，加字段会让指纹漂移、旧存档 resume 不上。但判定
-本来就属于被采信的那一行——它就是被判定的那个解，所以判定随结果一起传进来，画在那一行
-上。其余候选没有被判定过，它们的存在本身就是「目标值相近的候选不止一个」，也就是
-``多解 ▲``；解不出来的那些是 ``不可信 ■``，这一条压过采信标记，因为一个不该采信的解不
-因为被打开而变得可信。三态里的「早期淘汰」在散文与悬停上照旧写全（见
-``candidates._audit_state``），形状这一列让给判定。
+字段，也不能加：这个类要进 checkpoint，加字段会让指纹漂移、旧存档 resume 不上。判定是对
+推荐解算的，所以画在推荐那一行上。其余候选没有被判定过，画空心圈「未判定」——此前一律
+写 ``多解 ▲``，可「多解」本身是一个判定（还有别的解跟它一样好），替一个 J 大了几倍的解
+这么说是在编证据。解不出来的那些是 ``不可信 ■``，这一条压过判定标记，因为一个不该采用的
+解不因为被打开而变得可信。
 
-「切换」是画出来的，不是塞进去的控件：列表因此仍是一个焦点目标，方向键就能在候选之间
-走。每行塞一枚真按钮会多出八个 Tab 停靠点，而它做的事和点这一行是同一件事——设计稿把
-它画成无边框的主色文字，正是「点这行」的提示，不是第二个动作。
+「查看」是画出来的，不是塞进去的控件：列表因此仍是一个焦点目标，方向键就能在候选之间
+走，而走到哪一行都只是看。改项目的只有面板上那一枚「采用此候选」。
 """
 
 from __future__ import annotations
@@ -28,15 +26,18 @@ from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 from xrr_fitter.gui import theme
 
-# 判定这三档不来自结果本身，所以在这里落成常量：``多解`` 是「还有别的解跟它一样好」，
-# ``不可信`` 是「这个解算不出来」，``不可用`` 是旧存档没写判定字段。前两个必须是
-# ``theme.CONFIDENCE_GLYPHS`` 的键，形状与判定卡才是同一套。
-STATE_MULTIPLE = "多解"
+# 判定这三档不来自结果本身，所以在这里落成常量：``不可信`` 是「这个解算不出来」（必须是
+# ``theme.CONFIDENCE_GLYPHS`` 的键，形状与判定卡才是同一套），``未判定`` 是「没人对它算过判定」，
+# ``不可用`` 是推荐解在旧存档里没写判定字段。后两档画空心圈：都是「还没测」，不是第五档可信度。
 STATE_UNTRUSTED = "不可信"
+STATE_UNGRADED = "未判定"
 STATE_UNAVAILABLE = "不可用"
 
-MARK_CURRENT = "当前"
-MARK_SWITCH = "切换"
+# 右缘那枚标记。点一行只是去看它，所以别的行写「查看」而不是「切换」；导出与图用的那一行
+# 写「已采用」——只有「采用此候选」那一枚改它。
+MARK_ADOPTED = "已采用"
+MARK_VIEWING = "查看中"
+MARK_LOOK = "查看"
 
 TITLE_PREFIX = "候选"
 ORDINAL_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -114,6 +115,8 @@ class CandidateRow:
     objective: str
     ranking: str
     mark: str
+    # 「同候选 B」：这条种子收敛到了列表上方那一个解。空串时不画。
+    twin: str = ""
 
 
 def _number(value: float) -> str:
@@ -125,16 +128,22 @@ def _grade(state: str) -> tuple[str, str, str]:
     return theme.CONFIDENCE_GLYPHS[state], state, theme.CONFIDENCE_COMPARISON_KINDS[state]
 
 
-def _shape(candidate: object, *, adopted: bool, confidence: str | None) -> tuple[str, str, str]:
+def candidate_selection_objective(candidate: object) -> float:
+    """排序用的那个目标值：有全局排序值就用它，否则用局部值（``model.fitting`` 同一条规矩）。"""
+    ranking = getattr(candidate, "ranking_objective", None)
+    return getattr(candidate, "objective", float("nan")) if ranking is None else ranking
+
+
+def _shape(candidate: object, *, graded: bool, confidence: str | None) -> tuple[str, str, str]:
     """这一行画哪一档判定。
 
-    次序是要紧的：算不出来的解先被拦下，采信标记压不过它——否则一份「可信」的结果会
+    次序是要紧的：算不出来的解先被拦下，判定标记压不过它——否则一份「可信」的结果会
     把它自己那个发散的候选也画成 ●。
     """
     if not candidate_is_selectable(candidate):
         return _grade(STATE_UNTRUSTED)
-    if not adopted:
-        return _grade(STATE_MULTIPLE)
+    if not graded:
+        return theme.CONFIDENCE_FALLBACK_GLYPH, STATE_UNGRADED, theme.CONFIDENCE_FALLBACK_KIND
     if confidence in theme.CONFIDENCE_GLYPHS:
         return _grade(confidence)
     return theme.CONFIDENCE_FALLBACK_GLYPH, STATE_UNAVAILABLE, theme.CONFIDENCE_FALLBACK_KIND
@@ -152,16 +161,29 @@ def candidate_title(ordinal: int) -> str:
     return f"{TITLE_PREFIX} {ordinal + 1}"
 
 
+def _mark(*, selected: bool, adopted: bool) -> str:
+    """「已采用」压过「查看中」：它回答的是导出与图用的是哪一个，比「我在看哪个」更要紧。"""
+    if adopted:
+        return MARK_ADOPTED
+    return MARK_VIEWING if selected else MARK_LOOK
+
+
 def candidate_row(
     candidate: object,
     *,
     selected: bool,
     adopted: bool = False,
+    graded: bool = False,
     confidence: str | None = None,
     ordinal: int = 0,
+    twin_of: int | None = None,
 ) -> CandidateRow:
-    """把一个候选读成设计稿那一行的四段。"""
-    glyph, state, kind = _shape(candidate, adopted=adopted, confidence=confidence)
+    """把一个候选读成设计稿那一行的四段。
+
+    ``selected`` 是正在看的那一行，``adopted`` 是导出与图用的那一行，``graded`` 是判定所属的
+    那一行（推荐解）。三者原本被揉成一件事：看哪行就采用哪行，判定画在采用的那行上。
+    """
+    glyph, state, kind = _shape(candidate, graded=graded, confidence=confidence)
     objective = getattr(candidate, "objective", float("nan"))
     ranking = getattr(candidate, "ranking_objective", None)
     return CandidateRow(
@@ -172,7 +194,8 @@ def candidate_row(
         objective=f"J={_number(objective)}",
         # 一次单阶段求解里两者相等，写两遍等于让读者去比较两个一样的数。
         ranking="" if ranking is None or ranking == objective else f"排序 J={_number(ranking)}",
-        mark=MARK_CURRENT if selected else MARK_SWITCH,
+        mark=_mark(selected=selected, adopted=adopted),
+        twin="" if twin_of is None else f"同{candidate_title(twin_of)}",
     )
 
 
@@ -258,7 +281,7 @@ def switch_font(base: QFont) -> QFont:
 
 def _mark_font(base: QFont, mark: str) -> QFont:
     """右缘那枚标记的字：胶囊与幽灵按钮各一档。"""
-    return badge_font(base) if mark == MARK_CURRENT else switch_font(base)
+    return badge_font(base) if mark == MARK_ADOPTED else switch_font(base)
 
 
 def _row_text_height(base: QFont) -> int:
@@ -314,6 +337,7 @@ class CandidateRowDelegate(QStyledItemDelegate):
         segments = (
             (glyph_font(option.font), row.glyph),
             (title_font(option.font, selected=True), row.title),
+            (value_font(option.font), row.twin),
             (value_font(option.font), row.ranking),
             (value_font(option.font), row.objective),
             (_mark_font(option.font, row.mark), row.mark),
@@ -406,7 +430,7 @@ class CandidateRowDelegate(QStyledItemDelegate):
         metrics = QFontMetrics(font)
         painter.setFont(font)
         painter.setPen(value_colour(option.palette))
-        for text in (row.objective, row.ranking):
+        for text in (row.objective, row.ranking, row.twin):
             if not text:
                 continue
             cell = QRect(content)
@@ -433,10 +457,12 @@ class CandidateRowDelegate(QStyledItemDelegate):
         metrics = QFontMetrics(font)
         painter.setFont(font)
         width = metrics.horizontalAdvance(row.mark)
-        if row.mark != MARK_CURRENT:
+        if row.mark != MARK_ADOPTED:
             cell = QRect(content)
             cell.setLeft(content.right() - width)
-            painter.setPen(theme.token_colour(tokens.accent))
+            # 「查看」是可点的提示，走主色；「查看中」说的是这一行已经开着，不再是邀请，走静音色。
+            ink = tokens.accent if row.mark == MARK_LOOK else tokens.muted_text
+            painter.setPen(theme.token_colour(ink))
             painter.drawText(cell, int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), row.mark)
             return cell.left()
         height = min(content.height(), metrics.height() + 2 * theme.BADGE_PAD_V_PX)

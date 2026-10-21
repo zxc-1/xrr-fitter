@@ -170,7 +170,8 @@ def test_duplicate_key_can_be_corrected_without_partial_commit(qtbot, tmp_path):
         _accept(qtbot, dialog)
         error = dialog.findChild(QLabel, "sharingDialogError")
         assert dialog.isVisible() and error.isVisibleTo(dialog)
-        assert "unique" in error.text()
+        # 原先断言英文原文 ``unique``；对话框改说中文并点名重复的那个组名。
+        assert "共享组名称「shared-thickness」已存在" in error.text()
         assert editor.document.project is original
         _type(qtbot, dialog.findChild(QLineEdit, "sharingKeyInput"), "shared-density")
         _accept(qtbot, dialog)

@@ -7,7 +7,11 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QTreeWidget, QTr
 
 import xrr_fitter.api as api
 from xrr_fitter.gui.document import ProjectDocument
-from xrr_fitter.gui.parameters.sharing_dialog import SharingDialog
+from xrr_fitter.gui.parameters.sharing_dialog import Choices, SharingDialog, sharing_error_text
+
+#: 只有一个数据集时没有可以共享的对象，按钮置灰并说清缺什么。
+SINGLE_DATASET_TOOLTIP = "共享需要至少两个数据集；导入第二个数据集后可用"
+ADD_TOOLTIP = "选择数据集及共同自由参数，创建共享组"
 
 
 class SharingEditor(QWidget):
@@ -42,7 +46,7 @@ class SharingEditor(QWidget):
         self.add_button = QPushButton("添加共享")
         self.add_button.setObjectName("sharingAddRuleButton")
         self.add_button.setAccessibleName("添加参数共享组")
-        self.add_button.setToolTip("选择数据集及共同自由参数，创建共享组")
+        self.add_button.setToolTip(ADD_TOOLTIP)
         self.add_button.clicked.connect(self._add_rule)
         self.delete_button = QPushButton("删除共享")
         self.delete_button.setObjectName("sharingDeleteRuleButton")
@@ -60,15 +64,18 @@ class SharingEditor(QWidget):
         return self.document.project.sharing_rules
 
     def apply_rules(self, rules) -> bool:
-        values = tuple(rules)
-        current = self.document.project
+        """Commit ``rules``; a refusal is said on this page in Chinese and re-raised as is."""
         try:
-            validated = api.validate_sharing_rules(current, values)
-            updated = api.set_sharing_rules(current, validated)
+            return self._publish(tuple(rules))
         except (TypeError, ValueError) as error:
-            self.error_label.setText(str(error))
+            self.error_label.setText(sharing_error_text(error))
             self.error_label.show()
             raise
+
+    def _publish(self, values: tuple[api.SharingRule, ...]) -> bool:
+        current = self.document.project
+        validated = api.validate_sharing_rules(current, values)
+        updated = api.set_sharing_rules(current, validated)
         self.error_label.hide()
         if updated is current:
             return False
@@ -83,19 +90,23 @@ class SharingEditor(QWidget):
         return self.apply_rules(retained)
 
     def eligible_names(self, dataset_ids) -> tuple[str, ...]:
+        return tuple(name for name, _label in self.eligible_choices(dataset_ids))
+
+    def eligible_choices(self, dataset_ids) -> Choices:
+        """各数据集都还能共享的参数，(参数名, 显示名)。显示名取第一个数据集的声明。"""
         identifiers = tuple(dataset_ids)
         if len(identifiers) < 2:
             return ()
-        definition_sets = tuple(self._available_names(dataset_id) for dataset_id in identifiers)
-        common = set.intersection(*definition_sets)
-        return tuple(sorted(common))
+        available = tuple(self._available(dataset_id) for dataset_id in identifiers)
+        common = set.intersection(*(set(labels) for labels in available))
+        return tuple((name, available[0][name]) for name in sorted(common))
 
-    def _available_names(self, dataset_id: str) -> set[str]:
+    def _available(self, dataset_id: str) -> dict[str, str]:
         owned = {
             member.parameter_name for rule in self.rules for member in rule.members if member.dataset_id == dataset_id
         }
         return {
-            definition.name
+            definition.name: definition.display_name
             for definition in api.describe_parameters(self.document.project, dataset_id)
             if not definition.locked and not definition.constrained and definition.name not in owned
         }
@@ -103,7 +114,7 @@ class SharingEditor(QWidget):
     def _add_rule(self) -> None:
         dialog = SharingDialog(
             tuple(dataset.dataset_id for dataset in self.document.project.datasets),
-            self.eligible_names,
+            self.eligible_choices,
             self._commit_rule,
             self,
         )
@@ -111,7 +122,8 @@ class SharingEditor(QWidget):
         dialog.deleteLater()
 
     def _commit_rule(self, rule: api.SharingRule) -> None:
-        self.apply_rules((*self.rules, rule))
+        # 拒绝由对话框自己说：写进这一页的话，读者取消对话框之后页面上还挂着那句英文。
+        self._publish((*self.rules, rule))
 
     def _delete_selected_rule(self) -> None:
         selected = self.tree.currentItem()
@@ -128,6 +140,9 @@ class SharingEditor(QWidget):
         return self.error_label.text()
 
     def _render(self, *_args) -> None:
+        shareable = len(self.document.project.datasets) >= 2
+        self.add_button.setEnabled(shareable)
+        self.add_button.setToolTip(ADD_TOOLTIP if shareable else SINGLE_DATASET_TOOLTIP)
         self.tree.clear()
         for rule in self.rules:
             members = ", ".join(f"{member.dataset_id}:{member.parameter_name}" for member in rule.members)

@@ -303,7 +303,7 @@ def test_published_success_overrides_pending_requests_and_needs_no_progress_fram
                 panel._toggle_pause()
                 expected = PAUSE_REQUESTED_TEXT
             else:
-                panel._request_cancel()
+                panel.request_cancel()
                 expected = CANCELLING_TEXT
             assert panel.progress_view.status_summary().position == expected
         observed = []

@@ -23,22 +23,36 @@ from PySide6.QtWidgets import (
 import xrr_fitter.api as api
 from xrr_fitter.gui.accessibility import localize_standard_buttons
 from xrr_fitter.gui.document import ProjectDocument
+from xrr_fitter.gui.parameters.constraint_text import (
+    OPERATOR_TEXTS,
+    OPERATOR_TOOLTIP,
+    Labels,
+    constraint_error_text,
+    expression_item,
+    expression_text,
+    parameter_labels,
+    reference_label,
+)
 
 # The binary operators the builder can reduce with; leaf operands ("ref",
 # "const") are pushed directly and are never selected as an operator.
 BINARY_OPERATORS = ("add", "sub", "mul", "div", "pow")
 
 
-def _reference_label(reference: api.ParameterReference) -> str:
-    return f"{reference.dataset_id}:{reference.parameter_name}"
+def _command_button(text: str, name: str, tooltip: str, slot: Callable[[], None]) -> QPushButton:
+    button = QPushButton(text)
+    button.setObjectName(name)
+    button.setAccessibleName(text)
+    button.setToolTip(tooltip)
+    button.clicked.connect(slot)
+    return button
 
 
-def _node_label(node: api.ConstraintNode) -> str:
-    if node.op == "ref":
-        return _reference_label(node.reference)
-    if node.op == "const":
-        return f"{node.value:g}"
-    return node.op
+def _reference_choices(combo: QComboBox, references: Sequence[api.ParameterReference], labels: Labels) -> None:
+    for reference in references:
+        combo.addItem(reference_label(reference, labels), reference)
+        # 两个数据集里同名的层读起来一样，原始标识留在悬停提示里供分辨。
+        combo.setItemData(combo.count() - 1, reference_label(reference), Qt.ItemDataRole.ToolTipRole)
 
 
 class ConstraintEditor(QWidget):
@@ -78,6 +92,7 @@ class ConstraintEditor(QWidget):
         layout.addLayout(commands)
         layout.addWidget(self.tree)
         layout.addWidget(self.error_label)
+        self._labels: tuple[object, dict[api.ParameterReference, str]] | None = None
         document.project_changed.connect(self._render)
         self._render()
 
@@ -86,21 +101,42 @@ class ConstraintEditor(QWidget):
         return self.document.project.constraint_rules
 
     def apply_rules(self, rules) -> bool:
-        values = tuple(rules)
-        current = self.document.project
+        """Commit ``rules``; a refusal is said on this page in Chinese and re-raised as is."""
         try:
-            validated = api.validate_constraint_rules(current, values)
-            updated = api.set_constraint_rules(current, validated)
+            return self._publish(tuple(rules))
         except (TypeError, ValueError) as error:
-            self.error_label.setText(str(error))
+            self.error_label.setText(constraint_error_text(error, self.labels()))
             self.error_label.show()
             raise
+
+    def _publish(self, values: tuple[api.ConstraintRule, ...]) -> bool:
+        current = self.document.project
+        validated = api.validate_constraint_rules(current, values)
+        updated = api.set_constraint_rules(current, validated)
         self.error_label.hide()
         if updated is current:
             return False
         self.document.replace_project(updated)
         self.constraints_changed.emit(updated.constraint_rules)
         return True
+
+    def labels(self) -> dict[api.ParameterReference, str]:
+        """每个参数引用的显示名，按决定显示名的那几项缓存。
+
+        ``describe_parameters`` 要读源文件，而列表在每次 ``project_changed`` 都重画；显示名
+        只随结构、仪器、拟合配置与数据集名变，改一个初值不该再把每个数据集读一遍。
+        """
+        project = self.document.project
+        key = (
+            project.fit_config,
+            tuple(
+                (dataset.dataset_id, dataset.display_name, dataset.source_sha256, dataset.structure, dataset.instrument)
+                for dataset in project.datasets
+            ),
+        )
+        if self._labels is None or self._labels[0] != key:
+            self._labels = (key, parameter_labels(project))
+        return self._labels[1]
 
     def remove_rule(self, target: api.ParameterReference) -> bool:
         retained = tuple(rule for rule in self.rules if rule.target != target)
@@ -159,7 +195,8 @@ class ConstraintEditor(QWidget):
 
         def commit_rule(rule: api.ConstraintRule) -> None:
             nonlocal committed
-            self.apply_rules((*self.rules, rule))
+            # 拒绝由对话框自己说：写进这一页的话，读者取消对话框之后页面上还挂着那句话。
+            self._publish((*self.rules, rule))
             committed = True
 
         dialog = ConstraintDialog(
@@ -167,6 +204,7 @@ class ConstraintEditor(QWidget):
             sources,
             self,
             commit_rule=commit_rule,
+            labels=self.labels(),
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -194,23 +232,19 @@ class ConstraintEditor(QWidget):
 
     def _render(self, *_args) -> None:
         self.tree.clear()
+        if not self.rules:
+            return
+        labels = self.labels()
         for rule in self.rules:
-            parent = QTreeWidgetItem((_reference_label(rule.target), _node_label(rule.expression)))
+            parent = QTreeWidgetItem((reference_label(rule.target, labels), expression_text(rule.expression, labels)))
             parent.setData(0, Qt.ItemDataRole.UserRole, rule.target)
+            # 原始标识留在悬停提示里：两个数据集里同名的层读起来一样。
+            parent.setToolTip(0, reference_label(rule.target))
+            parent.setToolTip(1, expression_text(rule.expression))
             for operand in rule.expression.operands:
-                parent.addChild(self._node_item(operand))
+                parent.addChild(expression_item(operand, labels))
             self.tree.addTopLevelItem(parent)
-            parent.setExpanded(True)
-
-    def _node_item(self, node: api.ConstraintNode) -> QTreeWidgetItem:
-        if node.op == "ref":
-            return QTreeWidgetItem(("参数", _node_label(node)))
-        if node.op == "const":
-            return QTreeWidgetItem(("常数", _node_label(node)))
-        item = QTreeWidgetItem(("运算", node.op))
-        for operand in node.operands:
-            item.addChild(self._node_item(operand))
-        return item
+        self.tree.expandAll()
 
 
 class ConstraintDialog(QDialog):
@@ -223,6 +257,7 @@ class ConstraintDialog(QDialog):
         parent: QWidget | None = None,
         *,
         commit_rule: Callable[[api.ConstraintRule], None] | None = None,
+        labels: Labels | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("constraintDialog")
@@ -230,47 +265,23 @@ class ConstraintDialog(QDialog):
         self.setAccessibleName("添加参数约束")
         self.setModal(True)
         self._commit_rule = commit_rule
+        self._labels: Labels = {} if labels is None else labels
         self._rule: api.ConstraintRule | None = None
         self._stack: list[api.ConstraintNode] = []
-        self.target_input = QComboBox()
-        self.target_input.setObjectName("constraintTargetInput")
-        self.target_input.setAccessibleName("目标参数")
-        self.target_input.setToolTip("约束驱动的目标参数")
-        for reference in targets:
-            self.target_input.addItem(_reference_label(reference), reference)
-        self.source_input = QComboBox()
-        self.source_input.setObjectName("constraintSourceInput")
-        self.source_input.setAccessibleName("自变量参数")
-        self.source_input.setToolTip("作为表达式操作数的自变量参数")
-        for reference in sources:
-            self.source_input.addItem(_reference_label(reference), reference)
-        self.operator_input = QComboBox()
-        self.operator_input.setObjectName("constraintOperatorInput")
-        self.operator_input.setAccessibleName("运算符")
-        self.operator_input.setToolTip("对栈顶两个操作数施加的二元运算")
-        for operator in BINARY_OPERATORS:
-            self.operator_input.addItem(operator, operator)
-        self.constant_input = QDoubleSpinBox()
-        self.constant_input.setObjectName("constraintConstantInput")
-        self.constant_input.setAccessibleName("常数值")
-        self.constant_input.setToolTip("要压入表达式栈的常数")
-        self.constant_input.setDecimals(8)
-        self.constant_input.setRange(-1e6, 1e6)
-        self.add_constant_button = QPushButton("添加常数")
-        self.add_constant_button.setObjectName("constraintAddConstantButton")
-        self.add_constant_button.setAccessibleName("添加常数")
-        self.add_constant_button.setToolTip("将当前常数压入表达式栈")
-        self.add_constant_button.clicked.connect(self._push_constant)
-        self.add_parameter_button = QPushButton("添加参数")
-        self.add_parameter_button.setObjectName("constraintAddParameterButton")
-        self.add_parameter_button.setAccessibleName("添加参数")
-        self.add_parameter_button.setToolTip("将选中的自变量参数压入表达式栈")
-        self.add_parameter_button.clicked.connect(self._push_parameter)
-        self.add_operator_button = QPushButton("添加运算符")
-        self.add_operator_button.setObjectName("constraintAddOperatorButton")
-        self.add_operator_button.setAccessibleName("添加运算符")
-        self.add_operator_button.setToolTip("弹出栈顶两个操作数并压入其运算结果")
-        self.add_operator_button.clicked.connect(self._push_operator)
+        # 每一步之前的整栈快照：撤销一次运算要把它吃掉的两个操作数原样吐回来。
+        self._history: list[tuple[api.ConstraintNode, ...]] = []
+        self._build_inputs(targets, sources)
+        self.add_constant_button = _command_button(
+            "添加常数", "constraintAddConstantButton", "将当前常数压入表达式栈", self._push_constant
+        )
+        self.add_parameter_button = _command_button(
+            "添加参数", "constraintAddParameterButton", "将选中的自变量参数压入表达式栈", self._push_parameter
+        )
+        self.add_operator_button = _command_button(
+            "添加运算符", "constraintAddOperatorButton", "弹出栈顶两个操作数并压入其运算结果", self._push_operator
+        )
+        self.undo_button = _command_button("撤销一步", "constraintUndoButton", "撤回上一次压栈或运算", self._undo)
+        self.clear_button = _command_button("清空", "constraintClearButton", "清空表达式栈（可撤销）", self._clear)
         self.expression_tree = QTreeWidget()
         self.expression_tree.setObjectName("constraintExpressionTree")
         self.expression_tree.setAccessibleName("表达式栈")
@@ -290,6 +301,35 @@ class ConstraintDialog(QDialog):
         self._arrange()
         self._render_stack()
 
+    def _build_inputs(
+        self,
+        targets: Sequence[api.ParameterReference],
+        sources: Sequence[api.ParameterReference],
+    ) -> None:
+        self.target_input = QComboBox()
+        self.target_input.setObjectName("constraintTargetInput")
+        self.target_input.setAccessibleName("目标参数")
+        self.target_input.setToolTip("约束驱动的目标参数")
+        _reference_choices(self.target_input, targets, self._labels)
+        self.source_input = QComboBox()
+        self.source_input.setObjectName("constraintSourceInput")
+        self.source_input.setAccessibleName("自变量参数")
+        self.source_input.setToolTip("作为表达式操作数的自变量参数")
+        _reference_choices(self.source_input, sources, self._labels)
+        self.operator_input = QComboBox()
+        self.operator_input.setObjectName("constraintOperatorInput")
+        self.operator_input.setAccessibleName("运算符")
+        self.operator_input.setToolTip(OPERATOR_TOOLTIP)
+        for operator in BINARY_OPERATORS:
+            self.operator_input.addItem(OPERATOR_TEXTS[operator], operator)
+        self.constant_input = QDoubleSpinBox()
+        self.constant_input.setObjectName("constraintConstantInput")
+        self.constant_input.setAccessibleName("常数值")
+        # 常数按内部单位参与运算：厚度与粗糙度是 Å，相对密度是比值。
+        self.constant_input.setToolTip("要压入表达式栈的常数；厚度、粗糙度按 Å 计（1 nm = 10 Å），相对密度是比值")
+        self.constant_input.setDecimals(8)
+        self.constant_input.setRange(-1e6, 1e6)
+
     def _arrange(self) -> None:
         form = QFormLayout()
         form.addRow("目标参数", self.target_input)
@@ -300,6 +340,9 @@ class ConstraintDialog(QDialog):
         buttons_row.addWidget(self.add_constant_button)
         buttons_row.addWidget(self.add_parameter_button)
         buttons_row.addWidget(self.add_operator_button)
+        buttons_row.addStretch(1)
+        buttons_row.addWidget(self.undo_button)
+        buttons_row.addWidget(self.clear_button)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addLayout(buttons_row)
@@ -313,18 +356,14 @@ class ConstraintDialog(QDialog):
         except (TypeError, ValueError) as error:
             self._show_error(error)
             return
-        self._stack.append(node)
-        self.error_label.hide()
-        self._render_stack()
+        self._replace_top(0, node)
 
     def _push_parameter(self) -> None:
         reference = self.source_input.currentData()
         if reference is None:
             self._show_error(ValueError("没有可用的自变量参数"))
             return
-        self._stack.append(api.ConstraintNode("ref", reference=reference))
-        self.error_label.hide()
-        self._render_stack()
+        self._replace_top(0, api.ConstraintNode("ref", reference=reference))
 
     def _push_operator(self) -> None:
         if len(self._stack) < 2:
@@ -337,8 +376,27 @@ class ConstraintDialog(QDialog):
         except (TypeError, ValueError) as error:
             self._show_error(error)
             return
-        del self._stack[-2:]
-        self._stack.append(node)
+        self._replace_top(2, node)
+
+    def _replace_top(self, count: int, node: api.ConstraintNode) -> None:
+        """栈顶 ``count`` 个节点换成 ``node``，换之前记一份快照供撤销。"""
+        self._history.append(tuple(self._stack))
+        self._stack[len(self._stack) - count :] = [node]
+        self.error_label.hide()
+        self._render_stack()
+
+    def _undo(self) -> None:
+        if not self._history:
+            return
+        self._stack = list(self._history.pop())
+        self.error_label.hide()
+        self._render_stack()
+
+    def _clear(self) -> None:
+        if not self._stack:
+            return
+        self._history.append(tuple(self._stack))
+        self._stack = []
         self.error_label.hide()
         self._render_stack()
 
@@ -365,24 +423,16 @@ class ConstraintDialog(QDialog):
         self.accept()
 
     def _show_error(self, error: Exception) -> None:
-        self.error_label.setText(str(error))
+        self.error_label.setText(constraint_error_text(error, self._labels))
         self.error_label.show()
 
     def _render_stack(self) -> None:
         self.expression_tree.clear()
         for node in self._stack:
-            self.expression_tree.addTopLevelItem(self._stack_item(node))
-
-    def _stack_item(self, node: api.ConstraintNode) -> QTreeWidgetItem:
-        if node.op == "ref":
-            return QTreeWidgetItem(("参数", _reference_label(node.reference)))
-        if node.op == "const":
-            return QTreeWidgetItem(("常数", f"{node.value:g}"))
-        item = QTreeWidgetItem(("运算", node.op))
-        for operand in node.operands:
-            item.addChild(self._stack_item(operand))
-        item.setExpanded(True)
-        return item
+            self.expression_tree.addTopLevelItem(expression_item(node, self._labels))
+        self.expression_tree.expandAll()
+        self.undo_button.setEnabled(bool(self._history))
+        self.clear_button.setEnabled(bool(self._stack))
 
     def rule(self) -> api.ConstraintRule:
         if self._rule is None:

@@ -11,6 +11,7 @@ from tests.gui.test_uncertainty_dialog import _mcmc_report, _result, _uncertaint
 
 import xrr_fitter.api as api
 from xrr_fitter.gui import theme
+from xrr_fitter.gui.plots.parameter_labels import result_definitions, titled_labels
 from xrr_fitter.gui.plots.posterior import McmcHistogramPlot
 
 PARAMETER_NAMES = (
@@ -73,7 +74,9 @@ def _assert_readable(plot):
 def test_all_marginals_stay_readable_without_enlarging_the_viewport(qtbot, size):
     plot = _shown_plot(qtbot, size)
     assert (plot.width(), plot.height()) == size
-    assert [axes.get_title() for axes in plot.figure.axes] == list(PARAMETER_NAMES)
+    # 每个参数一格、按顺序；标题用证据图共用的短名（F26p），不是机器路径。
+    titles = titled_labels(PARAMETER_NAMES, result_definitions(_result_with_marginals()))
+    assert [axes.get_title() for axes in plot.figure.axes] == list(titles)
     _assert_readable(plot)
 
 

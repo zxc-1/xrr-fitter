@@ -148,7 +148,8 @@ def test_plot_panel_draws_qz4_weighted_residual_and_sld_from_candidate_arrays(
 
     sld_lines = panel.view("sld").axes.lines
     np.testing.assert_array_equal(_line_x(panel.view("qz4"), "观测数据"), candidate.qz_a_inv)
-    np.testing.assert_array_equal(_line_x(panel.view("residual"), "加权残差"), candidate.qz_a_inv)
+    # 残差卡压在反射率卡下面，横轴跟它同为散射角（不再是 qz）：同一个点在两张卡上对得上竖线。
+    np.testing.assert_array_equal(_line_x(panel.view("residual"), "加权残差"), data.two_theta_deg)
     np.testing.assert_array_equal(_line_y(panel.view("residual"), "加权残差"), candidate.weighted_residuals)
     np.testing.assert_allclose(sld_lines[0].get_xdata(), candidate.sld_depth_a / 10.0)
     np.testing.assert_allclose(sld_lines[0].get_ydata(), candidate.sld_profile_a2.real * SLD_DISPLAY_SCALE)

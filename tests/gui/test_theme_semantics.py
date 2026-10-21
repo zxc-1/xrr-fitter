@@ -72,7 +72,7 @@ def test_confidence_badge_keeps_the_emphasis_the_inline_style_carried() -> None:
 
     body = sheet.split("QLabel#confidenceBadge {", 1)[1].split("}", 1)[0]
     assert "font-weight: 700" in body
-    assert f"font-size: {theme.FONT_PT_MD}pt" in body
+    assert f"font-size: {theme.FONT_PX_MD}px" in body
 
 
 def test_the_verdict_reason_is_typeset_as_the_smaller_second_line() -> None:
@@ -83,7 +83,7 @@ def test_the_verdict_reason_is_typeset_as_the_smaller_second_line() -> None:
     sheet = theme.build_stylesheet(_palette("#FFFFFF"))
 
     body = sheet.split("QLabel#confidenceReason {", 1)[1].split("}", 1)[0]
-    assert f"font-size: {theme.FONT_PT_SM}pt" in body
+    assert f"font-size: {theme.FONT_PX_SM}px" in body
 
 
 # 设计稿 HTML 185-188 的四条 ``.confbadge.<状态>`` 规则，逐位抄下来。

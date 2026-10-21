@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -408,13 +408,14 @@ def test_the_point_count_leads_a_failed_source_status_too(qtbot, tmp_path) -> No
 
 def test_import_shortcuts_do_not_conflict_with_project_open(qtbot) -> None:
     panel = _panel(qtbot)
-    files = panel.findChild(QShortcut, "importFilesShortcut")
-    folder = panel.findChild(QShortcut, "importFolderShortcut")
+    files = panel.import_files_action
+    folder = panel.import_folder_action
 
-    assert files.key() == QKeySequence("Ctrl+I")
-    assert folder.key() == QKeySequence("Ctrl+Shift+I")
-    assert files.context() == Qt.ShortcutContext.WidgetWithChildrenShortcut
-    assert files.key() != QKeySequence(QKeySequence.StandardKey.Open)
+    assert files.shortcut() == QKeySequence("Ctrl+I")
+    assert folder.shortcut() == QKeySequence("Ctrl+Shift+I")
+    # 窗口级：焦点在画布或检视器时也要按得出来（见 ``test_import_keys_reach_the_whole_window``）。
+    assert files.shortcutContext() == Qt.ShortcutContext.WindowShortcut
+    assert files.shortcut() != QKeySequence(QKeySequence.StandardKey.Open)
 
 
 def test_data_panel_renders_precise_source_status_with_marker(qtbot, tmp_path) -> None:

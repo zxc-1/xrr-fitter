@@ -944,12 +944,14 @@ def test_the_dialog_states_the_angle_convention_and_the_delimiter_it_detected(qt
 
 
 def test_the_advanced_box_states_the_header_skip_and_the_log_option_it_does_not_have(qtbot, tmp_path) -> None:
-    """帧⑥a 的 ``高级`` 组：跳过表头行「自动」＋ 强度列取对数「是（若为线性计数）」。
+    """帧⑥a 的两格：跳过表头行「自动」＋ 强度列取对数「否」——读取器定死的两件事，两句只读陈述。
 
     表头是真自动的：读取器从第一处「连续两行都是数字」开始取数，所以这一格只读不写。
     取对数则整个不存在——``io/xy.py`` 里唯一带 log 的是拟合窗口的 ``log_domain_mask``，
-    导入这一步按线性计数读强度列。设计稿那枚方框本来也是未勾选的，所以灰着＋未勾选正好
-    是一句真话，而不是一个按了没反应的开关。
+    导入这一步按线性计数读强度列。这一格原先是一枚永远灰着的复选框（F50h）：看上去是一个暂时
+    按不动的开关，读者会去找让它亮起来的条件。现在它和「跳过表头行」一样是一句只读的话，说的是
+    「否」——设计稿那枚方框本来也是未勾选的。两格挪到了表格下面「角度约定 / 列分隔符」旁边：
+    它们在「高级」里多占的那一行，正是发货外观下对话框超出笔记本可用高度的那一截。
     """
     from xrr_fitter.gui.data.import_dialog import (
         ADVANCED_TITLE,
@@ -965,9 +967,9 @@ def test_the_advanced_box_states_the_header_skip_and_the_log_option_it_does_not_
     assert box.title() == ADVANCED_TITLE == "高级"
     assert dialog.header_skip_field.text() == HEADER_SKIP_TEXT == "自动"
     assert dialog.header_skip_field.isReadOnly()
-    log_option = dialog.log_intensity_check
-    assert log_option.text() == LOG_INTENSITY_TEXT == "是（若为线性计数）"
-    assert not log_option.isChecked() and not log_option.isEnabled()
+    log_option = dialog.log_intensity_field
+    assert log_option.text() == LOG_INTENSITY_TEXT == "否（按线性强度读入）"
+    assert log_option.isReadOnly() and log_option.isVisibleTo(dialog)
     assert log_option.toolTip()
 
 

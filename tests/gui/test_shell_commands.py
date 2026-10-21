@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtCore import QPoint
+from PySide6.QtGui import QColor, QImage
+from PySide6.QtWidgets import QPushButton, QToolButton
 
 COMMAND_SURFACES = (
     ("新建项目", "newProjectButton", "newProjectAction"),
@@ -31,8 +33,15 @@ def _menu_action(window, object_name):
 
 
 def _icon_bytes(icon) -> bytes:
-    """The rendered glyph, so two icons compare by what the user sees."""
-    return bytes(icon.pixmap(16, 16).toImage().constBits())
+    """The rendered glyph, so two icons compare by what the user sees.
+
+    The image is held in a local: ``constBits()`` is a view into the image's
+    buffer, and a temporary image is freed before ``bytes`` copies from it.  That
+    only ever worked while the icon cached its pixmap; glyphs repainted on demand
+    (``GlyphIconEngine``) hand back a fresh image each time.
+    """
+    image = icon.pixmap(16, 16).toImage()
+    return bytes(image.constBits())
 
 
 def test_each_command_wears_one_icon_in_the_toolbar_and_the_menu(qtbot) -> None:
@@ -137,3 +146,61 @@ def test_every_registered_command_wears_a_distinct_icon(qtbot) -> None:
         glyph = _icon_bytes(icon)
         assert glyph not in seen, f"{command} 与 {seen[glyph]} 用了同一个图标"
         seen[glyph] = command
+
+
+def test_the_rail_folder_shortcut_wears_the_folder_import_glyph(qtbot) -> None:
+    """F45：机架抬头那枚文件夹键与 文件 ▸ 导入数据文件夹… 是同一条命令，就该是同一枚字形。
+
+    它原先借的是平台的「打开文件夹」图标：macOS 上一只蓝文件夹、Windows 上一只黄的、离屏是
+    一圈线框——三处长得都不像别处那枚「文件夹 + 向下箭头」，也不跟着深色外观换墨色，读者在
+    菜单里学会的那枚到这里认不出来。
+    """
+    window = _window(qtbot)
+    quick = window.findChild(QToolButton, "importFolderQuickButton")
+    menu = _menu_action(window, "importFolderMenuAction")
+    assert quick is not None and not menu.icon().isNull()
+
+    assert _icon_bytes(quick.icon()) == _icon_bytes(menu.icon())
+
+
+def _ink_box(host, widget) -> tuple[int, int]:
+    """``widget`` 在 ``host`` 截图里落墨的宽与高（逻辑像素）；底色取控件左上角那一点。"""
+    image = host.grab().toImage().convertToFormat(QImage.Format.Format_ARGB32)
+    scale = image.width() / max(host.width(), 1)
+    origin = widget.mapTo(host, QPoint(0, 0))
+
+    def at(x: int, y: int) -> QColor:
+        return QColor.fromRgba(image.pixel(round((origin.x() + x) * scale), round((origin.y() + y) * scale)))
+
+    ground = at(0, 0)
+    inked = [
+        (x, y)
+        for x in range(widget.width())
+        for y in range(widget.height())
+        if sum(abs(a - b) for a, b in zip(at(x, y).getRgb()[:3], ground.getRgb()[:3], strict=True)) > 60
+    ]
+    assert inked, "按钮上一个像素的墨都没有"
+    xs, ys = zip(*inked, strict=True)
+    return max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
+
+
+def test_the_rail_folder_shortcut_draws_its_glyph_at_full_size(qtbot) -> None:
+    """F45：通用的 ``QToolButton`` 规则给每枚按钮 4×8px 内边距、30px 最小高；这枚键钉死 24px 宽，
+    16px 的字形于是只剩 6px 可画，换哪枚图标都是一团认不出的墨点。旁边那枚 ＋ 早就按设计稿去掉了
+    这两样，文件夹键也得去掉。"""
+    from xrr_fitter.gui.theme import build_stylesheet, light_palette
+
+    window = _window(qtbot)
+    palette = light_palette()
+    window.setPalette(palette)
+    window.setStyleSheet(build_stylesheet(palette))
+    window.set_guidance_visible(False)
+    window.resize(1280, 760)
+    window.show()
+    qtbot.waitExposed(window)
+    quick = window.findChild(QToolButton, "importFolderQuickButton")
+
+    width, height = _ink_box(window, quick)
+    assert width >= 10 and height >= 10, (width, height, quick.size())
+    # 键本身仍是 24px 见方：指针与触控都靠这一格（WCAG 2.5.8 的最小目标）。
+    assert quick.width() >= 24 and quick.height() >= 24, quick.size()

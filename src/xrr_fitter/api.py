@@ -97,6 +97,7 @@ from xrr_fitter.services.fitting import (
     run_mcmc,
     sld_uncertainty_bands,
 )
+from xrr_fitter.services.materials import INITIAL_DENSITIES_G_CM3
 from xrr_fitter.services.parameters import (
     _reconcile_parameter_relationships,
     accept_source_update,
@@ -195,6 +196,7 @@ __all__ = (
     "ImportBatchPreview",
     "ImportFilePreview",
     "ImportFailure",
+    "INITIAL_DENSITIES_G_CM3",
     "InstrumentSpec",
     "InterfaceTransition",
     "JointFitLayout",

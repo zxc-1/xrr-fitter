@@ -413,34 +413,17 @@ def _independent_fit(
     )
     working = project
     results: list[DatasetFitResult] = []
-    was_cancelled = False
+    # 每一行都已跑到头（取消时没开跑的行也立即以中断返回），所以这里只剩发布：一行停下不能
+    # 让排在它后面、已经跑完或存了检查点的行一起作废。
     for row in rows:
-        index, original = row.index, row.original
-        dataset_id = original.dataset_id
-        if row.error is not None:
-            working = _replace_dataset(working, index, _clear_dataset(working.datasets[index]))
-            fit_result = _failure_result(original, row.error)
-        else:
-            prepared = cast(PreparedDatasetFit, row.prepared)
-            working = _replace_dataset(working, index, prepared.updated_dataset)
-            outcome = buffered[index]
-            working = _replay_checkpoints(
-                working,
-                index,
-                outcome.checkpoints,
-                checkpoint_callback,
-            )
-            if outcome.error is not None:
-                fit_result = _failure_result(original, outcome.error)
-                was_cancelled = _cancelled(outcome.error)
-            else:
-                assert outcome.result is not None
-                fit_result = outcome.result
-                working = _commit_success(working, index, fit_result)
-        results.append(DatasetFitResult(dataset_id, fit_result))
-        if was_cancelled or (cancelled is not None and cancelled()):
-            was_cancelled = True
-            break
+        working, fit_result = _publish_independent_row(working, row, buffered, checkpoint_callback)
+        results.append(DatasetFitResult(row.original.dataset_id, fit_result))
+    outcomes = tuple(buffered.values())
+    was_cancelled = any(outcome.error is not None and _cancelled(outcome.error) for outcome in outcomes)
+    # 取消时 worker 不发终态结果，读者只看得到检查点发布出来的项目；跑完那几行的结果因此要
+    # 再随一次发布出去，否则「停止并保留进度」保留下来的东西界面上一样都看不见。
+    if was_cancelled and checkpoint_callback is not None and any(outcome.error is None for outcome in outcomes):
+        checkpoint_callback(working)
     values = tuple(results)
     return ProjectFitResult(
         "independent",
@@ -449,6 +432,27 @@ def _independent_fit(
         working,
         was_cancelled,
     )
+
+
+def _publish_independent_row(
+    working: XrrProject,
+    row: _IndependentPreparation,
+    buffered: dict[int, _BufferedFit[FitResult]],
+    checkpoint_callback: Callable[[XrrProject], None] | None,
+) -> tuple[XrrProject, FitResult]:
+    """Commit one finished row: its checkpoints always, its result when it has one."""
+    index, original = row.index, row.original
+    if row.error is not None:
+        working = _replace_dataset(working, index, _clear_dataset(working.datasets[index]))
+        return working, _failure_result(original, row.error)
+    prepared = cast(PreparedDatasetFit, row.prepared)
+    working = _replace_dataset(working, index, prepared.updated_dataset)
+    outcome = buffered[index]
+    working = _replay_checkpoints(working, index, outcome.checkpoints, checkpoint_callback)
+    if outcome.error is not None:
+        return working, _failure_result(original, outcome.error)
+    assert outcome.result is not None
+    return _commit_success(working, index, outcome.result), outcome.result
 
 
 def _joint_failure(project: XrrProject, error: BaseException) -> ProjectFitResult:
@@ -629,6 +633,14 @@ def _run_automatic_prefits(
                 outcome.result,
                 refining=row.group_size > 1,
             )
+        elif _cancelled(outcome.error):
+            # 停下不是失败：记成 FAILED 会抹掉刚重放的检查点，还把这一行踢出可运行集合，
+            # 「自动拟合」从此再也跑不到它。保留路由时的 REFINING 与检查点，下次从这里接着跑。
+            published[row.index] = DatasetFitResult(
+                row.original.dataset_id,
+                _failure_result(row.original, outcome.error),
+            )
+            was_cancelled = True
         else:
             working, published[row.index] = _commit_automatic_failure(
                 working,
@@ -636,7 +648,6 @@ def _run_automatic_prefits(
                 row.original,
                 outcome.error,
             )
-            was_cancelled = was_cancelled or _cancelled(outcome.error)
         if checkpoint_callback is not None:
             checkpoint_callback(working)
 

@@ -99,11 +99,20 @@ STATUS_DOT_RADIUS_PX = STATUS_DOT_PX // 2
 # actually installs, and keeps the generic last as a documented intent.
 MONO_FONT_STACK = '"SF Mono", "Cascadia Code", "Menlo", "Consolas", "DejaVu Sans Mono", monospace'
 
-# Point sizes for text drawn outside the stylesheet (Matplotlib artists) and for
-# the few labels that need to depart from the widget default.
+# Point sizes for Matplotlib artists only. A figure renders at its own dpi, so a
+# point there is the same size on every desktop.
 FONT_PT_SM = 9
 FONT_PT_MD = 11
 FONT_PT_LG = 14
+
+# The same three steps for Qt text, in pixels. Qt turns a point into pixels through
+# the logical DPI -- 96 on Windows, Linux and the offscreen tests, 72 on macOS -- so
+# every pt size drew 25% smaller on a Mac while the 13px system body text did not
+# move: the 11pt verdict that should outrank the body landed at 11px, below it.
+# These are the pixels the pt steps measured at 96 dpi, so nothing moves elsewhere.
+FONT_PX_SM = 12
+FONT_PX_MD = 15
+FONT_PX_LG = 19
 
 # One interactive-control height for buttons, tool buttons and single-line
 # inputs alike.  These used to carry three different minimums (22, 20, and
@@ -379,9 +388,8 @@ VERDICT_PAD_V_PX = 10
 VERDICT_PAD_H_PX = SPACE_MD
 VERDICT_FILL_ALPHAS: dict[str, float] = {"ok": 0.08, "info": 0.08, "warn": 0.09, "error": 0.08}
 VERDICT_BORDER_ALPHA = 0.35
-# 字形那 22px 折算成 16.5pt。字号在 Python 里落到控件上而不是写进 QSS：Qt 的样式表解析器
-# 遇到带小数的 pt 会丢掉整条规则，字形会静默退回默认字号。
-VERDICT_GLYPH_PT = 16.5
+# 设计稿 ``.confbadge .ic`` 字形的 22px，按像素直接给（见 ``FONT_PX_SM`` 那段）。
+VERDICT_GLYPH_PX = 22
 
 # 设计稿 ``.insp-sec .h`` 的字距（``letter-spacing:.6px``）。检视器那一栏的分节抬头是
 # 11px 的小字，字距把它读成一行标签而不是一句被缩小的标题；正文与图卡抬头都不加。
@@ -421,6 +429,10 @@ STEP_EYEBROW_TRACKING_PX = 0.6
 # 设计稿 ``.nav-sec .add`` 那枚 ``＋``：``font-size:16px;line-height:1``。它比抬头那行的字大
 # 五像素，也是按像素给的——抬头与它是同一条 CSS 规则里的一对，折算成 pt 两个数会各差一点。
 RAIL_ADD_GLYPH_FONT_PX = 16
+
+# 同一行抬头里那枚文件夹键的边长：面板按它钉尺寸，样式表按它定最小高。24px 是指针与触控
+# 目标的下限（WCAG 2.5.8），里面放 16px 的字形还留一圈边框。
+RAIL_QUICK_BUTTON_PX = 24
 
 # 设计稿 ``.field .inp{height:30px}``：选中层那张卡的四格比应用里其他输入框高一档，因为它们
 # 是这张卡的主体而不是塞在一行工具里的附件。``CONTROL_MIN_H`` 不能跟着改——层堆叠拿它当行高
@@ -637,6 +649,13 @@ QToolButton#datasetAddButton {{
 QToolButton#datasetAddButton::menu-indicator {{ image: none; width: 0px; }}
 QToolButton#datasetAddButton:hover:enabled {{ color: {tokens.accent_hover}; }}
 QToolButton#datasetAddButton:disabled {{ color: {tokens.muted_text}; }}
+/* 同一行抬头里那枚文件夹键（F45）：它钉死 24px 见方，通用规则的 4×8px 内边距与 30px 最小高
+   只给 16px 的字形留下 6px，画出来是一团墨点；高度还被撑到 40px。样式表的最小高会盖过代码钉的
+   尺寸，所以这里按同一个边长给，扣掉通用规则那圈 1px 边框——边框留着，悬停时仍有一圈。 */
+QToolButton#importFolderQuickButton {{
+    padding: 0px;
+    min-height: {RAIL_QUICK_BUTTON_PX - 2}px;
+}}
 /* The design's ``.seg``: one bordered pill whose chosen half is filled with the
    accent.  The halves lose their own borders and corner radius so the pair reads
    as a single control rather than as two adjacent buttons, and the filled half
@@ -744,7 +763,7 @@ QLabel[sectionHeader="true"][faintText="true"] {{
 }}
 QLabel[mutedText="true"] {{ color: {tokens.muted_text}; }}
 QLabel[faintText="true"] {{ color: {tokens.faint_text}; }}
-QLabel[emptyTitle="true"] {{ font-size: {FONT_PT_LG}pt; font-weight: 700; }}
+QLabel[emptyTitle="true"] {{ font-size: {FONT_PX_LG}px; font-weight: 700; }}
 QLabel[statusKind="ok"] {{ color: {tokens.ok}; }}
 QLabel[statusKind="info"] {{ color: {tokens.info}; }}
 QLabel[statusKind="warn"] {{ color: {tokens.warn}; }}
@@ -765,7 +784,7 @@ QLabel[statusDot="true"][statusKind="error"] {{ background: {tokens.error}; }}
 QLabel[statusDot="true"][statusKind="accent"] {{ background: {tokens.accent}; }}
 QLabel[hintBox="true"], QLabel[bannerBox="true"] {{
     border-radius: 8px;
-    font-size: {FONT_PT_SM}pt;
+    font-size: {FONT_PX_SM}px;
 }}
 QLabel[hintBox="true"] {{ padding: 10px 12px; }}
 QLabel[bannerBox="true"] {{ padding: 10px 14px; }}
@@ -830,7 +849,7 @@ QLabel[badge="true"][statusKind="error"] {{
 QLabel[mono="true"] {{ font-family: {MONO_FONT_STACK}; }}
 QLabel[codeBlock="true"] {{
     font-family: {MONO_FONT_STACK};
-    font-size: {FONT_PT_SM}pt;
+    font-size: {FONT_PX_SM}px;
     color: {tokens.muted_text};
     background: {tokens.surface};
     border: 1px solid {tokens.surface_border};
@@ -857,7 +876,7 @@ QLabel[stageMarker="true"][stepState="current"] {{ background: {tokens.accent}; 
 QLabel[stageMarker="true"][stepState="pending"] {{ background: transparent; border-color: {tokens.muted_text}; }}
 QLabel[stepDot="true"] {{
     border-radius: 10px;
-    font-size: 9pt;
+    font-size: {FONT_PX_SM}px;
     font-weight: 600;
 }}
 /* 向导抬头那一格的记号大一档（``.wizhead .wh .n{{width:30px;height:30px}}``），圆角只能跟着
@@ -918,8 +937,8 @@ QFrame[verdictBox="true"][statusKind="error"] {{
 }}
 /* ``.confbadge .txt .l`` / ``.r``：判定 700/15px，理由 11.5px 静音。两行同号时框里读起来
    是两句并列的话，小一档理由才读成判定的注脚。 */
-QLabel#confidenceBadge {{ font-weight: 700; font-size: {FONT_PT_MD}pt; }}
-QLabel#confidenceReason {{ font-size: {FONT_PT_SM}pt; }}
+QLabel#confidenceBadge {{ font-weight: 700; font-size: {FONT_PX_MD}px; }}
+QLabel#confidenceReason {{ font-size: {FONT_PX_SM}px; }}
 QTabBar::tab {{ padding: {SPACE_XS}px {SPACE_MD}px; }}
 /* 帧①/⑤ 的画布列由 ``.canvas-top`` 那条线分上下两段，容器不再自己画框：两个
    ``QTabWidget`` 退成只放页面的壳（自己那条 tab 条由 ``canvas_tab_group`` 藏起来，露在
@@ -960,6 +979,25 @@ QGroupBox::title {{
     font-weight: 700;
 }}
 """
+
+
+# ▾ 的两条斜边：从箭头框底边正中射向框的两个上角。锥形渐变按框自身的比例铺（object bounding），
+# 所以这个角只看「半宽 : 高」= 0.5 : 1，与框多大无关——atan(0.5) ≈ 26.57°，是一整圈的 0.0738。
+CARET_HALF_WEDGE_TURN = 0.0738
+
+
+def _down_caret(colour: str) -> str:
+    """一枚朝下的实心 ▾：中心在框底正中、朝正上张开的锥形色块，被框的上边裁成三角。
+
+    QSS 的边框在角上不斜接，拿三条边拼三角只拼得出一条横杠；样式表里的图片又得是磁盘上的文件，
+    换不了色。渐变跟着词元走，明暗各一份。
+    """
+    inner, outer = CARET_HALF_WEDGE_TURN - 0.0001, CARET_HALF_WEDGE_TURN + 0.0001
+    clear = "rgba(0, 0, 0, 0)"
+    return (
+        f"qconicalgradient(cx:0.5, cy:1, angle:90, stop:0 {colour}, stop:{inner:.4f} {colour}, "
+        f"stop:{outer:.4f} {clear}, stop:{1 - outer:.4f} {clear}, stop:{1 - inner:.4f} {colour}, stop:1 {colour})"
+    )
 
 
 def _chrome_styles(tokens: ThemeTokens) -> str:
@@ -1004,11 +1042,11 @@ QWidget#structureLayerRow[semiInfinite="true"] {{ background: {tokens.surface}; 
 QWidget#structureLayerRow[rowSelected="true"] {{ border-left-color: {tokens.accent}; }}
 QLabel#structureLayerName {{ font-weight: 600; }}
 QLabel#structureLayerDetail {{
-    font-size: {FONT_PT_SM}pt;
+    font-size: {FONT_PX_SM}px;
     color: {tokens.muted_text};
 }}
 QLabel#structureLayerReading {{
-    font-size: {FONT_PT_SM}pt;
+    font-size: {FONT_PX_SM}px;
     color: {tokens.muted_text};
 }}
 QLabel#structureLayerDrag {{ color: {tokens.muted_text}; }}
@@ -1031,7 +1069,7 @@ QTableWidget#resultValueTable::item {{ padding: 3px {SPACE_SM}px; }}
 QTableWidget#resultValueTable QHeaderView::section {{
     background: transparent;
     color: {tokens.muted_text};
-    font-size: {FONT_PT_SM}pt;
+    font-size: {FONT_PX_SM}px;
     font-weight: 700;
     padding: {SPACE_XS}px {SPACE_SM}px;
 }}
@@ -1076,6 +1114,16 @@ QComboBox::drop-down {{
     border: 0px;
     padding-right: {SPACE_SM}px;
 }}
+/* 设计稿 ``.inp.sel::after{{content:"▾"}}``：下拉框靠右一枚 ▾，读者靠它认出这是选单。``::drop-down``
+   一旦有样式，Qt 就不再画平台的箭头，那一格会空着（F46）；这里补一枚实心 ▾（画法见 ``_down_caret``）。
+   颜色取 muted 而不是设计稿的 --ink-faint：faint 落在窗口底色上只有 2.8:1，而认出控件靠的这枚记号
+   要到 3:1。 */
+QComboBox::down-arrow {{
+    width: 7px;
+    height: 4px;
+    background: {_down_caret(tokens.muted_text)};
+}}
+QComboBox::down-arrow:disabled {{ background: {_down_caret(tokens.border_strong)}; }}
 /* 设计稿 ``.field .inp.sel``：材料那一格是一整只框，``▾`` 在框里靠右。边画在外面这只
    ``QFrame`` 上，里面的输入框和按钮各自去掉自己的边——两道边就成了两只挨着的框，读者会
    以为那枚 ``▾`` 是另一个控件，而设计稿画的是点哪儿都在编辑同一样东西的一整格。 */
@@ -1159,6 +1207,12 @@ QWidget#inspectorColumn {{
 /* 设计稿的 .statusbar 也铺 --panel-2：它和两侧机架同属「不是内容面」的那一层。 */
 QStatusBar#mainStatusBar {{
     background: {rail_wash};
+}}
+/* 机架页脚 ``.ds-summary{{padding:var(--md);border-top:1px solid var(--border)}}``（F44）：没有内边距
+   那一行字贴着栏的左缘和窗口底边；上面那道线是它和管线之间唯一的分界。 */
+QLabel#datasetSummary {{
+    padding: {SPACE_MD}px;
+    border-top: 1px solid {tokens.surface_border};
 }}
 /* 设计稿 nav 的 border-right 是 1px solid var(--border)：栏与栏之间是一道线。
    线画在手柄上而不是画在栏上——手柄那几像素挪不走，边框画在栏上时手柄会留在线和画布之间，
@@ -1285,6 +1339,12 @@ def _appearance_palette(
         QPalette.ColorRole.ToolTipText,
     ):
         palette.setColor(role, QColor(text))
+    # 不带组的 ``setColor`` 一次写满三组，禁用组的字于是和正常的一样。按钮有 ``:disabled`` 规则
+    # 兜着，复选框、单选框、标签、菜单项、输入框没有——它们的禁用字只读这一组，深色下锁住的那几行
+    # 看上去还能点。和 ``QPushButton:disabled`` 同取 muted。
+    muted = token_colour(tokens.muted_text)
+    for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
+        palette.setColor(QPalette.ColorGroup.Disabled, role, muted)
     palette.setColor(QPalette.ColorRole.ToolTipBase, window_color)
     palette.setColor(QPalette.ColorRole.Highlight, QColor(tokens.accent))
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor(tokens.accent_text))
@@ -1548,12 +1608,14 @@ def apply_step_eyebrow(label: QLabel) -> None:
     Qt 的样式表没有 ``letter-spacing``，字号与字距同出设计稿的一条规则，字重按
     ``set_step_state`` 的分工归各自的字体对象（那条规则只给颜色）。
     """
+    # 字体必须先于 ``set_step_state`` 落下：装着样式表时，polish 把控件当时的字体存成它的底，之后
+    # 每一次 repolish（切明暗、改 stepState）都退回那一份。先改状态再改字体，存下的是改之前的 9pt
+    # 常规字——发货外观下这一行一出场就变回正文那一档，只有不装样式表的测试看得到它是对的。
     font = label.font()
     font.setPixelSize(STEP_EYEBROW_FONT_PX)
     font.setWeight(QFont.Weight.Bold)
     font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, STEP_EYEBROW_TRACKING_PX)
     label.setFont(font)
-    # QSS 首次 polish 会保存原字体，必须先设字体，否则 show/换肤会恢复成旧字体。
     set_step_state(label, "current")
 
 

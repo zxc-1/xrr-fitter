@@ -391,7 +391,7 @@ def test_layer_dialog_keeps_unknown_formula_open_and_focuses_formula(qtbot) -> N
 
 
 def _periodic_focus(qtbot, row: int):
-    from xrr_fitter.gui.structure.dialogs import PeriodicDialog
+    from xrr_fitter.gui.structure.periodic_dialog import PeriodicDialog
 
     module = _accessibility()
     dialog = PeriodicDialog()

@@ -222,12 +222,13 @@ def _configure_dialog_buttons(root: QWidget) -> None:
 
 
 def localize_standard_buttons(box: QDialogButtonBox, *, confirm: str | None = None) -> None:
-    """Write Chinese labels over Qt's built-in English standard buttons.
+    """Write this application's own labels over Qt's standard buttons.
 
-    ``QDialogButtonBox`` takes its ``Ok``/``Cancel`` text from Qt's own
-    catalogue, and this application installs no ``QTranslator``, so the footer
-    of an otherwise Chinese dialog reads in English.  The accessible names were
-    already localized here; the visible labels need the same source of truth.
+    ``QDialogButtonBox`` takes its ``Ok``/``Cancel`` text from Qt's catalogue
+    (``application.install_qt_translations``), which says 确定/取消 for every
+    dialog alike.  The labels here are the dialog's own words, and they hold even
+    where no translator is installed (the test session).  The accessible names
+    were already localized here; the visible labels need the same source of truth.
 
     The box is passed in rather than discovered from the dialog: a footer is
     localized where it is built, before it joins a layout, so a walk over the

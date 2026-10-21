@@ -116,6 +116,7 @@ PACKAGE_EDGE_EXCEPTIONS = {
     "io.examples": {"physics.reflectivity", "physics.stack"},
     "io.orso": {"version"},
     "gui.data.import_dialog": {"io.xy"},
+    "gui.chrome": {"version"},
 }
 # Package exceptions are exact directed module edges, never owner-wide grants.
 # The mapping key names the only source module that receives an exception.
