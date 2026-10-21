@@ -21,12 +21,22 @@ python3.12 -m pip check
 ```
 
 The generator `tools/lock_audit_tools.py --report REPORT --output LOCK --check`
-checks an existing lock against a pip 26.1.2 JSON resolution. Generation omits
+checks an existing lock against a pip 26.2.2 JSON resolution. Generation omits
 `--check`. Resolve all direct `[tool.xrr.audit].requires` with
 `--dry-run --ignore-installed --only-binary=:all: --report REPORT`, constrained
 by `requirements-macos-arm64-py312.lock`. Only non-yanked HTTPS PyPI wheels are
 accepted; wheel identity, tags, SHA-256, dependency markers, extras and exact
 closure are checked. Preserve the original resolver report outside Git.
+
+The bootstrap and builder also pin pip 26.2.2, which includes the fix for
+[CVE-2026-13346](https://github.com/pypa/pip/commit/10dfb6b9005484578b386f64b9f36982e3dc6679).
+Installer changes must update the bootstrap/audit/refnx hash locks, manifest
+bindings, cache identities and installed-script reconstruction together. Keep
+the exact-version check: matching script templates alone do not approve another
+installer. Hash checks verify archive content and do not replace safe download
+path handling. Fresh Windows bootstrap still begins with the runner's
+`ensurepip` seed before installing the pinned version; the pin does not certify
+that seed or a complete OS/native runtime closure.
 
 ## Verification
 

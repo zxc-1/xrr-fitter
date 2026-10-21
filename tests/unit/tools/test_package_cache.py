@@ -23,7 +23,7 @@ def test_cache_key_separates_trust_domains_and_binds_full_manifest(load_tool_mod
     module = _module(load_tool_module)
     manifest = _manifest()
     trusted = module.cache_key(manifest, "trusted")
-    assert "windows-x64-py312-python-3.12-pip-26.1.2" in trusted
+    assert "windows-x64-py312-python-3.12-pip-26.2.2" in trusted
     assert manifest["lock_sha256"] in trusted
     assert module.cache_key(deepcopy(manifest), "trusted") == trusted
     assert module.cache_key(manifest, "pr-12") != trusted

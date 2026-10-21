@@ -57,8 +57,8 @@ def _template_assignment(node) -> bool:
 
 
 def _pinned_script_maker(wheel) -> ast.ClassDef:
-    if (wheel.record["name"], wheel.record["version"]) != ("pip", "26.1.2"):
-        raise ValueError("installed transformations require the pinned pip 26.1.2 wheel")
+    if (wheel.record["name"], wheel.record["version"]) != ("pip", "26.2.2"):
+        raise ValueError("installed transformations require the pinned pip 26.2.2 wheel")
     source = ast.parse(wheel.read("pip/_internal/operations/install/wheel.py"))
     classes = [node for node in source.body if isinstance(node, ast.ClassDef) and node.name == "PipScriptMaker"]
     if len(classes) != 1:

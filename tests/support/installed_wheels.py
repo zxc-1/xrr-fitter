@@ -61,7 +61,7 @@ def make_pip(root: Path) -> dict:
     return make_wheel(
         root,
         name="pip",
-        version="26.1.2",
+        version="26.2.2",
         entries={
             "pip/_internal/operations/install/wheel.py": source.encode(),
         },

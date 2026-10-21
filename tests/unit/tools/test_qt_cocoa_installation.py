@@ -73,7 +73,7 @@ def _loader(load_tool_module, tmp_path, monkeypatch):
     evidence, root, wheels, build, receipt = qt_build_case(load_tool_module, tmp_path)
     module = load_tool_module("installed_inputs")
     packaging = make_wheel(wheels, name="packaging")
-    pip = make_wheel(tmp_path / "bootstrap", name="pip", version="26.1.2")
+    pip = make_wheel(tmp_path / "bootstrap", name="pip", version="26.2.2")
     (root / "tools/bootstrap-requirements.lock").write_text(
         "".join(
             f"{item['record']['name']}=={item['record']['version']} --hash=sha256:{item['record']['sha256']}\n"

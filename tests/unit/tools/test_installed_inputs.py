@@ -97,7 +97,7 @@ def _loader_fixture(tmp_path, module, monkeypatch):
     root = tmp_path / "repo"
     (root / "tools").mkdir(parents=True)
     packaging = make_wheel(tmp_path / "ordinary", name="packaging")
-    pip = make_wheel(tmp_path / "auxiliary", name="pip", version="26.1.2")
+    pip = make_wheel(tmp_path / "auxiliary", name="pip", version="26.2.2")
     lock = root / "tools/bootstrap-requirements.lock"
     lock.write_text(
         "".join(
@@ -116,7 +116,7 @@ def test_inputs_are_bound_before_parsing_not_after_a_lock_change(tmp_path, load_
     root, manifest_path, pip, lock = _loader_fixture(tmp_path, module, monkeypatch)
 
     def change_lock(*args):
-        lock.write_text(lock.read_text().replace("pip==26.1.2", "pip==99.0"))
+        lock.write_text(lock.read_text().replace("pip==26.2.2", "pip==99.0"))
 
     monkeypatch.setattr(module, "_platform_inputs", change_lock)
     with pytest.raises(ValueError, match="input.*changed|identity"):

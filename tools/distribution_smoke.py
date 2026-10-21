@@ -69,7 +69,7 @@ def _install_environment(root: Path, lock_file: Path, runner: Runner) -> Path:
     child["PYTHONDONTWRITEBYTECODE"] = "1"
     child["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     runner(
-        (str(python), "-m", "pip", "install", "pip==26.1.2"),
+        (str(python), "-m", "pip", "install", "pip==26.2.2"),
         cwd=environment,
         env=child,
         check=True,

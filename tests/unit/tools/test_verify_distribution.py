@@ -434,7 +434,7 @@ def test_smoke_environment_links_the_base_interpreter_before_running_pip(
     result = subprocess.run((str(python), "-m", "pip", "--version"), check=True, capture_output=True, text=True)
     assert "pip " in result.stdout
     assert [args for args, _kwargs in calls] == [
-        (str(python), "-m", "pip", "install", "pip==26.1.2"),
+        (str(python), "-m", "pip", "install", "pip==26.2.2"),
         (str(python), "-m", "pip", "install", "-r", str(lock.resolve())),
     ]
     assert all(kwargs["check"] is True for _args, kwargs in calls)

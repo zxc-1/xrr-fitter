@@ -40,7 +40,7 @@ IDENTITY = {
     "schema": "xrr-qt-cocoa-inputs-v1",
     "target": "macos-arm64-py312",
     "python_version": "3.12",
-    "pip_version": "26.1.2",
+    "pip_version": "26.2.2",
     "qt_version": "6.11.2",
     "wheel_tag": "cp310-abi3-macosx_13_0_arm64",
     "wheel_build": "1xrrcocoa",

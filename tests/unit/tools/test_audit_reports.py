@@ -51,7 +51,7 @@ def test_audit_tools_do_not_become_distribution_dependencies():
         "mypy==2.3.1",
         "pip-audit==2.10.1",
         "scipy-stubs==1.18.0.0",
-        "pip==26.1.2",
+        "pip==26.2.2",
     ]
     published = project["project"]["dependencies"] + project["project"]["optional-dependencies"]["test"]
     assert not set(tools["requires"]) & set(published)

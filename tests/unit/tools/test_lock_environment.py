@@ -334,7 +334,7 @@ def test_resolver_uses_pinned_pip_declared_specs_and_freeze_only(
     python = resolver / "bin" / "python"
     assert commands == [
         (sys.executable, "-m", "venv", str(resolver)),
-        (str(python), "-m", "pip", "install", "pip==26.1.2"),
+        (str(python), "-m", "pip", "install", "pip==26.2.2"),
         (
             str(python),
             "-m",

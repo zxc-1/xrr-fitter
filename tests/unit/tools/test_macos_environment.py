@@ -27,7 +27,7 @@ def _owned(module, tmp_path):
 def test_combined_key_binds_all_three_input_chains_and_trust_domain(load_tool_module):
     module = _module(load_tool_module)
     key = module.combined_key(ROOT, "pr-26")
-    assert key.startswith("xrr-macos-inputs-v1-pr-26-python-3.12-pip-26.1.2-")
+    assert key.startswith("xrr-macos-inputs-v1-pr-26-python-3.12-pip-26.2.2-")
     assert key != module.combined_key(ROOT, "trusted")
     assert key == module.combined_key(ROOT, "pr-26")
     from package_cache import cache_key

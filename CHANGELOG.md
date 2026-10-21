@@ -35,6 +35,8 @@ The existing 0.2.4 draft retains its original artifacts and source identity.
   open the manual before their version tag exists.
 
 ### Security
+- Update the pinned bootstrap, build and audit installer to pip 26.2.2 for
+  CVE-2026-13346, preserving exact wheel hashes and installation-byte checks.
 - Update locked Pillow inputs from 12.3.0 to 13.0.0 to resolve the advisory
   failures, with verified wheel bytes and refreshed environment evidence.
 

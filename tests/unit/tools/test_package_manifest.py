@@ -45,7 +45,7 @@ def _resolution(load_tool_module, target):
                 },
             }
         )
-    return {"version": "1", "pip_version": "26.1.2", "install": items}
+    return {"version": "1", "pip_version": "26.2.2", "install": items}
 
 
 @pytest.mark.parametrize("target,count", [("macos-arm64-py312", 44), ("windows-x64-py312", 38)])

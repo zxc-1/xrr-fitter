@@ -80,7 +80,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           python -c "import platform, struct, sys; assert sys.platform == 'win32' and platform.machine() == 'AMD64' and struct.calcsize('P') == 8 and sys.version_info[:2] == (3, 12)"
-          python -m pip install pip==26.1.2
+          python -m pip install pip==26.2.2
           python -m pip install --requirement builder/requirements-windows-x64-py312.lock
           python -m pip install --no-deps --no-build-isolation ./source
           python -m pip check

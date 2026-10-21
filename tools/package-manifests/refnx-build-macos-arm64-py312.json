@@ -1,9 +1,9 @@
 {
   "application_lock_sha256": "8089e96cb16d0b913fd352f9ed475fda864acb1a8486a880f0ba07233ab83500",
-  "lock_sha256": "7f997ba57d8190d82746e62c694dcf75ce84ac9182d13c35c5fe2137a726d408",
-  "pip_version": "26.1.2",
+  "lock_sha256": "f9846406484c24f79f895d6900c3f6527016d18ccef480ebaedf2818ba1c5089",
+  "pip_version": "26.2.2",
   "python_version": "3.12",
-  "requirements_sha256": "52752ed180335a01fe44503a552023d8a42625f3bab0cf61f3de6b9d434a38a6",
+  "requirements_sha256": "023a7933fe897583fbaf09660bdfc9ce41caa3895f3c3397d8020a09594ae376",
   "schema": "xrr-refnx-build-inputs-v1",
   "source_manifest_sha256": "950bdd62aca36d8497685ddd5688205a28c5b76637e930eca8e9e53ea29dc381",
   "target": "macos-arm64-py312",
@@ -51,11 +51,11 @@
       "version": "26.3"
     },
     {
-      "filename": "pip-26.1.2-py3-none-any.whl",
+      "filename": "pip-26.2.2-py3-none-any.whl",
       "name": "pip",
-      "sha256": "382ff9f685ee3bc25864f820aa50505825f10f5458ffff07e30a6d96e5715cab",
-      "url": "https://files.pythonhosted.org/packages/5d/95/6b5cb3461ea5673ba0995989746db58eb18b91b54dbf331e72f569540946/pip-26.1.2-py3-none-any.whl",
-      "version": "26.1.2"
+      "sha256": "fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70",
+      "url": "https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl",
+      "version": "26.2.2"
     },
     {
       "filename": "pyproject_metadata-0.12.1-py3-none-any.whl",

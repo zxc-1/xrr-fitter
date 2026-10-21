@@ -16,7 +16,7 @@ from pathlib import Path
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
-PIP_VERSION = "26.1.2"
+PIP_VERSION = "26.2.2"
 VCS_PATTERN = re.compile(r"git\+(https://[^@]+)@([0-9a-f]{40})")
 PYTHON_ENVIRONMENT_KEYS = {
     "PYTHONHOME",

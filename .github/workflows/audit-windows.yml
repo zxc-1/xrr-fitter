@@ -114,7 +114,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $PSNativeCommandUseErrorActionPreference = $true
-          & $env:PYTHON tools/installed_sbom.py --manifest tools/package-manifests/windows-x64-py312.json --wheel-dir "$env:AUDIT_ROOT/reports/packages/wheels" --pip-wheel "$env:AUDIT_ROOT/reports/auxiliary-wheels/pip-26.1.2-py3-none-any.whl" --auxiliary-dir "$env:AUDIT_ROOT/reports/auxiliary-wheels" --executable "$env:AUDIT_ROOT/executable/xrr-fitter-cli.exe" --executable-evidence "$env:AUDIT_ROOT/reports/executable.json" --report-dir "$env:AUDIT_ROOT/reports/installed"
+          & $env:PYTHON tools/installed_sbom.py --manifest tools/package-manifests/windows-x64-py312.json --wheel-dir "$env:AUDIT_ROOT/reports/packages/wheels" --pip-wheel "$env:AUDIT_ROOT/reports/auxiliary-wheels/pip-26.2.2-py3-none-any.whl" --auxiliary-dir "$env:AUDIT_ROOT/reports/auxiliary-wheels" --executable "$env:AUDIT_ROOT/executable/xrr-fitter-cli.exe" --executable-evidence "$env:AUDIT_ROOT/reports/executable.json" --report-dir "$env:AUDIT_ROOT/reports/installed"
           if (git status --porcelain=v1 --untracked-files=all) { throw "byte verification changed the source checkout" }
       - name: Save verified wheel bytes only after successful validation
         if: ${{ success() && steps.wheel-cache.outputs.cache-hit != 'true' }}
