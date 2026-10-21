@@ -1,5 +1,5 @@
 {
-  "lock_sha256": "7941128a9682c5de41a8a110b31b02902a7b266af0a3350efa481c3c90ee0ff7",
+  "lock_sha256": "8089e96cb16d0b913fd352f9ed475fda864acb1a8486a880f0ba07233ab83500",
   "pip_version": "26.1.2",
   "pyproject_sha256": "1636118f165bd955d711b1303045dd657433a3310a362d140043027d8d7eb878",
   "python_version": "3.12",
@@ -147,11 +147,11 @@
       "version": "2.1.0"
     },
     {
-      "filename": "pillow-12.3.0-cp312-cp312-macosx_11_0_arm64.whl",
+      "filename": "pillow-13.0.0-cp312-cp312-macosx_11_0_arm64.whl",
       "name": "pillow",
-      "sha256": "ffd0c5368496f41b0944be820fcb7a838aa6e623d250b01acf2643939c3f99d7",
-      "url": "https://files.pythonhosted.org/packages/d8/66/9a386a92561f402389a4fc70c18838bf6d35eb5eb5c6850b4b2dc64f5048/pillow-12.3.0-cp312-cp312-macosx_11_0_arm64.whl",
-      "version": "12.3.0"
+      "sha256": "fc481f742ccda20e9ed760b8f978dff50f2a4e9bc253ac167fb0a05b0783ef52",
+      "url": "https://files.pythonhosted.org/packages/39/4b/f2ed53d83aa44ac19599ac0a54897f867fafb95f406980d1e24083f8cbe3/pillow-13.0.0-cp312-cp312-macosx_11_0_arm64.whl",
+      "version": "13.0.0"
     },
     {
       "filename": "pluggy-1.6.0-py3-none-any.whl",

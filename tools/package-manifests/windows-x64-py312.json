@@ -1,5 +1,5 @@
 {
-  "lock_sha256": "5e997f4fc4f99c515b82a754b81d2fca121b394810f0640818dc98b323afb2e4",
+  "lock_sha256": "2143ad3a485de2a66727d09d8be797bd5c9fecb0f1cd2f2514c6b0c2d035d735",
   "pip_version": "26.1.2",
   "pyproject_sha256": "1636118f165bd955d711b1303045dd657433a3310a362d140043027d8d7eb878",
   "python_version": "3.12",
@@ -120,11 +120,11 @@
       "version": "2.1.0"
     },
     {
-      "filename": "pillow-12.3.0-cp312-cp312-win_amd64.whl",
+      "filename": "pillow-13.0.0-cp312-cp312-win_amd64.whl",
       "name": "pillow",
-      "sha256": "a2b55dd6b2a4c4b7d87ffa56bdb33fdc5fdb9a462173861a7bc097f17d91cb09",
-      "url": "https://files.pythonhosted.org/packages/45/89/da2f7971a317f83d807fdd4065c0af40208e59e692cc43d315a71a0e96d1/pillow-12.3.0-cp312-cp312-win_amd64.whl",
-      "version": "12.3.0"
+      "sha256": "ff3fe9eb621fbb9db4c4be33ab946f6bac5f98ab50ca8d3260503653656c961b",
+      "url": "https://files.pythonhosted.org/packages/ff/cd/73a79ecdc822076002eb24b5e1e4a530b0bb5310fcb6d239abbec877110b/pillow-13.0.0-cp312-cp312-win_amd64.whl",
+      "version": "13.0.0"
     },
     {
       "filename": "pyinstaller-6.21.0-py3-none-win_amd64.whl",
