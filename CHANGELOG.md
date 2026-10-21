@@ -31,6 +31,8 @@ The existing 0.2.4 draft retains its original artifacts and source identity.
   and stalled-test stack reporting avoid the observed verification deadlocks.
 - README scientific identities and release status now match the implemented
   schema and the distinction between tagged drafts and published releases.
+- Online help uses a published, immutable guide snapshot so candidate builds
+  open the manual before their version tag exists.
 
 ### Security
 - Update locked Pillow inputs from 12.3.0 to 13.0.0 to resolve the advisory
