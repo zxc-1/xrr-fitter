@@ -67,3 +67,33 @@ def bounded_perturbations(
     folded = np.remainder(np.abs(perturbed[outside]), 2.0)
     perturbed[outside] = np.where(folded <= 1.0, folded, 2.0 - folded)
     return tuple(_readonly(vector, float) for vector in perturbed)
+
+
+def sensitivity_scaled_start(
+    center: np.ndarray,
+    proposal: np.ndarray,
+    residual_jacobian: np.ndarray,
+) -> np.ndarray:
+    """Contract a bounded proposal using raw solver-residual RMS sensitivity.
+
+    This is a local proposal metric, not objective curvature or uncertainty.
+    Low-sensitivity coordinates retain their exact proposal bytes. Normalize
+    each column before squaring so large finite derivatives cannot overflow.
+    """
+    unit_center = np.asarray(center, dtype=float)
+    proposed = np.asarray(proposal, dtype=float)
+    _validate_perturbation_center(unit_center)
+    _validate_perturbation_center(proposed)
+    if proposed.shape != unit_center.shape:
+        raise ValueError("perturbation proposal must match the center shape")
+    jacobian = np.asarray(residual_jacobian, dtype=float)
+    valid = jacobian.ndim == 2 and jacobian.shape[0] > 0 and jacobian.shape[1] == unit_center.size
+    if not valid or not np.all(np.isfinite(jacobian)):
+        raise ValueError("residual Jacobian must be finite with nonempty rows and the center width")
+    peak = np.max(np.abs(jacobian), axis=0)
+    normalized = jacobian / np.maximum(peak, np.finfo(float).tiny)
+    rms = peak * np.sqrt(np.mean(normalized**2, axis=0))
+    sensitive = rms > 1.0
+    result = np.array(proposed, copy=True)
+    result[sensitive] = unit_center[sensitive] + (proposed[sensitive] - unit_center[sensitive]) / rms[sensitive]
+    return _readonly(result, float)

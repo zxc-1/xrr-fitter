@@ -45,6 +45,7 @@ from xrr_fitter.evaluation import (
     EvaluationConstraintError,
     PhysicalValueError,
     encode_physical_vector,
+    least_squares_system,
 )
 from xrr_fitter.fit.adaptive_grid import initial_grid_points
 from xrr_fitter.fit.adaptive_review import (
@@ -73,7 +74,7 @@ from xrr_fitter.fit.global_search import (
 from xrr_fitter.fit.local_budget import local_stage_setups, next_local_round, optimizer_evidence
 from xrr_fitter.fit.local_search import LocalSearchResult, SearchCancelled, solve_local
 from xrr_fitter.fit.objective import evaluate_vector
-from xrr_fitter.fit.perturbations import bounded_perturbations
+from xrr_fitter.fit.perturbations import bounded_perturbations, sensitivity_scaled_start
 from xrr_fitter.fit.problem import compile_stage_problem
 from xrr_fitter.fit.progress import (
     best_preview_candidate as _best_candidate,
@@ -1014,7 +1015,9 @@ def _incumbent_starts(
     """Return exact first-seed incumbents or later seeded perturbations.
 
     Later seeds include a materially improved elite when available. Each source
-    incumbent receives its own derived perturbation stream.
+    incumbent receives its own derived perturbation stream. Only the extra elite
+    proposal contracts in sensitive residual coordinates; a rounded exact copy
+    cannot supply an independent challenge and is omitted.
     """
     if seed_index == 0:
         return setup.full_incumbents
@@ -1028,6 +1031,11 @@ def _incumbent_starts(
             )[0]
         )
         starts.extend(bounded_perturbations(incumbent, 1, seed=seed, sigma=0.002))
+    if elite is not None and elite.size:
+        _residual, jacobian = least_squares_system(setup.full_problem, elite)
+        starts[-1] = sensitivity_scaled_start(elite, starts[-1], jacobian)
+        if np.array_equal(starts[-1], elite):
+            starts.pop()
     return tuple(starts)
 
 
@@ -1297,7 +1305,9 @@ def _stage_e_seed(
         selected,
         candidate_id=f"E-{seed_index}",
         seed_index=seed_index,
-        nfev=solved.nfev + sum(candidate.nfev for candidate in attempts),
+        # Count the elite's extra analytic system evaluation even when its
+        # contracted proposal rounds to the center or hits the local cache.
+        nfev=solved.nfev + sum(candidate.nfev for candidate in attempts) + int(seed_index > 0 and elite is not None),
         search_evidence=(evidence, *(record for candidate in attempts for record in candidate.search_evidence)),
     )
 
