@@ -26,9 +26,9 @@ from xrr_fitter.evaluation import (
     unit_to_physical,
     values_by_name,
 )
-from xrr_fitter.fit.candidates import bounded_perturbations
 from xrr_fitter.fit.initialization import estimate_initial_candidates
 from xrr_fitter.fit.objective import evaluate_jacobian, evaluate_vector
+from xrr_fitter.fit.perturbations import bounded_perturbations
 from xrr_fitter.fit.problem import (
     compile_fit_problem,
     compile_fixed_parameter_problem,

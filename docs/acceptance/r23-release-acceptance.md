@@ -37,13 +37,28 @@ the baseline runs above do not certify the updated candidate.
 The failed attempt preserved the confidence assertion and warnings, but not its
 classification reasons, candidates or bootstrap failure details. Static review
 cannot distinguish the three possible UNTRUSTED triggers from those warnings.
-The diagnostic follow-up retains these already-computed inputs in a separate
+The PR #38 diagnostic follow-up retains these already-computed inputs in a separate
 failure sidecar, with controlled tests for spawn transport and persistence errors;
 it does not change fitting or scientific thresholds, recover the lost result, or
 turn the failed attempt into PASS. No additional scientific computation was
-started for this follow-up. The 197 retained outcomes are not an executed-fit
+started for that diagnostic-retention change. The 197 retained outcomes are not an executed-fit
 count: running workers can finish after another worker fails without their result
 being consumed. Complete statistical and release acceptance remain unmet.
+
+A subsequent controlled local replay on Python 3.12.13 reproduced
+`oxide-cap-14012` with `insufficient_cluster_support`: only one of the four
+final seeds found the materially better solution. The first three declared-start
+paths had zero resolution width after clipping; its analytic width derivative
+vanishes at zero. Reflecting the same sampled displacement inward recovered the
+better solution within the original local budget. The bounded-proposal repair
+now reflects excursions while preserving interior draws, seed streams, sigma,
+counts and solver budgets. The unchanged case replay produced three agreeing
+final seeds and passed output and recovery assertions with confidence
+`CORRELATED`; bootstrap failures remained zero. This local diagnostic differs
+from the historical runner's Python patch and concurrency. It does not replace
+full 220-case acceptance or relabel the historical failed run. Existing completed
+checkpoints retain their historical candidates; applying the repair requires a
+new affected search, and a completed Stage-E checkpoint has no remaining search.
 
 The old 0.2.4 assets predate the GUI/MCMC follow-ups and Pillow update. Preserve
 their tag and identity. Build and verify the next version from one clean final

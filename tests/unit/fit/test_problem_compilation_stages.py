@@ -3,7 +3,7 @@ from __future__ import annotations
 from tests.unit.fit.problem_compilation_cases import *
 
 
-def test_bounded_perturbations_are_seeded_counted_and_clipped() -> None:
+def test_bounded_perturbations_are_seeded_counted_and_bounded() -> None:
     center = np.array([0.0, 0.5, 1.0])
 
     first = bounded_perturbations(center, 7, seed=42, sigma=0.3)

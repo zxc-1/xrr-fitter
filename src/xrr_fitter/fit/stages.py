@@ -57,7 +57,6 @@ from xrr_fitter.fit.candidates import (
     StageBArchive,
     archive_stage_b_candidates,
     best_candidate_index,
-    bounded_perturbations,
     build_candidate_pool,
     candidate_from_evaluation,
     materially_improves,
@@ -74,6 +73,7 @@ from xrr_fitter.fit.global_search import (
 from xrr_fitter.fit.local_budget import local_stage_setups, next_local_round, optimizer_evidence
 from xrr_fitter.fit.local_search import LocalSearchResult, SearchCancelled, solve_local
 from xrr_fitter.fit.objective import evaluate_vector
+from xrr_fitter.fit.perturbations import bounded_perturbations
 from xrr_fitter.fit.problem import compile_stage_problem
 from xrr_fitter.fit.progress import (
     best_preview_candidate as _best_candidate,

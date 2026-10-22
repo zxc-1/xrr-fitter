@@ -8,7 +8,8 @@ import numpy as np
 
 from xrr_fitter.evaluation import encode_physical_vector
 from xrr_fitter.fit.adaptive_grid import next_budget_lineage
-from xrr_fitter.fit.candidates import best_candidate_index, bounded_perturbations
+from xrr_fitter.fit.candidates import best_candidate_index
+from xrr_fitter.fit.perturbations import bounded_perturbations
 from xrr_fitter.fit.problem import compile_stage_problem
 from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext, SearchAllocation, SearchEvidence
 
