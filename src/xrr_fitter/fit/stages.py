@@ -1317,6 +1317,7 @@ def run_stage_e(
 ) -> StageOutcome:
     """Run final named seeds and carry only materially improved elite state.
 
+    The first selectable result is compared with the best full-data parent.
     One public candidate is emitted per seed. Progress follows successful seed
     completion, and the outcome summary preserves seed order regardless of which
     candidate becomes the current best.
@@ -1325,7 +1326,7 @@ def run_stage_e(
     # elite; only local attempts within one path are independent.
     setup = _stage_e_setup(problem, parents)
     candidates: list[FitCandidate] = []
-    best: FitCandidate | None = None
+    incumbent = parents[rank_candidate_indices(parents)[0]]
     elite: np.ndarray | None = None
     for index, seed in enumerate(seeds):
         _poll(cancelled)
@@ -1343,14 +1344,14 @@ def run_stage_e(
         )
         candidates.append(candidate)
         winner = best_candidate_index(tuple(candidates))
-        current = None if winner is None else candidates[winner]
-        if best is not None and current is not None and current is not best:
-            if materially_improves(problem, best, current):
+        best = None if winner is None else candidates[winner]
+        if best is not None and best is not incumbent:
+            if materially_improves(problem, incumbent, best):
                 elite = encode_physical_vector(
                     setup.full_problem,
-                    _candidate_values(current),
+                    _candidate_values(best),
                 )
-        best = current
+            incumbent = best
         objective = float("inf") if best is None else best.objective
         _emit(
             progress,
