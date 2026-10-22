@@ -26,10 +26,11 @@ by their configured conditions. A successful branch run does not satisfy those
 release jobs. The integrated baseline test manifest was bound to source
 `919ef67d0b9043bddb673048342c4c02c3773d96` with 7,263 nodes. The pip security
 regressions added three nodes, collected from
-`8277c58ac5aa51488ce3c2026c137ed6622b3959` with 7,266 nodes. The current manifest
-includes ten failure-diagnostic regression nodes, freshly collected from
-`65765b579ea5db9177858276788a9c2351e65060` with 7,276 nodes and the unchanged
-application lock digest. The release identity gate checks the committed test
+`8277c58ac5aa51488ce3c2026c137ed6622b3959` with 7,266 nodes. Ten failure-diagnostic
+regressions produced 7,276 nodes at `65765b579ea5db9177858276788a9c2351e65060`.
+The current manifest adds six bounded-proposal regressions, freshly collected
+from `bfc980bac3eb2f1d020b0b1e7f7833319c5a6cbc` with 7,282 nodes and the
+unchanged application lock digest. The release identity gate checks the committed test
 tree, collection hash and source ancestry. The updated installer/build inputs
 require fresh final-candidate evidence under the existing statistical policy;
 the baseline runs above do not certify the updated candidate.
