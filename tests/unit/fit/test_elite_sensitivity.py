@@ -229,11 +229,13 @@ def test_stage_e_charges_the_elite_system_evaluation_without_enlarging_optimizer
     candidate = stages._stage_e_seed(problem, setup, 1, 202, center, None, None)
 
     assert len(calls) == 1
-    assert optimized and not cached_keys.intersection(key for key, _budget in optimized)
+    assert optimized
+    optimized_keys, budgets = zip(*optimized, strict=True)
+    assert not cached_keys.intersection(optimized_keys)
     maximum = max(
         problem.config.budget.local_min_nfev, problem.config.budget.local_nfev_per_parameter * (center.size + 1)
     )
-    assert all(budget == maximum for _key, budget in optimized)
+    assert set(budgets) == {maximum}
     if elite_state == "cached":
         assert any(record.stop_reason == "reused_exact_start:E-0-local-0" for record in candidate.search_evidence)
     # Actual optimizer counts and each local's publication evaluation precede
