@@ -119,6 +119,46 @@ def _manifest(index: int, identity: dict, budget: dict, cases, hashes: dict) -> 
     }
 
 
+def _publish_diagnostics(report, directory_identity, index, identity, budget, error) -> dict:
+    diagnostic_error = getattr(error, "fit_diagnostics_error", None)
+    if diagnostic_error is not None:
+        return {"diagnostics_error": diagnostic_error}
+    diagnostics = getattr(error, "fit_diagnostics", None)
+    if diagnostics is None:
+        return {}
+    try:
+        content = _json_bytes(
+            {
+                "schema": "xrr-r23-statistical-failure-diagnostics-v1",
+                "state": "FAIL",
+                "shard_index": index,
+                "identity": identity,
+                "worker_budget": budget,
+                "diagnostics": diagnostics,
+            }
+        )
+        _write(report, directory_identity, "failure-diagnostics.json", content)
+    except Exception as diagnostic_error:
+        return {
+            "diagnostics_error": {
+                "error_type": type(diagnostic_error).__name__,
+                "error": str(diagnostic_error)[:4000],
+            }
+        }
+    return {"diagnostics_sha256": hashlib.sha256(content).hexdigest()}
+
+
+def _publish_failure(report, directory_identity, index, identity, budget, error) -> None:
+    failure = {
+        "state": "FAIL",
+        "shard_index": index,
+        "error_type": type(error).__name__,
+        "error": str(error)[:4000],
+        **_publish_diagnostics(report, directory_identity, index, identity, budget, error),
+    }
+    _write(report, directory_identity, "failure.json", _json_bytes(failure))
+
+
 def run_shard(root: Path, report: Path, index: int, *, allow_compute: bool = False) -> dict:
     if allow_compute is not True:
         raise ValueError("statistical shard fitting requires explicit --compute permission")
@@ -137,13 +177,7 @@ def run_shard(root: Path, report: Path, index: int, *, allow_compute: bool = Fal
         result = _manifest(index, identity, budget, cases, hashes)
         _write(report, directory_identity, "result.json", _json_bytes(result))
     except BaseException as error:
-        failure = {
-            "state": "FAIL",
-            "shard_index": index,
-            "error_type": type(error).__name__,
-            "error": str(error)[:4000],
-        }
-        _write(report, directory_identity, "failure.json", _json_bytes(failure))
+        _publish_failure(report, directory_identity, index, identity, budget, error)
         raise
     _directory_identity(report, "statistical report")
     return result

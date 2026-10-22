@@ -51,6 +51,16 @@ PYTHONDONTWRITEBYTECODE=1 python tools/locked_closure.py --repo-root . --wheel-d
 - 原 `validate_corpus_outcomes` 全局断言、两个 statistical pytest node ID 和完整
   report 断言保持不变。发布 summary 前再次求值并复验全部 228 个输入文件。
 
+案例已经返回 `FitResult`、但输出或恢复断言失败时，原异常保留类型和消息，并携带
+已有分类理由、候选参数/目标、阶段成员和实际 bootstrap 失败记录。分片将它保存到
+`failure-diagnostics.json`，绑定本次 source/runtime/workflow identity、分片与 worker
+预算，`failure.json` 记录其 SHA-256。仅序列化已计算值，不求值模型或重新拟合；非有限
+诊断数用明确的 `"+inf"`、`"-inf"`、`"nan"` 字符串保存，避免不合法 JSON 或无声丢失。
+没有返回 FitResult 的异常仍只保留原 failure。诊断文件不能替代 case outcome 或完整
+manifest，失败分片继续为 FAIL；历史未保存的诊断不能由此补造。
+若诊断序列化或 sidecar 写入失败，基础失败回执明确记录 `diagnostics_error`，并保留
+原验收异常。该快照覆盖分类输入，未承诺保存完整 profile、模型曲线或所有数值分析状态。
+
 同一源码、运行上下文下重验：
 
 ```sh
