@@ -229,14 +229,19 @@ def test_stage_e_charges_the_elite_system_evaluation_without_enlarging_optimizer
     candidate = stages._stage_e_seed(problem, setup, 1, 202, center, None, None)
 
     assert len(calls) == 1
+    _assert_seed_work_counts(problem, setup, candidate, optimized, cached_keys)
+
+
+def _assert_seed_work_counts(problem, setup, candidate, optimized, cached_keys) -> None:
     assert optimized
     optimized_keys, budgets = zip(*optimized, strict=True)
     assert not cached_keys.intersection(optimized_keys)
     maximum = max(
-        problem.config.budget.local_min_nfev, problem.config.budget.local_nfev_per_parameter * (center.size + 1)
+        problem.config.budget.local_min_nfev,
+        problem.config.budget.local_nfev_per_parameter * (len(problem.variables) + 1),
     )
     assert set(budgets) == {maximum}
-    if elite_state == "cached":
+    if cached_keys:
         assert any(record.stop_reason == "reused_exact_start:E-0-local-0" for record in candidate.search_evidence)
     # Actual optimizer counts and each local's publication evaluation precede
     # the system evaluation; neither an omitted nor cached elite adds a solve.
