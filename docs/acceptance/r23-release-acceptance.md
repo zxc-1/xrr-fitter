@@ -18,7 +18,8 @@ below. The source now prepares **0.2.5**; this document is not publication appro
 | Scientific identity | Project schema `5`, algorithm `xrr-fit-v2-poisson-5`, objective `2`; approved cases and limits are in [V2 acceptance](fitting-algorithm-v2.md) |
 | Native dependency coverage | Ordinary locked-pin advisory audit passed on the baseline; reviewed pip 26.2.2 fixes the subsequently identified CVE-2026-13346. Exact-pin advisories, verified build inputs and installed bytes cover different scopes; the ensurepip seed, OS and full runtime-loader closure remain incomplete |
 | Pip security candidate | PR #37 merged at `4946de513a9760aa7b52f7646738f5dbbc87e108`; main verify/audit and Windows runs `39675427347`, `39675427212`, `39675549133`, `39675693903` succeeded in their recorded scopes |
-| Latest synthetic attempt | [run 39675537530](https://github.com/zxc-1/xrr-fitter/actions/runs/39675537530), attempt 1 at `4946de5`, **FAIL**: `oxide-cap-14012` returned UNTRUSTED. Seven complete shards retained 193 outcomes; failed shard 4 retained four outcomes and no complete manifest. The other 23 outcomes were not retained. Aggregate failed on the missing manifest; release was skipped |
+| Earlier synthetic attempt | [run 39675537530](https://github.com/zxc-1/xrr-fitter/actions/runs/39675537530), attempt 1 at `4946de5`, **FAIL**: `oxide-cap-14012` returned UNTRUSTED. Seven complete shards retained 193 outcomes; failed shard 4 retained four outcomes and no complete manifest. The other 23 outcomes were not retained. Aggregate failed on the missing manifest; release was skipped |
+| Reflection-only synthetic attempt | [run 39716539704](https://github.com/zxc-1/xrr-fitter/actions/runs/39716539704), attempt 1 at `9abc7ef`, **FAIL**: `periodic-13018-n95` and `oxide-cap-14004` returned `insufficient_cluster_support`. Six complete shards and two partial shards retained 195 outcomes; 25 were missing. Failure sidecars retain both classifications and bootstrap failure rates of zero. These results remain historical failures after subsequent search repairs |
 
 The baseline main run executed the ordinary engineering and distribution gates.
 Tag-only statistical, candidate-readiness, identity and release jobs were skipped
@@ -28,9 +29,11 @@ release jobs. The integrated baseline test manifest was bound to source
 regressions added three nodes, collected from
 `8277c58ac5aa51488ce3c2026c137ed6622b3959` with 7,266 nodes. Ten failure-diagnostic
 regressions produced 7,276 nodes at `65765b579ea5db9177858276788a9c2351e65060`.
-The current manifest adds six bounded-proposal regressions, freshly collected
-from `bfc980bac3eb2f1d020b0b1e7f7833319c5a6cbc` with 7,282 nodes and the
-unchanged application lock digest. The release identity gate checks the committed test
+Six bounded-proposal regressions produced 7,282 nodes at
+`bfc980bac3eb2f1d020b0b1e7f7833319c5a6cbc`. The current manifest adds 25 net
+first-seed elite and residual-sensitivity regression nodes, freshly collected from
+`dd643b92eebb79bdb572ec047df8f96548fd9c20` with 7,307 nodes and the unchanged
+application lock digest. The release identity gate checks the committed test
 tree, collection hash and source ancestry. The updated installer/build inputs
 require fresh final-candidate evidence under the existing statistical policy;
 the baseline runs above do not certify the updated candidate.
@@ -60,6 +63,20 @@ from the historical runner's Python patch and concurrency. It does not replace
 full 220-case acceptance or relabel the historical failed run. Existing completed
 checkpoints retain their historical candidates; applying the repair requires a
 new affected search, and a completed Stage-E checkpoint has no remaining search.
+
+The subsequent first-seed repair admits a material E-0 improvement against the
+best selectable full-data parent into the existing elite restart path. This fixed
+the unchanged `oxide-cap-14004` diagnostic, but its original unit-space Gaussian
+draw remained too large in sensitive residual coordinates for the long periodic
+case. Only the additional elite proposal now contracts high-sensitivity coordinates
+using the raw solver Jacobian's column RMS, with no new random draw or enlarged
+per-path budget. Three original periodic elite draws then reconverged in 7, 7 and
+6 local evaluations; the unchanged oxide case still passed its full diagnostic.
+These are diagnostic observations, not complete statistical acceptance. The new
+candidate requires fresh exact-source engineering and full 220-case evidence;
+neither earlier failed run certifies it. See the
+[search and evidence policy](../architecture/statistical-verification.md) for the
+noise, prior, work-count and checkpoint boundaries.
 
 The old 0.2.4 assets predate the GUI/MCMC follow-ups and Pillow update. Preserve
 their tag and identity. Build and verify the next version from one clean final
