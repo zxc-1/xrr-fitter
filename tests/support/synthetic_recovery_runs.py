@@ -9,6 +9,7 @@ from math import ceil
 
 import numpy as np
 
+from tests.support.synthetic_recovery_diagnostics import failure_diagnostics
 from tests.support.synthetic_recovery_metrics import (
     _best_candidate,
     _metric_error,
@@ -212,12 +213,24 @@ def _fit_worker_case(case_id: str) -> _CaseOutcome:
             local_workers=WORKER_LOCAL_WORKERS,
             profile_names=_case_profile_names(case),
         )
-    _assert_fit_output_contract(case, result, data)
-    if case.category == "ambiguous":
-        return _ambiguous_outcome(case, result)
-    if case.category == "model_error":
-        return _model_error_outcome(case, result, data)
-    return _recovery_outcome(case, result, data)
+    try:
+        _assert_fit_output_contract(case, result, data)
+        if case.category == "ambiguous":
+            return _ambiguous_outcome(case, result)
+        if case.category == "model_error":
+            return _model_error_outcome(case, result, data)
+        return _recovery_outcome(case, result, data)
+    except AssertionError as error:
+        # Built-in exception attributes survive the existing spawn transport;
+        # preserve its original type/message as well as the computed evidence.
+        try:
+            error.fit_diagnostics = failure_diagnostics(case, result)
+        except Exception as diagnostic_error:
+            error.fit_diagnostics_error = {
+                "error_type": type(diagnostic_error).__name__,
+                "error": str(diagnostic_error)[:4000],
+            }
+        raise
 
 
 def _component_layer_work(component: object) -> int:
