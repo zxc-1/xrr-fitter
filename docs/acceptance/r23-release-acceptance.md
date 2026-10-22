@@ -32,7 +32,7 @@ regressions produced 7,276 nodes at `65765b579ea5db9177858276788a9c2351e65060`.
 Six bounded-proposal regressions produced 7,282 nodes at
 `bfc980bac3eb2f1d020b0b1e7f7833319c5a6cbc`. The current manifest adds 25 net
 first-seed elite and residual-sensitivity regression nodes, freshly collected from
-`dd643b92eebb79bdb572ec047df8f96548fd9c20` with 7,307 nodes and the unchanged
+`2430c5ad3285b5fe102d712ecda45b6d4dd52e53` with 7,307 nodes and the unchanged
 application lock digest. The release identity gate checks the committed test
 tree, collection hash and source ancestry. The updated installer/build inputs
 require fresh final-candidate evidence under the existing statistical policy;
@@ -71,8 +71,10 @@ draw remained too large in sensitive residual coordinates for the long periodic
 case. Only the additional elite proposal now contracts high-sensitivity coordinates
 using the raw solver Jacobian's column RMS, with no new random draw or enlarged
 per-path budget. Three original periodic elite draws then reconverged in 7, 7 and
-6 local evaluations; the unchanged oxide case still passed its full diagnostic.
-These are diagnostic observations, not complete statistical acceptance. The new
+6 local evaluations. The unchanged oxide and periodic cases then passed their
+complete output and recovery diagnostics with confidence `CORRELATED`. Input
+bytes, configuration, seeds, A-D candidates and the first E candidate matched the
+respective earlier runs. These are diagnostic observations, not complete statistical acceptance. The new
 candidate requires fresh exact-source engineering and full 220-case evidence;
 neither earlier failed run certifies it. See the
 [search and evidence policy](../architecture/statistical-verification.md) for the
