@@ -17,18 +17,33 @@ below. The source now prepares **0.2.5**; this document is not publication appro
 | Windows | At the integrated baseline, [run 39663019105](https://github.com/zxc-1/xrr-fitter/actions/runs/39663019105) passed 117 headless tests, native-platform QtTest rendering/events/save-reopen and CLI EXE checks; [run 39663031877](https://github.com/zxc-1/xrr-fitter/actions/runs/39663031877) built the frozen GUI and passed its offscreen startup smoke. Physical desktop input and native frozen-GUI interaction remain unverified |
 | Scientific identity | Project schema `5`, algorithm `xrr-fit-v2-poisson-5`, objective `2`; approved cases and limits are in [V2 acceptance](fitting-algorithm-v2.md) |
 | Native dependency coverage | Ordinary locked-pin advisory audit passed on the baseline; reviewed pip 26.2.2 fixes the subsequently identified CVE-2026-13346. Exact-pin advisories, verified build inputs and installed bytes cover different scopes; the ensurepip seed, OS and full runtime-loader closure remain incomplete |
+| Pip security candidate | PR #37 merged at `4946de513a9760aa7b52f7646738f5dbbc87e108`; main verify/audit and Windows runs `39675427347`, `39675427212`, `39675549133`, `39675693903` succeeded in their recorded scopes |
+| Latest synthetic attempt | [run 39675537530](https://github.com/zxc-1/xrr-fitter/actions/runs/39675537530), attempt 1 at `4946de5`, **FAIL**: `oxide-cap-14012` returned UNTRUSTED. Seven complete shards retained 193 outcomes; failed shard 4 retained four outcomes and no complete manifest. The other 23 outcomes were not retained. Aggregate failed on the missing manifest; release was skipped |
 
 The baseline main run executed the ordinary engineering and distribution gates.
 Tag-only statistical, candidate-readiness, identity and release jobs were skipped
 by their configured conditions. A successful branch run does not satisfy those
 release jobs. The integrated baseline test manifest was bound to source
 `919ef67d0b9043bddb673048342c4c02c3773d96` with 7,263 nodes. The pip security
-regressions add three nodes; the current manifest is freshly collected from
-`8277c58ac5aa51488ce3c2026c137ed6622b3959` with 7,266 nodes and the unchanged
+regressions added three nodes, collected from
+`8277c58ac5aa51488ce3c2026c137ed6622b3959` with 7,266 nodes. The current manifest
+includes ten failure-diagnostic regression nodes, freshly collected from
+`65765b579ea5db9177858276788a9c2351e65060` with 7,276 nodes and the unchanged
 application lock digest. The release identity gate checks the committed test
 tree, collection hash and source ancestry. The updated installer/build inputs
 require fresh final-candidate evidence under the existing statistical policy;
 the baseline runs above do not certify the updated candidate.
+
+The failed attempt preserved the confidence assertion and warnings, but not its
+classification reasons, candidates or bootstrap failure details. Static review
+cannot distinguish the three possible UNTRUSTED triggers from those warnings.
+The diagnostic follow-up retains these already-computed inputs in a separate
+failure sidecar, with controlled tests for spawn transport and persistence errors;
+it does not change fitting or scientific thresholds, recover the lost result, or
+turn the failed attempt into PASS. No additional scientific computation was
+started for this follow-up. The 197 retained outcomes are not an executed-fit
+count: running workers can finish after another worker fails without their result
+being consumed. Complete statistical and release acceptance remain unmet.
 
 The old 0.2.4 assets predate the GUI/MCMC follow-ups and Pillow update. Preserve
 their tag and identity. Build and verify the next version from one clean final
