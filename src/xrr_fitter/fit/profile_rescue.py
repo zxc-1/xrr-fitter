@@ -15,12 +15,12 @@ import numpy as np
 
 from xrr_fitter.fit.candidates import (
     best_candidate_index,
-    bounded_perturbations,
     candidate_from_evaluation,
     materially_improves,
 )
 from xrr_fitter.fit.local_budget import optimizer_evidence
 from xrr_fitter.fit.local_search import LocalSearchResult, SearchCancelled, solve_local
+from xrr_fitter.fit.perturbations import bounded_perturbations
 from xrr_fitter.fit.tasking import TaskRunner
 from xrr_fitter.fit.tasking import run_tasks as _run_tasks
 from xrr_fitter.model.fitting import FitCandidate, FitEvaluationContext

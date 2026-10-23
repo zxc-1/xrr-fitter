@@ -732,7 +732,16 @@ def test_stage_e_runs_de_four_ranked_locals_and_two_restarts(
     assert outcome.summary.candidate_ids == ("E-0",)
 
 
+@pytest.mark.parametrize(
+    ("improved_seed", "expected_starts"),
+    (
+        pytest.param(0, (8, 9, 9, 9), id="first-seed"),
+        pytest.param(2, (8, 8, 8, 9), id="later-seed"),
+    ),
+)
 def test_stage_e_carries_only_a_materially_improved_elite_to_later_seeds(
+    improved_seed: int,
+    expected_starts: tuple[int, ...],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api = _stages_api()
@@ -779,7 +788,7 @@ def test_stage_e_carries_only_a_materially_improved_elite_to_later_seeds(
     def controlled_local(problem_value, start, **_kwargs):
         seed_index = max(0, active_seed - 1)
         starts_by_seed[seed_index].append(np.array(start, copy=True))
-        unit = elite_unit if seed_index == 2 else baseline_unit
+        unit = elite_unit if seed_index == improved_seed else baseline_unit
         return SimpleNamespace(
             unit_vector=np.array(unit, copy=True),
             evaluation=evaluate_vector(problem_value, unit),
@@ -799,11 +808,11 @@ def test_stage_e_carries_only_a_materially_improved_elite_to_later_seeds(
         cancelled=None,
     )
 
-    assert tuple(len(starts_by_seed[index]) for index in range(4)) == (8, 8, 8, 9)
-    seed_three_incumbents = starts_by_seed[3][:3]
+    assert tuple(len(starts_by_seed[index]) for index in range(4)) == expected_starts
+    next_seed_incumbents = starts_by_seed[improved_seed + 1][:3]
     assert any(
         not np.array_equal(start, elite_unit) and np.max(np.abs(start - elite_unit)) <= 0.01
-        for start in seed_three_incumbents
+        for start in next_seed_incumbents
     )
 
 

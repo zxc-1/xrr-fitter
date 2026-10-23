@@ -87,54 +87,6 @@ def _readonly(value: object, dtype: type | None = None) -> np.ndarray:
     return result
 
 
-def _validate_perturbation_center(center: np.ndarray) -> None:
-    if center.ndim != 1 or not np.all(np.isfinite(center)):
-        raise ValueError("perturbation center must be a finite unit vector")
-    if np.any((center < 0.0) | (center > 1.0)):
-        raise ValueError("perturbation center is outside unit bounds")
-
-
-def _validate_perturbation_count(count: object) -> None:
-    if isinstance(count, bool) or not isinstance(count, (int, np.integer)) or count < 0:
-        raise ValueError("perturbation count must be a nonnegative integer")
-
-
-def _validate_perturbation_sigma(sigma: float) -> None:
-    if not isfinite(sigma) or sigma < 0.0:
-        raise ValueError("perturbation sigma must be finite and nonnegative")
-
-
-def bounded_perturbations(
-    center: np.ndarray,
-    count: int,
-    *,
-    seed: int,
-    sigma: float = 0.1,
-) -> tuple[np.ndarray, ...]:
-    """Draw clipped perturbations without mutating the carried center.
-
-    An empty coordinate layout has one logical center but no useful perturbed
-    vectors, so it returns an empty tuple before touching the RNG stream.
-    """
-    unit_center = np.asarray(center, dtype=float)
-    _validate_perturbation_center(unit_center)
-    _validate_perturbation_count(count)
-    _validate_perturbation_sigma(sigma)
-    if unit_center.size == 0:
-        return ()
-    perturbed = np.clip(
-        unit_center
-        + np.random.default_rng(seed).normal(
-            0.0,
-            sigma,
-            size=(int(count), unit_center.size),
-        ),
-        0.0,
-        1.0,
-    )
-    return tuple(_readonly(vector, float) for vector in perturbed)
-
-
 def _ordinary_interface_values(
     component_index: int,
     component: LayerSpec | GradientLayerSpec,
